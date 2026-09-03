@@ -80,6 +80,7 @@ public class ClusterConfigurationValidatorTest {
         map.put("scheduleMaxPerDatabase", "100");
         map.put("scheduleCacheMaxBytes", "8Mb");
         map.put("scriptTextImportEnabled", "false");
+        map.put("scriptProcedureImportEnabled", "true");
         return map;
     }
 

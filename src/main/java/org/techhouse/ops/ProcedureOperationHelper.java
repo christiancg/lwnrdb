@@ -18,6 +18,7 @@ import org.techhouse.ops.resp.DeleteProcedureResponse;
 import org.techhouse.ops.resp.ListProceduresResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveProcedureResponse;
+import org.techhouse.simplejs.CompiledScript;
 import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.UnexpectedCharacterException;
@@ -41,6 +42,7 @@ public final class ProcedureOperationHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final Configuration configuration = Configuration.getInstance();
+    private static final String PROCEDURE_SPECIFIER_PREFIX = "procedures/";
 
     private ProcedureOperationHelper() {
     }
@@ -61,14 +63,21 @@ public final class ProcedureOperationHelper {
         }
         // Parsing here is the point of a stored procedure over a client-side string: a broken body is
         // refused now rather than on somebody else's first call.
+        final CompiledScript compiled;
         try {
-            var _ = simpleJs.compile(source, false);
+            compiled = simpleJs.compile(source, false);
         } catch (SimpleJsRuntimeException | UnexpectedTokenException | UnexpectedEndOfInputException
                 | UnexpectedCharacterException | UnterminatedStringException | UnterminatedTemplateException
                 | UnterminatedCommentException | UnterminatedRegexException parseFailure) {
             return new OperationResponse(OperationType.SAVE_PROCEDURE,
                     ErrorCode.INVALID_PROCEDURE.getDefaultMessage() + ": " + parseFailure.getMessage(),
                     ErrorCode.INVALID_PROCEDURE);
+        }
+        final var missingImport = firstUnresolvableImport(request, dbName, compiled);
+        if (missingImport != null) {
+            return new OperationResponse(OperationType.SAVE_PROCEDURE,
+                    ErrorCode.PROCEDURE_IMPORT_NOT_FOUND.getDefaultMessage() + ": '" + missingImport + "'",
+                    ErrorCode.PROCEDURE_IMPORT_NOT_FOUND);
         }
         locks.lock(dbName, Globals.PROCEDURES_FOLDER);
         try {
@@ -84,6 +93,44 @@ public final class ProcedureOperationHelper {
         } finally {
             locks.release(dbName, Globals.PROCEDURES_FOLDER);
         }
+    }
+
+    /**
+     * The first {@code procedures/<name>} specifier this source imports that would not resolve, or null when
+     * every static import is satisfiable. Refusing the save here means a typo'd import is reported to whoever
+     * installs it rather than to whoever calls it next.
+     *
+     * <p>
+     * Only checked on the node that originates the save. A stamped request is a peer re-executing the op
+     * under REPLICATE_ADMIN, and a peer that has not yet received the library would otherwise reject a save
+     * the coordinator accepted - diverging on a validation the coordinator already performed.
+     *
+     * <p>
+     * Only the {@code procedures/} prefix is checked: {@code args}/{@code db}/{@code script} always resolve,
+     * any other specifier was already unresolvable before procedure imports existed, and a dynamic
+     * {@code import(expr)} is not statically visible. The procedure's own name counts as resolvable - it
+     * exists as of this save - so a self-import still surfaces as a runtime cycle rather than depending on
+     * whether this is the first save.
+     */
+    private static String firstUnresolvableImport(SaveProcedureRequest request, String dbName,
+            CompiledScript compiled) {
+        if (request.getStampedVersion() > 0) {
+            return null;
+        }
+        for (final var specifier : simpleJs.moduleSpecifiers(compiled)) {
+            if (!specifier.startsWith(PROCEDURE_SPECIFIER_PREFIX)) {
+                continue;
+            }
+            final var name = specifier.substring(PROCEDURE_SPECIFIER_PREFIX.length());
+            if (name.equals(request.getName())) {
+                continue;
+            }
+            final var target = cache.getProcedure(dbName, name);
+            if (target == null || !target.isEnabled()) {
+                return specifier;
+            }
+        }
+        return null;
     }
 
     // The version, timestamp and author are computed once and written back onto the request, so a peer

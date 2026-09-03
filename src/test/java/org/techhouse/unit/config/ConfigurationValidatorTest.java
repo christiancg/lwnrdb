@@ -81,6 +81,7 @@ public class ConfigurationValidatorTest {
         map.put("scheduleMaxPerDatabase", "100");
         map.put("scheduleCacheMaxBytes", "8Mb");
         map.put("scriptTextImportEnabled", "false");
+        map.put("scriptProcedureImportEnabled", "true");
         return map;
     }
 
@@ -315,6 +316,7 @@ public class ConfigurationValidatorTest {
     public void test_invalid_script_sandbox_values(@TempDir Path tempDir) {
         assertHasError(tempDir, "scriptsEnabled", "maybe", "scriptsEnabled");
         assertHasError(tempDir, "scriptTextImportEnabled", "maybe", "scriptTextImportEnabled");
+        assertHasError(tempDir, "scriptProcedureImportEnabled", "maybe", "scriptProcedureImportEnabled");
         assertHasError(tempDir, "scriptInstructionBudget", "0", "scriptInstructionBudget");
         assertHasError(tempDir, "scriptInstructionBudget", "not-a-number", "scriptInstructionBudget");
         assertHasError(tempDir, "scriptTimeoutMs", "0", "scriptTimeoutMs");

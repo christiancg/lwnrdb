@@ -555,6 +555,131 @@ def test_definer_rights():
                   row["object"].get("definer") == ADMIN_USERNAME, f"got {row['object']}")
 
 
+def test_procedure_imports(conn: Conn):
+    section("Shared code between procedures (procedures/<name>)")
+
+    check_status("install a library of helpers",
+                 conn.save_procedure("lib_fmt",
+                                     "export function label(id) { return 'order:' + id; }\n"
+                                     "export const VERSION = 2;"), "OK")
+
+    # The point of the feature: a procedure composes a library rather than copying it.
+    check_status("install a procedure that imports the library",
+                 conn.save_procedure("labeller",
+                                     "import { label, VERSION } from 'procedures/lib_fmt';\n"
+                                     "import args from 'args';\n"
+                                     "return { text: label(args.id), v: VERSION };"), "OK")
+    response = conn.call("labeller", {"id": "o9"})
+    check_status("CALL_PROCEDURE resolves the import", response, "OK")
+    check("the composed result is correct", response.get("result") == {"text": "order:o9", "v": 2},
+          f"got {response.get('result')!r}")
+
+    check_status("install a library that itself imports another",
+                 conn.save_procedure("lib_wrap",
+                                     "import { label } from 'procedures/lib_fmt';\n"
+                                     "export function shout(id) { return label(id).toUpperCase(); }"), "OK")
+    check_status("install a procedure two levels up",
+                 conn.save_procedure("shouter",
+                                     "import { shout } from 'procedures/lib_wrap';\n"
+                                     "import args from 'args';\n"
+                                     "return shout(args.id);"), "OK")
+    check("a library may import a library", conn.call("shouter", {"id": "o1"}).get("result") == "ORDER:O1",
+          f"got {conn.call('shouter', {'id': 'o1'}).get('result')!r}")
+
+    # A library is an ordinary procedure, so the existing DDL surface manages it.
+    listed = conn.send({"type": "LIST_PROCEDURES", "databaseName": DB})
+    names = [p.get("name") for p in (listed.get("procedures") or [])]
+    check("a library is listed like any other procedure", "lib_fmt" in names, f"got {names}")
+
+    check_status("delete the library", conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB,
+                                                  "name": "lib_fmt"}), "OK")
+    failed = conn.call("labeller", {"id": "o9"})
+    check("deleting the library breaks its importers at the next call",
+          failed.get("errorCode") == "400-9" and "Cannot find module 'procedures/lib_fmt'" in (
+              failed.get("message") or ""),
+          f"got {failed.get('errorCode')} {failed.get('message')!r}")
+    check_status("reinstalling the library fixes them again",
+                 conn.save_procedure("lib_fmt", "export function label(id) { return 'order:' + id; }\n"
+                                                "export const VERSION = 3;"), "OK")
+    check("the importer picks up the new version",
+          conn.call("labeller", {"id": "o9"}).get("result") == {"text": "order:o9", "v": 3},
+          f"got {conn.call('labeller', {'id': 'o9'}).get('result')!r}")
+
+
+def test_trigger_imports(conn: Conn):
+    section("A trigger's procedure may import a library")
+    check_status("install a library the trigger will use",
+                 conn.save_procedure("lib_audit",
+                                     "export function describe(event, id, actor) {\n"
+                                     "    return event + ' on ' + id + ' by ' + actor;\n"
+                                     "}"), "OK")
+    check_status("install a trigger procedure that imports it",
+                 conn.save_procedure("audit_via_lib",
+                                     "import db from 'db';\n"
+                                     "import args from 'args';\n"
+                                     "import { describe } from 'procedures/lib_audit';\n"
+                                     "db.save(db.name, '" + AUDIT + "', { _id: 'lib-' + args.id,\n"
+                                     "    note: describe(args.event, args.id, args.actingUser),\n"
+                                     "    definer: args.definer });\n"
+                                     "return 'ok';"), "OK")
+    check_status("point the trigger at it",
+                 conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "audit_via_lib"), "OK")
+
+    # Definer rights must survive the import: the writer cannot touch the audit collection itself.
+    with user_conn(WRITER) as writer:
+        check_status("the writer saves a document", writer.save_doc({"_id": "imp1", "n": 1}), "OK")
+    row = await_doc(conn, "lib-imp1")
+    check("the trigger's import resolved and it wrote the audit row", row.get("status") == "OK", f"got {row}")
+    if row.get("status") == "OK":
+        check("the library computed the note",
+              row["object"].get("note") == f"UPDATED on imp1 by {WRITER}", f"got {row['object']}")
+        check("definer rights survive the import",
+              row["object"].get("definer") == ADMIN_USERNAME, f"got {row['object']}")
+
+    check_status("restore the original audit trigger",
+                 conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "auditor"), "OK")
+
+
+def test_trigger_import_failure(conn: Conn):
+    section("A trigger whose import cannot be resolved")
+    # The save-time check passes while the library exists, so this is how a trigger ends up with an
+    # unresolvable import: the library is deleted from under it afterwards.
+    check_status("install a library",
+                 conn.save_procedure("lib_gone", "export function tag(id) { return 'tagged-' + id; }"), "OK")
+    check_status("install a trigger procedure that imports it",
+                 conn.save_procedure("audit_needs_lib",
+                                     "import db from 'db';\n"
+                                     "import args from 'args';\n"
+                                     "import { tag } from 'procedures/lib_gone';\n"
+                                     "db.save(db.name, '" + AUDIT + "', { _id: 'gone-' + args.id,\n"
+                                     "    note: tag(args.id) });\n"
+                                     "return 'ok';"), "OK")
+    check_status("point the trigger at it",
+                 conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "audit_needs_lib"), "OK")
+    check_status("a write fires it while the library is present", conn.save_doc({"_id": "ok1", "n": 1}), "OK")
+    check("the trigger wrote its row", await_doc(conn, "gone-ok1").get("status") == "OK")
+
+    check_status("delete the library the trigger's procedure imports",
+                 conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "lib_gone"}), "OK")
+    before = trigger_failures(conn)
+    # The write itself must still succeed: a trigger is fired after the commit, so a broken trigger
+    # cannot fail the operation that triggered it.
+    check_status("a write still succeeds with the trigger broken", conn.save_doc({"_id": "ok2", "n": 2}), "OK")
+    missing = await_doc(conn, "gone-ok2", timeout=5.0)
+    check("the trigger produced nothing", missing.get("status") != "OK",
+          f"the run should have failed on the missing import, but a row appeared: {missing}")
+    check("the failure is counted in the stats", trigger_failures(conn) > before,
+          f"failures did not increase from {before}")
+
+    check_status("restore the original audit trigger",
+                 conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "auditor"), "OK")
+
+
+def trigger_failures(conn: Conn) -> int:
+    stats = conn.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("triggers", {})
+    return stats.get("failed", 0)
+
+
 def test_batch_mode(conn: Conn):
     section("Batch mode")
     check_status("install a batch counter", conn.save_procedure("batch_counter",
@@ -690,6 +815,9 @@ def main():
             test_result_cap(conn)
         test_definer_rights()
         with admin_conn() as conn:
+            test_procedure_imports(conn)
+            test_trigger_imports(conn)
+            test_trigger_import_failure(conn)
             test_batch_mode(conn)
             test_cascade(conn)
             test_stats(conn)

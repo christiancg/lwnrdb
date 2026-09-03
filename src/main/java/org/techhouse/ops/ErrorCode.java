@@ -38,7 +38,10 @@ public enum ErrorCode {
                                                                                                                             OperationStatus.ERROR), TOO_MANY_SCHEDULES(
                                                                                                                                     "400-17",
                                                                                                                                     "The database already has the maximum number of schedules",
-                                                                                                                                    OperationStatus.ERROR),
+                                                                                                                                    OperationStatus.ERROR), PROCEDURE_IMPORT_NOT_FOUND(
+                                                                                                                                            "400-18",
+                                                                                                                                            "The procedure imports a procedure that does not exist",
+                                                                                                                                            OperationStatus.ERROR),
 
     // ── 401 Unauthenticated ───────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(

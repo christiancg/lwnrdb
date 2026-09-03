@@ -66,15 +66,25 @@ public final class ModuleEvaluator {
         this.eventLoop = eventLoop;
     }
 
-    private JsValue resolveModule(String source) {
+    // A built-in is the object a default import binds directly (`import db from "db"` binds the db object,
+    // which has no `default` member); a real module is a namespace whose `default` member is its default
+    // export. Conflating the two would bind `{default: fn}` where the script asked for `fn`.
+    private record ResolvedBinding(JsValue value, boolean moduleNamespace) {
+    }
+
+    private ResolvedBinding resolveModule(String source) {
         return switch (source) {
-            case "args" -> interp.cacheBuiltinModule("builtin:args",
-                    () -> host.args() == null ? new JsObject() : EJsonInterop.fromEjson(host.args()));
-            case "db" -> interp.cacheBuiltinModule("builtin:db", this::createDbModule);
-            case "script" -> interp.cacheBuiltinModule("builtin:script",
-                    () -> ScriptModule.create(this::importText, host.limits(), interp.intrinsics()));
-            default -> resolveHostModule(source);
+            case "args" -> builtin(interp.cacheBuiltinModule("builtin:args",
+                    () -> host.args() == null ? new JsObject() : EJsonInterop.fromEjson(host.args())));
+            case "db" -> builtin(interp.cacheBuiltinModule("builtin:db", this::createDbModule));
+            case "script" -> builtin(interp.cacheBuiltinModule("builtin:script",
+                    () -> ScriptModule.create(this::importText, host.limits(), interp.intrinsics())));
+            default -> new ResolvedBinding(resolveHostModule(source), true);
         };
+    }
+
+    private ResolvedBinding builtin(JsValue value) {
+        return new ResolvedBinding(value, false);
     }
 
     private JsValue createDbModule() {
@@ -92,7 +102,9 @@ public final class ModuleEvaluator {
         if (resolved == null) {
             throw new JsThrowException(interp.intrinsics().makeError("Error", "Cannot find module '" + source + "'"));
         }
-        return interp.importModule(resolved.moduleId(), () -> parse(resolved.source()));
+        final var compiled = resolved.compiled();
+        final var reusable = compiled != null && compiled.strictScriptGoal() == host.strictScriptGoal();
+        return interp.importModule(resolved.moduleId(), () -> reusable ? compiled.program() : parse(resolved.source()));
     }
 
     private JsValue importText(String moduleId, String source) {
@@ -109,17 +121,24 @@ public final class ModuleEvaluator {
         }
     }
 
-    // A module namespace object: the resolved module's own members plus a `default` binding that
-    // mirrors what a default import would bind, so both `ns.default` and `ns.member` work.
     private JsValue moduleNamespace(String source) {
-        final var module = resolveModule(source);
+        return namespaceObject(resolveModule(source));
+    }
+
+    // A module namespace object. A real module already is one, carrying its named exports and its own
+    // `default`; a built-in is wrapped so both `ns.default` and `ns.member` work - and so the static and
+    // dynamic namespace-import forms agree on the shape.
+    private JsValue namespaceObject(ResolvedBinding resolved) {
+        if (resolved.moduleNamespace()) {
+            return resolved.value();
+        }
         final var namespace = new JsObject();
-        if (module instanceof JsObject object) {
+        if (resolved.value() instanceof JsObject object) {
             for (final var key : object.keys()) {
                 namespace.set(key, object.get(key));
             }
         }
-        namespace.set("default", module);
+        namespace.set("default", resolved.value());
         return namespace;
     }
 
@@ -141,13 +160,15 @@ public final class ModuleEvaluator {
     }
 
     public void bindImport(ImportDeclaration declaration, Environment env) {
-        final var namespace = resolveModule(declaration.getSource().getValue());
+        final var resolved = resolveModule(declaration.getSource().getValue());
+        final var namespace = resolved.value();
+        final var defaultBinding = resolved.moduleNamespace() ? moduleMember(namespace, "default") : namespace;
         for (final var specifier : declaration.getSpecifiers()) {
             switch (specifier) {
                 case ImportDefaultSpecifier defaultSpecifier ->
-                    defineModuleBinding(env, defaultSpecifier.getLocal().getName(), namespace);
+                    defineModuleBinding(env, defaultSpecifier.getLocal().getName(), defaultBinding);
                 case ImportNamespaceSpecifier namespaceSpecifier ->
-                    defineModuleBinding(env, namespaceSpecifier.getLocal().getName(), namespace);
+                    defineModuleBinding(env, namespaceSpecifier.getLocal().getName(), namespaceObject(resolved));
                 case ImportSpecifier importSpecifier -> defineModuleBinding(env, importSpecifier.getLocal().getName(),
                         moduleMember(namespace, moduleName(importSpecifier.getImported())));
                 default -> throw new UnsupportedNodeException(specifier.getType().name());
@@ -184,19 +205,36 @@ public final class ModuleEvaluator {
             }
             return;
         }
+        // `export { x } from 'mod'` re-exports mod's binding; only a sourceless `export { x }` reads the
+        // local scope. Resolved once, so the module evaluates once however many names are taken from it.
+        final var source = declaration.getSource();
+        final var resolved = source == null ? null : resolveModule(source.getValue());
         for (final var specifier : declaration.getSpecifiers()) {
             final var local = moduleName(specifier.getLocal());
-            exports.put(moduleName(specifier.getExported()), env.get(local));
+            final var value = resolved == null ? env.get(local) : reexportedMember(resolved, local);
+            exports.put(moduleName(specifier.getExported()), value);
         }
     }
 
+    // A built-in has no `default` member of its own, so `export { default as x } from 'db'` takes the
+    // built-in itself - the same rule a default import follows.
+    private JsValue reexportedMember(ResolvedBinding resolved, String local) {
+        if (!resolved.moduleNamespace() && "default".equals(local)) {
+            return resolved.value();
+        }
+        return moduleMember(resolved.value(), local);
+    }
+
     public void evalExportAll(ExportAllDeclaration declaration, Map<String, JsValue> exports) {
-        final var namespace = resolveModule(declaration.getSource().getValue());
+        final var namespace = resolveModule(declaration.getSource().getValue()).value();
         if (declaration.getExported() != null) {
             exports.put(declaration.getExported().getName(), namespace);
         } else if (namespace instanceof JsObject object) {
             for (final var key : object.keys()) {
-                exports.put(key, object.get(key));
+                // A star re-export carries the named exports only; `default` is deliberately not one.
+                if (!"default".equals(key)) {
+                    exports.put(key, object.get(key));
+                }
             }
         }
     }

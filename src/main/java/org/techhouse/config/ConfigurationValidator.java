@@ -62,6 +62,7 @@ public final class ConfigurationValidator {
         }
         validateBoolean(configs, "scriptsEnabled", errors);
         validateBoolean(configs, "scriptTextImportEnabled", errors);
+        validateBoolean(configs, "scriptProcedureImportEnabled", errors);
         validatePositiveLong(configs, "scriptInstructionBudget", errors);
         validatePositiveLong(configs, "scriptTimeoutMs", errors);
         validateInt(configs, "scriptMaxDepth", 1, errors);

@@ -6,7 +6,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
-
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -118,8 +117,8 @@ public class ScheduleDispatcherTest {
                 + "', { _id: args.id, ok: true });" + " return 'ok';");
     }
 
-    private ScheduleRegistry.Entry register(String procedureName, String definer, boolean enabled,
-                                            long timeoutMs, JsonObject args) throws Exception {
+    private ScheduleRegistry.Entry register(String procedureName, String definer, boolean enabled, long timeoutMs,
+            JsonObject args) throws Exception {
         final var definition = new ScheduleDefinition("s", procedureName, null, 60_000L, args, timeoutMs, enabled,
                 definer, null, 1L, 1L, 1L, definer);
         fs.writeSchedule(TestGlobals.DB, "s", eJson.toJson(definition.toJsonObject()));
@@ -233,9 +232,8 @@ public class ScheduleDispatcherTest {
     // Unlike a trigger, a scheduled run is not already inside a transaction, so it may open its own.
     @Test
     public void test_a_scheduled_run_may_open_its_own_transaction() throws Exception {
-        storeProcedure(
-                "import db from 'db'; import args from 'args';" + " db.transaction(() => { db.save(db.name, '"
-                        + OUTPUT_COLL + "', { _id: args.id, ok: true }); });" + " return 'ok';");
+        storeProcedure("import db from 'db'; import args from 'args';" + " db.transaction(() => { db.save(db.name, '"
+                + OUTPUT_COLL + "', { _id: args.id, ok: true }); });" + " return 'ok';");
         ScheduleDispatcher.dispatch(register("job", OWNER, true, 0L, idArgs("in-transaction")));
         assertNotNull(outputRow("in-transaction"));
     }

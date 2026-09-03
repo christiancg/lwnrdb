@@ -7,8 +7,11 @@ configured sandbox that the shared CI server does not have. It runs in two phase
   phase 1 — `scriptsEnabled=true` with a deliberately tight sandbox
             (small instruction budget, short deadline, low log caps, small source cap)
             so every limit is reachable in a test rather than only in theory;
-  phase 2 — the same data directory restarted with `scriptsEnabled=false`, proving the
-            master switch refuses the operation for everyone, admins included.
+  phase 2 — the same data directory restarted with `scriptProcedureImportEnabled=false`,
+            proving that switch closes the `procedures/` prefix while leaving the
+            built-in specifiers and import-free procedures working;
+  phase 3 — restarted again with `scriptsEnabled=false`, proving the master switch
+            refuses the operation for everyone, admins included.
 
 What is covered:
 
@@ -22,6 +25,9 @@ What is covered:
   * the rest of the host surface: EJson custom types (Geo/Vector/DbDateTime/DbTime),
     `crypto`, the host-gated `fetch` and text-import capabilities, module resolution,
     `import.meta`, and the configured time zone / locale;
+  * importing a stored procedure as a module (`procedures/<name>`): every import form,
+    library-to-library chains, the scope restriction, disabled procedures, cycles,
+    one-evaluation-per-run, budget sharing, and the exports-only contract;
   * `args` in its various shapes, and the result contract (return / export default /
     named exports / awaited promise / undefined);
   * a broad sweep of the ES2026 language surface the engine implements, so a regression
@@ -153,6 +159,11 @@ class Conn:
             payload["args"] = args
         return self.send(payload)
 
+    def save_procedure(self, name: str, script: str, db=DB, **extra) -> dict:
+        payload = {"type": "SAVE_PROCEDURE", "databaseName": db, "name": name, "script": script}
+        payload.update(extra)
+        return self.send(payload)
+
     def close(self):
         try:
             self.s.close()
@@ -174,7 +185,7 @@ def admin_conn() -> Conn:
 
 # ── server lifecycle ─────────────────────────────────────────────────────────
 
-def write_config(work_dir: str, scripts_enabled: bool):
+def write_config(work_dir: str, scripts_enabled: bool, procedure_imports_enabled: bool = True):
     cfg = (
         f"port={PORT}\n"
         "filePath=db\n"
@@ -193,6 +204,7 @@ def write_config(work_dir: str, scripts_enabled: bool):
         f"scriptCursorBatchSize={CURSOR_BATCH_SIZE}\n"
         f"scriptCursorMaxBatchSize={CURSOR_MAX_BATCH_SIZE}\n"
         "scriptTextImportEnabled=false\n"
+        f"scriptProcedureImportEnabled={'true' if procedure_imports_enabled else 'false'}\n"
         "scriptTimeZone=UTC\n"
         "scriptLocale=en-US\n"
     )
@@ -572,6 +584,216 @@ def test_capabilities(conn: Conn):
                  conn.run("return (1234.5).toLocaleString();"), "1,234.5")
 
 
+def test_procedure_imports(conn: Conn):
+    section("Module imports — procedures/<name>")
+
+    check_status("store a library exporting a named function",
+                 conn.save_procedure("lib_money", "export function cents(n) { return Math.round(n * 100); }\n"
+                                                  "export const RATE = 0.21;"), "OK")
+    check_result("a named export is importable",
+                 conn.run("import { cents } from 'procedures/lib_money';\nreturn cents(12.345);"), 1235)
+    check_result("several named exports at once",
+                 conn.run("import { cents, RATE } from 'procedures/lib_money';\nreturn [cents(1), RATE];"),
+                 [100, 0.21])
+    check_result("a renamed named export",
+                 conn.run("import { cents as toCents } from 'procedures/lib_money';\nreturn toCents(2);"), 200)
+
+    check_status("store a library with a default export",
+                 conn.save_procedure("lib_default", "export default (n) => n + 1;"), "OK")
+    check_result("a default import binds the default export, not the namespace",
+                 conn.run("import bump from 'procedures/lib_default';\nreturn bump(41);"), 42)
+    check_result("a namespace import exposes members and the default",
+                 conn.run("import * as ns from 'procedures/lib_money';\n"
+                          "return [typeof ns.cents, ns.RATE];"), ["function", 0.21])
+    check_result("a dynamic import resolves a procedure",
+                 conn.run("const ns = await import('procedures/lib_money');\nreturn ns.cents(3);"), 300)
+    check_status("store a library whose body has a side effect",
+                 conn.save_procedure("lib_marker", "import db from 'db';\n"
+                                                   "db.save(db.name, '%s', { _id: 'import-marker', seen: 1 });"
+                                     % COLL), "OK")
+    check_result("a side-effect-only import runs the module body",
+                 conn.run("import db from 'db';\n"
+                          "import 'procedures/lib_marker';\n"
+                          "return db.findById(db.name, '%s', 'import-marker').seen;" % COLL), 1)
+
+    check_status("store a library that imports another library",
+                 conn.save_procedure("lib_chain", "import { cents } from 'procedures/lib_money';\n"
+                                                  "export function twiceCents(n) { return cents(n) * 2; }"), "OK")
+    check_result("a library may import another library",
+                 conn.run("import { twiceCents } from 'procedures/lib_chain';\nreturn twiceCents(1.5);"), 300)
+
+    # Absence, not failure, is still an error here: an unresolvable specifier throws into the script.
+    check_result("an unknown procedure throws a catchable error",
+                 conn.run("try { await import('procedures/nope'); return 'resolved'; }\n"
+                          "catch (e) { return e.message; }"),
+                 "Cannot find module 'procedures/nope'")
+    check_result("a bare specifier is still unresolvable",
+                 conn.run("try { await import('lodash'); return 'resolved'; }\n"
+                          "catch (e) { return e.message; }"), "Cannot find module 'lodash'")
+    check_result("a nested name is refused (no traversal)",
+                 conn.run("try { await import('procedures/a/b'); return 'resolved'; }\n"
+                          "catch (e) { return e.message; }"), "Cannot find module 'procedures/a/b'")
+    check_result("a traversal attempt is refused",
+                 conn.run("try { await import('procedures/../lib_money'); return 'resolved'; }\n"
+                          "catch (e) { return e.message; }"), "Cannot find module 'procedures/../lib_money'")
+    check_failed_script("a static import of an unknown procedure fails the run",
+                        conn.run("import { x } from 'procedures/nope';\nreturn x;"),
+                        "400-9", "Cannot find module 'procedures/nope'")
+
+    # An unresolvable import is refused when the procedure is installed, not when it is called.
+    check_code("saving a procedure whose import does not exist is refused",
+               conn.save_procedure("lib_broken", "import { x } from 'procedures/absent';\nexport const y = x;"),
+               "ERROR", "400-18")
+    check_status("… and nothing was stored",
+                 conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "lib_broken"}), "OK")
+    check_status("the same save succeeds once the library exists",
+                 conn.save_procedure("lib_broken", "import { cents } from 'procedures/lib_money';\n"
+                                                   "export const y = cents;"), "OK")
+    check_status("the built-in specifiers are never checked",
+                 conn.save_procedure("lib_builtins", "import db from 'db';\nexport const n = typeof db;"), "OK")
+
+    # The re-export forms carry a specifier too, so they are checked and they fail the same way.
+    check_code("a re-export from a missing procedure is refused at save time",
+               conn.save_procedure("lib_reexport", "export { cents } from 'procedures/absent';"), "ERROR", "400-18")
+    check_code("an export-all from a missing procedure is refused at save time",
+               conn.save_procedure("lib_starexport", "export * from 'procedures/absent';"), "ERROR", "400-18")
+    check_failed_script("a re-export from a missing procedure fails a run",
+                        conn.run("export { cents } from 'procedures/absent';"),
+                        "400-9", "Cannot find module 'procedures/absent'")
+    check_failed_script("an export-all from a missing procedure fails a run",
+                        conn.run("export * from 'procedures/absent';"),
+                        "400-9", "Cannot find module 'procedures/absent'")
+
+    check_result("a named re-export takes the library's binding",
+                 conn.run("export { RATE } from 'procedures/lib_money';"), {"RATE": 0.21})
+    check_result("… even when a local of the same name is in scope",
+                 conn.run("const RATE = 999;\nexport { RATE } from 'procedures/lib_money';"), {"RATE": 0.21})
+    check_result("a renamed re-export",
+                 conn.run("export { RATE as rate } from 'procedures/lib_money';"), {"rate": 0.21})
+    check_status("store a library with a default export to re-export",
+                 conn.save_procedure("lib_def", "export default 'the-default'; export const other = 1;"), "OK")
+    check_result("a default can be re-exported under a name",
+                 conn.run("export { default as picked } from 'procedures/lib_def';"), {"picked": "the-default"})
+    check_result("export * carries the named exports but not the default",
+                 conn.run("export * from 'procedures/lib_def';"), {"other": 1})
+    check_result("a sourceless export still reads the local scope",
+                 conn.run("const local = 5;\nexport { local };"), {"local": 5})
+
+    # A computed specifier is not statically visible, so the save-time check cannot see it. It must still
+    # fail when it runs - the install-time check is an early warning, not a guarantee.
+    check_status("a computed specifier passes the save-time check",
+                 conn.save_procedure("lib_computed",
+                                     "const where = 'procedures/' + 'absent';\n"
+                                     "const mod = await import(where);\n"
+                                     "return mod.anything;"), "OK")
+    computed = conn.send({"type": "CALL_PROCEDURE", "databaseName": DB, "procedureName": "lib_computed"})
+    check("… and still fails when it runs",
+          computed.get("errorCode") == "400-9"
+          and "Cannot find module 'procedures/absent'" in (computed.get("message") or ""),
+          f"got {computed.get('errorCode')} {computed.get('message')!r}")
+
+    # A library deleted after its importer was installed: the check ran when there was nothing wrong.
+    check_status("store a base library", conn.save_procedure("lib_base", "export const base = 7;"), "OK")
+    check_status("store a library that imports it",
+                 conn.save_procedure("lib_mid", "import { base } from 'procedures/lib_base';\n"
+                                                "export function mid() { return base; }"), "OK")
+    check_result("the chain works while both exist",
+                 conn.run("import { mid } from 'procedures/lib_mid';\nreturn mid();"), 7)
+    check_status("delete the base library",
+                 conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "lib_base"}), "OK")
+    check_failed_script("a nested import that has since been deleted fails, naming the missing module",
+                        conn.run("import { mid } from 'procedures/lib_mid';\nreturn mid();"),
+                        "400-9", "Cannot find module 'procedures/lib_base'")
+
+    # Console output still comes back when the failure is an import. A static import is bound before any
+    # statement runs, so the logging has to happen before a dynamic one for the point to be observable.
+    failed = conn.run("console.log('before the import');\n"
+                      "await import('procedures/absent');\n"
+                      "return 'unreachable';")
+    check_failed_script("an import failure is reported as a script failure", failed, "400-9",
+                        "Cannot find module 'procedures/absent'")
+    check("… and the console output up to that point is still returned",
+          failed.get("logs") == ["before the import"], f"got {failed.get('logs')!r}")
+
+    check_status("store a disabled library",
+                 conn.save_procedure("lib_off", "export const value = 1;", enabled=False), "OK")
+    check_code("importing a disabled procedure is refused at save time too",
+               conn.save_procedure("lib_wants_off", "import { value } from 'procedures/lib_off';\n"
+                                                    "export const v = value;"), "ERROR", "400-18")
+    check_failed_script("a disabled procedure is not importable",
+                        conn.run("import { value } from 'procedures/lib_off';\nreturn value;"),
+                        "400-9", "Cannot find module 'procedures/lib_off'")
+
+    check_status("store a library in the other database",
+                 conn.save_procedure("lib_elsewhere", "export const value = 1;", db=OTHER_DB), "OK")
+    check_failed_script("a procedure of another database is out of scope",
+                        conn.run("import { value } from 'procedures/lib_elsewhere';\nreturn value;"),
+                        "400-9", "Cannot find module 'procedures/lib_elsewhere'")
+
+    check_status("store a self-importing procedure",
+                 conn.save_procedure("lib_loop", "import { self } from 'procedures/lib_loop';\n"
+                                                 "export function self() { return 1; }"), "OK")
+    check_failed_script("a self-import is a cycle",
+                        conn.run("import { self } from 'procedures/lib_loop';\nreturn self();"),
+                        "400-9", "Circular import of module")
+    # A save refuses an import that does not resolve yet, so the pair is built dependency-first and
+    # the cycle is closed by updating the second one afterwards.
+    check_status("store the second half without its import first",
+                 conn.save_procedure("lib_b", "export function b() { return 1; }"), "OK")
+    check_status("store the first half of a mutual import",
+                 conn.save_procedure("lib_a", "import { b } from 'procedures/lib_b';\n"
+                                              "export function a() { return b(); }"), "OK")
+    check_status("close the cycle by updating the second half",
+                 conn.save_procedure("lib_b", "import { a } from 'procedures/lib_a';\n"
+                                              "export function b() { return a(); }"), "OK")
+    check_failed_script("a mutual import is a cycle",
+                        conn.run("import { a } from 'procedures/lib_a';\nreturn a();"),
+                        "400-9", "Circular import of module")
+
+    check_status("store a library that counts its own evaluations",
+                 conn.save_procedure("lib_counter", "import db from 'db';\n"
+                                                    "const prev = db.findById(db.name, '%s', 'eval-count');\n"
+                                                    "const seen = (prev === null ? 0 : prev.seen) + 1;\n"
+                                                    "db.save(db.name, '%s', { _id: 'eval-count', seen });\n"
+                                                    "export const marker = seen;" % (COLL, COLL)), "OK")
+    check_result("an imported module evaluates once per run",
+                 conn.run("import db from 'db';\n"
+                          "import 'procedures/lib_counter';\n"
+                          "await import('procedures/lib_counter');\n"
+                          "return db.findById(db.name, '%s', 'eval-count').seen;" % COLL), 1)
+
+    # The importer's own budget pays for the import, so a runaway library cannot buy fresh compute.
+    check_status("store a library that never terminates",
+                 conn.save_procedure("lib_spin", "while (true) { }"), "OK")
+    check_failed_script("an imported module shares the importing run's budget",
+                        conn.run("import 'procedures/lib_spin';\nreturn 'never';"), "400-11")
+
+    # A procedure written for CALL_PROCEDURE returns rather than exports, and only exports are
+    # importable - so it imports as undefined. The trap worth pinning, not a defect.
+    check_status("store a procedure written in the CALL_PROCEDURE style",
+                 conn.save_procedure("lib_returning", "return 5;"), "OK")
+    check_result("a procedure written with a top-level return imports as undefined",
+                 conn.run("import lib from 'procedures/lib_returning';\nreturn typeof lib;"), "undefined")
+    check_result("… and it is still callable as a procedure",
+                 conn.send({"type": "CALL_PROCEDURE", "databaseName": DB, "procedureName": "lib_returning"}), 5)
+
+    check_status("store a library that throws while evaluating",
+                 conn.save_procedure("lib_throwing", "throw new Error('library boom');"), "OK")
+    check_result("an error thrown by a library is catchable in the importer",
+                 conn.run("try { await import('procedures/lib_throwing'); return 'imported'; }\n"
+                          "catch (e) { return e.message; }"), "library boom")
+
+    check_status("store a library that reads through db",
+                 conn.save_procedure("lib_reader", "import db from 'db';\n"
+                                                   "export function count() {\n"
+                                                   "    return db.aggregate(db.name, '%s', []).length;\n"
+                                                   "}" % COLL), "OK")
+    check_result("a library reaches the same db binding as its importer",
+                 conn.run("import db from 'db';\n"
+                          "import { count } from 'procedures/lib_reader';\n"
+                          "return count() === db.aggregate(db.name, '%s', []).length;" % COLL), True)
+
+
 def test_language_surface(conn: Conn):
     section("Language surface (ES2026)")
     cases = [
@@ -883,6 +1105,21 @@ def test_admin_is_unrestricted(conn: Conn):
 # Phase 2 — scripts disabled
 # ══════════════════════════════════════════════════════════════════════════
 
+def test_procedure_imports_disabled(conn: Conn):
+    section("Procedure imports disabled (scriptProcedureImportEnabled=false)")
+    check_failed_script("the procedures/ prefix is unresolvable",
+                        conn.run("import { cents } from 'procedures/lib_money';\nreturn cents(1);"),
+                        "400-9", "Cannot find module 'procedures/lib_money'")
+    check_result("… including dynamically",
+                 conn.run("try { await import('procedures/lib_money'); return 'resolved'; }\n"
+                          "catch (e) { return e.message; }"),
+                 "Cannot find module 'procedures/lib_money'")
+    check_result("the built-in specifiers still resolve",
+                 conn.run("import db from 'db';\nreturn typeof db.findById;"), "function")
+    check_status("a procedure with no imports still runs",
+                 conn.send({"type": "CALL_PROCEDURE", "databaseName": DB, "procedureName": "lib_returning"}), "OK")
+
+
 def test_engine_disabled():
     section("Engine disabled (scriptsEnabled=false)")
     with Conn() as conn:
@@ -942,11 +1179,21 @@ def main():
             test_arguments(conn)
             test_custom_types(conn)
             test_capabilities(conn)
+            test_procedure_imports(conn)
             test_language_surface(conn)
             test_result_cap(conn)
             test_cursor(conn)
             test_permissions(conn)
             test_admin_is_unrestricted(conn)
+
+        stop_server(proc)
+        proc = None
+
+        write_config(work_dir, scripts_enabled=True, procedure_imports_enabled=False)
+        print(f"\n  Restarting server (procedure imports disabled) on {HOST}:{PORT} ...")
+        proc = start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_procedure_imports_disabled(conn)
 
         stop_server(proc)
         proc = None

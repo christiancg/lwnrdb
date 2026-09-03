@@ -90,8 +90,7 @@ public class OperationProcessorScheduleTest {
     @Test
     public void test_save_failure_is_reported_as_an_error_code() throws Exception {
         TestUtils.setPrivateField(configuration, "schedulesEnabled", false);
-        assertEquals(ErrorCode.SCRIPTS_DISABLED.getCode(),
-                processor.processMessage(saveRequest()).getErrorCode());
+        assertEquals(ErrorCode.SCRIPTS_DISABLED.getCode(), processor.processMessage(saveRequest()).getErrorCode());
         assertEquals(ErrorCode.SCRIPTS_DISABLED.getCode(),
                 processor.processMessage(new DeleteScheduleRequest(TestGlobals.DB, "nightly")).getErrorCode());
         assertEquals(ErrorCode.SCRIPTS_DISABLED.getCode(),

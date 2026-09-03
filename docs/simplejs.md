@@ -634,6 +634,66 @@ all — produces the standard catchable `Cannot find module '…'`. The returned
 registry key, so two specifiers naming the same module must return the same id or it is evaluated
 twice.
 
+A **re-export resolves its source.** `export { x } from "mod"` takes `x` from *mod*, not from the local
+scope, and introduces no local binding (so the importing module cannot read `x` itself); only a sourceless
+`export { x }` reads the local scope. `export * from "mod"` carries the named exports and deliberately
+**not** `default`, and `export { default as x } from "mod"` picks the default export up under a name —
+where *mod* is a built-in, whose members are the module, `default` means the built-in itself. Before this
+was fixed `evalExportNamed` ignored its source, which made a re-export a `ReferenceError` when no local
+happened to match and — worse — silently exported an unrelated local when one did.
+
+A **default import binds the module's default export**, while a **built-in** specifier binds the
+built-in object itself — `import db from "db"` binds the `db` object, which has no `default` member
+to unwrap. `ModuleEvaluator` therefore tags each resolution as either a built-in or a real module
+namespace (`ResolvedBinding`) and unwraps `default` only for the latter; the same distinction makes
+`await import("procedures/x")` hand back the module's own namespace rather than nesting it under a
+second `default`. A module with no default export binds `undefined`, not its namespace object. The static and dynamic namespace forms
+agree: `namespaceObject` shapes both, so `import * as ns from "db"` and `await import("db")` alike give
+an object carrying the built-in's members plus a `default` that is the built-in.
+
+**The database host resolves `procedures/<name>`** (`host/ProcedureModuleResolver`, wired by
+`host/DatabaseHostBindings.moduleResolver()`), so a script, stored procedure, trigger or scheduled
+procedure can import shared code instead of copying it: a library *is* a stored procedure, managed
+by the `SAVE_PROCEDURE`/`DELETE_PROCEDURE`/`LIST_PROCEDURES` operations that already exist, with
+nothing new persisted or replicated. The namespace is flat and scope-restricted — a name containing
+a `/` is refused (no traversal, and no ambiguity about the always-`"main"` referrer), and only the
+run's own `scopedDatabase` is searched, the same boundary `EnforcingDatabaseAccess` enforces for
+data. A missing **or disabled** procedure answers `Cannot find module 'procedures/…'`, mirroring
+`CALL_PROCEDURE` answering not-found rather than running a disabled one. The module id carries the
+procedure's version (`procedure:<db>|<name>|<version>`), which makes it meaningful in a cycle or
+depth error and is the key a compiled-form cache would need. Authority is the **importer's**,
+unchanged: an imported module's `db` calls go through the importing run's `EnforcingDatabaseAccess`,
+so a trigger importing a helper keeps its definer rights and a `RUN_SCRIPT` importing one keeps the
+caller's — importing widens what code is reachable, never what it may do. Gated by
+`scriptProcedureImportEnabled` (**default `true`**, unlike `scriptTextImportEnabled`: `importText`
+evaluates a caller-supplied string, whereas a procedure import evaluates code only `SAVE_PROCEDURE`
+could have installed).
+
+**An unresolvable import is refused at install time.** `SAVE_PROCEDURE` walks the compiled program's
+static `import`/`export … from` specifiers (`SimpleJs.moduleSpecifiers`, which keeps the AST inside the
+engine) and rejects the save with `400-18` when a `procedures/<name>` target is missing or disabled — so a
+typo reaches whoever installs the procedure rather than whoever calls it next. Three deliberate
+exclusions: the check is skipped when the request is already stamped, because that is a peer re-executing
+the op under `REPLICATE_ADMIN` and it must not reject a save the coordinator accepted before its own copy
+of the library arrived; the procedure's **own** name counts as resolvable, so a self-import behaves the
+same on the first save as on a later one and still surfaces as a runtime cycle; and only the
+`procedures/` prefix is checked, since `args`/`db`/`script` always resolve and a dynamic
+`import(expr)` is not statically visible. The consequence to know is that **install order matters** —
+a library must exist before the procedures that import it, and a mutually-importing pair can only be
+created by closing the cycle with a second save (such a pair fails at runtime anyway).
+
+**An imported library is parsed once per node, not once per run.** `ResolvedModule` carries an optional
+`CompiledScript`, which `ProcedureModuleResolver` fills from `ops/CompiledProcedureCache` — the same
+version-keyed cache `CALL_PROCEDURE` uses, so a save cannot serve a stale parse. `ModuleEvaluator`
+reuses that program only when it was parsed under the goal the run is using, re-parsing otherwise, for
+the same reason `SimpleJs.run(CompiledScript, …)` does.
+
+**Only `export`ed bindings are importable.** `Interpreter.evaluateModule` builds a namespace from
+`export default`/`export …` declarations alone, so a procedure written for `CALL_PROCEDURE` with a
+top-level `return` — legal under the relaxed script goal — imports as `{ default: undefined }` and a
+default import of it binds `undefined`. This is spec-correct ESM, but it is the one trap worth
+knowing: a procedure meant to be *called* and one meant to be *imported* are written differently.
+
 The `"script"` built-in is the in-sandbox entry to the same pipeline:
 `script.importText(source[, moduleId])` runs a **string** as a module and returns its namespace,
 skipping only the resolution step. Without an explicit id the id is content-addressed
@@ -1591,7 +1651,8 @@ be kept in step — an exclusion with no entry here is a number being flattered.
   deterministically; `WeakMap`/`WeakSet` exist but are strong (weakness is unobservable in-sandbox).
 - **Arbitrary module resolution** — the engine itself performs no filesystem or URL loading; a
   specifier beyond the `args`/`db`/`script` built-ins resolves only if the host's `ModuleResolver`
-  claims it, so what is importable is entirely the host's decision. Loading an npm package through
+  claims it, so what is importable is entirely the host's decision. Under the database host that
+  means `procedures/<name>` (see *Module loading*) and nothing else. Loading an npm package through
   that seam additionally needs work that is not built: CommonJS/`require`, node core-module shims,
   `package.json` `exports` resolution, and ESM live-binding cycles (a cycle currently throws).
 - **`Symbol.species`** — `JsArray`/`JsTypedArray` are not subclassable, so species is unobservable;

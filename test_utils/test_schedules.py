@@ -392,6 +392,46 @@ def test_validation(conn: Conn):
     clear_schedules(conn)
 
 
+def test_import_failure(conn: Conn):
+    section("A scheduled procedure whose import cannot be resolved")
+    # Installing the procedure passes the save-time import check, so a schedule ends up broken only
+    # when the library is deleted from under it afterwards.
+    check_status("install a library",
+                 conn.save_procedure("lib_step", "export function step(n) { return n + 1; }"), "OK")
+    check_status("install a procedure that imports it",
+                 conn.save_procedure("counter_via_lib",
+                                     "import db from 'db'; import args from 'args';"
+                                     " import { step } from 'procedures/lib_step';"
+                                     " const id = args.id;"
+                                     " const existing = db.findById(db.name, '" + COLL + "', id);"
+                                     " const n = existing ? step(existing.n) : 1;"
+                                     " db.save(db.name, '" + COLL + "', { _id: id, n: n });"
+                                     " return n;"), "OK")
+    check_status("schedule it every 500ms",
+                 conn.save_schedule("importer", "counter_via_lib", intervalMs=500,
+                                    args={"id": "import-fail"}), "OK")
+    fired = await_counter(conn, "import-fail", 1)
+    check("it fires while the library is present", fired >= 1, f"counter never advanced (last {fired})")
+
+    before_failed = schedule_failures(conn)
+    check_status("delete the library it imports", conn.delete_procedure("lib_step"), "OK")
+    settled = counter_value(conn, "import-fail")
+    time.sleep(2.5)
+    after = counter_value(conn, "import-fail")
+    check("the schedule stops producing results once the import is unresolvable",
+          after <= settled + 1, f"counter advanced from {settled} to {after} after the library was deleted")
+    check("the failures are counted in the stats", schedule_failures(conn) > before_failed,
+          f"failures did not increase from {before_failed}")
+
+    check_status("delete the schedule", conn.delete_schedule("importer"), "OK")
+    check_status("delete the broken procedure", conn.delete_procedure("counter_via_lib"), "OK")
+
+
+def schedule_failures(conn: Conn) -> int:
+    stats = conn.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("schedules", {})
+    return stats.get("failed", 0)
+
+
 def test_referential_integrity(conn: Conn):
     section("Referential integrity")
     check_status("save a schedule referencing the procedure",
@@ -500,6 +540,7 @@ def main() -> int:
             test_cron_schedule(conn)
             test_listing(conn)
             test_validation(conn)
+            test_import_failure(conn)
             test_referential_integrity(conn)
         test_permissions()
         with admin_conn() as conn:

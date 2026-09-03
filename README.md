@@ -40,6 +40,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [x] Triggers (the [`SAVE_TRIGGER`](#save_trigger) operation)
   - [x] Scheduled procedures (the [`SAVE_SCHEDULE`](#save_schedule) operation)
   - [x] Run script (the [`RUN_SCRIPT`](#run_script) operation)
+  - [x] Shared code between procedures: a script, procedure, trigger or schedule can `import … from "procedures/<name>"` to reuse a stored procedure as a module (`scriptProcedureImportEnabled`, on by default) — see [docs/simplejs.md](docs/simplejs.md) → *Module loading*
   - [x] Script node selection under clustering: [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) are forwarded to a live node chosen by current script load (`scriptRoutingEnabled`, on by default), skipping any node not yet caught up on admin metadata — see [docs/clustering.md](docs/clustering.md) → *Scripts*
     - [ ] Locality-aware placement: selection is by load only, so the chosen node is usually not the owner of the collections the script touches and every operation the script issues still costs a round trip
 - [x] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant (per-collection JSON Schema — see [Schema validation](#schema-validation)) 
@@ -493,6 +494,20 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 - `logs` holds the script's `console` output — the newest `scriptMaxLogLines` lines, each clipped to `scriptMaxLogLineChars` — and `logsTruncated` reports whether anything was dropped. Output is returned on **every** outcome, including a failure, so a failed run is still debuggable.
 - **Permissions**: admins may run scripts on any database and database owners on the databases they own; any other user needs a **per-database** script grant — `scriptPermissions: {"mydb": "RUN"}` on their user record (the older boolean form is still accepted and reads as `RUN`). Every operation the script itself issues is authorized again on its own request, so the grant never widens what the caller can read or write, and the collection schema still applies to a script's writes. A script cannot leave its database (`admin` included) — an attempt throws a catchable error inside the script.
 - The exposed surface is read+write only (`findById`, `aggregate`, `save`, `bulkSave`, `delete`, `cursor`, `listCollections`, `listDatabases`, `transaction`); DDL, user management and outbound network access are not reachable from a script.
+- **Importing shared code**: besides `args`, `db` and `script`, a script may import any stored procedure of its own database as a module with `import … from "procedures/<name>"`. A library is just a procedure that exports instead of returning:
+
+  ```json
+  {"type":"SAVE_PROCEDURE","databaseName":"mydb","name":"money",
+   "script":"export function cents(n) { return Math.round(n * 100); }"}
+  ```
+  ```js
+  import { cents } from "procedures/money";
+  import db from "db";
+  const o = db.findById(db.name, "orders", "o1");
+  return cents(o.amount);
+  ```
+
+  Only the script's own database is searched, a missing **or disabled** procedure throws a catchable `Cannot find module 'procedures/…'`, and a cycle throws `Circular import of module '…'`. `SAVE_PROCEDURE` **refuses** a procedure whose `procedures/…` import does not resolve (`400-18`), so a typo is reported to whoever installs it rather than to whoever calls it next — which means libraries must be installed before the procedures that import them. The imported module shares the importing run's budget, deadline and authority — so a trigger importing a helper keeps its definer rights, and importing never widens what the caller may do. **Only `export`ed bindings are visible**: a procedure written with a top-level `return` (the `CALL_PROCEDURE` style) imports as `undefined`, so a module meant to be imported must `export`. Set `scriptProcedureImportEnabled=false` to refuse the whole `procedures/` prefix.
 - **`db.cursor(database, collection, pipeline, options)`** is the memory-safe way to read more than fits in one result: it returns an iterator that runs the pipeline one page at a time (`SKIP`/`LIMIT` appended per batch), so only one batch is ever in memory and only that batch counts against `scriptMaxMemoryBytes`. `options.batchSize` defaults to `scriptCursorBatchSize` and is clamped to `scriptCursorMaxBatchSize`; a non-positive value is a `RangeError`. It works with `for-of`, spread and the iterator helpers (`.map`/`.take`/…).
 
   ```js
@@ -531,7 +546,7 @@ Stores a named script in a database so it can be called by name instead of being
 - `enabled` defaults to `true`; a disabled procedure is not callable (`404-8`).
 - `ifVersion` is optional optimistic concurrency: present and not equal to the stored version → `409-8`. Absent means an unconditional upsert. Use `0` to require that the procedure does not exist yet.
 - A procedure is stored **with its database**, in `{filePath}/{database}/.procedures/{name}.json`, so dropping the database removes it.
-- **Errors**: `403-2` scripting disabled, `403-1` not permitted, `404-4` unknown database, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`, the same rule as a collection) or a blank script, `400-10` source over `scriptMaxSourceBytes`, `400-13` source that does not parse (the message carries the line and column), `409-8` version conflict.
+- **Errors**: `403-2` scripting disabled, `403-1` not permitted, `404-4` unknown database, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`, the same rule as a collection) or a blank script, `400-10` source over `scriptMaxSourceBytes`, `400-13` source that does not parse (the message carries the line and column), `400-18` a `procedures/<name>` import that does not resolve (so install a library before its importers), `409-8` version conflict.
 
 #### `DELETE_PROCEDURE`
 ```json
@@ -928,6 +943,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-15` | `ERROR` | Script result exceeds the maximum allowed size |
 | `400-16` | `ERROR` | The schedule definition is not valid |
 | `400-17` | `ERROR` | The database already has the maximum number of schedules |
+| `400-18` | `ERROR` | A saved procedure imports a `procedures/<name>` that does not exist or is disabled |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -1054,6 +1070,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scriptMaxLogLines` | Valid number ≥ 1. Max `console` lines returned with the response (newest kept) |
 | `scriptMaxLogLineChars` | Valid number ≥ 1. Max characters kept per returned `console` line |
 | `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
+| `scriptProcedureImportEnabled` | `true` or `false` (default `true`). Whether a script may import a stored procedure of its own database as a module with `import … from "procedures/<name>"`. On by default, unlike `scriptTextImportEnabled`: `importText` evaluates a caller-supplied string, whereas a procedure import evaluates code only `SAVE_PROCEDURE` could have installed |
 | `procedureCacheSize` | Compiled stored procedures retained per node (>= 0, default `128`); keyed by procedure version, so a save can never serve a stale entry. `0` compiles on every call |
 | `procedureCacheMaxBytes` | Human-readable size > 0 (default `32Mb`). Memory bound on cached procedure **source**. Separate from `maxMemory`, which bounds the user document/index cache only |
 | `schemaCacheMaxBytes` | Human-readable size > 0 (default `32Mb`). Same contract, for cached collection schemas |

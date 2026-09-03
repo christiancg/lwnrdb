@@ -1594,6 +1594,46 @@ Calling one that was never installed → `404-8`
 {"type": "CALL_PROCEDURE", "databaseName": "test", "procedureName": "neverInstalled", "args": {}}
 ```
 
+Importing a stored procedure as a module — a library is a procedure that `export`s instead of
+returning, imported with `procedures/<name>` (only this database's, and only if it is enabled)
+
+```json
+{"type": "SAVE_PROCEDURE", "databaseName": "test", "name": "money", "script": "export function cents(n) { return Math.round(n * 100); }"}
+```
+
+```json
+{"type": "SAVE_PROCEDURE", "databaseName": "test", "name": "totalCents", "script": "import { cents } from \"procedures/money\";\nimport args from \"args\";\nreturn cents(args.amount);"}
+```
+
+```json
+{"type": "CALL_PROCEDURE", "databaseName": "test", "procedureName": "totalCents", "args": {"amount": 12.345}}
+```
+
+Installing a procedure whose import does not resolve is refused → `400-18` (so libraries go in first)
+
+```json
+{"type": "SAVE_PROCEDURE", "databaseName": "test", "name": "brokenImport", "script": "import { nope } from \"procedures/absent\";\nexport const x = nope;"}
+```
+
+A script may import one too
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import { cents } from \"procedures/money\";\nreturn cents(3.5);"}
+```
+
+An unknown module is a catchable error, so the specifier can be probed → `Cannot find module 'procedures/nope'`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "try { await import(\"procedures/nope\"); return 'resolved'; } catch (e) { return e.message; }"}
+```
+
+A procedure written with a top-level `return` is callable but imports as `undefined` — only `export`ed
+bindings cross a module boundary
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "import lib from \"procedures/totalCents\";\nreturn typeof lib;"}
+```
+
 Delete — idempotent, so sending it twice still returns OK
 
 ```json

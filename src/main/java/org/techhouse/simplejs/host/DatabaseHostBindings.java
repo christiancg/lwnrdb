@@ -23,6 +23,19 @@ public record DatabaseHostBindings(JsonObject args, DatabaseAccess database, Con
                 Locale.forLanguageTag(configuration.getScriptLocale()));
     }
 
+    // A new resolver per call rather than a cached one: a record cannot hold an extra instance field, and
+    // the resolver is a one-reference flyweight. Requiring a scope keeps an unscoped embedding on its
+    // previous behaviour and means the resolver can never be asked about a database this run is not
+    // confined to.
+    @Override
+    public ModuleResolver moduleResolver() {
+        if (!Configuration.getInstance().isScriptProcedureImportEnabled() || database == null
+                || database.scopedDatabase() == null) {
+            return null;
+        }
+        return new ProcedureModuleResolver(database.scopedDatabase());
+    }
+
     // Network access is deliberately absent (a null NetworkAccess makes `fetch` unavailable) and the
     // parse goal stays relaxed, since the wire contract allows a top-level `return`.
     public static ResourceLimits limitsFromConfiguration() {

@@ -1,5 +1,7 @@
 package org.techhouse.simplejs;
 
+import java.util.LinkedHashSet;
+import java.util.List;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.simplejs.exceptions.JsThrowException;
@@ -28,6 +30,9 @@ import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
+import org.techhouse.simplejs.nodes.ExportAllDeclaration;
+import org.techhouse.simplejs.nodes.ExportNamedDeclaration;
+import org.techhouse.simplejs.nodes.ImportDeclaration;
 import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
@@ -45,6 +50,28 @@ public final class SimpleJs {
     public CompiledScript compile(String source, boolean strictScriptGoal) {
         final var program = Parser.parse(Lexer.lexWithPositions(source), strictScriptGoal);
         return new CompiledScript(program, source, strictScriptGoal, JsonUtils.sha256(source));
+    }
+
+    /**
+     * The distinct specifiers a compiled program imports or re-exports from, in source order. Only the static
+     * forms are visible: a dynamic {@code import(expr)} is an arbitrary expression and cannot be resolved
+     * without running the program. Callers use this to report an unresolvable import when a script is
+     * installed rather than on somebody else's first call; the AST stays inside this package.
+     */
+    public List<String> moduleSpecifiers(CompiledScript compiled) {
+        final var specifiers = new LinkedHashSet<String>();
+        for (final var statement : compiled.program().getBody()) {
+            final var source = switch (statement) {
+                case ImportDeclaration declaration -> declaration.getSource();
+                case ExportNamedDeclaration declaration -> declaration.getSource();
+                case ExportAllDeclaration declaration -> declaration.getSource();
+                default -> null;
+            };
+            if (source != null && source.getValue() != null) {
+                specifiers.add(source.getValue());
+            }
+        }
+        return List.copyOf(specifiers);
     }
 
     public ScriptResult run(String source, HostBindings host) {

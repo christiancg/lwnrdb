@@ -52,6 +52,7 @@ public final class Configuration {
     private int scriptMaxLogLines;
     private int scriptMaxLogLineChars;
     private boolean scriptTextImportEnabled;
+    private boolean scriptProcedureImportEnabled;
     private long scriptMaxMemoryBytes;
     private long scriptMaxResultBytes;
     private int scriptCursorBatchSize;
@@ -141,6 +142,7 @@ public final class Configuration {
         scriptMaxLogLines = intOf(configs, "scriptMaxLogLines");
         scriptMaxLogLineChars = intOf(configs, "scriptMaxLogLineChars");
         scriptTextImportEnabled = booleanOf(configs, "scriptTextImportEnabled");
+        scriptProcedureImportEnabled = booleanOf(configs, "scriptProcedureImportEnabled");
         scriptMaxMemoryBytes = sizeOf(configs, "scriptMaxMemoryBytes");
         scriptMaxResultBytes = sizeOf(configs, "scriptMaxResultBytes");
         scriptCursorBatchSize = intOf(configs, "scriptCursorBatchSize");
@@ -375,6 +377,10 @@ public final class Configuration {
 
     public boolean isScriptTextImportEnabled() {
         return scriptTextImportEnabled;
+    }
+
+    public boolean isScriptProcedureImportEnabled() {
+        return scriptProcedureImportEnabled;
     }
 
     public long getScriptMaxMemoryBytes() {

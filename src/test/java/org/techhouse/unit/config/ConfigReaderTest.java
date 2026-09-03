@@ -116,6 +116,7 @@ public class ConfigReaderTest {
         expectedConfig.put("scheduleMaxPerDatabase", "100");
         expectedConfig.put("scheduleCacheMaxBytes", "8Mb");
         expectedConfig.put("scriptTextImportEnabled", "false");
+        expectedConfig.put("scriptProcedureImportEnabled", "true");
 
         // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();
