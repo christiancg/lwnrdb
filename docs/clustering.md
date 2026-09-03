@@ -140,8 +140,12 @@ request, which is what you want when scripts do many small reads and clients alr
 that owns the data.
 
 `cluster/ScriptPlacement.choose()` makes the choice by **power of two choices**: sample two distinct
-`ALIVE` members of the local membership view at random and take the one reporting the lower script load
-(ties break on `nodeId`, so two edges sampling the same pair agree). Picking the globally least-loaded
+`ALIVE` members of the local membership view at random and take the less loaded one — load **relative to
+`maxConcurrentScripts`**, not absolute, since a node running 3/4 is nearly full where one running 6/32 is
+idle, and a sample already at its cap loses outright to one that is not (a saturated target could only
+answer `503-6`). A member reporting capacity `0` is either uncapped or too old to gossip the field, so
+that pair falls back to comparing absolute load; ties break on `nodeId`, so two edges sampling the same
+pair agree. Picking the globally least-loaded
 node would herd — every edge sees the same gossiped view, stale by up to one `gossipIntervalMs`, so they
 would all forward to the same node at once and then all see it saturated. Sampling needs no accurate
 global view, is O(1), and still keeps the maximum load exponentially closer to the mean than random
@@ -149,8 +153,9 @@ placement. `choose()` answering "this node" (or a cluster of one) means the scri
 
 The load signal is `NodeInfo.scriptLoad`, the number of script runs executing on a node right now
 (`RUN_SCRIPT`, `CALL_PROCEDURE` and trigger dispatch alike — all interpreter CPU), counted by
-`ops/ScriptLoad` around `ScriptOperationHelper`'s run and published on each gossip round alongside the two
-admin-catch-up fields below. All three ride the existing gossip payload with no wire change, and adopting a
+`ops/ScriptLoad` around `ScriptOperationHelper`'s run and published on each gossip round alongside
+`NodeInfo.scriptCapacity` (this node's `maxConcurrentScripts`, from `ops/ScriptAdmission.capacity()`) and
+the two admin-catch-up fields below. All four ride the existing gossip payload with no wire change, and adopting a
 peer's new values (`NodeInfo.copyTelemetryFrom`) deliberately does **not** count as a membership change:
 firing the membership listeners every round would rebuild the ownership ring and re-run anti-entropy for
 nothing. A node running an older version reports `0` load and so attracts traffic — roll every node before
@@ -172,7 +177,10 @@ Quorum is deliberately still not an input: a script that lands on a node lacking
 write with the existing `503-2`, which is the correct and already-tested outcome. A forward that fails (unreachable target, timeout, `ERROR` reply)
 **falls back to local execution** rather than erroring: the script would have run here anyway before
 placement existed, so local is always correct and placement can never make a working call fail. The
-fallback is logged at WARNING and counted. Because a forwarded script must be given the whole script
+fallback is logged at WARNING and counted. A `503-6` from the chosen node is **not** one of those
+failures: it is a real `FORWARD_RESPONSE`, so it is relayed to the client verbatim rather than retried
+locally. Falling back there would let the cluster route around the very cap protecting the target, and the
+caller should simply retry. Because a forwarded script must be given the whole script
 budget, `forwardScript` waits `scriptTimeoutMs + replicationAckTimeoutMs` rather than the ack timeout
 sized for a single write. No forwarding loop is possible: the target runs the script through
 `ClusterConnectionHandler.executeForwarded` → `OperationProcessor` directly, bypassing

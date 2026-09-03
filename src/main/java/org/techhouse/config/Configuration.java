@@ -57,6 +57,8 @@ public final class Configuration {
     private long scriptMaxResultBytes;
     private int scriptCursorBatchSize;
     private int scriptCursorMaxBatchSize;
+    private int maxConcurrentScripts;
+    private long scriptQueueWaitMs;
     private int procedureCacheSize;
     private long procedureCacheMaxBytes;
     private long schemaCacheMaxBytes;
@@ -147,6 +149,8 @@ public final class Configuration {
         scriptMaxResultBytes = sizeOf(configs, "scriptMaxResultBytes");
         scriptCursorBatchSize = intOf(configs, "scriptCursorBatchSize");
         scriptCursorMaxBatchSize = intOf(configs, "scriptCursorMaxBatchSize");
+        maxConcurrentScripts = intOf(configs, "maxConcurrentScripts");
+        scriptQueueWaitMs = longOf(configs, "scriptQueueWaitMs");
         procedureCacheSize = intOf(configs, "procedureCacheSize");
         procedureCacheMaxBytes = sizeOf(configs, "procedureCacheMaxBytes");
         schemaCacheMaxBytes = sizeOf(configs, "schemaCacheMaxBytes");
@@ -397,6 +401,14 @@ public final class Configuration {
 
     public int getScriptCursorMaxBatchSize() {
         return scriptCursorMaxBatchSize;
+    }
+
+    public int getMaxConcurrentScripts() {
+        return maxConcurrentScripts;
+    }
+
+    public long getScriptQueueWaitMs() {
+        return scriptQueueWaitMs;
     }
 
     public int getProcedureCacheSize() {

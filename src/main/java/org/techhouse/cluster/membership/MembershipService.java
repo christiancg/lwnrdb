@@ -28,6 +28,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ScriptAdmission;
 import org.techhouse.ops.ScriptLoad;
 
 public class MembershipService {
@@ -35,6 +36,7 @@ public class MembershipService {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
+    private final ScriptAdmission scriptAdmission = IocContainer.get(ScriptAdmission.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Map<String, NodeInfo> members = new ConcurrentHashMap<>();
     private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
@@ -118,6 +120,7 @@ public class MembershipService {
         final var now = System.currentTimeMillis();
         self.setHeartbeat(heartbeatCounter.incrementAndGet());
         self.setScriptLoad(scriptLoad.current());
+        self.setScriptCapacity(scriptAdmission.capacity());
         self.setAdminSyncing(adminSyncing);
         self.setAdminEpoch(adminEpoch.current());
         lastSeen.put(self.getNodeId(), now);
@@ -247,7 +250,7 @@ public class MembershipService {
 
     private NodeInfo buildSelf(String nodeId) {
         return new NodeInfo(nodeId, clusterConfig.advertisedAddress(), clusterConfig.clusterPort(), NodeState.ALIVE,
-                System.currentTimeMillis(), 0L);
+                System.currentTimeMillis(), 0L, 0, scriptAdmission.capacity());
     }
 
     private String resolveNodeId() {

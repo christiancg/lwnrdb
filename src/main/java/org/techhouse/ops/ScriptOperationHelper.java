@@ -27,6 +27,7 @@ public final class ScriptOperationHelper {
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
+    private static final ScriptAdmission admission = IocContainer.get(ScriptAdmission.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(ScriptOperationHelper.class);
     private static final String EXHAUSTED_MESSAGE = "Script exhausted available memory";
@@ -47,19 +48,28 @@ public final class ScriptOperationHelper {
         if (source.getBytes(StandardCharsets.UTF_8).length > configuration.getScriptMaxSourceBytes()) {
             return new OperationResponse(OperationType.RUN_SCRIPT, ErrorCode.SCRIPT_TOO_LARGE);
         }
-        // Deliberately the source overload, not compile(): a syntax error has to stay a 400-9 response
-        // rather than an exception, which is the contract this operation already had.
-        final var host = hostFor(request.getArgs(), dbName, username, clientId);
-        final var start = System.currentTimeMillis();
-        final ScriptResult result;
-        scriptLoad.enter();
-        try {
-            result = simpleJs.run(source, host);
-        } finally {
-            scriptLoad.exit();
+        // Admitted only after the checks above, so a request that was never going to run does not consume
+        // one of the node's script permits.
+        if (!admission.tryAcquire()) {
+            return new OperationResponse(OperationType.RUN_SCRIPT, ErrorCode.SCRIPT_CONCURRENCY_LIMIT);
         }
-        logRun("RUN_SCRIPT user=" + username + " database=" + dbName, System.currentTimeMillis() - start, result);
-        return toRunScriptResponse(result);
+        try {
+            // Deliberately the source overload, not compile(): a syntax error has to stay a 400-9 response
+            // rather than an exception, which is the contract this operation already had.
+            final var host = hostFor(request.getArgs(), dbName, username, clientId);
+            final var start = System.currentTimeMillis();
+            final ScriptResult result;
+            scriptLoad.enter();
+            try {
+                result = simpleJs.run(source, host);
+            } finally {
+                scriptLoad.exit();
+            }
+            logRun("RUN_SCRIPT user=" + username + " database=" + dbName, System.currentTimeMillis() - start, result);
+            return toRunScriptResponse(result);
+        } finally {
+            admission.release();
+        }
     }
 
     // The shared body: build the configured sandbox, run an already-parsed program, log the outcome.

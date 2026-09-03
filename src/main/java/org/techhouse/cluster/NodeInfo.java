@@ -12,6 +12,7 @@ public class NodeInfo {
     private volatile long incarnation;
     private volatile long heartbeat;
     private volatile int scriptLoad;
+    private volatile int scriptCapacity;
     private volatile boolean adminSyncing;
     private volatile long adminEpoch;
 
@@ -24,6 +25,11 @@ public class NodeInfo {
 
     public NodeInfo(String nodeId, String host, int port, NodeState state, long incarnation, long heartbeat,
             int scriptLoad) {
+        this(nodeId, host, port, state, incarnation, heartbeat, scriptLoad, 0);
+    }
+
+    public NodeInfo(String nodeId, String host, int port, NodeState state, long incarnation, long heartbeat,
+            int scriptLoad, int scriptCapacity) {
         this.nodeId = nodeId;
         this.host = host;
         this.port = port;
@@ -31,6 +37,7 @@ public class NodeInfo {
         this.incarnation = incarnation;
         this.heartbeat = heartbeat;
         this.scriptLoad = scriptLoad;
+        this.scriptCapacity = scriptCapacity;
     }
 
     public NodeAddress address() {
@@ -93,6 +100,14 @@ public class NodeInfo {
         this.scriptLoad = scriptLoad;
     }
 
+    public int getScriptCapacity() {
+        return scriptCapacity;
+    }
+
+    public void setScriptCapacity(int scriptCapacity) {
+        this.scriptCapacity = scriptCapacity;
+    }
+
     public boolean isAdminSyncing() {
         return adminSyncing;
     }
@@ -116,6 +131,7 @@ public class NodeInfo {
      */
     public void copyTelemetryFrom(NodeInfo incoming) {
         scriptLoad = incoming.getScriptLoad();
+        scriptCapacity = incoming.getScriptCapacity();
         adminSyncing = incoming.isAdminSyncing();
         adminEpoch = incoming.getAdminEpoch();
     }
@@ -127,19 +143,21 @@ public class NodeInfo {
         if (!(o instanceof NodeInfo that))
             return false;
         return port == that.port && incarnation == that.incarnation && heartbeat == that.heartbeat
-                && scriptLoad == that.scriptLoad && adminSyncing == that.adminSyncing && adminEpoch == that.adminEpoch
+                && scriptLoad == that.scriptLoad && scriptCapacity == that.scriptCapacity
+                && adminSyncing == that.adminSyncing && adminEpoch == that.adminEpoch
                 && Objects.equals(nodeId, that.nodeId) && Objects.equals(host, that.host) && state == that.state;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(nodeId, host, port, state, incarnation, heartbeat, scriptLoad, adminSyncing, adminEpoch);
+        return Objects.hash(nodeId, host, port, state, incarnation, heartbeat, scriptLoad, scriptCapacity, adminSyncing,
+                adminEpoch);
     }
 
     @Override
     public String toString() {
         return "NodeInfo(nodeId=" + nodeId + ", host=" + host + ", port=" + port + ", state=" + state + ", incarnation="
-                + incarnation + ", heartbeat=" + heartbeat + ", scriptLoad=" + scriptLoad + ", adminSyncing="
-                + adminSyncing + ", adminEpoch=" + adminEpoch + ")";
+                + incarnation + ", heartbeat=" + heartbeat + ", scriptLoad=" + scriptLoad + ", scriptCapacity="
+                + scriptCapacity + ", adminSyncing=" + adminSyncing + ", adminEpoch=" + adminEpoch + ")";
     }
 }

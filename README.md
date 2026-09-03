@@ -522,7 +522,7 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 
   It is a **paged read, not a snapshot**: each batch is an ordinary `AGGREGATE` against the live collection (authorized, schema-checked and cluster-routed like any other), so a concurrent insert or delete between two batches can make a document be seen twice or not at all. Paging is only meaningful with a `SORT` step — without one the pipeline's order is unspecified — and `db.cursor` does not inject one, because that would change the results of a pipeline ending in `GROUP_BY`/`COUNT`. Such a pipeline still works, but it pages the *step output*, which is rarely what is meant.
 - **Every failed `db` operation throws a catchable `Error` inside the script** — a permission denial, a schema violation, an oversized entry, a cluster rejection or an internal error alike; a failure is never silently swallowed. The two exceptions are ordinary absence rather than failure: a missing document reads as `null` from `findById`, an empty pipeline as `[]` from `aggregate`, and deleting a document that is not there is a no-op.
-- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `408-1` when it exceeds `scriptTimeoutMs`, and `409-6` if sent while a transaction is open on the connection.
+- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `408-1` when it exceeds `scriptTimeoutMs`, `503-6` when the node is already running `maxConcurrentScripts` scripts and none finished within `scriptQueueWaitMs` (nothing ran — retry shortly), and `409-6` if sent while a transaction is open on the connection.
 - Under clustering the script runs on the node that received it; each operation it issues is routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
 #### `SAVE_PROCEDURE`
@@ -582,7 +582,7 @@ Runs a stored procedure. The permission is the same as [`RUN_SCRIPT`](#run_scrip
 
 - The procedure runs with the **caller's** authority, so calling one never grants more than the caller already had.
 - The parsed program is cached per node keyed by `(database, name, version)`, so a repeated call does not re-parse. `procedureCacheSize` bounds it.
-- **Errors**: as `RUN_SCRIPT`, plus `404-8` when the procedure is absent or disabled.
+- **Errors**: as `RUN_SCRIPT` — including `503-6` when the node is at `maxConcurrentScripts` and no permit came free within `scriptQueueWaitMs`, which is retryable because nothing ran — plus `404-8` when the procedure is absent or disabled.
 
 #### `SAVE_TRIGGER`
 Runs a stored procedure after a committed write to a collection. Requires admin privileges, ownership, or `MANAGE`. Off by default: set `triggersEnabled=true` for triggers to fire (the DDL works either way).
@@ -802,6 +802,10 @@ Response shape:
     "scripts": {
       "routingEnabled": true,
       "running": 2,
+      "capacity": 16,
+      "available": 14,
+      "rejected": 0,
+      "waited": 7,
       "forwarded": 118,
       "forwardFallbacks": 3
     },
@@ -1007,6 +1011,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-3` | `ERROR` | Timed out waiting for the replication quorum |
 | `503-4` | `ERROR` | The collection's owner node is unreachable |
 | `503-5` | `ERROR` | Admin coordinator is synchronizing, retry shortly |
+| `503-6` | `ERROR` | Too many scripts running, retry shortly |
 
 ### Bootstrap
 
@@ -1067,6 +1072,8 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scriptMaxResultBytes` | Human-readable size > 0 (default `16Mb`). Max size of the value a script returns; a larger result fails the run with `400-15` (the `console` output still comes back). Use `db.cursor` to process more data than can be returned |
 | `scriptCursorBatchSize` | Valid number ≥ 1 (default `500`). Default number of documents `db.cursor` fetches per batch |
 | `scriptCursorMaxBatchSize` | Valid number ≥ 1 (default `5000`), and ≥ `scriptCursorBatchSize`. Upper clamp for a caller-supplied `batchSize`, so one call cannot materialise an unbounded batch |
+| `maxConcurrentScripts` | Valid number ≥ 0 (default `16`); `0` disables the cap. Max client-initiated script runs ([`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure)) executing on this node at once. Each run gets its own interpreter and its own `scriptMaxMemoryBytes` allocation budget, so this cap × `scriptMaxMemoryBytes` is the worst-case heap the script surface can hold — **additive** with `maxMemory` and the metadata cache budgets, exactly as those are additive with each other. Triggers and scheduled procedures are bounded separately by `triggerThreads` and `scheduleThreads` and are deliberately **not** subject to this cap, so the node-wide ceiling on concurrent interpreters is `maxConcurrentScripts + triggerThreads + scheduleThreads`. A caller refused after waiting `scriptQueueWaitMs` receives `503-6` |
+| `scriptQueueWaitMs` | Valid number ≥ 0 (default `250`); `0` rejects immediately. How long a client-initiated script run waits for a permit before it is rejected with `503-6`. The wait absorbs bursts so a short spike queues instead of erroring, while the cap still bounds the heap. May legally exceed `scriptTimeoutMs` — a caller can wait longer than a run takes |
 | `scriptMaxLogLines` | Valid number ≥ 1. Max `console` lines returned with the response (newest kept) |
 | `scriptMaxLogLineChars` | Valid number ≥ 1. Max characters kept per returned `console` line |
 | `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
@@ -1121,6 +1128,9 @@ scriptMaxMemoryBytes=64Mb
 scriptMaxResultBytes=16Mb
 scriptCursorBatchSize=500
 scriptCursorMaxBatchSize=5000
+# node-wide script concurrency cap; x scriptMaxMemoryBytes is the worst-case script heap
+maxConcurrentScripts=16
+scriptQueueWaitMs=250
 # stored procedures and triggers; triggers are off by default and gated separately
 procedureCacheSize=128
 # metadata cache bounds - budgeted SEPARATELY from maxMemory (see below)

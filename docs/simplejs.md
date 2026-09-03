@@ -991,6 +991,18 @@ was replaced; see *Regex engine* below.
 - **`RUN_SCRIPT` exposes all of the above to clients**, with the sandbox's `ResourceLimits` built
   from configuration (`DatabaseHostBindings.limitsFromConfiguration`) rather than supplied by the
   caller. See *The `RUN_SCRIPT` operation* below.
+- **The per-run budgets bound one run; `maxConcurrentScripts` bounds their sum.** Every limit in
+  `ResourceLimits` is per run, so N simultaneous callers each get the full instruction budget and the
+  full `scriptMaxMemoryBytes` allocation budget. `ops/ScriptAdmission` caps the client-initiated
+  operations (`RUN_SCRIPT`, `CALL_PROCEDURE`) at `maxConcurrentScripts` concurrent runs, admitting a
+  caller after a bounded `scriptQueueWaitMs` wait and answering `503-6` if none comes free. Triggers
+  and scheduled procedures are deliberately **exempt** — they are already bounded by their own worker
+  pools (`triggerThreads`, `scheduleThreads`), and a trigger refused for want of a permit would be a
+  *dropped* trigger rather than a retried one, since its pending-run record is consumed by the
+  transaction that applies its effects. The node-wide ceiling on concurrent interpreters is therefore
+  `maxConcurrentScripts + triggerThreads + scheduleThreads`, and that sum times `scriptMaxMemoryBytes`
+  is the worst-case script heap an operator sizes `-Xmx` against, additive with `maxMemory` and the
+  metadata cache budgets.
 - **A script's console output is returned to the caller.** `SimpleJs.run` captures it into
   `ScriptResult.getLogs()` on every exit path and tees it to `host.console()`; see *Captured
   console output* below.

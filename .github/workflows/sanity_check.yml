@@ -150,6 +150,14 @@ jobs:
             run: |
               python3 test_utils/test_schedules.py
 
+          # Self-contained, on port 8997: the cap has to be a small known value for a
+          # burst to reach it, and the suite restarts its own instance three times -
+          # reject-immediately, absorb-by-waiting, and cap disabled as the control.
+          - name: script-admission
+            start_server: false
+            run: |
+              python3 test_utils/test_script_admission.py
+
           # Needs a server already up (it connects + loads data, then restarts
           # the server itself to measure cold-cache latency via pgrep).
           - name: cache-warmup-bench

@@ -72,6 +72,8 @@ public final class ConfigurationValidator {
         validateInt(configs, "scriptCursorBatchSize", 1, errors);
         validateInt(configs, "scriptCursorMaxBatchSize", 1, errors);
         validateCursorBatchSizes(configs, errors);
+        validateInt(configs, "maxConcurrentScripts", 0, errors);
+        validateQueueWait(configs, errors);
         validateInt(configs, "scriptMaxLogLines", 1, errors);
         validateInt(configs, "scriptMaxLogLineChars", 1, errors);
         validateInt(configs, "procedureCacheSize", 0, errors);
@@ -105,6 +107,14 @@ public final class ConfigurationValidator {
         if (Integer.parseInt(batchSize.trim()) > Integer.parseInt(maxBatchSize.trim())) {
             errors.add("scriptCursorBatchSize (" + batchSize + ") must not be greater than scriptCursorMaxBatchSize ("
                     + maxBatchSize + ")");
+        }
+    }
+
+    // 0 is legal and means reject the caller immediately, so this cannot use validatePositiveLong.
+    private static void validateQueueWait(Map<String, String> configs, List<String> errors) {
+        final var value = configs.get("scriptQueueWaitMs");
+        if (notALong(value, parsed -> parsed >= 0)) {
+            errors.add("scriptQueueWaitMs must be a valid number greater than or equal to 0, but was: " + value);
         }
     }
 

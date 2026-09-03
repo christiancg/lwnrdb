@@ -188,13 +188,26 @@ public class Main {
         final var metadataCap = config.getProcedureCacheMaxBytes() + config.getSchemaCacheMaxBytes()
                 + config.getScheduleCacheMaxBytes();
         final var userCap = config.isCachingDisabled() || config.isCacheUnlimited() ? 0L : config.getMaxMemoryBytes();
-        final var total = userCap + metadataCap;
+        final var scriptCap = scriptBudgetBytes();
+        final var total = userCap + metadataCap + scriptCap;
         if (total > xmx) {
-            logger.warning("The configured cache budgets total " + total + " bytes (maxMemory " + userCap
+            logger.warning("The configured memory budgets total " + total + " bytes (maxMemory " + userCap
                     + " + procedureCacheMaxBytes/schemaCacheMaxBytes/scheduleCacheMaxBytes " + metadataCap
-                    + ") but JVM -Xmx is only " + xmx
+                    + " + concurrent script budgets " + scriptCap + ") but JVM -Xmx is only " + xmx
                     + " bytes. Lower the budgets or raise -Xmx, otherwise a fully-warm node cannot fit in heap.");
         }
+    }
+
+    // The concurrent interpreters this node can hold at once: client runs are capped by
+    // maxConcurrentScripts, triggers and schedules by their own worker pools. Each may allocate up to
+    // scriptMaxMemoryBytes, and that is additive with the cache budgets.
+    private static long scriptBudgetBytes() {
+        if (!config.isScriptsEnabled()) {
+            return 0L;
+        }
+        final var interpreters = (long) config.getMaxConcurrentScripts() + config.getTriggerThreads()
+                + config.getScheduleThreads();
+        return interpreters * config.getScriptMaxMemoryBytes();
     }
 
     static void warnIfXmxExceedsMaxMemory() {

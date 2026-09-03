@@ -163,6 +163,8 @@ public class ConfigurationTest {
         map.put("scriptMaxResultBytes", "16Mb");
         map.put("scriptCursorBatchSize", "500");
         map.put("scriptCursorMaxBatchSize", "5000");
+        map.put("maxConcurrentScripts", "16");
+        map.put("scriptQueueWaitMs", "250");
         map.put("procedureCacheSize", "128");
         map.put("triggersEnabled", "false");
         map.put("triggerThreads", "2");
@@ -208,6 +210,8 @@ public class ConfigurationTest {
             assertFalse(config.isScriptTextImportEnabled());
             assertEquals(10_000_000L, config.getScriptInstructionBudget());
             assertEquals(5000L, config.getScriptTimeoutMs());
+            assertEquals(16, config.getMaxConcurrentScripts());
+            assertEquals(250L, config.getScriptQueueWaitMs());
             assertEquals(200, config.getScriptMaxDepth());
             assertEquals(256L * 1024L, config.getScriptMaxSourceBytes());
             assertEquals(1000, config.getScriptMaxLogLines());

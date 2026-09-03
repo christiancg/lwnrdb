@@ -37,9 +37,11 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ReplicatedApplyHelper;
+import org.techhouse.ops.ScriptAdmission;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
@@ -430,6 +432,33 @@ public class ScriptClusterRoutingIntegrationTest {
         final var response = router.forward(RequestParser.parseRequest(raw), raw, false, ADMIN, null);
         assertNotNull(response, "the script should have been forwarded, not run locally");
         assertTrue(response.contains("hello"), response);
+    }
+
+    // A 503-6 is a real response, so it is relayed rather than retried here. forwardScript's fallback is
+    // deliberately generous - a transport failure runs the script locally - and falling back on a capacity
+    // rejection would let the cluster route around the very cap protecting the target node.
+    @Test
+    public void test_forwarded_script_rejection_is_relayed_not_retried_locally() throws Exception {
+        enableScriptRouting();
+        final var admission = IocContainer.get(ScriptAdmission.class);
+        admission.reconfigure(1, 0L);
+        final var raw = "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"script\":\"return 41 + 1;\"}";
+        final var forwardedBefore = scriptPlacement.getForwarded();
+        final var fallbacksBefore = scriptPlacement.getForwardFallbacks();
+        assertTrue(admission.tryAcquire());
+        final String response;
+        try {
+            response = router.forward(RequestParser.parseRequest(raw), raw, false, ADMIN, null);
+        } finally {
+            admission.release();
+            admission.reconfigure(0, 0L);
+        }
+        assertNotNull(response, "the target's rejection must be relayed, not retried locally");
+        assertTrue(response.contains(ErrorCode.SCRIPT_CONCURRENCY_LIMIT.getCode()), response);
+        assertFalse(response.contains("\"result\":42"), "the script ran anyway: " + response);
+        assertEquals(forwardedBefore + 1, scriptPlacement.getForwarded());
+        assertEquals(fallbacksBefore, scriptPlacement.getForwardFallbacks());
     }
 
     // Routing off keeps the pre-existing behaviour: the script runs on the node that received it.

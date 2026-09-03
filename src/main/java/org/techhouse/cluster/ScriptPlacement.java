@@ -21,7 +21,9 @@ import org.techhouse.ioc.IocContainer;
  * candidate: running locally is the fallback in every other case too.
  *
  * <p>The choice is made by <b>power of two choices</b> - sample two distinct live members at random and
- * take the less loaded one. Picking the globally least-loaded node instead would herd: every edge sees the
+ * take the less loaded one, where "less loaded" is load <em>relative to</em> {@code maxConcurrentScripts}
+ * so a heterogeneous cluster compares like with like, and a sample already at its cap loses to one that is
+ * not (it could only answer {@code 503-6}). Picking the globally least-loaded node instead would herd: every edge sees the
  * same gossiped view, stale by up to one gossip interval, so they would all forward to the same node at
  * once. Sampling needs no accurate global view and still keeps the maximum load exponentially closer to
  * the mean than plain random placement.
@@ -106,9 +108,34 @@ public class ScriptPlacement {
 
     // Ties break on nodeId so two edges sampling the same pair of idle nodes agree on the answer.
     private static NodeInfo lessLoaded(NodeInfo a, NodeInfo b) {
-        if (a.getScriptLoad() != b.getScriptLoad()) {
+        // A saturated target could only answer 503-6, so it loses to any sample that is not itself full.
+        if (isSaturated(a) != isSaturated(b)) {
+            return isSaturated(a) ? b : a;
+        }
+        // Load relative to capacity, not absolute: 6/32 is idle where 3/4 is nearly full. A node reporting
+        // capacity 0 is either uncapped or too old to gossip the field, so the pair falls back to absolute
+        // load rather than comparing against an unknown denominator.
+        if (comparable(a) && comparable(b)) {
+            final var ratioA = loadRatio(a);
+            final var ratioB = loadRatio(b);
+            if (ratioA != ratioB) {
+                return ratioA < ratioB ? a : b;
+            }
+        } else if (a.getScriptLoad() != b.getScriptLoad()) {
             return a.getScriptLoad() < b.getScriptLoad() ? a : b;
         }
         return a.getNodeId().compareTo(b.getNodeId()) <= 0 ? a : b;
+    }
+
+    private static boolean comparable(NodeInfo node) {
+        return node.getScriptCapacity() > 0;
+    }
+
+    private static boolean isSaturated(NodeInfo node) {
+        return comparable(node) && node.getScriptLoad() >= node.getScriptCapacity();
+    }
+
+    private static double loadRatio(NodeInfo node) {
+        return (double) node.getScriptLoad() / Math.max(node.getScriptCapacity(), 1);
     }
 }

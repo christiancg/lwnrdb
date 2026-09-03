@@ -17,6 +17,7 @@ import org.techhouse.simplejs.host.ScriptResult;
 public final class ProcedureCallHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
+    private static final ScriptAdmission admission = IocContainer.get(ScriptAdmission.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     private ProcedureCallHelper() {
@@ -39,10 +40,19 @@ public final class ProcedureCallHelper {
             return new OperationResponse(OperationType.CALL_PROCEDURE,
                     "Procedure '" + name + "' not found in database '" + dbName + "'", ErrorCode.PROCEDURE_NOT_FOUND);
         }
-        final var compiled = compiledProcedures.get(dbName, name, definition.getVersion(), definition.getSource());
-        final var result = ScriptOperationHelper.runCompiled(compiled, request.getArgs(), dbName, username, clientId,
-                "CALL_PROCEDURE user=" + username + " database=" + dbName + " procedure=" + name);
-        return toResponse(result);
+        // The gate is here rather than in runCompiled, which triggers and schedules share: they are bounded
+        // by their own worker pools and must never be refused a run.
+        if (!admission.tryAcquire()) {
+            return new OperationResponse(OperationType.CALL_PROCEDURE, ErrorCode.SCRIPT_CONCURRENCY_LIMIT);
+        }
+        try {
+            final var compiled = compiledProcedures.get(dbName, name, definition.getVersion(), definition.getSource());
+            final var result = ScriptOperationHelper.runCompiled(compiled, request.getArgs(), dbName, username,
+                    clientId, "CALL_PROCEDURE user=" + username + " database=" + dbName + " procedure=" + name);
+            return toResponse(result);
+        } finally {
+            admission.release();
+        }
     }
 
     private static OperationResponse toResponse(ScriptResult result) {

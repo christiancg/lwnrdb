@@ -59,6 +59,8 @@ public class ConfigurationValidatorTest {
         map.put("scriptMaxResultBytes", "16Mb");
         map.put("scriptCursorBatchSize", "500");
         map.put("scriptCursorMaxBatchSize", "5000");
+        map.put("maxConcurrentScripts", "16");
+        map.put("scriptQueueWaitMs", "250");
         map.put("procedureCacheSize", "128");
         map.put("triggersEnabled", "false");
         map.put("triggerThreads", "2");
@@ -335,6 +337,23 @@ public class ConfigurationValidatorTest {
         assertHasError(tempDir, "scriptMaxResultBytes", "0", "scriptMaxResultBytes");
         assertHasError(tempDir, "scriptCursorBatchSize", "0", "scriptCursorBatchSize");
         assertHasError(tempDir, "scriptCursorMaxBatchSize", "0", "scriptCursorMaxBatchSize");
+    }
+
+    // 0 is legal for both: it means "no cap" and "reject immediately" respectively.
+    @Test
+    public void test_invalid_script_admission_bounds(@TempDir Path tempDir) {
+        assertHasError(tempDir, "maxConcurrentScripts", "-1", "maxConcurrentScripts");
+        assertHasError(tempDir, "maxConcurrentScripts", "not-a-number", "maxConcurrentScripts");
+        assertHasError(tempDir, "scriptQueueWaitMs", "-1", "scriptQueueWaitMs");
+        assertHasError(tempDir, "scriptQueueWaitMs", "not-a-number", "scriptQueueWaitMs");
+    }
+
+    @Test
+    public void test_zero_script_admission_bounds_are_valid(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("maxConcurrentScripts", "0");
+        config.put("scriptQueueWaitMs", "0");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
     }
 
     @Test

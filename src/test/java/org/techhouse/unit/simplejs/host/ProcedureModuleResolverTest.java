@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs.host;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.Objects;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -15,8 +16,6 @@ import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.simplejs.host.ProcedureModuleResolver;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import java.util.Objects;
 
 public class ProcedureModuleResolverTest {
     private static final String ACTOR = "alice";

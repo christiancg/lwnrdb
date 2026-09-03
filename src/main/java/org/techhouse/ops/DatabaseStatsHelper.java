@@ -21,6 +21,7 @@ public final class DatabaseStatsHelper {
     private static final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private static final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
+    private static final ScriptAdmission scriptAdmission = IocContainer.get(ScriptAdmission.class);
     private static final ScriptPlacement scriptPlacement = IocContainer.get(ScriptPlacement.class);
 
     private DatabaseStatsHelper() {
@@ -90,6 +91,10 @@ public final class DatabaseStatsHelper {
         final var scripts = new JsonObject();
         scripts.addProperty("routingEnabled", Configuration.getInstance().isScriptRoutingEnabled());
         scripts.addProperty("running", (long) scriptLoad.current());
+        scripts.addProperty("capacity", (long) scriptAdmission.capacity());
+        scripts.addProperty("available", (long) scriptAdmission.available());
+        scripts.addProperty("rejected", scriptAdmission.getRejected());
+        scripts.addProperty("waited", scriptAdmission.getWaited());
         scripts.addProperty("forwarded", scriptPlacement.getForwarded());
         scripts.addProperty("forwardFallbacks", scriptPlacement.getForwardFallbacks());
         return scripts;
