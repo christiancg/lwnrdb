@@ -1,6 +1,7 @@
 package org.techhouse.ops.req.validations;
 
 import java.util.List;
+import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.auth.PermissionLevel;
@@ -12,6 +13,7 @@ import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CallProcedureRequest;
+import org.techhouse.ops.req.CancelScriptRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.CreateUserRequest;
@@ -73,7 +75,7 @@ public class RequestValidator {
             case STOP_LISTEN -> validateStopListen((StopListenRequest) request);
             // Transaction control operations carry no db/coll/payload of their own — the transaction is
             // scoped to the connection. Authentication is still enforced in MessageProcessor.
-            case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION, LIST_TRANSACTIONS ->
+            case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION, LIST_TRANSACTIONS, LIST_SCRIPTS ->
                 ValidationResult.ok();
             case RESOLVE_TRANSACTION -> validateResolveTransaction((ResolveTransactionRequest) request);
             case RUN_SCRIPT -> validateRunScript((RunScriptRequest) request);
@@ -87,6 +89,7 @@ public class RequestValidator {
             case SAVE_SCHEDULE -> validateSaveSchedule((SaveScheduleRequest) request);
             case DELETE_SCHEDULE -> validateDeleteSchedule((DeleteScheduleRequest) request);
             case LIST_SCHEDULES -> validateDbNameOnly(request.getDatabaseName());
+            case CANCEL_SCRIPT -> validateCancelScript((CancelScriptRequest) request);
         };
     }
 
@@ -202,6 +205,20 @@ public class RequestValidator {
             return dbResult;
         }
         return validateProcedureName(request.getName());
+    }
+
+    // The run id is a UUID the server itself minted, so anything else names no run that could ever exist.
+    private static ValidationResult validateCancelScript(CancelScriptRequest request) {
+        final var runId = request.getRunId();
+        if (runId == null || runId.isBlank()) {
+            return ValidationResult.fail("runId is required");
+        }
+        try {
+            UUID.fromString(runId);
+        } catch (IllegalArgumentException e) {
+            return ValidationResult.fail("runId must be a UUID");
+        }
+        return ValidationResult.ok();
     }
 
     private static ValidationResult validateResolveTransaction(ResolveTransactionRequest request) {

@@ -1389,6 +1389,40 @@ abort alike — reachable as `getLogs()` and `isLogsTruncated()`.
 - Under `RUN_SCRIPT` the two caps come from `scriptMaxLogLines`/`scriptMaxLogLineChars`, and the
   lines travel back to the client on the response (`logs`/`logsTruncated`).
 
+### Cancellation
+
+A run can be stopped from outside through `host/CancellationToken`, a one-method seam
+(`boolean isCancelled()`) reached via `HostBindings.cancellation()`. A **null token means "never
+cancelled"**, which is the default and is what leaves `SimpleHostBindings` and the test262 worker on
+their previous behaviour; `host/DatabaseHostBindings` carries a real one, backed by the
+`AtomicBoolean` on the `ops/ScriptRun` that the node's `ops/ScriptRunRegistry` hands out.
+
+- The token is polled exactly where the other sandbox aborts are checked: in `Interpreter.tick()`
+  (loop back-edges and call entries), beside the instruction budget and the wall clock, and in the
+  `EventLoop`'s two park loops (`awaitAsyncCompletion` and `awaitUntil`). Both parks are capped at a
+  50 ms `CANCEL_POLL_NANOS` slice for that reason — a script parked on a 30-second timer must notice
+  its cancellation now, not when the timer comes due — and the run's registration also unparks the
+  drain thread directly, so the poll interval is the fallback rather than the mechanism.
+- Cancellation therefore is **cooperative**. A run blocked inside a host call (a `db` operation, a
+  `fetch`) ends at the next tick or poll after that call returns, not instantly. A straight-line
+  program with no loop and no call reaches no tick at all and simply finishes.
+- `ScriptCancelledException` extends `ScriptAbortException`, which is the whole point: `evalTry`
+  neither lets user `try`/`catch` catch it nor runs `finally`, and `disposeScope` skips `using`
+  disposal — so a script cannot trap its own cancellation in a `finally { while (true) {} }`.
+- `SimpleJs.run` reports it as its own outcome, `ScriptCancelledError`, in a catch arm **before** the
+  `ScriptAbortException` one; `ops/ScriptOperationHelper.errorCodeFor` maps that to `408-2`, so
+  `RUN_SCRIPT`, `CALL_PROCEDURE` and the trigger/schedule log lines all name it identically. Console
+  output produced before the cancellation still travels back on the response.
+- **A cancelled trigger run is dropped rather than replayed.** `ops/TriggerDispatcher` treats every
+  terminal non-applying outcome as consuming the run's pending `ops/TriggerRunLog` record, and a
+  cancellation is one of them — so a cancelled trigger will not be re-queued by
+  `TriggerRunRecovery.recoverLocal()` at the next startup. This is the one place the exactly-once
+  guarantee is intentionally waived: an operator cancelling a runaway trigger wants it stopped, not
+  retried.
+
+The wire side — the admin-only `LIST_SCRIPTS`/`CANCEL_SCRIPT` operations and their cluster-wide
+fan-out — lives in `cluster/ScriptRunDirectory`; see README and `docs/clustering.md`.
+
 ### `crypto`
 
 A namespace object like `Math`/`JSON`/`Reflect`, so a stored procedure can mint ids and hash content

@@ -83,6 +83,8 @@ public final class RequestParser {
                 case ROLLBACK_TRANSACTION -> eJson.fromJson(message, RollbackTransactionRequest.class);
                 case RESOLVE_TRANSACTION -> eJson.fromJson(message, ResolveTransactionRequest.class);
                 case LIST_TRANSACTIONS -> eJson.fromJson(message, ListTransactionsRequest.class);
+                case LIST_SCRIPTS -> eJson.fromJson(message, ListScriptsRequest.class);
+                case CANCEL_SCRIPT -> eJson.fromJson(message, CancelScriptRequest.class);
                 case RUN_SCRIPT -> eJson.fromJson(message, RunScriptRequest.class);
                 case SAVE_PROCEDURE -> eJson.fromJson(message, SaveProcedureRequest.class);
                 case DELETE_PROCEDURE -> eJson.fromJson(message, DeleteProcedureRequest.class);

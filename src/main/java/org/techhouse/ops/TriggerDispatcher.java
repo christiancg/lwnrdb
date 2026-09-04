@@ -16,6 +16,7 @@ import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.host.DatabaseHostBindings;
 import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
 import org.techhouse.simplejs.host.ResourceLimits;
+import org.techhouse.simplejs.host.ScriptResult;
 
 /**
  * Runs one queued trigger. A failure here never reaches the write that fired it - that already committed -
@@ -26,6 +27,7 @@ public final class TriggerDispatcher {
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final ScriptRunRegistry runRegistry = IocContainer.get(ScriptRunRegistry.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TriggerDispatcher.class);
 
@@ -70,9 +72,8 @@ public final class TriggerDispatcher {
             String definer) {
         final var compiled = compiledProcedures.get(event.getDbName(), trigger.getProcedureName(), version, source);
         final var database = new EnforcingDatabaseAccess(definer, null, event.getDbName(), event.getDepth() + 1);
-        // Unlike CALL_PROCEDURE the console sink is non-null: nobody is waiting on a response, so the
-        // server log is the only place a trigger's console output can go.
-        final var host = DatabaseHostBindings.of(argsFor(event, definer), database, logger::info, limits());
+        final var scriptRun = runRegistry.register(ScriptRunKind.TRIGGER, event.getDbName(), trigger.getName(), definer,
+                null);
         final var start = System.currentTimeMillis();
         final var runId = event.getRunId();
         // A logged run executes inside a transaction that also consumes its record, so the effects and the
@@ -80,13 +81,23 @@ public final class TriggerDispatcher {
         // both happen inside the body wrapper because the interpreter runs the module on its own thread and
         // the collection locks a transactional write takes are owned by the thread that acquired them.
         final var committed = new java.util.concurrent.atomic.AtomicBoolean(runId == null);
-        final var result = runId == null
-                ? simpleJs.run(compiled, host)
-                : simpleJs.run(compiled, host,
-                        body -> runInTransaction(database, runId, trigger.getName(), body, committed));
+        final ScriptResult result;
+        try {
+            // Unlike CALL_PROCEDURE the console sink is non-null: nobody is waiting on a response, so the
+            // server log is the only place a trigger's console output can go.
+            final var host = DatabaseHostBindings.of(argsFor(event, definer), database, logger::info, limits(),
+                    scriptRun::isCancelled);
+            result = runId == null
+                    ? simpleJs.run(compiled, host)
+                    : simpleJs.run(compiled, host,
+                            body -> runInTransaction(database, runId, trigger.getName(), body, committed));
+        } finally {
+            runRegistry.unregister(scriptRun.runId());
+        }
         final var line = "TRIGGER name=" + trigger.getName() + " database=" + event.getDbName() + " collection="
                 + event.getCollName() + " event=" + event.getType() + " definer=" + definer + " actingUser="
-                + event.getActingUser() + " durationMs=" + (System.currentTimeMillis() - start);
+                + event.getActingUser() + " runId=" + scriptRun.runId() + " durationMs="
+                + (System.currentTimeMillis() - start);
         if (result.isError()) {
             consumeQuietly(runId, trigger.getName());
             triggerExecutor.countFailure();

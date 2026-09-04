@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.UUID;
@@ -15,12 +16,15 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ShutdownCoordinator;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.ScriptRunKind;
+import org.techhouse.ops.ScriptRunRegistry;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
@@ -67,6 +71,22 @@ public class ShutdownCoordinatorTest {
         final var server = new SocketServer(0);
 
         assertDoesNotThrow(() -> coordinator().shutdown(server, null));
+    }
+
+    // A registered script run is not something shutdown waits on: the registry is in-memory bookkeeping,
+    // so the ordered stop must still finish within its budget.
+    @Test
+    public void test_shutdown_completes_with_a_run_registered() {
+        final var registry = IocContainer.get(ScriptRunRegistry.class);
+        final var run = registry.register(ScriptRunKind.RUN_SCRIPT, TestGlobals.DB, null, "alice", null);
+        try {
+            final var start = System.currentTimeMillis();
+            assertDoesNotThrow(() -> coordinator().shutdown(null, null));
+            assertTrue(System.currentTimeMillis() - start < Configuration.getInstance().getShutdownTimeoutMs() + 5_000L,
+                    "shutdown overran its budget with a run registered");
+        } finally {
+            registry.unregister(run.runId());
+        }
     }
 
     @Test

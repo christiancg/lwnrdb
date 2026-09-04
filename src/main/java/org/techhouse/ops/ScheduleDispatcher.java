@@ -67,7 +67,7 @@ public final class ScheduleDispatcher {
         final var logPrefix = "SCHEDULE name=" + definition.getName() + " database=" + dbName + " procedure="
                 + definition.getProcedureName() + " definer=" + definer;
         final var result = ScriptOperationHelper.runCompiled(compiled, definition.getArgs(), dbName, definer, null,
-                logPrefix, limits(definition), logger::info);
+                logPrefix, ScriptRunKind.SCHEDULE, definition.getName(), limits(definition), logger::info).result();
         if (result.isError()) {
             scheduleExecutor.countFailure();
             logger.warning(logPrefix + " outcome=" + result.getErrorName() + ": " + result.getErrorMessage()

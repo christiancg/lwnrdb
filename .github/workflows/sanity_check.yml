@@ -158,6 +158,15 @@ jobs:
             run: |
               python3 test_utils/test_script_admission.py
 
+          # Self-contained, on port 8998: LIST_SCRIPTS / CANCEL_SCRIPT need scripts, triggers and
+          # schedules all enabled plus a deliberately generous script timeout (so a cancellation is
+          # never mistaken for a timeout), and the suite restarts its own instance to prove a
+          # cancelled trigger run is not replayed by startup recovery.
+          - name: script-control
+            start_server: false
+            run: |
+              python3 test_utils/test_script_control.py
+
           # Needs a server already up (it connects + loads data, then restarts
           # the server itself to measure cold-cache latency via pgrep).
           - name: cache-warmup-bench

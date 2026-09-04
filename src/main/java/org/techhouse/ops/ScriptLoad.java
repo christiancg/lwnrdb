@@ -1,25 +1,21 @@
 package org.techhouse.ops;
 
-import java.util.concurrent.atomic.AtomicInteger;
+import org.techhouse.ioc.IocContainer;
 
 /**
  * The number of script runs executing on this node right now - RUN_SCRIPT, CALL_PROCEDURE and trigger
  * dispatch alike, since they all consume the same interpreter CPU. Gossiped with the heartbeat as the
  * placement signal {@code cluster/ScriptPlacement} samples, so it is a live hint rather than an
  * accounting figure.
+ *
+ * <p>
+ * The count is {@link ScriptRunRegistry}'s size rather than a counter of its own: the number placement acts
+ * on and the runs LIST_SCRIPTS reports are then the same set by construction.
  */
 public class ScriptLoad {
-    private final AtomicInteger running = new AtomicInteger();
-
-    public void enter() {
-        running.incrementAndGet();
-    }
-
-    public void exit() {
-        running.decrementAndGet();
-    }
+    private static final ScriptRunRegistry registry = IocContainer.get(ScriptRunRegistry.class);
 
     public int current() {
-        return running.get();
+        return registry.size();
     }
 }

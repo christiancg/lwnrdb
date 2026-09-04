@@ -22,6 +22,7 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.ReplicatedApplyHelper;
 import org.techhouse.ops.ReplicatedTxApplyHelper;
 import org.techhouse.ops.ReplicatedUserApplyHelper;
+import org.techhouse.ops.ScriptRunRegistry;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.RequestParser;
@@ -36,6 +37,8 @@ public class ClusterConnectionHandler implements Runnable {
     private final AdminAntiEntropyService adminAntiEntropyService = IocContainer.get(AdminAntiEntropyService.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Tx2pcDirectory tx2pcDirectory = IocContainer.get(Tx2pcDirectory.class);
+    private final ScriptRunDirectory scriptRunDirectory = IocContainer.get(ScriptRunDirectory.class);
+    private final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
     private final Socket socket;
@@ -94,6 +97,8 @@ public class ClusterConnectionHandler implements Runnable {
             case ABORT_TX -> handleAbortTx(request);
             case TX_STATUS -> handleTxStatus(request);
             case LIST_TX -> handleListTx();
+            case LIST_SCRIPTS -> handleListScripts();
+            case CANCEL_SCRIPT -> handleCancelScript(request);
             case ADMIN_SNAPSHOT -> handleAdminSnapshot();
             case DIGEST -> handleDigest(request);
             case PULL -> handlePull(request);
@@ -260,6 +265,33 @@ public class ClusterConnectionHandler implements Runnable {
         } catch (Exception e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to list in-doubt transactions: " + e.getMessage());
+        }
+        return response;
+    }
+
+    // Reports the script runs executing on this node for a cluster-wide LIST_SCRIPTS aggregation.
+    private ClusterMessage handleListScripts() {
+        final var response = new ClusterMessage();
+        try {
+            response.setType(ClusterMessageType.LIST_SCRIPTS_ACK);
+            response.setRunningScripts(scriptRunDirectory.localRuns());
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to list running scripts: " + e.getMessage());
+        }
+        return response;
+    }
+
+    // Cancels a run executing on this node. An id this node is not running is not an error: the operator
+    // asked every member and only the one running it answers true.
+    private ClusterMessage handleCancelScript(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        try {
+            response.setType(ClusterMessageType.CANCEL_SCRIPT_ACK);
+            response.setCancelledRun(scriptRunRegistry.cancel(request.getCancelRunId()));
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to cancel the running script: " + e.getMessage());
         }
         return response;
     }

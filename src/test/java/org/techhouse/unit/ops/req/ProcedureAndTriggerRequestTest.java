@@ -163,7 +163,7 @@ public class ProcedureAndTriggerRequestTest {
 
     @Test
     public void test_call_procedure_response_carries_logs_on_both_outcomes() {
-        final var ok = new CallProcedureResponse("ok", new JsonString("v"), List.of("a log"), false);
+        final var ok = new CallProcedureResponse("ok", new JsonString("v"), List.of("a log"), false, "run-1");
         assertEquals("v", ok.getResult().asJsonString().getValue());
         assertEquals(List.of("a log"), ok.getLogs());
         assertFalse(ok.isLogsTruncated());
@@ -174,7 +174,7 @@ public class ProcedureAndTriggerRequestTest {
         assertEquals(List.of("another"), ok.getLogs());
         assertTrue(ok.isLogsTruncated());
 
-        final var failed = new CallProcedureResponse("boom", ErrorCode.SCRIPT_FAILED, List.of("before"), true);
+        final var failed = new CallProcedureResponse("boom", ErrorCode.SCRIPT_FAILED, List.of("before"), true, "run-1");
         assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), failed.getErrorCode());
         assertEquals(List.of("before"), failed.getLogs());
         assertTrue(failed.isLogsTruncated());

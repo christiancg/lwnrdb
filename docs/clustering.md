@@ -152,8 +152,8 @@ global view, is O(1), and still keeps the maximum load exponentially closer to t
 placement. `choose()` answering "this node" (or a cluster of one) means the script runs locally.
 
 The load signal is `NodeInfo.scriptLoad`, the number of script runs executing on a node right now
-(`RUN_SCRIPT`, `CALL_PROCEDURE` and trigger dispatch alike — all interpreter CPU), counted by
-`ops/ScriptLoad` around `ScriptOperationHelper`'s run and published on each gossip round alongside
+(`RUN_SCRIPT`, `CALL_PROCEDURE`, trigger dispatch and scheduled runs alike — all interpreter CPU), read by
+`ops/ScriptLoad` from the `ops/ScriptRunRegistry` every entry point registers with, and published on each gossip round alongside
 `NodeInfo.scriptCapacity` (this node's `maxConcurrentScripts`, from `ops/ScriptAdmission.capacity()`) and
 the two admin-catch-up fields below. All four ride the existing gossip payload with no wire change, and adopting a
 peer's new values (`NodeInfo.copyTelemetryFrom`) deliberately does **not** count as a membership change:
@@ -201,7 +201,21 @@ reads; a script that is mostly computation is best spread. `ScriptPlacement` is 
 locality term could be added later without touching the routing, wire or execution paths.
 
 `GET_DATABASE_STATS` reports placement per node under `scripts`: `routingEnabled`, `running` (the live
-count), `forwarded` and `forwardFallbacks`.
+count), `forwarded`, `forwardFallbacks` and `cancelled`.
+
+Because placement decides where a run executes, **visibility and cancellation are cluster-wide from the
+start**: the admin-only `LIST_SCRIPTS` and `CANCEL_SCRIPT` operations (`cluster/ScriptRunDirectory`) run on
+the node that receives them and fan out to every live member, the pattern `LIST_TRANSACTIONS` already
+establishes. Neither is in `ROUTABLE`, `SCRIPT_OPS` or `ADMIN_DDL` — the router must not claim them, or the
+listing would only ever describe one node. A run is reported on the node **executing** it, which under
+default routing is usually not the node that accepted the request: each row carries that node's address, so
+`LIST_SCRIPTS` on node B shows a run node A is executing with A's address. `CANCEL_SCRIPT` cancels locally
+first and only broadcasts when the run is not here, so the common case costs no messages; an id no live node
+is running answers `cancelled:false` with status `OK`. An unreachable peer is logged and skipped rather than
+failing the whole listing, which means a listing is a best-effort view of the live members — a run on a
+partitioned node is invisible until it is reachable again, and a `CANCEL_SCRIPT` cannot reach it either. The
+run count `LIST_SCRIPTS` reports and the `scriptLoad` placement acts on are the same `ops/ScriptRunRegistry`
+by construction, so the two can never disagree.
 
 ### Stored procedures and triggers
 

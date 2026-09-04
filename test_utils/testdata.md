@@ -1207,6 +1207,81 @@ Clean up
 {"type": "DROP_DATABASE", "databaseName": "test2"}
 ```
 
+Running scripts: visibility and cancellation (admin only)
+
+`LIST_SCRIPTS` reports every script executing right now — ad-hoc `RUN_SCRIPT`s, `CALL_PROCEDURE`s,
+trigger runs and scheduled runs alike — and `CANCEL_SCRIPT` stops one by its `runId`. Both fan out to
+every live member, so a run is visible and cancellable from any node, not only the one executing it.
+
+Unlike everything else in this playbook these need **two connections**: the run has to still be in
+flight when you look for it. Send the slow script on connection A, then the listing and the cancel on
+connection B.
+
+Nothing running yet — an empty `scripts` list
+
+```json
+{"type": "LIST_SCRIPTS"}
+```
+
+On connection A, a script that runs for a minute (leave it waiting)
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "export default new Promise(r => setTimeout(() => r('done'), 60000));"}
+```
+
+On connection B, the run now appears — `runId`, the `node` executing it, its `kind`, the `database`, the
+`username` whose authority it runs with, and `ageMs`. On a standalone server `node` reads `local`; in a
+cluster it is the executing node's `host:clusterPort`.
+
+```json
+{"type": "LIST_SCRIPTS"}
+```
+
+Stop it, using the `runId` from that listing. Connection A's `RUN_SCRIPT` then answers `408-2`, and the
+`runId` on its response is the same one.
+
+```json
+{"type": "CANCEL_SCRIPT", "runId": "00000000-0000-0000-0000-000000000000"}
+```
+
+Every `RUN_SCRIPT` and `CALL_PROCEDURE` response carries its own `runId`, so a caller can name its run
+without listing first.
+
+A `runId` no live node is running is not an error — the answer is `OK` with `cancelled: false`
+
+```json
+{"type": "CANCEL_SCRIPT", "runId": "00000000-0000-0000-0000-000000000000"}
+```
+
+A missing `runId` → `400-1`
+
+```json
+{"type": "CANCEL_SCRIPT"}
+```
+
+A `runId` that is not a UUID → `400-1`
+
+```json
+{"type": "CANCEL_SCRIPT", "runId": "not-a-uuid"}
+```
+
+Cancellation is not catchable and skips `finally`. Run this on connection A and cancel it from B: it
+answers `408-2`, not `"caught"`, and the `finally` block never runs.
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "try {\n    while (true) {}\n} catch (e) {\n    return 'caught';\n} finally {\n    console.log('this never runs');\n}"}
+```
+
+A `CALL_PROCEDURE`, a trigger run and a scheduled run are listed the same way, with `kind` set to
+`CALL_PROCEDURE`, `TRIGGER` or `SCHEDULE` and `name` naming the procedure, trigger or schedule (the
+sections below install those; `name` is `null` for an ad-hoc `RUN_SCRIPT`). Cancelling a **trigger** run
+drops it: its pending run record is consumed, so startup recovery will not replay it — the one place the
+exactly-once trigger guarantee is deliberately waived.
+
+Both operations are admin-only: any non-admin — even a database owner holding a `MANAGE` script grant —
+gets `403-1`. The counters `running` and `cancelled` in `GET_DATABASE_STATS` report the same numbers per
+node.
+
 Admin-only: get memory & schema stats (heap usage, cache usage vs cap, OS free RAM, totals across databases/collections, plus per-collection page/index/entry breakdown)
 
 ```json

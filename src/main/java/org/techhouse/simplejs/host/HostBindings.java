@@ -30,6 +30,12 @@ public interface HostBindings {
         return null;
     }
 
+    // Cancellation is opt-in: a null token means this run can never be cancelled, which is what leaves
+    // every embedding that does not track its runs on today's behaviour.
+    default CancellationToken cancellation() {
+        return null;
+    }
+
     // The JVM defaults keep every existing embedding (and the test262 worker) on today's behaviour;
     // only a binding that overrides these makes a script answer the same on every cluster node.
     default java.time.ZoneId timeZone() {

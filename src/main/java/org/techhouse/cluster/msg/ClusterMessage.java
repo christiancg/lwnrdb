@@ -33,6 +33,13 @@ public class ClusterMessage {
     // This node's in-doubt (PREPARED) distributed transactions on a LIST_TX_ACK, aggregated cluster-wide by
     // the node handling a LIST_TRANSACTIONS request.
     private List<InDoubtTx> inDoubtTransactions;
+    // This node's script runs executing right now on a LIST_SCRIPTS_ACK, aggregated cluster-wide by the node
+    // handling a LIST_SCRIPTS request.
+    private List<RunningScript> runningScripts;
+    // The run id to cancel on a CANCEL_SCRIPT message.
+    private String cancelRunId;
+    // Whether the receiving node was executing that run and has asked it to stop, on a CANCEL_SCRIPT_ACK.
+    private boolean cancelledRun;
     // This node's authoritative admin state (epoch + databases/collections/users) on an ADMIN_SNAPSHOT_ACK.
     private AdminSnapshotPayload adminSnapshot;
     // The admin coordinator's current admin epoch, shipped on REPLICATE_ADMIN/REPLICATE_USER so live replicas
@@ -170,6 +177,30 @@ public class ClusterMessage {
 
     public void setInDoubtTransactions(List<InDoubtTx> inDoubtTransactions) {
         this.inDoubtTransactions = inDoubtTransactions;
+    }
+
+    public List<RunningScript> getRunningScripts() {
+        return runningScripts;
+    }
+
+    public void setRunningScripts(List<RunningScript> runningScripts) {
+        this.runningScripts = runningScripts;
+    }
+
+    public String getCancelRunId() {
+        return cancelRunId;
+    }
+
+    public void setCancelRunId(String cancelRunId) {
+        this.cancelRunId = cancelRunId;
+    }
+
+    public boolean isCancelledRun() {
+        return cancelledRun;
+    }
+
+    public void setCancelledRun(boolean cancelledRun) {
+        this.cancelledRun = cancelledRun;
     }
 
     public AdminSnapshotPayload getAdminSnapshot() {

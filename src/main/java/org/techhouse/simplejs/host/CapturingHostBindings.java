@@ -54,6 +54,11 @@ public record CapturingHostBindings(HostBindings delegate, ConsoleCapture captur
     }
 
     @Override
+    public CancellationToken cancellation() {
+        return delegate.cancellation();
+    }
+
+    @Override
     public ZoneId timeZone() {
         return delegate.timeZone();
     }

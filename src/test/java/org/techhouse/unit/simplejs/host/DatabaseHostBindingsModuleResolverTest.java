@@ -35,7 +35,7 @@ public class DatabaseHostBindingsModuleResolverTest {
 
     private static DatabaseHostBindings hostFor(String scopedDatabase) {
         final var database = new EnforcingDatabaseAccess("alice", null, scopedDatabase);
-        return DatabaseHostBindings.of(null, database, null, DatabaseHostBindings.limitsFromConfiguration());
+        return DatabaseHostBindings.of(null, database, null, DatabaseHostBindings.limitsFromConfiguration(), null);
     }
 
     @Test
@@ -56,7 +56,8 @@ public class DatabaseHostBindingsModuleResolverTest {
 
     @Test
     void resolverAbsentWithoutDatabaseAccess() {
-        final var host = DatabaseHostBindings.of(null, null, null, DatabaseHostBindings.limitsFromConfiguration());
+        final var host = DatabaseHostBindings.of(null, null, null, DatabaseHostBindings.limitsFromConfiguration(),
+                null);
         assertNull(host.moduleResolver());
     }
 

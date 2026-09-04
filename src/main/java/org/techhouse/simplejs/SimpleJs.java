@@ -8,6 +8,7 @@ import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.ScriptAbortException;
+import org.techhouse.simplejs.exceptions.ScriptCancelledException;
 import org.techhouse.simplejs.exceptions.ScriptMemoryException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
 import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
@@ -84,6 +85,8 @@ public final class SimpleJs {
             final var program = Parser.parse(Lexer.lexWithPositions(source), capturing.strictScriptGoal());
             final var outcome = Interpreter.run(program, capturing);
             return resultOf(EJsonInterop.toHostEjson(contractResult(outcome)), capture, limits);
+        } catch (ScriptCancelledException cancelled) {
+            return failed("ScriptCancelledError", cancelled.getMessage(), capture);
         } catch (ScriptTimeoutException timeout) {
             return failed("ScriptTimeoutError", timeout.getMessage(), capture);
         } catch (ScriptMemoryException memory) {
@@ -142,6 +145,8 @@ public final class SimpleJs {
                     ? Interpreter.run(program, capturing)
                     : Interpreter.run(program, capturing, around);
             return resultOf(EJsonInterop.toHostEjson(contractResult(outcome)), capture, limits);
+        } catch (ScriptCancelledException cancelled) {
+            return failed("ScriptCancelledError", cancelled.getMessage(), capture);
         } catch (ScriptTimeoutException timeout) {
             return failed("ScriptTimeoutError", timeout.getMessage(), capture);
         } catch (ScriptMemoryException memory) {

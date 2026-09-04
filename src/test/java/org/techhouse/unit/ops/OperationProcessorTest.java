@@ -869,6 +869,8 @@ public class OperationProcessorTest {
         assertEquals(admission.getWaited(), scripts.get("waited").asJsonNumber().getValue().longValue());
         assertTrue(scripts.has("forwarded"));
         assertTrue(scripts.has("forwardFallbacks"));
+        assertEquals(IocContainer.get(org.techhouse.ops.ScriptRunRegistry.class).getCancelled(),
+                scripts.get("cancelled").asJsonNumber().getValue().longValue());
 
         final var memory = stats.get("memory").asJsonObject();
         assertTrue(memory.has("heapUsedBytes"));

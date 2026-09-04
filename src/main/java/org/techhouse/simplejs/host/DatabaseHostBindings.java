@@ -14,13 +14,13 @@ import org.techhouse.ejson.elements.JsonObject;
  * keeps the JVM defaults, which is what leaves the test262 worker's behaviour untouched.
  */
 public record DatabaseHostBindings(JsonObject args, DatabaseAccess database, Consumer<String> console,
-        ResourceLimits limits, ZoneId timeZone, Locale locale) implements HostBindings {
+        ResourceLimits limits, ZoneId timeZone, Locale locale, CancellationToken cancellation) implements HostBindings {
 
     public static DatabaseHostBindings of(JsonObject args, DatabaseAccess database, Consumer<String> console,
-            ResourceLimits limits) {
+            ResourceLimits limits, CancellationToken cancellation) {
         final var configuration = Configuration.getInstance();
         return new DatabaseHostBindings(args, database, console, limits, ZoneId.of(configuration.getScriptTimeZone()),
-                Locale.forLanguageTag(configuration.getScriptLocale()));
+                Locale.forLanguageTag(configuration.getScriptLocale()), cancellation);
     }
 
     // A new resolver per call rather than a cached one: a record cannot hold an extra instance field, and

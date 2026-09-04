@@ -47,20 +47,22 @@ public final class ProcedureCallHelper {
         }
         try {
             final var compiled = compiledProcedures.get(dbName, name, definition.getVersion(), definition.getSource());
-            final var result = ScriptOperationHelper.runCompiled(compiled, request.getArgs(), dbName, username,
-                    clientId, "CALL_PROCEDURE user=" + username + " database=" + dbName + " procedure=" + name);
-            return toResponse(result);
+            final var outcome = ScriptOperationHelper.runCompiled(compiled, request.getArgs(), dbName, username,
+                    clientId, "CALL_PROCEDURE user=" + username + " database=" + dbName + " procedure=" + name,
+                    ScriptRunKind.CALL_PROCEDURE, name);
+            return toResponse(outcome.result(), outcome.runId());
         } finally {
             admission.release();
         }
     }
 
-    private static OperationResponse toResponse(ScriptResult result) {
+    private static OperationResponse toResponse(ScriptResult result, String runId) {
         if (!result.isError()) {
             return new CallProcedureResponse("Procedure executed successfully", result.getValue(), result.getLogs(),
-                    result.isLogsTruncated());
+                    result.isLogsTruncated(), runId);
         }
         return new CallProcedureResponse(result.getErrorName() + ": " + result.getErrorMessage(),
-                ScriptOperationHelper.errorCodeFor(result.getErrorName()), result.getLogs(), result.isLogsTruncated());
+                ScriptOperationHelper.errorCodeFor(result.getErrorName()), result.getLogs(), result.isLogsTruncated(),
+                runId);
     }
 }

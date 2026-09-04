@@ -12,18 +12,23 @@ public class CallProcedureResponse extends OperationResponse {
     private JsonBaseElement result;
     private List<String> logs;
     private boolean logsTruncated;
+    private String runId;
 
-    public CallProcedureResponse(String message, JsonBaseElement result, List<String> logs, boolean logsTruncated) {
+    public CallProcedureResponse(String message, JsonBaseElement result, List<String> logs, boolean logsTruncated,
+            String runId) {
         super(OperationType.CALL_PROCEDURE, OperationStatus.OK, message);
         this.result = result;
         this.logs = logs;
         this.logsTruncated = logsTruncated;
+        this.runId = runId;
     }
 
-    public CallProcedureResponse(String message, ErrorCode errorCode, List<String> logs, boolean logsTruncated) {
+    public CallProcedureResponse(String message, ErrorCode errorCode, List<String> logs, boolean logsTruncated,
+            String runId) {
         super(OperationType.CALL_PROCEDURE, message, errorCode);
         this.logs = logs;
         this.logsTruncated = logsTruncated;
+        this.runId = runId;
     }
 
     public JsonBaseElement getResult() {
@@ -48,5 +53,13 @@ public class CallProcedureResponse extends OperationResponse {
 
     public void setLogsTruncated(boolean logsTruncated) {
         this.logsTruncated = logsTruncated;
+    }
+
+    public String getRunId() {
+        return runId;
+    }
+
+    public void setRunId(String runId) {
+        this.runId = runId;
     }
 }

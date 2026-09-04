@@ -21,7 +21,7 @@ public class DatabaseHostBindingsTest {
     @Test
     public void test_reads_the_script_zone_and_locale_from_configuration() {
         final var configuration = Configuration.getInstance();
-        final var bindings = DatabaseHostBindings.of(new JsonObject(), null, null, ResourceLimits.unlimited());
+        final var bindings = DatabaseHostBindings.of(new JsonObject(), null, null, ResourceLimits.unlimited(), null);
         assertEquals(ZoneId.of(configuration.getScriptTimeZone()), bindings.timeZone());
         assertEquals(Locale.forLanguageTag(configuration.getScriptLocale()), bindings.locale());
         assertEquals(ZoneId.of("UTC"), bindings.timeZone());
@@ -33,7 +33,7 @@ public class DatabaseHostBindingsTest {
     public void test_carries_the_rest_of_the_contract() {
         final var args = new JsonObject();
         final var limits = ResourceLimits.unlimited();
-        final var bindings = DatabaseHostBindings.of(args, null, System.out::println, limits);
+        final var bindings = DatabaseHostBindings.of(args, null, System.out::println, limits, null);
         assertSame(args, bindings.args());
         assertNull(bindings.database());
         assertNotNull(bindings.console());

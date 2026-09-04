@@ -19,7 +19,7 @@ public class RunScriptResponseTest {
 
     @Test
     public void test_success_constructor_sets_ok_status_and_no_error_code() {
-        final var response = new RunScriptResponse("ok", new JsonNumber(2), List.of("logged"), false);
+        final var response = new RunScriptResponse("ok", new JsonNumber(2), List.of("logged"), false, "run-1");
         assertEquals(OperationType.RUN_SCRIPT, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
         assertNull(response.getErrorCode());
@@ -30,7 +30,8 @@ public class RunScriptResponseTest {
 
     @Test
     public void test_error_constructor_keeps_logs_and_sets_error_code() {
-        final var response = new RunScriptResponse("TypeError: boom", ErrorCode.SCRIPT_FAILED, List.of("before"), true);
+        final var response = new RunScriptResponse("TypeError: boom", ErrorCode.SCRIPT_FAILED, List.of("before"), true,
+                "run-1");
         assertEquals(OperationStatus.ERROR, response.getStatus());
         assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), response.getErrorCode());
         assertEquals("TypeError: boom", response.getMessage());
@@ -41,7 +42,7 @@ public class RunScriptResponseTest {
 
     @Test
     public void test_setters_update_fields() {
-        final var response = new RunScriptResponse("ok", new JsonNumber(1), List.of(), false);
+        final var response = new RunScriptResponse("ok", new JsonNumber(1), List.of(), false, "run-1");
         response.setResult(new JsonString("changed"));
         response.setLogs(List.of("a"));
         response.setLogsTruncated(true);
@@ -55,7 +56,7 @@ public class RunScriptResponseTest {
         final var array = new JsonArray();
         array.add(new JsonNumber(1));
         array.add(new JsonNumber(2));
-        final var json = eJson.toJson(new RunScriptResponse("ok", array, List.of("line"), false));
+        final var json = eJson.toJson(new RunScriptResponse("ok", array, List.of("line"), false, "run-1"));
         assertTrue(json.contains("\"result\":[1,2]"));
         assertTrue(json.contains("\"logs\":[\"line\"]"));
         assertTrue(json.contains("\"logsTruncated\":false"));
@@ -65,7 +66,7 @@ public class RunScriptResponseTest {
     @Test
     public void test_serializes_null_result_and_error_code() {
         final var json = eJson
-                .toJson(new RunScriptResponse("SyntaxError: bad", ErrorCode.SCRIPT_FAILED, List.of(), false));
+                .toJson(new RunScriptResponse("SyntaxError: bad", ErrorCode.SCRIPT_FAILED, List.of(), false, "run-1"));
         assertTrue(json.contains("\"result\":null"));
         assertTrue(json.contains("\"errorCode\":\"400-9\""));
     }
@@ -73,7 +74,7 @@ public class RunScriptResponseTest {
     // A console line containing a newline must not break the line-delimited protocol
     @Test
     public void test_escapes_newlines_in_logs() {
-        final var json = eJson.toJson(new RunScriptResponse("ok", new JsonNumber(1), List.of("a\nb"), false));
+        final var json = eJson.toJson(new RunScriptResponse("ok", new JsonNumber(1), List.of("a\nb"), false, "run-1"));
         assertTrue(json.contains("\"a\\nb\""));
         assertFalse(json.contains("a\nb"));
     }

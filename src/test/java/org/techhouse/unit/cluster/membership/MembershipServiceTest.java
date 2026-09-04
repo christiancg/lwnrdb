@@ -18,7 +18,8 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.ScriptLoad;
+import org.techhouse.ops.ScriptRunKind;
+import org.techhouse.ops.ScriptRunRegistry;
 
 public class MembershipServiceTest {
 
@@ -124,17 +125,17 @@ public class MembershipServiceTest {
 
     @Test
     public void test_gossip_carries_the_current_script_load() {
-        final var scriptLoad = IocContainer.get(ScriptLoad.class);
+        final var registry = IocContainer.get(ScriptRunRegistry.class);
         final var service = new MembershipService();
         service.bootstrap(node("self", 1L, 0L));
-        scriptLoad.enter();
-        scriptLoad.enter();
+        final var first = registry.register(ScriptRunKind.RUN_SCRIPT, "db", null, "u", null);
+        final var second = registry.register(ScriptRunKind.RUN_SCRIPT, "db", null, "u", null);
         try {
             service.gossipTick();
             assertEquals(2, service.getSelf().getScriptLoad());
         } finally {
-            scriptLoad.exit();
-            scriptLoad.exit();
+            registry.unregister(first.runId());
+            registry.unregister(second.runId());
         }
         service.gossipTick();
         assertEquals(0, service.getSelf().getScriptLoad());

@@ -70,7 +70,8 @@ public enum ErrorCode {
                                                                             OperationStatus.NOT_FOUND),
 
     // ── 408 Request Timeout ───────────────────────────────────
-    SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR),
+    SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR), SCRIPT_CANCELLED("408-2",
+            "Script was cancelled", OperationStatus.ERROR),
 
     // ── 409 Conflict ──────────────────────────────────────────
     USER_ALREADY_EXISTS("409-1", "User already exists", OperationStatus.ERROR), DATABASE_ALREADY_EXISTS("409-2",

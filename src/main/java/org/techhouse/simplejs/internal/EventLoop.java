@@ -13,10 +13,17 @@ import java.util.concurrent.locks.LockSupport;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.Intrinsics;
 import org.techhouse.simplejs.exceptions.JsThrowException;
+import org.techhouse.simplejs.exceptions.ScriptCancelledException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
+import org.techhouse.simplejs.host.CancellationToken;
 import org.techhouse.simplejs.values.JsPromise;
 
 public final class EventLoop {
+    // A cancelled run must not sit in a park until a 30s timer comes due, so every park is capped at this
+    // slice and the token re-read on each wake. Both loops already re-test their condition after waking,
+    // so a shorter park changes nothing else.
+    private static final long CANCEL_POLL_NANOS = 50_000_000L;
+
     private static final class Timer {
         private final long id;
         private long dueNanos;
@@ -55,6 +62,7 @@ public final class EventLoop {
     private long nextSeq;
     private InterpreterOps ops;
     private Intrinsics intrinsics;
+    private CancellationToken cancellation;
 
     // Wired once by the owning Interpreter so values like JsPromise (constructed all over the
     // builtins/internal layers, never with direct interpreter access) can call back into it for
@@ -63,6 +71,12 @@ public final class EventLoop {
     public void wireInterpreter(InterpreterOps ops, Intrinsics intrinsics) {
         this.ops = ops;
         this.intrinsics = intrinsics;
+    }
+
+    // Wired once by the owning Interpreter, for the same reason `ops` is: the park loops are the one place
+    // outside tick() where a cancelled run would otherwise block indefinitely.
+    public void wireCancellation(CancellationToken cancellation) {
+        this.cancellation = cancellation;
     }
 
     public InterpreterOps ops() {
@@ -168,15 +182,22 @@ public final class EventLoop {
 
     private void awaitAsyncCompletion(long deadlineNanos) {
         while (asyncCompletions.isEmpty()) {
+            checkCancelled();
             if (deadlineNanos >= 0) {
                 final var remaining = deadlineNanos - System.nanoTime();
                 if (remaining <= 0) {
                     throw new ScriptTimeoutException("Script exceeded its time limit");
                 }
-                LockSupport.parkNanos(remaining);
+                LockSupport.parkNanos(Math.min(remaining, CANCEL_POLL_NANOS));
             } else {
-                LockSupport.park();
+                LockSupport.parkNanos(CANCEL_POLL_NANOS);
             }
+        }
+    }
+
+    private void checkCancelled() {
+        if (cancellation != null && cancellation.isCancelled()) {
+            throw new ScriptCancelledException("Script was cancelled");
         }
     }
 
@@ -194,10 +215,11 @@ public final class EventLoop {
         final var target = deadlineNanos >= 0 ? Math.min(dueNanos, deadlineNanos) : dueNanos;
         long now;
         while ((now = System.nanoTime()) < target) {
+            checkCancelled();
             if (!asyncCompletions.isEmpty()) {
                 return false;
             }
-            LockSupport.parkNanos(target - now);
+            LockSupport.parkNanos(Math.min(target - now, CANCEL_POLL_NANOS));
         }
         if (deadlineNanos >= 0 && dueNanos > deadlineNanos) {
             throw new ScriptTimeoutException("Script exceeded its time limit");

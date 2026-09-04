@@ -23,6 +23,7 @@ import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CallProcedureRequest;
+import org.techhouse.ops.req.CancelScriptRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
@@ -59,6 +60,7 @@ import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
+import org.techhouse.ops.resp.CancelScriptResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
 import org.techhouse.ops.resp.CreateCollectionResponse;
 import org.techhouse.ops.resp.CreateDatabaseResponse;
@@ -70,6 +72,7 @@ import org.techhouse.ops.resp.DropIndexResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
+import org.techhouse.ops.resp.ListScriptsResponse;
 import org.techhouse.ops.resp.ListTransactionsResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.ListenResponse;
@@ -91,6 +94,8 @@ public class OperationProcessor {
             .get(org.techhouse.cluster.Tx2pcCoordinator.class);
     private final org.techhouse.cluster.Tx2pcDirectory tx2pcDirectory = IocContainer
             .get(org.techhouse.cluster.Tx2pcDirectory.class);
+    private final org.techhouse.cluster.ScriptRunDirectory scriptRunDirectory = IocContainer
+            .get(org.techhouse.cluster.ScriptRunDirectory.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
@@ -159,6 +164,8 @@ public class OperationProcessor {
             case SAVE_SCHEDULE -> processSaveSchedule((SaveScheduleRequest) operationRequest, actingUser);
             case DELETE_SCHEDULE -> processDeleteSchedule((DeleteScheduleRequest) operationRequest);
             case LIST_SCHEDULES -> processListSchedules((ListSchedulesRequest) operationRequest);
+            case LIST_SCRIPTS -> processListScripts();
+            case CANCEL_SCRIPT -> processCancelScript((CancelScriptRequest) operationRequest);
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
     }
@@ -756,6 +763,22 @@ public class OperationProcessor {
     private OperationResponse processResolveTransaction(ResolveTransactionRequest request) {
         final var commit = ResolveTransactionRequest.DECISION_COMMIT.equals(request.getDecision());
         return tx2pcCoordinator.forceResolve(request.getDtxId(), commit);
+    }
+
+    private OperationResponse processListScripts() {
+        try {
+            return new ListScriptsResponse("Ok", scriptRunDirectory.listClusterWide());
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.LIST_SCRIPTS, ErrorCode.SCRIPT_FAILED);
+        }
+    }
+
+    private OperationResponse processCancelScript(CancelScriptRequest request) {
+        try {
+            return new CancelScriptResponse("Ok", scriptRunDirectory.cancelClusterWide(request.getRunId()));
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.CANCEL_SCRIPT, ErrorCode.SCRIPT_FAILED);
+        }
     }
 
     private OperationResponse processListTransactions() {

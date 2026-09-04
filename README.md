@@ -485,13 +485,15 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
   "message": "Script executed successfully",
   "result": {"name": "Alice"},
   "logs": ["found u1"],
-  "logsTruncated": false
+  "logsTruncated": false,
+  "runId": "3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83"
 }
 ```
 
 - `script` (required) is the program source, `args` (optional) is an arbitrary object the script reads through `import args from "args"`, and `db.name` is the scoped database name — so one script can run against any database without hardcoding it.
 - `result` is the script's value: a top-level `return`, else `export default`, else an object of the named exports, else JSON `null`. A promise returned at top level is awaited (a rejection becomes the error); one that never settles yields `null`.
 - `logs` holds the script's `console` output — the newest `scriptMaxLogLines` lines, each clipped to `scriptMaxLogLineChars` — and `logsTruncated` reports whether anything was dropped. Output is returned on **every** outcome, including a failure, so a failed run is still debuggable.
+- `runId` names this run for the whole time it executes, so a slow run can be found with [`LIST_SCRIPTS`](#list_scripts-admin-only) and stopped with [`CANCEL_SCRIPT`](#cancel_script-admin-only) without listing first. It is returned on every outcome and also appears in the run's log line.
 - **Permissions**: admins may run scripts on any database and database owners on the databases they own; any other user needs a **per-database** script grant — `scriptPermissions: {"mydb": "RUN"}` on their user record (the older boolean form is still accepted and reads as `RUN`). Every operation the script itself issues is authorized again on its own request, so the grant never widens what the caller can read or write, and the collection schema still applies to a script's writes. A script cannot leave its database (`admin` included) — an attempt throws a catchable error inside the script.
 - The exposed surface is read+write only (`findById`, `aggregate`, `save`, `bulkSave`, `delete`, `cursor`, `listCollections`, `listDatabases`, `transaction`); DDL, user management and outbound network access are not reachable from a script.
 - **Importing shared code**: besides `args`, `db` and `script`, a script may import any stored procedure of its own database as a module with `import … from "procedures/<name>"`. A library is just a procedure that exports instead of returning:
@@ -522,7 +524,7 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 
   It is a **paged read, not a snapshot**: each batch is an ordinary `AGGREGATE` against the live collection (authorized, schema-checked and cluster-routed like any other), so a concurrent insert or delete between two batches can make a document be seen twice or not at all. Paging is only meaningful with a `SORT` step — without one the pipeline's order is unspecified — and `db.cursor` does not inject one, because that would change the results of a pipeline ending in `GROUP_BY`/`COUNT`. Such a pipeline still works, but it pages the *step output*, which is rarely what is meant.
 - **Every failed `db` operation throws a catchable `Error` inside the script** — a permission denial, a schema violation, an oversized entry, a cluster rejection or an internal error alike; a failure is never silently swallowed. The two exceptions are ordinary absence rather than failure: a missing document reads as `null` from `findById`, an empty pipeline as `[]` from `aggregate`, and deleting a document that is not there is a no-op.
-- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `408-1` when it exceeds `scriptTimeoutMs`, `503-6` when the node is already running `maxConcurrentScripts` scripts and none finished within `scriptQueueWaitMs` (nothing ran — retry shortly), and `409-6` if sent while a transaction is open on the connection.
+- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `408-1` when it exceeds `scriptTimeoutMs`, `408-2` when an operator cancelled it with `CANCEL_SCRIPT`, `503-6` when the node is already running `maxConcurrentScripts` scripts and none finished within `scriptQueueWaitMs` (nothing ran — retry shortly), and `409-6` if sent while a transaction is open on the connection.
 - Under clustering the script runs on the node that received it; each operation it issues is routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
 #### `SAVE_PROCEDURE`
@@ -577,12 +579,52 @@ Runs a stored procedure. The permission is the same as [`RUN_SCRIPT`](#run_scrip
 {"type":"CALL_PROCEDURE","databaseName":"mydb","procedureName":"recalcTotals","args":{"id":"o1"}}
 ```
 ```json
-{"type":"CALL_PROCEDURE","status":"OK","message":"Procedure executed successfully","result":42,"logs":[],"logsTruncated":false}
+{"type":"CALL_PROCEDURE","status":"OK","message":"Procedure executed successfully","result":42,"logs":[],"logsTruncated":false,"runId":"3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83"}
 ```
 
 - The procedure runs with the **caller's** authority, so calling one never grants more than the caller already had.
 - The parsed program is cached per node keyed by `(database, name, version)`, so a repeated call does not re-parse. `procedureCacheSize` bounds it.
 - **Errors**: as `RUN_SCRIPT` — including `503-6` when the node is at `maxConcurrentScripts` and no permit came free within `scriptQueueWaitMs`, which is retryable because nothing ran — plus `404-8` when the procedure is absent or disabled.
+
+#### `LIST_SCRIPTS` (admin only)
+Lists every script run executing **anywhere in the cluster** right now — ad-hoc `RUN_SCRIPT`s, `CALL_PROCEDURE`s, trigger runs and scheduled runs alike. It runs on the node that receives it and queries every live member, so an operator sees a run wherever [script placement](docs/clustering.md) put it, not only on the node they connected to. An unreachable peer costs its rows a warning in the log rather than failing the listing.
+```json
+{"type":"LIST_SCRIPTS"}
+```
+```json
+{
+  "type": "LIST_SCRIPTS",
+  "status": "OK",
+  "message": "Ok",
+  "scripts": [
+    {
+      "runId": "3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83",
+      "node": "10.0.0.2:8990",
+      "kind": "CALL_PROCEDURE",
+      "database": "shop",
+      "name": "reprice",
+      "username": "alice",
+      "ageMs": 18244
+    }
+  ]
+}
+```
+- `kind` is `RUN_SCRIPT`, `CALL_PROCEDURE`, `TRIGGER` or `SCHEDULE`; `name` is the procedure, trigger or schedule name and is `null` for an ad-hoc `RUN_SCRIPT`.
+- `username` is the authority the run has — the caller for `RUN_SCRIPT`/`CALL_PROCEDURE`, the definer for a trigger or schedule.
+- `node` is the node **executing** the run, and `ageMs` is measured against a single instant so two rows that started together report the same age.
+
+#### `CANCEL_SCRIPT` (admin only)
+Stops the run named by `runId` (from `LIST_SCRIPTS`, or from the `runId` on a `RUN_SCRIPT`/`CALL_PROCEDURE` response) wherever it is executing. Cancels locally if the run is here, otherwise broadcasts to every live member.
+```json
+{"type":"CANCEL_SCRIPT","runId":"3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83"}
+```
+```json
+{"type":"CANCEL_SCRIPT","status":"OK","message":"Ok","cancelled":true}
+```
+- A `runId` that matches nothing anywhere answers `cancelled:false` with status `OK` — the request was well-formed and the run is not running, which is the state the caller asked for. Returns `400-1` if `runId` is missing or is not a UUID.
+- Cancellation is **cooperative and not catchable**: the run stops at its next instruction check or event-loop poll, its `try`/`catch` cannot intercept it and its `finally` blocks do not run — the same treatment the timeout and budget aborts get. A run blocked inside a host call therefore ends when that call returns, not instantly.
+- The cancelled caller receives `408-2`; the operator issuing `CANCEL_SCRIPT` gets `OK`. An open `db.transaction` is rolled back.
+- **A cancelled trigger run is dropped, not retried.** Trigger execution is otherwise exactly-once, but a cancellation consumes the run's pending record — cancelling a runaway trigger stops it rather than queueing it up again. See [docs/simplejs.md](docs/simplejs.md).
 
 #### `SAVE_TRIGGER`
 Runs a stored procedure after a committed write to a collection. Requires admin privileges, ownership, or `MANAGE`. Off by default: set `triggersEnabled=true` for triggers to fire (the DDL works either way).
@@ -807,7 +849,8 @@ Response shape:
       "rejected": 0,
       "waited": 7,
       "forwarded": 118,
-      "forwardFallbacks": 3
+      "forwardFallbacks": 3,
+      "cancelled": 1
     },
     "totals": {
       "userCount": 3,
@@ -964,6 +1007,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-9` | `NOT_FOUND` | Trigger not found |
 | `404-10` | `NOT_FOUND` | Schedule not found |
 | `408-1` | `ERROR` | Script exceeded its time budget |
+| `408-2` | `ERROR` | Script was cancelled |
 | `409-1` | `ERROR` | User already exists |
 | `409-2` | `ERROR` | Database already exists |
 | `409-3` | `ERROR` | A transaction is already in progress for this connection |

@@ -29,6 +29,9 @@ point of clustering is that any node serves any request transparently):
     cut off by the replication-ack timeout, an unreachable target falls back to local
     execution, and a node with scriptRoutingEnabled=false never forwards (node-2 turns the
     on-by-default flag off on purpose, so both behaviours are covered in one cluster);
+  * script control across nodes: a run executing on one node is listed by every live member
+    with that node's address and can be cancelled from any of them, the cancelled caller
+    getting 408-2 (LIST_SCRIPTS / CANCEL_SCRIPT fan out rather than being routed);
   * node failure with quorum maintained (kill a node, writes + reads keep working);
   * node rejoin (restart it, the cluster serves consistent data again).
 """
@@ -271,6 +274,36 @@ def burst(port, script, count: int) -> list:
     for t in threads:
         t.join()
     return results
+
+
+class BackgroundRun:
+    """Runs a script on its own connection and thread against one node, so the suite can look the
+    run up on a *different* node and cancel it while it is still executing."""
+
+    def __init__(self, port: int, script: str, db=None):
+        self.response = None
+        self._thread = threading.Thread(target=self._run, args=(port, script, db), daemon=True)
+        self._thread.start()
+
+    def _run(self, port, script, db):
+        conn = authed(port)
+        try:
+            self.response = send(conn.s, conn.f,
+                                 {"type": "RUN_SCRIPT", "databaseName": db or DB, "script": script})
+        finally:
+            conn.close()
+
+    def join(self, timeout_s: float = 60.0) -> bool:
+        self._thread.join(timeout_s)
+        return not self._thread.is_alive()
+
+
+def list_scripts(port) -> list:
+    return op(port, {"type": "LIST_SCRIPTS"}).get("scripts") or []
+
+
+def cancel_script(port, run_id) -> dict:
+    return op(port, {"type": "CANCEL_SCRIPT", "runId": run_id})
 
 
 def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.0):
@@ -901,6 +934,79 @@ def test_long_forwarded_script_is_not_cut_off():
                forwarded > 0, detail="no concurrent long run was forwarded")
 
 
+def test_script_control_is_cluster_wide():
+    section("Script control — a run is listed and cancelled from a node that is not running it")
+
+    # node-2 has scriptRoutingEnabled=false, so a run submitted there executes there. That is what
+    # makes "some other node" deterministic: placement would otherwise pick any live node.
+    runner_node = nodes[2]
+    observer_ports = [nodes[0].client_port, nodes[1].client_port]
+    # Start from a quiet cluster so the run under test is the only one in flight.
+    check_true("no script is running anywhere before the test",
+               wait_until(lambda: all(not list_scripts(p) for p in all_ports()), timeout_s=30.0),
+               detail=f"listing={list_scripts(nodes[0].client_port)!r}")
+    # Comfortably inside scriptTimeoutMs (20s), so a cancellation can never be mistaken for a timeout.
+    background = BackgroundRun(runner_node.client_port,
+                               'export default new Promise(r => setTimeout(() => r(1), 15000));')
+
+    expected_node = f"{HOST}:{runner_node.cluster_port}"
+
+    # Earlier placement tests fire bursts of short scripts, so the listing may still be draining
+    # one of them. Identify this run by the node executing it rather than by being the only row.
+    def _row_on_the_runner(port):
+        for candidate in list_scripts(port):
+            if candidate.get("node") == expected_node:
+                return candidate
+        return None
+
+    row = wait_until(lambda: _row_on_the_runner(nodes[0].client_port) is not None, timeout_s=15.0) \
+        and _row_on_the_runner(nodes[0].client_port)
+    check_true("node-0 sees a run it is not executing", bool(row),
+               detail=f"node-0 listing={list_scripts(nodes[0].client_port)!r}")
+    if not row:
+        background.join(30.0)
+        return
+    check_true("the row names the node actually executing the run",
+               row.get("node") == expected_node,
+               detail=f"expected node={expected_node!r} got={row.get('node')!r}")
+    check_true("and it is not the node answering the listing",
+               row.get("node") != f"{HOST}:{nodes[0].cluster_port}")
+    check_true("the row carries the run's kind and database",
+               row.get("kind") == "RUN_SCRIPT" and row.get("database") == DB,
+               detail=f"row={row!r}")
+    # Every live member sees the same run: the listing is a cluster-wide view, not a local one.
+    for port in observer_ports:
+        rows = list_scripts(port)
+        check_true(f"the run is visible from the node on port {port}",
+                   any(r.get("runId") == row["runId"] and r.get("node") == expected_node for r in rows),
+                   detail=f"got {rows!r}")
+
+    response = cancel_script(nodes[0].client_port, row["runId"])
+    check("CANCEL_SCRIPT from another node succeeds", response, "OK")
+    check_field("it reports the run as cancelled", response, "cancelled", True)
+
+    check_true("the cancelled run returned to its caller", background.join(30.0))
+    check_code("the caller on the executing node receives 408-2",
+               background.response or {}, "ERROR", "408-2")
+    check_field("the caller's runId is the one the other node listed",
+                background.response or {}, "runId", row["runId"])
+
+    for port in all_ports():
+        check_true(f"the cancelled run leaves the listing on port {port}",
+                   wait_until(lambda p=port: not any(r.get("runId") == row["runId"]
+                                                     for r in list_scripts(p)), timeout_s=30.0),
+                   detail=f"still listed: {list_scripts(port)!r}")
+
+    # No live node is running it, so the fan-out answers false rather than failing.
+    unknown = cancel_script(nodes[1].client_port, "00000000-0000-0000-0000-000000000000")
+    check("cancelling an unknown run anywhere is still OK", unknown, "OK")
+    check_field("and reports cancelled:false", unknown, "cancelled", False)
+
+    check_true("every node reports itself idle again",
+               wait_until(lambda: all(script_stats(p).get("running") == 0 for p in all_ports()),
+                          timeout_s=30.0))
+
+
 def test_script_placement_falls_back_when_the_target_dies():
     section("Script node selection — an unreachable target falls back to local execution")
 
@@ -1173,6 +1279,10 @@ def main():
         test_schedule_failover()
         test_node_rejoin()
         test_schedule_rejoin_catch_up()
+        # Last: it parks a long run on one node, which leaves that node's gossiped script load
+        # elevated for a round or two. Placement takes the *less* loaded of two samples, so running
+        # this before the placement tests would bias which node they pick.
+        test_script_control_is_cluster_wide()
 
         # Cleanup (best-effort).
         drop_db(nodes[0].client_port, DB)
