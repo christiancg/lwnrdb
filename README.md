@@ -41,6 +41,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [x] Scheduled procedures (the [`SAVE_SCHEDULE`](#save_schedule) operation)
   - [x] Run script (the [`RUN_SCRIPT`](#run_script) operation)
   - [x] Shared code between procedures: a script, procedure, trigger or schedule can `import … from "procedures/<name>"` to reuse a stored procedure as a module (`scriptProcedureImportEnabled`, on by default) — see [docs/simplejs.md](docs/simplejs.md) → *Module loading*
+  - [x] Scripting inside the query pipeline: `SCRIPT` filter and `MAP` operators plus a `REDUCE` step — see [Script operators](#script-operators-simplejs-in-the-pipeline)
   - [x] Script node selection under clustering: [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) are forwarded to a live node chosen by current script load (`scriptRoutingEnabled`, on by default), skipping any node not yet caught up on admin metadata — see [docs/clustering.md](docs/clustering.md) → *Scripts*
     - [ ] Locality-aware placement: selection is by load only, so the chosen node is usually not the owner of the collections the script touches and every operation the script issues still costs a round trip
 - [x] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant (per-collection JSON Schema — see [Schema validation](#schema-validation)) 
@@ -189,6 +190,7 @@ Also accepts an optional top-level `"analyze": true` (default `false`); see [Exp
 | `LIMIT` | `limit` (> 0) | |
 | `SKIP` | `skip` (>= 0) | |
 | `SORT` | `fieldName`, `ascending` | |
+| `REDUCE` | `script` | Folds the whole stream into one document; optional `initialValue` (default JSON null) and `resultField` (default `value`) |
 
 `GROUP_BY`, `JOIN`, `SORT`, and `DISTINCT` use a single-field index when one exists on the step's field and the step is the first step in the pipeline; otherwise they fall back to a full scan. These steps use only the scalar/custom/null indexes, so documents whose indexed field holds a JSON object or array are not represented in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results (see [Memory management → Streaming reads](#memory-management)). 
 Object- and array-valued fields are instead indexed for **element-match** (whole-value equality): a `FILTER` with `EQUALS`, `NOT_EQUALS`, `IN`, or `NOT_IN` hashes the object/array and resolves it through a dedicated per-kind hash index (`…-Object.idx` / `…-Array.idx`).
@@ -198,6 +200,34 @@ A collection may also carry a single JSON Schema stored alongside its data files
 **Field operator types:** `EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`
 
 **Conjunction operator types:** `AND`, `OR`, `NOR`, `XOR`, `NAND`
+
+#### Script operators (SimpleJS in the pipeline)
+
+A pipeline may run SimpleJS in three places. All three are gated by `scriptsEnabled` (the same master switch `RUN_SCRIPT`, procedures, triggers and schedules sit behind) **and** by the caller's per-database script grant: admin, database owner, or `scriptPermissions` for the database — a `READ` grant alone is not enough, because executing code is a strictly wider capability than reading. A pipeline script is refused inside a `LISTEN` (`400-19`): that pipeline re-runs on every matching write, with no client-visible budget.
+
+- A **`SCRIPT` filter operator** — a predicate, `(doc) => boolean`. Recognised by a `script` key (instead of `fieldOperatorType`/`customOperatorName`/`conjunctionType`) and usable anywhere a field operator can appear, nested conjunctions included.
+
+```json
+{"type":"FILTER","operator":{"script":"export default (doc) => doc.price * doc.qty > 100;"}}
+```
+
+- A **`SCRIPT` mid-operator** in a `MAP` `ADD_FIELD` — a computed field, `(doc) => value`. An `undefined` result leaves the field unset.
+
+```json
+{"type":"MAP","operators":[
+  {"fieldName":"total","operator":{"type":"SCRIPT","script":"export default (doc) => doc.price * doc.qty;"}}]}
+```
+
+- A **`REDUCE` step** — a fold, `(accumulator, doc) => accumulator`, collapsing the stream to one document exactly as `COUNT` does. A step after it is legal and operates on that single document.
+
+```json
+{"type":"REDUCE","resultField":"total","initialValue":0,
+ "script":"export default (acc, doc) => acc + doc.price * doc.qty;"}
+```
+
+The callable is the module's `export default`, else its top-level `return` value; an async or generator function is refused. **A pipeline script has no `db` module, no `fetch`, no procedure imports and no `importText`** — it is a pure function from a document to a value. That is what makes it safe: the pipeline already holds collection read locks on the calling thread, and with no `db` a pipeline script cannot issue an `AGGREGATE`, so there is no recursion to bound.
+
+The sandbox is **per pipeline, not per document**: one interpreter serves the whole query, so `aggregationScriptInstructionBudget` (`400-11`) and `aggregationScriptTimeoutMs` (`408-1`) bound the query as a whole rather than resetting on every row — a runaway predicate aborts the query instead of getting a fresh budget on each document. `aggregationScriptMaxSourceBytes` caps one operator's source (`400-10`), and a script that throws surfaces as `400-9`. A `SCRIPT` predicate **can never use an index**, so put it after an index-backed `FILTER`; inside a conjunction the other operands still resolve via index and the script then sees only what they produce. `analyze` reports `scriptInvocations`/`scriptMillis` and suggests exactly this.
 
 #### Custom operators (type-specific)
 
@@ -955,7 +985,7 @@ Being allowed to start a script is separate from what it may do: every operation
 
 > **Upgrade note.** Roll every node to this version before granting `MANAGE` or otherwise rewriting a user record in a cluster. User records replicate by shipping the record itself, and a node without `scriptPermissions` levels cannot parse the string form — it would skip the whole user record, not just the grant. Note that any write to a user record converts it (a password change will do), so the ordering matters even if you never touch a script grant.
 
-Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`, `LIST_SCHEDULES`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`, `LIST_SCHEDULES`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`. An `AGGREGATE` whose pipeline carries a [script operator](#script-operators-simplejs-in-the-pipeline) additionally requires `RUN`, since running code is wider than reading.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`, `SAVE_SCHEMA`, `DELETE_SCHEMA` (the last two also being available to database owners and admins, like the other DDL operations).
 
 ### Authentication errors
@@ -991,6 +1021,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-16` | `ERROR` | The schedule definition is not valid |
 | `400-17` | `ERROR` | The database already has the maximum number of schedules |
 | `400-18` | `ERROR` | A saved procedure imports a `procedures/<name>` that does not exist or is disabled |
+| `400-19` | `ERROR` | A `SCRIPT` operator is not allowed in a `LISTEN` pipeline |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -1107,7 +1138,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `tombstoneRetentionMs` | Valid number ≥ 1. How long delete tombstones are kept before anti-entropy GC; must exceed the longest expected node downtime |
 | `scriptTimeZone` | A valid IANA time zone id (e.g. `UTC`, `Europe/Madrid`) or fixed offset. The zone a stored script's `Date`/`Temporal`/`toLocaleString` answers in, so the same script returns the same answer on every node |
 | `scriptLocale` | A valid BCP 47 language tag (e.g. `en-US`). The locale a stored script's locale-sensitive formatting and collation use |
-| `scriptsEnabled` | `true` or `false` (default `true`). Whether clients may run scripts at all ([`RUN_SCRIPT`](#run_script)), and whether stored procedures may be installed or called. On by default: a script is bounded by the server-fixed sandbox below and by permissions — only an admin, a database owner, or a user holding `scriptPermissions` for that database may start one, and every operation the script issues is authorized again on its own request. When `false` the operations are refused with `403-2` |
+| `scriptsEnabled` | `true` or `false` (default `true`). Whether clients may run scripts at all ([`RUN_SCRIPT`](#run_script)), whether stored procedures may be installed or called, and whether an `AGGREGATE` pipeline may carry a [script operator](#script-operators-simplejs-in-the-pipeline). On by default: a script is bounded by the server-fixed sandbox below and by permissions — only an admin, a database owner, or a user holding `scriptPermissions` for that database may start one, and every operation the script issues is authorized again on its own request. When `false` the operations are refused with `403-2` |
 | `scriptInstructionBudget` | Valid number ≥ 1. Max interpreter instructions per script run; exceeding it aborts with `400-11` |
 | `scriptTimeoutMs` | Valid number ≥ 1. Max wall-clock time per script run; exceeding it aborts with `408-1` |
 | `scriptMaxDepth` | Valid number ≥ 1. Max nested call depth per script run; exceeding it aborts with `400-11` |
@@ -1116,6 +1147,9 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scriptMaxResultBytes` | Human-readable size > 0 (default `16Mb`). Max size of the value a script returns; a larger result fails the run with `400-15` (the `console` output still comes back). Use `db.cursor` to process more data than can be returned |
 | `scriptCursorBatchSize` | Valid number ≥ 1 (default `500`). Default number of documents `db.cursor` fetches per batch |
 | `scriptCursorMaxBatchSize` | Valid number ≥ 1 (default `5000`), and ≥ `scriptCursorBatchSize`. Upper clamp for a caller-supplied `batchSize`, so one call cannot materialise an unbounded batch |
+| `aggregationScriptInstructionBudget` | Valid number ≥ 1 (default `1000000`). Max interpreter instructions **all** the [script operators](#script-operators-simplejs-in-the-pipeline) in one `AGGREGATE` pipeline may execute in total before the query aborts with `400-11`. Deliberately an order below `scriptInstructionBudget`, and deliberately per-pipeline rather than per-document: one interpreter serves the whole query, so a runaway predicate aborts it instead of getting a fresh budget on every row |
+| `aggregationScriptTimeoutMs` | Valid number ≥ 1 (default `2000`). Wall clock for the same set of operators, also per pipeline; exceeding it aborts the query with `408-1` |
+| `aggregationScriptMaxSourceBytes` | Human-readable size > 0 (default `16Kb`). Max source size of a single script operator; a larger one is rejected with `400-10` |
 | `maxConcurrentScripts` | Valid number ≥ 0 (default `16`); `0` disables the cap. Max client-initiated script runs ([`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure)) executing on this node at once. Each run gets its own interpreter and its own `scriptMaxMemoryBytes` allocation budget, so this cap × `scriptMaxMemoryBytes` is the worst-case heap the script surface can hold — **additive** with `maxMemory` and the metadata cache budgets, exactly as those are additive with each other. Triggers and scheduled procedures are bounded separately by `triggerThreads` and `scheduleThreads` and are deliberately **not** subject to this cap, so the node-wide ceiling on concurrent interpreters is `maxConcurrentScripts + triggerThreads + scheduleThreads`. A caller refused after waiting `scriptQueueWaitMs` receives `503-6` |
 | `scriptQueueWaitMs` | Valid number ≥ 0 (default `250`); `0` rejects immediately. How long a client-initiated script run waits for a permit before it is rejected with `503-6`. The wait absorbs bursts so a short spike queues instead of erroring, while the cap still bounds the heap. May legally exceed `scriptTimeoutMs` — a caller can wait longer than a run takes |
 | `scriptMaxLogLines` | Valid number ≥ 1. Max `console` lines returned with the response (newest kept) |

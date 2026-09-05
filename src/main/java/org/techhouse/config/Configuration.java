@@ -57,6 +57,9 @@ public final class Configuration {
     private long scriptMaxResultBytes;
     private int scriptCursorBatchSize;
     private int scriptCursorMaxBatchSize;
+    private long aggregationScriptInstructionBudget;
+    private long aggregationScriptTimeoutMs;
+    private long aggregationScriptMaxSourceBytes;
     private int maxConcurrentScripts;
     private long scriptQueueWaitMs;
     private int procedureCacheSize;
@@ -149,6 +152,9 @@ public final class Configuration {
         scriptMaxResultBytes = sizeOf(configs, "scriptMaxResultBytes");
         scriptCursorBatchSize = intOf(configs, "scriptCursorBatchSize");
         scriptCursorMaxBatchSize = intOf(configs, "scriptCursorMaxBatchSize");
+        aggregationScriptInstructionBudget = longOf(configs, "aggregationScriptInstructionBudget");
+        aggregationScriptTimeoutMs = longOf(configs, "aggregationScriptTimeoutMs");
+        aggregationScriptMaxSourceBytes = sizeOf(configs, "aggregationScriptMaxSourceBytes");
         maxConcurrentScripts = intOf(configs, "maxConcurrentScripts");
         scriptQueueWaitMs = longOf(configs, "scriptQueueWaitMs");
         procedureCacheSize = intOf(configs, "procedureCacheSize");
@@ -397,6 +403,18 @@ public final class Configuration {
 
     public int getScriptCursorBatchSize() {
         return scriptCursorBatchSize;
+    }
+
+    public long getAggregationScriptInstructionBudget() {
+        return aggregationScriptInstructionBudget;
+    }
+
+    public long getAggregationScriptTimeoutMs() {
+        return aggregationScriptTimeoutMs;
+    }
+
+    public long getAggregationScriptMaxSourceBytes() {
+        return aggregationScriptMaxSourceBytes;
     }
 
     public int getScriptCursorMaxBatchSize() {

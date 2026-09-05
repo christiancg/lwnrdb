@@ -119,6 +119,9 @@ public class ConfigReaderTest {
         expectedConfig.put("scheduleCacheMaxBytes", "8Mb");
         expectedConfig.put("scriptTextImportEnabled", "false");
         expectedConfig.put("scriptProcedureImportEnabled", "true");
+        expectedConfig.put("aggregationScriptInstructionBudget", "1000000");
+        expectedConfig.put("aggregationScriptTimeoutMs", "2000");
+        expectedConfig.put("aggregationScriptMaxSourceBytes", "16Kb");
 
         // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();

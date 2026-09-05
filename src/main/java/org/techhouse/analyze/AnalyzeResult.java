@@ -17,6 +17,8 @@ public class AnalyzeResult {
     public List<String> indexesUsed;
     public long documentsScanned;
     public List<String> locksAcquired;
+    public long scriptInvocations;
+    public long scriptMillis;
     public List<String> suggestions;
 
     public long getStartTime() {
@@ -73,6 +75,22 @@ public class AnalyzeResult {
 
     public void setLocksAcquired(List<String> locksAcquired) {
         this.locksAcquired = locksAcquired;
+    }
+
+    public long getScriptInvocations() {
+        return scriptInvocations;
+    }
+
+    public void setScriptInvocations(long scriptInvocations) {
+        this.scriptInvocations = scriptInvocations;
+    }
+
+    public long getScriptMillis() {
+        return scriptMillis;
+    }
+
+    public void setScriptMillis(long scriptMillis) {
+        this.scriptMillis = scriptMillis;
     }
 
     public List<String> getSuggestions() {

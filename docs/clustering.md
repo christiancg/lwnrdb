@@ -151,6 +151,12 @@ would all forward to the same node at once and then all see it saturated. Sampli
 global view, is O(1), and still keeps the maximum load exponentially closer to the mean than random
 placement. `choose()` answering "this node" (or a cluster of one) means the script runs locally.
 
+A **pipeline script** (a `SCRIPT` operator or a `REDUCE` step inside an `AGGREGATE`) is the exception, and
+needs no new code: an `AGGREGATE` this node does not own is forwarded to the collection's owner as raw
+request JSON, so the script runs on the owner, beside the data it filters. A pipeline script is therefore
+the *more* local of the two — it has no `db` module and cannot issue an operation of its own, so there is
+nothing for it to round-trip.
+
 The load signal is `NodeInfo.scriptLoad`, the number of script runs executing on a node right now
 (`RUN_SCRIPT`, `CALL_PROCEDURE`, trigger dispatch and scheduled runs alike — all interpreter CPU), read by
 `ops/ScriptLoad` from the `ops/ScriptRunRegistry` every entry point registers with, and published on each gossip round alongside

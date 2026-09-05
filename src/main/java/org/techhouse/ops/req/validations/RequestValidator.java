@@ -9,6 +9,7 @@ import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -504,6 +505,12 @@ public class RequestValidator {
         }
         if (request.getAggregationSteps() == null) {
             return ValidationResult.fail("LISTEN request requires an aggregationSteps array");
+        }
+        // A LISTEN pipeline re-runs on every matching change, so a script in it would execute per write
+        // with no client-visible budget to bound it.
+        if (AggregationStepValidator.containsScript(request.getAggregationSteps())) {
+            return ValidationResult.fail(ErrorCode.SCRIPT_NOT_ALLOWED_IN_LISTEN,
+                    ErrorCode.SCRIPT_NOT_ALLOWED_IN_LISTEN.getDefaultMessage());
         }
         return validateAggregationSteps(request.getAggregationSteps());
     }

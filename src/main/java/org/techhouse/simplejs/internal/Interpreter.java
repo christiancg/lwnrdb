@@ -21,6 +21,7 @@ import org.techhouse.simplejs.exceptions.ScriptCancelledException;
 import org.techhouse.simplejs.exceptions.ScriptLimitException;
 import org.techhouse.simplejs.exceptions.ScriptMemoryException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
+import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
@@ -386,6 +387,16 @@ public final class Interpreter {
     }
 
     private ProgramOutcome runModule(Program program) {
+        try {
+            final var outcome = evaluateTopLevelModule(program);
+            reportUnhandledRejections();
+            return outcome;
+        } finally {
+            cancelPendingCoroutines();
+        }
+    }
+
+    private ProgramOutcome evaluateTopLevelModule(Program program) {
         final var env = Environment.global();
         final var globalThis = GlobalScope.install(env, eventLoop, this::callValue, this::iterableToList,
                 host.console(), ops, host.network(), host.limits(), intrinsics);
@@ -396,28 +407,93 @@ public final class Interpreter {
         final var coroutine = new Coroutine();
         coroutines.add(coroutine);
         coroutine.markAsync();
-        try {
-            coroutine.startAsync(() -> {
-                currentCoroutine.set(coroutine);
-                if (moduleBodyWrapper == null) {
-                    evaluateModuleBody(program, env, result);
-                } else {
-                    moduleBodyWrapper.around(() -> evaluateModuleBody(program, env, result));
-                }
-                return JsUndefined.getInstance();
-            });
-            markContractPromiseHandled(result);
-            eventLoop.drain(deadlineNanos);
-            reportUnhandledRejections();
-        } finally {
-            for (final var pending : coroutines) {
-                if (!pending.isDone()) {
-                    pending.cancel();
-                }
+        coroutine.startAsync(() -> {
+            currentCoroutine.set(coroutine);
+            if (moduleBodyWrapper == null) {
+                evaluateModuleBody(program, env, result);
+            } else {
+                moduleBodyWrapper.around(() -> evaluateModuleBody(program, env, result));
             }
-        }
+            return JsUndefined.getInstance();
+        });
+        markContractPromiseHandled(result);
+        eventLoop.drain(deadlineNanos);
         return new ProgramOutcome(result.last, result.hasReturn, result.returnValue, result.exportDefault,
                 result.namedExports);
+    }
+
+    private void cancelPendingCoroutines() {
+        for (final var pending : coroutines) {
+            if (!pending.isDone()) {
+                pending.cancel();
+            }
+        }
+    }
+
+    /**
+     * Evaluates the module body and keeps the interpreter alive so the caller can invoke a value it exported
+     * many times - one realm, and therefore one instruction budget, deadline and memory budget for the whole
+     * sequence of calls rather than a fresh one per call.
+     */
+    public static Session open(Program program, HostBindings host) {
+        final var interpreter = new Interpreter(host);
+        try {
+            return new Session(interpreter, interpreter.evaluateTopLevelModule(program));
+        } catch (RuntimeException | Error failure) {
+            interpreter.reportUnhandledRejections();
+            interpreter.cancelPendingCoroutines();
+            throw failure;
+        }
+    }
+
+    public static final class Session implements AutoCloseable {
+        private final Interpreter interpreter;
+        private final ProgramOutcome outcome;
+        private boolean closed;
+
+        private Session(Interpreter interpreter, ProgramOutcome outcome) {
+            this.interpreter = interpreter;
+            this.outcome = outcome;
+        }
+
+        public ProgramOutcome outcome() {
+            return outcome;
+        }
+
+        public JsValue call(JsValue fn, List<JsValue> args) {
+            if (closed) {
+                throw new SimpleJsRuntimeException("Script session is closed");
+            }
+            final var value = interpreter.callValue(fn, JsUndefined.getInstance(), args);
+            interpreter.eventLoop.drain(interpreter.deadlineNanos);
+            return value;
+        }
+
+        public void charge(long bytes) {
+            interpreter.charge(bytes);
+        }
+
+        public void release(long bytes) {
+            interpreter.release(bytes);
+        }
+
+        @Override
+        public void close() {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            try {
+                interpreter.eventLoop.drain(interpreter.deadlineNanos);
+                interpreter.reportUnhandledRejections();
+            } catch (RuntimeException | Error ignored) {
+                // A script whose pending work aborts on the way out has nothing left to report: the
+                // caller already has its per-document outcome, and the coroutines below still have to be
+                // cancelled or their virtual threads would park forever.
+            } finally {
+                interpreter.cancelPendingCoroutines();
+            }
+        }
     }
 
     // The host contract awaits a promise returned (or default-exported) at top level, so it is

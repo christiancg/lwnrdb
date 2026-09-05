@@ -81,6 +81,7 @@ import org.techhouse.ops.resp.ReindexResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.SetDatabaseOwnersResponse;
 import org.techhouse.ops.resp.StopListenResponse;
+import org.techhouse.simplejs.exceptions.ScriptCallableException;
 
 public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -391,6 +392,9 @@ public class OperationProcessor {
             return results.isEmpty()
                     ? new OperationResponse(OperationType.AGGREGATE, ErrorCode.NO_RESULTS)
                     : new AggregateResponse("Ok", results);
+        } catch (ScriptCallableException scriptFailure) {
+            return new OperationResponse(OperationType.AGGREGATE, scriptFailure.getMessage(),
+                    ScriptOperationHelper.errorCodeFor(scriptFailure.getErrorName()));
         } catch (Exception e) {
             return new OperationResponse(OperationType.AGGREGATE, ErrorCode.ERROR_AGGREGATING);
         } finally {

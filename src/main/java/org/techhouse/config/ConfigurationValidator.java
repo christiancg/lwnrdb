@@ -72,6 +72,9 @@ public final class ConfigurationValidator {
         validateInt(configs, "scriptCursorBatchSize", 1, errors);
         validateInt(configs, "scriptCursorMaxBatchSize", 1, errors);
         validateCursorBatchSizes(configs, errors);
+        validatePositiveLong(configs, "aggregationScriptInstructionBudget", errors);
+        validatePositiveLong(configs, "aggregationScriptTimeoutMs", errors);
+        validatePositiveSize(configs, "aggregationScriptMaxSourceBytes", errors);
         validateInt(configs, "maxConcurrentScripts", 0, errors);
         validateQueueWait(configs, errors);
         validateInt(configs, "scriptMaxLogLines", 1, errors);

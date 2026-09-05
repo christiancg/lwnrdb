@@ -4,10 +4,12 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.ScriptAbortException;
+import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.simplejs.exceptions.ScriptCancelledException;
 import org.techhouse.simplejs.exceptions.ScriptMemoryException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
@@ -85,39 +87,12 @@ public final class SimpleJs {
             final var program = Parser.parse(Lexer.lexWithPositions(source), capturing.strictScriptGoal());
             final var outcome = Interpreter.run(program, capturing);
             return resultOf(EJsonInterop.toHostEjson(contractResult(outcome)), capture, limits);
-        } catch (ScriptCancelledException cancelled) {
-            return failed("ScriptCancelledError", cancelled.getMessage(), capture);
-        } catch (ScriptTimeoutException timeout) {
-            return failed("ScriptTimeoutError", timeout.getMessage(), capture);
-        } catch (ScriptMemoryException memory) {
-            return failed("ScriptMemoryError", memory.getMessage(), capture);
-        } catch (ScriptAbortException limit) {
-            return failed("ScriptLimitError", limit.getMessage(), capture);
-        } catch (JsThrowException thrown) {
-            return errorFromThrow(thrown, capture);
-        } catch (TypeErrorException error) {
-            return failed("TypeError", error.getMessage(), capture);
-        } catch (ReferenceErrorException error) {
-            return failed("ReferenceError", error.getMessage(), capture);
-        } catch (RangeErrorException error) {
-            return failed("RangeError", error.getMessage(), capture);
-        } catch (SyntaxErrorException | UnexpectedTokenException | UnexpectedEndOfInputException
-                | UnexpectedCharacterException | UnterminatedStringException | UnterminatedTemplateException
-                | UnterminatedCommentException | UnterminatedRegexException error) {
-            return failed("SyntaxError", error.getMessage(), capture);
-        } catch (UnsupportedNodeException error) {
-            return failed("SyntaxError", "Unsupported syntax: " + error.getMessage(), capture);
-        } catch (SimpleJsRuntimeException error) {
-            return failed("InternalError", error.getMessage(), capture);
-        } catch (OutOfMemoryError | StackOverflowError exhausted) {
-            // A deliberate, narrow exception to "never catch these": the throw originates at one
-            // script-driven allocation (or one runaway recursion in the regex matcher / JSON parser,
-            // neither of which passes through the interpreter's depth counter), the oversized object
-            // becomes garbage on the way out, and the alternative is an unhandled error killing the
-            // connection's thread. The budget above is what should make this unreachable; reaching it
-            // may also mean the JVM was already under pressure from something other than this script,
-            // which is why ScriptOperationHelper logs it at WARN rather than treating it as routine.
-            return failed("ScriptMemoryError", "Script exhausted available memory", capture);
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            final var error = describe(failure);
+            if (error == null) {
+                throw failure;
+            }
+            return failed(error.name(), error.message(), capture);
         }
     }
 
@@ -145,33 +120,155 @@ public final class SimpleJs {
                     ? Interpreter.run(program, capturing)
                     : Interpreter.run(program, capturing, around);
             return resultOf(EJsonInterop.toHostEjson(contractResult(outcome)), capture, limits);
-        } catch (ScriptCancelledException cancelled) {
-            return failed("ScriptCancelledError", cancelled.getMessage(), capture);
-        } catch (ScriptTimeoutException timeout) {
-            return failed("ScriptTimeoutError", timeout.getMessage(), capture);
-        } catch (ScriptMemoryException memory) {
-            return failed("ScriptMemoryError", memory.getMessage(), capture);
-        } catch (ScriptAbortException limit) {
-            return failed("ScriptLimitError", limit.getMessage(), capture);
-        } catch (JsThrowException thrown) {
-            return errorFromThrow(thrown, capture);
-        } catch (TypeErrorException error) {
-            return failed("TypeError", error.getMessage(), capture);
-        } catch (ReferenceErrorException error) {
-            return failed("ReferenceError", error.getMessage(), capture);
-        } catch (RangeErrorException error) {
-            return failed("RangeError", error.getMessage(), capture);
-        } catch (SyntaxErrorException | UnexpectedTokenException | UnexpectedEndOfInputException
-                | UnexpectedCharacterException | UnterminatedStringException | UnterminatedTemplateException
-                | UnterminatedCommentException | UnterminatedRegexException error) {
-            return failed("SyntaxError", error.getMessage(), capture);
-        } catch (UnsupportedNodeException error) {
-            return failed("SyntaxError", "Unsupported syntax: " + error.getMessage(), capture);
-        } catch (SimpleJsRuntimeException error) {
-            return failed("InternalError", error.getMessage(), capture);
-        } catch (OutOfMemoryError | StackOverflowError exhausted) {
-            return failed("ScriptMemoryError", "Script exhausted available memory", capture);
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            final var error = describe(failure);
+            if (error == null) {
+                throw failure;
+            }
+            return failed(error.name(), error.message(), capture);
         }
+    }
+
+    /**
+     * Opens a callable a pipeline step invokes once per document. The module body is evaluated here, once, and
+     * the interpreter stays alive until {@link ScriptCallable#close()} - so the whole sequence of calls shares
+     * one instruction budget, deadline and memory budget rather than getting a fresh one per row.
+     *
+     * <p>
+     * The callable is the module's {@code export default}, else its top-level {@code return} value. An async or
+     * generator function is refused: the call must not hop off the thread holding the collection read locks.
+     */
+    public ScriptCallable openCallable(String source, HostBindings host) {
+        try {
+            return openCallable(compile(source, host.strictScriptGoal()), host);
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            throw asCallableException(failure);
+        }
+    }
+
+    public ScriptCallable openCallable(CompiledScript compiled, HostBindings host) {
+        try {
+            final var program = compiled.strictScriptGoal() == host.strictScriptGoal()
+                    ? compiled.program()
+                    : Parser.parse(Lexer.lexWithPositions(compiled.source()), host.strictScriptGoal());
+            final var session = Interpreter.open(program, host);
+            try {
+                return new SessionCallable(session, requireCallable(session.outcome()));
+            } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                session.close();
+                throw failure;
+            }
+        } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+            throw asCallableException(failure);
+        }
+    }
+
+    private JsValue requireCallable(Interpreter.ProgramOutcome outcome) {
+        final var candidate = outcome.hasReturn() ? outcome.returnValue() : outcome.exportDefault();
+        if (candidate == null) {
+            throw new TypeErrorException("Script must export default (or return) a function");
+        }
+        if (candidate instanceof JsFunction function) {
+            if (function.isAsync() || function.isGenerator()) {
+                throw new TypeErrorException("Script function must not be async or a generator");
+            }
+            return function;
+        }
+        if (candidate instanceof JsNativeFunction || candidate instanceof JsClass) {
+            return candidate;
+        }
+        throw new TypeErrorException("Script must export default (or return) a function");
+    }
+
+    private static ScriptCallableException asCallableException(Throwable failure) {
+        final var error = describe(failure);
+        if (error == null) {
+            if (failure instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw (Error) failure;
+        }
+        return new ScriptCallableException(error.name(), error.message());
+    }
+
+    private record SessionCallable(Interpreter.Session session, JsValue function) implements ScriptCallable {
+        @Override
+        public JsonBaseElement apply(JsonObject document) {
+            return invoke(List.of(EJsonInterop.fromEjson(document)), document, null);
+        }
+
+        @Override
+        public JsonBaseElement apply(JsonBaseElement accumulator, JsonObject document) {
+            return invoke(List.of(EJsonInterop.fromEjson(accumulator), EJsonInterop.fromEjson(document)), document,
+                    accumulator);
+        }
+
+        // The document (and the fold's accumulator) is charged before the call and released after it, so a
+        // scan of a million documents costs one document of the memory budget rather than a million.
+        private JsonBaseElement invoke(List<JsValue> args, JsonObject document, JsonBaseElement accumulator) {
+            final var charged = EJsonInterop.estimatedBytes(document)
+                    + (accumulator == null ? 0 : EJsonInterop.estimatedBytes(accumulator));
+            session.charge(charged);
+            try {
+                return EJsonInterop.toHostEjson(settled(session.call(function, args)));
+            } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
+                throw asCallableException(failure);
+            } finally {
+                session.release(charged);
+            }
+        }
+
+        @Override
+        public void close() {
+            session.close();
+        }
+    }
+
+    private record ScriptError(String name, String message) {
+    }
+
+    // The one place a failure becomes a reportable name+message, shared by run(), openCallable() and every
+    // per-document call. A null means the throwable is not the engine's to report, so it propagates.
+    private static ScriptError describe(Throwable failure) {
+        return switch (failure) {
+            case ScriptCancelledException cancelled -> new ScriptError("ScriptCancelledError", cancelled.getMessage());
+            case ScriptTimeoutException timeout -> new ScriptError("ScriptTimeoutError", timeout.getMessage());
+            case ScriptMemoryException memory -> new ScriptError("ScriptMemoryError", memory.getMessage());
+            case ScriptAbortException limit -> new ScriptError("ScriptLimitError", limit.getMessage());
+            case JsThrowException thrown -> throwName(thrown);
+            case TypeErrorException error -> new ScriptError("TypeError", error.getMessage());
+            case ReferenceErrorException error -> new ScriptError("ReferenceError", error.getMessage());
+            case RangeErrorException error -> new ScriptError("RangeError", error.getMessage());
+            case SyntaxErrorException error -> new ScriptError("SyntaxError", error.getMessage());
+            case UnexpectedTokenException error -> new ScriptError("SyntaxError", error.getMessage());
+            case UnexpectedEndOfInputException error -> new ScriptError("SyntaxError", error.getMessage());
+            case UnexpectedCharacterException error -> new ScriptError("SyntaxError", error.getMessage());
+            case UnterminatedStringException error -> new ScriptError("SyntaxError", error.getMessage());
+            case UnterminatedTemplateException error -> new ScriptError("SyntaxError", error.getMessage());
+            case UnterminatedCommentException error -> new ScriptError("SyntaxError", error.getMessage());
+            case UnterminatedRegexException error -> new ScriptError("SyntaxError", error.getMessage());
+            case UnsupportedNodeException error ->
+                new ScriptError("SyntaxError", "Unsupported syntax: " + error.getMessage());
+            case SimpleJsRuntimeException error -> new ScriptError("InternalError", error.getMessage());
+            // A deliberate, narrow exception to "never catch these": the throw originates at one
+            // script-driven allocation (or one runaway recursion in the regex matcher / JSON parser,
+            // neither of which passes through the interpreter's depth counter), the oversized object
+            // becomes garbage on the way out, and the alternative is an unhandled error killing the
+            // connection's thread. The budget is what should make this unreachable; reaching it
+            // may also mean the JVM was already under pressure from something other than this script,
+            // which is why ScriptOperationHelper logs it at WARN rather than treating it as routine.
+            case OutOfMemoryError _ -> new ScriptError("ScriptMemoryError", "Script exhausted available memory");
+            case StackOverflowError _ -> new ScriptError("ScriptMemoryError", "Script exhausted available memory");
+            default -> null;
+        };
+    }
+
+    private static ScriptError throwName(JsThrowException thrown) {
+        final var value = thrown.getValue();
+        if (value instanceof JsObject object) {
+            return new ScriptError(errorName(object), field(object));
+        }
+        return new ScriptError("Error", JsCoercion.toStr(value));
     }
 
     // The cap belongs with the other sandbox limits rather than with the caller, so CALL_PROCEDURE
@@ -214,7 +311,7 @@ public final class SimpleJs {
 
     // The event loop has already drained, so a promise at the top level is normally settled; one that
     // never settles inside the sandbox contributes undefined.
-    private JsValue settled(JsValue value) {
+    private static JsValue settled(JsValue value) {
         if (!(value instanceof JsPromise promise)) {
             return value;
         }
@@ -226,18 +323,10 @@ public final class SimpleJs {
         };
     }
 
-    private ScriptResult errorFromThrow(JsThrowException thrown, ConsoleCapture capture) {
-        final var value = thrown.getValue();
-        if (value instanceof JsObject object) {
-            return failed(errorName(object), field(object), capture);
-        }
-        return failed("Error", JsCoercion.toStr(value), capture);
-    }
-
     // A thrown value may have no "name" anywhere on its prototype chain (e.g. the test262 harness's
     // Test262Error, a plain function constructor whose prototype only defines `toString`); fall back
     // to the constructor function's own name before defaulting to "Error".
-    private String errorName(JsObject object) {
+    private static String errorName(JsObject object) {
         var current = object;
         while (current != null) {
             if (current.has("name")) {
@@ -258,7 +347,7 @@ public final class SimpleJs {
         return "Error";
     }
 
-    private String constructorName(JsValue constructorValue) {
+    private static String constructorName(JsValue constructorValue) {
         if (constructorValue instanceof JsFunction function) {
             return function.getName();
         }
@@ -273,7 +362,7 @@ public final class SimpleJs {
 
     // An error instance carries only the properties the constructor set: `name` normally lives on
     // the intrinsic prototype, so the chain has to be walked to report it.
-    private String field(JsObject object) {
+    private static String field(JsObject object) {
         var current = object;
         while (current != null) {
             if (current.has("message")) {

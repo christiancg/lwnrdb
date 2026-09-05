@@ -167,6 +167,15 @@ jobs:
             run: |
               python3 test_utils/test_script_control.py
 
+          # Self-contained, on port 8999: the SCRIPT operators inside an AGGREGATE pipeline need a
+          # deliberately tight aggregation sandbox (small budget, short deadline, small source cap) the
+          # shared server does not have, and the suite restarts its own instance with scriptsEnabled=false
+          # - the only server-side switch the feature has - to prove it refuses every scripted pipeline.
+          - name: aggregation-scripts
+            start_server: false
+            run: |
+              python3 test_utils/test_aggregation_scripts.py
+
           # Needs a server already up (it connects + loads data, then restarts
           # the server itself to measure cold-cache latency via pgrep).
           - name: cache-warmup-bench

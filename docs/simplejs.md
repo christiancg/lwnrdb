@@ -1341,6 +1341,61 @@ Three things it is deliberately not:
 - **Not stateful server-side.** Abandoning a cursor mid-walk (a `break` out of the `for-of`) holds
   nothing to release; there is no cursor handle, no open read, and nothing to time out.
 
+### Pipeline scripts
+
+The three `SCRIPT` surfaces inside an aggregation (a `FILTER` operator, a `MAP` `ADD_FIELD`
+mid-operator and the `REDUCE` step) run on a different seam from every other entry point:
+`SimpleJs.openCallable(compiled, host)` -> `Interpreter.open(program, host)` -> a
+`ScriptCallable` invoked once per document, closed when the pipeline ends. `SimpleJs.run` is now
+that same lifecycle plus the result contract, so the drain-and-cancel logic exists once.
+
+**One interpreter per pipeline, not per document.** `Intrinsics` builds a realm's prototype objects
+per `Interpreter`, so a fresh one per document would dominate the cost - but the load-bearing reason
+is the budget: one interpreter means one instruction budget, one deadline and one memory budget for
+the whole query. A runaway predicate aborts the query instead of getting a fresh budget on every row,
+which is exactly what `SimpleJs.run` could not provide (it evaluates a program and discards the
+interpreter). `ops/PipelineScriptContext` is that lifetime: one callable per distinct source, opened
+lazily on first use, closed in the try-with-resources that wraps `applySteps`. Because a `Stream` is
+lazy, that block has to enclose the terminal `toList()` and not just the step loop.
+
+**The callable comes from the module contract**, not a magic name: it is the module's
+`export default`, else its top-level `return` value. An async or generator function is rejected up
+front with a `TypeError` - the same rule `DbModule.transaction` applies, and for the same reason: the
+call must not hop off the thread holding the collection read locks.
+
+**There is no `db`.** `host/PipelineHostBindings` returns null for `database()`, `network()`,
+`moduleResolver()` and `args()`, and discards console output (the operator is invoked once per
+document, so a `console.log` over a large collection is a log-flood risk; the window into a pipeline
+script is `analyze`). That is what makes the feature safe rather than merely bounded: the aggregation
+already holds collection read locks on the calling thread, so a re-entrant `db` call would invite
+lock-ordering trouble, and with no `db` a pipeline script cannot issue an `AGGREGATE` - there is no
+recursion to bound. Time zone and locale still come from `scriptTimeZone`/`scriptLocale`, so a
+computed date field answers identically on every node.
+
+**Memory is charged and released per document.** `SessionCallable.invoke` charges
+`EJsonInterop.estimatedBytes(document)` (plus the accumulator, for a fold) before the call and
+releases it after, reusing the `InterpreterOps.charge`/`release` pair whose deterministic release
+point is the `db.cursor` precedent. Without the release a million-document scan would exhaust the
+budget on document count alone. A `REDUCE`'s *final* accumulator is measured against
+`scriptMaxResultBytes` before it is emitted, so a fold that accumulates every document into an array
+fails cleanly with `400-15` rather than by `OutOfMemoryError`.
+
+The sandbox comes from `aggregationScriptInstructionBudget`/`aggregationScriptTimeoutMs`
+(`scriptMaxDepth` and `scriptMaxMemoryBytes` are reused rather than twinned) and is deliberately an
+order below the `RUN_SCRIPT` budget. The deadline is the *pipeline's*: `PipelineScriptContext` records
+it once and passes each later callable only the time left, so a query carrying several different
+scripts cannot outlive the timeout by opening more of them. The instruction budget is per callable,
+which means N distinct sources in one pipeline get N budgets - the wall clock, not the budget, is what
+bounds that case.
+
+**Errors.** Every failure surfaces as a single `ScriptCallableException` carrying the same error name
+a `ScriptResult` would have reported, mapped to a wire code by the `ScriptOperationHelper.errorCodeFor`
+the other script paths use: `400-9` thrown or unparseable, `400-11` budget/depth, `400-12` memory,
+`400-15` an oversized reduced value, `408-1` the deadline.
+
+A document a script mutates is never written through: the argument is an `EJsonInterop.fromEjson`
+conversion, so the host document the pipeline carries is a separate object.
+
 ### Script operations under clustering
 
 `host/EnforcingDatabaseAccess.dispatch` consults `cluster/ClusterRouter` before running an operation

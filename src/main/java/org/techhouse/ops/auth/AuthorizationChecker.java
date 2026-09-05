@@ -11,6 +11,7 @@ import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.validations.AggregationStepValidator;
 
 public final class AuthorizationChecker {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -124,6 +125,13 @@ public final class AuthorizationChecker {
                     && lacksCollectionAccess(user, dbName, joinStep.getJoinCollection(), PermissionLevel.READ)) {
                 return AuthorizationResult.deny("action is forbidden, no permissions");
             }
+        }
+
+        // A pipeline carrying a script executes code, which is a strictly wider capability than the READ
+        // the operation itself needs - so it takes the same per-database grant RUN_SCRIPT does. Admins and
+        // owners short-circuited above, exactly as they do for RUN_SCRIPT.
+        if (AggregationStepValidator.containsScript(stepsToCheck) && !user.canRunScripts(dbName)) {
+            return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
         return AuthorizationResult.allow();

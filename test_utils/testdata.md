@@ -564,6 +564,24 @@ number to boolean
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "casted", "condition": null, "operator": {"type":"CAST", "fieldName": "aNumber", "toType": "BOOLEAN"}}]}]}
 ```
 
+Add field "total" with a script → type "SCRIPT" (needs scriptsEnabled and the caller's scriptPermissions)
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "MAP", "operators": [{"fieldName": "total", "condition": null, "operator": {"type":"SCRIPT", "script": "export default (doc) => doc.aNumber * 2;"}}]}]}
+```
+
+Filter with a script predicate
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator": {"script": "export default (doc) => doc.aNumber > 5;"}}]}
+```
+
+Fold the stream into a single document → step "REDUCE" (optional "initialValue" and "resultField", the latter defaulting to "value")
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "REDUCE", "resultField": "total", "initialValue": 0, "script": "export default (acc, doc) => acc + doc.aNumber;"}]}
+```
+
 Add field "addedAfterMap" with condition "AND" → type "MULTIPLY"
 
 ```json

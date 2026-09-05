@@ -41,7 +41,10 @@ public enum ErrorCode {
                                                                                                                                     OperationStatus.ERROR), PROCEDURE_IMPORT_NOT_FOUND(
                                                                                                                                             "400-18",
                                                                                                                                             "The procedure imports a procedure that does not exist",
-                                                                                                                                            OperationStatus.ERROR),
+                                                                                                                                            OperationStatus.ERROR), SCRIPT_NOT_ALLOWED_IN_LISTEN(
+                                                                                                                                                    "400-19",
+                                                                                                                                                    "A SCRIPT operator is not allowed in a LISTEN pipeline",
+                                                                                                                                                    OperationStatus.ERROR),
 
     // ── 401 Unauthenticated ───────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(

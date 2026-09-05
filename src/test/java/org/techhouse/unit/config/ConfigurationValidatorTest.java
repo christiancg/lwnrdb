@@ -59,6 +59,9 @@ public class ConfigurationValidatorTest {
         map.put("scriptMaxResultBytes", "16Mb");
         map.put("scriptCursorBatchSize", "500");
         map.put("scriptCursorMaxBatchSize", "5000");
+        map.put("aggregationScriptInstructionBudget", "1000000");
+        map.put("aggregationScriptTimeoutMs", "2000");
+        map.put("aggregationScriptMaxSourceBytes", "16Kb");
         map.put("maxConcurrentScripts", "16");
         map.put("scriptQueueWaitMs", "250");
         map.put("procedureCacheSize", "128");
@@ -337,6 +340,16 @@ public class ConfigurationValidatorTest {
         assertHasError(tempDir, "scriptMaxResultBytes", "0", "scriptMaxResultBytes");
         assertHasError(tempDir, "scriptCursorBatchSize", "0", "scriptCursorBatchSize");
         assertHasError(tempDir, "scriptCursorMaxBatchSize", "0", "scriptCursorMaxBatchSize");
+    }
+
+    @Test
+    public void test_invalid_aggregation_script_bounds(@TempDir Path tempDir) {
+        assertHasError(tempDir, "aggregationScriptInstructionBudget", "0", "aggregationScriptInstructionBudget");
+        assertHasError(tempDir, "aggregationScriptInstructionBudget", "not-a-number",
+                "aggregationScriptInstructionBudget");
+        assertHasError(tempDir, "aggregationScriptTimeoutMs", "0", "aggregationScriptTimeoutMs");
+        assertHasError(tempDir, "aggregationScriptMaxSourceBytes", "nonsense", "aggregationScriptMaxSourceBytes");
+        assertHasError(tempDir, "aggregationScriptMaxSourceBytes", "0", "aggregationScriptMaxSourceBytes");
     }
 
     // 0 is legal for both: it means "no cap" and "reject immediately" respectively.

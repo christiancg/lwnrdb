@@ -58,6 +58,9 @@ public class ClusterConfigurationValidatorTest {
         map.put("scriptMaxResultBytes", "16Mb");
         map.put("scriptCursorBatchSize", "500");
         map.put("scriptCursorMaxBatchSize", "5000");
+        map.put("aggregationScriptInstructionBudget", "1000000");
+        map.put("aggregationScriptTimeoutMs", "2000");
+        map.put("aggregationScriptMaxSourceBytes", "16Kb");
         map.put("maxConcurrentScripts", "16");
         map.put("scriptQueueWaitMs", "250");
         map.put("procedureCacheSize", "128");

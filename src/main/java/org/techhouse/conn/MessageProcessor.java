@@ -67,7 +67,7 @@ public class MessageProcessor implements Runnable {
                             final var validationResult = RequestValidator.validate(parsedMessage);
                             if (!validationResult.isValid()) {
                                 response = eJson.toJson(new OperationResponse(parsedMessage.getType(),
-                                        validationResult.getErrorMessage(), ErrorCode.VALIDATION_ERROR));
+                                        validationResult.getErrorMessage(), validationResult.getErrorCode()));
                             } else {
                                 final var type = parsedMessage.getType();
                                 final var isPublicOperation = type == OperationType.AUTHENTICATE
