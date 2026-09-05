@@ -22,6 +22,7 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     // [[SourceText]]: the text of the function-like production this closure came from, or null when
     // the parser had no source to slice - see JsNode.sourceText.
     private String sourceText;
+    private String moduleName;
     // Concise methods and accessors are not constructors, so they have no `prototype` property.
     private boolean method;
     private boolean derivedConstructor;
@@ -36,6 +37,14 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
         this.async = async;
         this.generator = generator;
         this.closure = closure;
+    }
+
+    public String getModuleName() {
+        return moduleName;
+    }
+
+    public void setModuleName(String moduleName) {
+        this.moduleName = moduleName;
     }
 
     public String getName() {

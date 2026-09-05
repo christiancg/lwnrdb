@@ -68,6 +68,21 @@ public class ScriptCallableTest {
         }
     }
 
+    // A per-document failure carries the same frames a RUN_SCRIPT failure would
+    @Test
+    public void test_per_document_failure_carries_a_stack() {
+        try (var callable = open("""
+                function score(doc) {
+                  throw new Error('bad row');
+                }
+                export default score;
+                """)) {
+            final var failure = assertThrows(ScriptCallableException.class, () -> callable.apply(document(1)));
+            assertNotNull(failure.getErrorStack());
+            assertTrue(failure.getErrorStack().getFirst().startsWith("score ("), failure.getErrorStack()::toString);
+        }
+    }
+
     @Test
     public void test_rejects_non_callable() {
         final var error = failureOf("export default 42;");

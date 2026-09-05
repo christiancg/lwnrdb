@@ -64,7 +64,7 @@ public final class DbModule {
     // partway rather than after the whole JS copy already exists. What the script passed in is never
     // charged - it was charged when the script allocated it.
     private static JsValue aggregate(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
-        final var pipeline = (JsonArray) EJsonInterop.toHostEjson(args.get(2));
+        final var pipeline = (JsonArray) EJsonInterop.toHostEjson(args.get(2), ops);
         final var results = database.aggregate(arg(args, 0), arg(args, 1), pipeline);
         final var array = new JsArray();
         for (final var result : results) {
@@ -75,14 +75,14 @@ public final class DbModule {
     }
 
     private static JsValue save(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
-        final var document = (JsonObject) EJsonInterop.toHostEjson(args.get(2));
+        final var document = (JsonObject) EJsonInterop.toHostEjson(args.get(2), ops);
         final var saved = database.save(arg(args, 0), arg(args, 1), document);
         InterpreterOps.charge(ops, EJsonInterop.estimatedBytes(saved));
         return EJsonInterop.fromEjson(saved);
     }
 
     private static JsValue bulkSave(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
-        final var converted = EJsonInterop.toHostEjson(args.get(2));
+        final var converted = EJsonInterop.toHostEjson(args.get(2), ops);
         if (!(converted instanceof JsonArray array)) {
             throw new TypeErrorException("db.bulkSave expects an array of documents");
         }
@@ -103,7 +103,7 @@ public final class DbModule {
     // db.aggregate, and a concurrent write between two batches is observable.
     private static JsValue cursor(DatabaseAccess database, InterpreterOps ops, Intrinsics intrinsics,
             ResourceLimits limits, List<JsValue> args) {
-        final var converted = args.size() > 2 ? EJsonInterop.toHostEjson(args.get(2)) : null;
+        final var converted = args.size() > 2 ? EJsonInterop.toHostEjson(args.get(2), ops) : null;
         if (!(converted instanceof JsonArray steps)) {
             throw new TypeErrorException("db.cursor expects an array of aggregation steps");
         }

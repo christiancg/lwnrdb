@@ -521,7 +521,8 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 ```
 
 - `script` (required) is the program source, `args` (optional) is an arbitrary object the script reads through `import args from "args"`, and `db.name` is the scoped database name — so one script can run against any database without hardcoding it.
-- `result` is the script's value: a top-level `return`, else `export default`, else an object of the named exports, else JSON `null`. A promise returned at top level is awaited (a rejection becomes the error); one that never settles yields `null`.
+- `result` is the script's value: a top-level `return`, else `export default`, else an object of the named exports, else JSON `null`. A promise returned at top level is awaited (a rejection becomes the error); one that never settles fails the run with `400-20`, since the event loop has already drained and it can never settle. An accessor-valued property is read through its getter on the way out, so a computed field reaches the caller like any other.
+- `stack`, on a failed run, lists the frames the error came from, innermost first — `"applyRule (procedures/rules:12:7)"`, `"main:4:1"`. A frame names the function, the module it was written in (`main`, or `procedures/<name>` for imported code) and its line and column; the list is capped at 32 frames with a trailing `"... N more frames"`. A sandbox abort — a timeout, a cancellation, a budget or depth limit — carries no frames, because it is not a program error. The same frames appear in the run's server-side log line as `stack=[…]`, which is how an unattended trigger or scheduled procedure failure is diagnosed.
 - `logs` holds the script's `console` output — the newest `scriptMaxLogLines` lines, each clipped to `scriptMaxLogLineChars` — and `logsTruncated` reports whether anything was dropped. Output is returned on **every** outcome, including a failure, so a failed run is still debuggable.
 - `runId` names this run for the whole time it executes, so a slow run can be found with [`LIST_SCRIPTS`](#list_scripts-admin-only) and stopped with [`CANCEL_SCRIPT`](#cancel_script-admin-only) without listing first. It is returned on every outcome and also appears in the run's log line.
 - **Permissions**: admins may run scripts on any database and database owners on the databases they own; any other user needs a **per-database** script grant — `scriptPermissions: {"mydb": "RUN"}` on their user record (the older boolean form is still accepted and reads as `RUN`). Every operation the script itself issues is authorized again on its own request, so the grant never widens what the caller can read or write, and the collection schema still applies to a script's writes. A script cannot leave its database (`admin` included) — an attempt throws a catchable error inside the script.
@@ -554,7 +555,7 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 
   It is a **paged read, not a snapshot**: each batch is an ordinary `AGGREGATE` against the live collection (authorized, schema-checked and cluster-routed like any other), so a concurrent insert or delete between two batches can make a document be seen twice or not at all. Paging is only meaningful with a `SORT` step — without one the pipeline's order is unspecified — and `db.cursor` does not inject one, because that would change the results of a pipeline ending in `GROUP_BY`/`COUNT`. Such a pipeline still works, but it pages the *step output*, which is rarely what is meant.
 - **Every failed `db` operation throws a catchable `Error` inside the script** — a permission denial, a schema violation, an oversized entry, a cluster rejection or an internal error alike; a failure is never silently swallowed. The two exceptions are ordinary absence rather than failure: a missing document reads as `null` from `findById`, an empty pipeline as `[]` from `aggregate`, and deleting a document that is not there is a no-op.
-- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `408-1` when it exceeds `scriptTimeoutMs`, `408-2` when an operator cancelled it with `CANCEL_SCRIPT`, `503-6` when the node is already running `maxConcurrentScripts` scripts and none finished within `scriptQueueWaitMs` (nothing ran — retry shortly), and `409-6` if sent while a transaction is open on the connection.
+- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `400-20` when its result is a promise that never settled, `408-1` when it exceeds `scriptTimeoutMs`, `408-2` when an operator cancelled it with `CANCEL_SCRIPT`, `503-6` when the node is already running `maxConcurrentScripts` scripts and none finished within `scriptQueueWaitMs` (nothing ran — retry shortly), and `409-6` if sent while a transaction is open on the connection.
 - Under clustering the script runs on the node that received it; each operation it issues is routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
 #### `SAVE_PROCEDURE`
@@ -603,7 +604,7 @@ Idempotent — succeeds whether or not the procedure existed. Refused with `400-
 `includeSource: true` adds the `source` field. Requires `READ` on the database.
 
 #### `CALL_PROCEDURE`
-Runs a stored procedure. The permission is the same as [`RUN_SCRIPT`](#run_script)'s (`scriptPermissions` of at least `RUN`), the sandbox is the same, and the response shape matches — `result`, `logs`, `logsTruncated`, with the same error codes.
+Runs a stored procedure. The permission is the same as [`RUN_SCRIPT`](#run_script)'s (`scriptPermissions` of at least `RUN`), the sandbox is the same, and the response shape matches — `result`, `logs`, `logsTruncated`, and `stack` on a failure, with the same error codes.
 
 ```json
 {"type":"CALL_PROCEDURE","databaseName":"mydb","procedureName":"recalcTotals","args":{"id":"o1"}}
@@ -685,6 +686,8 @@ Runs a stored procedure after a committed write to a collection. Requires admin 
 - The procedure receives `{event, database, collection, id, document, trigger, actingUser, definer, firedAt, depth}` as its `args` — `actingUser` is who wrote, `definer` is whose authority the run has. In `batch` mode `documents` replaces `id`/`document`.
 - Triggers are stored **with their collection**, in `{filePath}/{database}/{collection}/{collection}-triggers.json`, so dropping the collection removes them.
 - **Errors**: `403-1` not permitted, `404-4` unknown collection, `404-8` unknown or disabled procedure, `400-14` no events / an unknown event / an unknown mode, `409-8` version conflict.
+- **A failing trigger names where it failed.** Nobody is waiting on a response, so the run's warning line in the server log carries `stack=[…]` — the frames the error came from, innermost first, naming the procedure and line.
+- **Testing one before installing it.** There is no dry-run operation. Put the logic in a stored procedure, exercise it with [`CALL_PROCEDURE`](#call_procedure) against a representative document, and make the trigger a thin wrapper that imports and delegates to it. That exercises the body, not dispatch — cascade depth, definer rights and the pending-run record still need a real write to observe.
 
 #### `DELETE_TRIGGER`
 ```json
@@ -1022,6 +1025,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-17` | `ERROR` | The database already has the maximum number of schedules |
 | `400-18` | `ERROR` | A saved procedure imports a `procedures/<name>` that does not exist or is disabled |
 | `400-19` | `ERROR` | A `SCRIPT` operator is not allowed in a `LISTEN` pipeline |
+| `400-20` | `ERROR` | The script's result promise never settled |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -1157,6 +1161,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
 | `scriptProcedureImportEnabled` | `true` or `false` (default `true`). Whether a script may import a stored procedure of its own database as a module with `import … from "procedures/<name>"`. On by default, unlike `scriptTextImportEnabled`: `importText` evaluates a caller-supplied string, whereas a procedure import evaluates code only `SAVE_PROCEDURE` could have installed |
 | `procedureCacheSize` | Compiled stored procedures retained per node (>= 0, default `128`); keyed by procedure version, so a save can never serve a stale entry. `0` compiles on every call |
+| `scriptCompiledCacheSize` | Parsed ad-hoc `RUN_SCRIPT` programs retained per node (>= 0, default `128`); keyed by a hash of the source, so an entry can never go stale. A syntax error is cached too and replayed as the same `400-9`. `0` parses on every call |
 | `procedureCacheMaxBytes` | Human-readable size > 0 (default `32Mb`). Memory bound on cached procedure **source**. Separate from `maxMemory`, which bounds the user document/index cache only |
 | `schemaCacheMaxBytes` | Human-readable size > 0 (default `32Mb`). Same contract, for cached collection schemas |
 | `triggerCacheMaxEntries` | Collections whose trigger list is kept in memory (>= 0, default `4096`). Bounded by count, not bytes — a trigger list is small and read on every committed write. `0` reads from disk every time |
@@ -1355,10 +1360,14 @@ To auto-format your changes before committing:
 mvn spotless:apply
 ```
 
-> **Build JDK:** use **JDK 25** (matching the project's compiler target and CI).
-> JDK 26 also works. The Eclipse JDT formatter is used instead of
-> Google/Palantir formatters specifically because the latter rely on `javac`
-> internals that are incompatible with JDK 25/26.
+> **Build JDK: JDK 26 or newer is required** (matching the project's compiler
+> target and CI); `mvn verify` fails on anything older. The floor is not
+> arbitrary: the SimpleJS regex engine resolves `\p{...}` property escapes
+> against the JDK's own Unicode data, so an older JDK ships an older UCD and the
+> same script answers differently — including between two nodes of one cluster.
+> The Eclipse JDT formatter is used instead of Google/Palantir formatters
+> specifically because the latter rely on `javac` internals that are
+> incompatible with recent JDKs.
 
 The linter rulesets are deliberately curated rather than using defaults: they
 target real defects and conventions the formatter does not cover, while

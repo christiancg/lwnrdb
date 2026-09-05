@@ -139,6 +139,66 @@ public class ScriptOperationHelperTest {
     }
 
     @Test
+    public void test_failed_run_carries_a_stack() {
+        final var response = run("""
+                function inner() {
+                  throw new Error('boom');
+                }
+                inner();
+                """);
+        assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), response.getErrorCode());
+        assertNotNull(response.getStack());
+        assertFalse(response.getStack().isEmpty());
+        assertTrue(response.getStack().getFirst().startsWith("inner ("), response.getStack()::toString);
+    }
+
+    // The single-line form the trigger and schedule log lines embed
+    @Test
+    public void test_render_stack_joins_frames_on_one_line() {
+        assertEquals(" stack=[inner (main:2:3) | main:4:1]",
+                ScriptOperationHelper.renderStack(java.util.List.of("inner (main:2:3)", "main:4:1")));
+    }
+
+    @Test
+    public void test_render_stack_of_nothing_is_empty() {
+        assertEquals("", ScriptOperationHelper.renderStack(null));
+        assertEquals("", ScriptOperationHelper.renderStack(java.util.List.of()));
+    }
+
+    @Test
+    public void test_successful_run_carries_no_stack() {
+        assertNull(run("return 1;").getStack());
+    }
+
+    @Test
+    public void test_pending_result_promise_is_reported() {
+        final var response = run("return new Promise(function () {});");
+        assertEquals(ErrorCode.SCRIPT_RESULT_PENDING.getCode(), response.getErrorCode());
+    }
+
+    @Test
+    public void test_getter_valued_property_reaches_the_caller() {
+        final var response = run("return { get total() { return 42; } };");
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertEquals(42, response.getResult().asJsonObject().get("total").asJsonNumber().getValue().intValue());
+    }
+
+    // The compiled form is cached, but a syntax error must still answer 400-9 on every call
+    @Test
+    public void test_repeated_syntax_error_stays_400_9() {
+        for (var i = 0; i < 3; i++) {
+            final var response = run("return (;");
+            assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), response.getErrorCode());
+        }
+    }
+
+    @Test
+    public void test_repeated_run_reuses_the_compiled_form() {
+        assertEquals(2, run("return 1 + 1;").getResult().asJsonNumber().getValue().intValue());
+        assertEquals(2, run("return 1 + 1;").getResult().asJsonNumber().getValue().intValue());
+    }
+
+    @Test
     public void test_returns_named_exports_when_no_return() {
         final var response = run("export const a = 1;");
         assertEquals(OperationStatus.OK, response.getStatus());

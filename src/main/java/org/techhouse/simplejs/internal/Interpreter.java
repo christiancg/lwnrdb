@@ -29,6 +29,7 @@ import org.techhouse.simplejs.host.CancellationToken;
 import org.techhouse.simplejs.host.HostBindings;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 import org.techhouse.simplejs.internal.interpreter.BindingEvaluator;
+import org.techhouse.simplejs.internal.interpreter.CallStack;
 import org.techhouse.simplejs.internal.interpreter.ClassEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ExpressionEvaluator;
 import org.techhouse.simplejs.internal.interpreter.Iteration;
@@ -36,6 +37,7 @@ import org.techhouse.simplejs.internal.interpreter.MemberEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ModuleEvaluator;
 import org.techhouse.simplejs.internal.interpreter.ModuleRegistry;
 import org.techhouse.simplejs.internal.interpreter.ProxyDispatch;
+import org.techhouse.simplejs.internal.interpreter.StackCapture;
 import org.techhouse.simplejs.internal.interpreter.StatementEvaluator;
 import org.techhouse.simplejs.internal.interpreter.VarHoisting;
 import org.techhouse.simplejs.internal.interpreter.YieldDelegation;
@@ -286,6 +288,7 @@ public final class Interpreter {
     private final CancellationToken cancellation;
     private int depth;
     private int moduleDepth;
+    private final CallStack callStack = new CallStack();
     private Environment globalEnv;
     private ModuleBodyWrapper moduleBodyWrapper;
     // Set once by runModule (one Interpreter per script run/realm). GetBindingValue on a Global
@@ -323,7 +326,23 @@ public final class Interpreter {
     }
 
     public static ProgramOutcome run(Program program, HostBindings host) {
-        return new Interpreter(host).runModule(program);
+        return new Interpreter(host).runModule(program, (outcome, ignored) -> outcome);
+    }
+
+    /**
+     * Runs the program and maps its outcome to a result while the interpreter is still alive, so the mapping
+     * may invoke user code - an accessor-valued property on the returned object, in particular. The mapping is
+     * charged against the run's own budgets, and the loop is drained again afterwards in case it queued work.
+     */
+    public static <T> T run(Program program, HostBindings host, ModuleBodyWrapper around, ResultFinisher<T> finisher) {
+        final var interpreter = new Interpreter(host);
+        interpreter.moduleBodyWrapper = around;
+        return interpreter.runModule(program, finisher);
+    }
+
+    @FunctionalInterface
+    public interface ResultFinisher<T> {
+        T finish(ProgramOutcome outcome, InterpreterOps ops);
     }
 
     /**
@@ -333,9 +352,7 @@ public final class Interpreter {
      * calling thread instead would strand them.
      */
     public static ProgramOutcome run(Program program, HostBindings host, ModuleBodyWrapper around) {
-        final var interpreter = new Interpreter(host);
-        interpreter.moduleBodyWrapper = around;
-        return interpreter.runModule(program);
+        return run(program, host, around, (outcome, ignored) -> outcome);
     }
 
     @FunctionalInterface
@@ -383,16 +400,20 @@ public final class Interpreter {
     }
 
     private JsValue evalProgram(Program program) {
-        return runModule(program).lastValue();
+        return runModule(program, (outcome, ignored) -> outcome).lastValue();
     }
 
-    private ProgramOutcome runModule(Program program) {
+    private <T> T runModule(Program program, ResultFinisher<T> finisher) {
+        final var previousStack = StackCapture.install(callStack);
         try {
             final var outcome = evaluateTopLevelModule(program);
+            final var finished = finisher.finish(outcome, ops);
+            eventLoop.drain(deadlineNanos);
             reportUnhandledRejections();
-            return outcome;
+            return finished;
         } finally {
             cancelPendingCoroutines();
+            StackCapture.restore(previousStack);
         }
     }
 
@@ -437,11 +458,13 @@ public final class Interpreter {
      */
     public static Session open(Program program, HostBindings host) {
         final var interpreter = new Interpreter(host);
+        final var previousStack = StackCapture.install(interpreter.callStack);
         try {
-            return new Session(interpreter, interpreter.evaluateTopLevelModule(program));
+            return new Session(interpreter, interpreter.evaluateTopLevelModule(program), previousStack);
         } catch (RuntimeException | Error failure) {
             interpreter.reportUnhandledRejections();
             interpreter.cancelPendingCoroutines();
+            StackCapture.restore(previousStack);
             throw failure;
         }
     }
@@ -449,11 +472,13 @@ public final class Interpreter {
     public static final class Session implements AutoCloseable {
         private final Interpreter interpreter;
         private final ProgramOutcome outcome;
+        private final CallStack previousStack;
         private boolean closed;
 
-        private Session(Interpreter interpreter, ProgramOutcome outcome) {
+        private Session(Interpreter interpreter, ProgramOutcome outcome, CallStack previousStack) {
             this.interpreter = interpreter;
             this.outcome = outcome;
+            this.previousStack = previousStack;
         }
 
         public ProgramOutcome outcome() {
@@ -492,6 +517,7 @@ public final class Interpreter {
                 // cancelled or their virtual threads would park forever.
             } finally {
                 interpreter.cancelPendingCoroutines();
+                StackCapture.restore(previousStack);
             }
         }
     }
@@ -542,7 +568,7 @@ public final class Interpreter {
     // An imported module shares this interpreter's realm, event loop, coroutine and instruction
     // counter: a second Interpreter would give it prototypes the importer cannot match, an event loop
     // nothing drains, a thread that breaks an open transaction's affinity, and a fresh budget.
-    public JsValue importModule(String moduleId, Supplier<Program> parser) {
+    public JsValue importModule(String moduleId, String displayName, Supplier<Program> parser) {
         final var state = moduleRegistry.stateOf(moduleId);
         if (state == ModuleRegistry.State.EVALUATED) {
             return moduleRegistry.namespaceOf(moduleId);
@@ -558,6 +584,7 @@ public final class Interpreter {
         }
         moduleRegistry.beginEvaluation(moduleId);
         moduleDepth++;
+        final var previousModule = callStack.enterModule(displayName);
         try {
             final var namespace = evaluateModule(parser.get());
             moduleRegistry.complete(moduleId, namespace);
@@ -566,6 +593,7 @@ public final class Interpreter {
             moduleRegistry.fail(moduleId, error);
             throw error;
         } finally {
+            callStack.exitModule(previousModule);
             moduleDepth--;
         }
     }
@@ -656,6 +684,7 @@ public final class Interpreter {
     }
 
     public Completion evalStatement(Statement statement, Environment env) {
+        callStack.setPosition(statement.getPosition());
         return switch (statement.getType()) {
             case BLOCK_STATEMENT -> statements.evalBlock((BlockStatement) statement, env);
             case EMPTY_STATEMENT -> Completion.empty();
@@ -1118,6 +1147,9 @@ public final class Interpreter {
             boolean async, boolean generator, Environment closure, String sourceText) {
         final var function = new JsFunction(name, params, body, arrow, expressionBody, async, generator, closure);
         function.setSourceText(sourceText);
+        // The module a frame is labelled with is where the function was written, not where it is called
+        // from, so it is recorded once here rather than read off the stack at call time.
+        function.setModuleName(callStack.currentModule());
         if (generator) {
             function.getPrototype().setProto(async ? intrinsics.asyncIteratorProto() : intrinsics.iteratorProto());
         }
@@ -1273,13 +1305,22 @@ public final class Interpreter {
         return switch (callee) {
             case JsProxy proxy -> proxies.apply(proxy, thisArg, args);
             case JsFunction function -> callFunction(function, thisArg, args);
-            case JsNativeFunction nativeFunction -> nativeFunction.invoke(thisArg, args);
+            case JsNativeFunction nativeFunction -> invokeNative(nativeFunction, thisArg, args);
             // %Function.prototype% is itself callable per spec (accepts any arguments, returns
             // undefined) despite being an ordinary JsObject rather than a JsFunction/JsNativeFunction,
             // since it must stay exposed as a JsObject for GlobalScope/getMember call sites.
             case JsObject object when object == intrinsics.functionProto() -> JsUndefined.getInstance();
             default -> throw new TypeErrorException(JsCoercion.toStr(callee) + " is not a function");
         };
+    }
+
+    private JsValue invokeNative(JsNativeFunction nativeFunction, JsValue thisArg, List<JsValue> args) {
+        callStack.push(nativeFunction.getName(), CallStack.NATIVE_MODULE);
+        try {
+            return nativeFunction.invoke(thisArg, args);
+        } finally {
+            callStack.pop();
+        }
     }
 
     private JsValue driveAsyncGenerator(JsAsyncGenerator generator, MemberEvaluator.AsyncStep step, JsValue argument) {
@@ -1295,6 +1336,7 @@ public final class Interpreter {
             throw new ScriptLimitException("Script exceeded its maximum call depth");
         }
         depth++;
+        callStack.push(function.getName(), function.getModuleName());
         try {
             final var activation = function.getClosure().functionChild();
             if (!function.isArrow()) {
@@ -1340,6 +1382,7 @@ public final class Interpreter {
             }
             return result;
         } finally {
+            callStack.pop();
             depth--;
         }
     }
@@ -1407,6 +1450,7 @@ public final class Interpreter {
         final var coroutine = new Coroutine();
         coroutines.add(coroutine);
         coroutine.markGenerator();
+        ownStackSegment(coroutine, function);
         coroutine.prime(() -> {
             currentCoroutine.set(coroutine);
             return runFunctionBody(function, activation);
@@ -1422,6 +1466,7 @@ public final class Interpreter {
         final var coroutine = new Coroutine();
         coroutines.add(coroutine);
         coroutine.markAsync();
+        ownStackSegment(coroutine, function);
         coroutine.startAsync(() -> {
             currentCoroutine.set(coroutine);
             try {
@@ -1442,6 +1487,7 @@ public final class Interpreter {
         final var generator = new JsAsyncGenerator(coroutine);
         coroutine.markAsync();
         coroutine.markGenerator();
+        ownStackSegment(coroutine, function);
         coroutine.setResumeObserver(escaped -> members.observeAsyncGenerator(generator, escaped));
         coroutine.prime(() -> {
             currentCoroutine.set(coroutine);
@@ -1450,6 +1496,20 @@ public final class Interpreter {
         final var proto = function.getPrototype();
         generator.setProto(proto instanceof JsObject object ? object : intrinsics.asyncIteratorProto());
         return generator;
+    }
+
+    // A coroutine body resumes and parks many times, interleaved with its consumer's own code, so it gets
+    // its own stack segment installed for the length of each resumption rather than sharing the caller's.
+    private void ownStackSegment(Coroutine coroutine, JsFunction function) {
+        final var segment = callStack.segmentFor(function.getName(), function.getModuleName());
+        coroutine.setAroundResume(resume -> {
+            final var saved = callStack.swap(segment);
+            try {
+                resume.run();
+            } finally {
+                callStack.swap(saved);
+            }
+        });
     }
 
     private JsValue evalYield(YieldExpression yield, Environment env) {

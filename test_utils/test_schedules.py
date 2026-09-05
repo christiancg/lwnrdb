@@ -257,6 +257,14 @@ def stop_server(proc):
         time.sleep(0.2)
 
 
+def read_log(log_path: str) -> str:
+    try:
+        with open(log_path, "rb") as fp:
+            return fp.read().decode(errors="replace")
+    except OSError:
+        return ""
+
+
 def dump_log(log_path: str):
     try:
         with open(log_path, "rb") as fp:
@@ -390,6 +398,36 @@ def test_validation(conn: Conn):
     check_status("editing an existing schedule is still allowed",
                  conn.save_schedule("capped0", "counter", cron="0 4 * * *"), "OK")
     clear_schedules(conn)
+
+
+def test_failure_logs_a_stack(conn: Conn, log_path: str):
+    section("A failing scheduled run names where it failed")
+    check_status("install a procedure that throws two frames deep",
+                 conn.save_procedure("scheduled_explodes",
+                                     "function inner() {\n"
+                                     "  throw new Error('schedule blew up');\n"
+                                     "}\n"
+                                     "function outer() {\n"
+                                     "  inner();\n"
+                                     "}\n"
+                                     "outer();"), "OK")
+    before = schedule_failures(conn)
+    check_status("schedule it every 500ms",
+                 conn.save_schedule("exploder", "scheduled_explodes", intervalMs=500), "OK")
+    deadline = time.time() + 20.0
+    while schedule_failures(conn) <= before and time.time() < deadline:
+        time.sleep(0.2)
+    check("the failure is counted", schedule_failures(conn) > before, f"failures did not increase from {before}")
+
+    # Nobody is waiting on a response, so the server log is where the trace has to appear
+    log = read_log(log_path)
+    line = next((entry for entry in log.splitlines()
+                 if "SCHEDULE name=exploder" in entry and "schedule blew up" in entry), "")
+    check("the scheduled run's failure line carries a stack", "stack=[" in line, f"line={line!r}")
+    check("the stack names the throwing function", "inner (" in line, f"line={line!r}")
+
+    check_status("delete the schedule", conn.delete_schedule("exploder"), "OK")
+    check_status("delete the procedure", conn.delete_procedure("scheduled_explodes"), "OK")
 
 
 def test_import_failure(conn: Conn):
@@ -541,6 +579,7 @@ def main() -> int:
             test_listing(conn)
             test_validation(conn)
             test_import_failure(conn)
+            test_failure_logs_a_stack(conn, log_path)
             test_referential_integrity(conn)
         test_permissions()
         with admin_conn() as conn:

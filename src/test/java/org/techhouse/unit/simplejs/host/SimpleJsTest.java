@@ -264,12 +264,67 @@ public class SimpleJsTest {
         assertEquals(7, result.getValue().asJsonNumber().getValue().intValue());
     }
 
-    // A promise that never settles inside the sandbox contributes JSON null
+    // The loop has drained by the time the contract is applied, so a still-pending promise can never
+    // settle - reporting it is what separates it from a script that deliberately produced null
     @Test
-    public void test_toplevel_pending_promise_resolves_to_null() {
+    public void test_toplevel_pending_promise_is_an_error() {
         final var result = run("return new Promise(function() {})");
+        assertTrue(result.isError());
+        assertEquals("ScriptPendingResultError", result.getErrorName());
+    }
+
+    @Test
+    public void test_export_default_pending_promise_is_an_error() {
+        final var result = run("export default new Promise(function() {})");
+        assertTrue(result.isError());
+        assertEquals("ScriptPendingResultError", result.getErrorName());
+    }
+
+    @Test
+    public void test_explicit_null_result_is_still_a_value() {
+        final var result = run("return null");
         assertFalse(result.isError());
         assertInstanceOf(JsonNull.class, result.getValue());
+    }
+
+    @Test
+    public void test_promise_settled_by_a_timer_still_succeeds() {
+        final var result = run("return new Promise(function(resolve) { setTimeout(function() { resolve(5); }, 1); })");
+        assertFalse(result.isError());
+        assertEquals(5, result.getValue().asJsonNumber().getValue().intValue());
+    }
+
+    @Test
+    public void test_result_includes_a_getter_valued_property() {
+        final var result = run("return { get n() { return 41 + 1; } }");
+        assertFalse(result.isError());
+        assertEquals(42, result.getValue().asJsonObject().get("n").asJsonNumber().getValue().intValue());
+    }
+
+    @Test
+    public void test_getter_throwing_during_result_conversion_becomes_a_script_error() {
+        final var result = run("return { get n() { throw new TypeError('nope'); } }");
+        assertTrue(result.isError());
+        assertEquals("TypeError", result.getErrorName());
+    }
+
+    // The conversion runs inside the sandbox, so a runaway getter is bounded rather than hanging the boundary
+    @Test
+    public void test_runaway_getter_hits_the_instruction_budget() {
+        final var host = new SimpleHostBindings(new JsonObject(), null, null, new ResourceLimits(5000, 5000, 50));
+        final var result = engine.run("return { get n() { while (true) {} } }", host);
+        assertTrue(result.isError());
+        assertEquals("ScriptLimitError", result.getErrorName());
+    }
+
+    @Test
+    public void test_getter_creating_a_promise_still_settles() {
+        final var result = run("""
+                let seen = false;
+                const o = { get n() { Promise.resolve(1).then(function() { seen = true; }); return 3; } };
+                return o;""");
+        assertFalse(result.isError());
+        assertEquals(3, result.getValue().asJsonObject().get("n").asJsonNumber().getValue().intValue());
     }
 
     // An awaited top-level rejection is not also reported as an unhandled rejection

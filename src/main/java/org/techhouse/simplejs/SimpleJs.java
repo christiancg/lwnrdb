@@ -5,6 +5,7 @@ import java.util.List;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
@@ -12,6 +13,7 @@ import org.techhouse.simplejs.exceptions.ScriptAbortException;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.simplejs.exceptions.ScriptCancelledException;
 import org.techhouse.simplejs.exceptions.ScriptMemoryException;
+import org.techhouse.simplejs.exceptions.ScriptPendingResultException;
 import org.techhouse.simplejs.exceptions.ScriptTimeoutException;
 import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
@@ -85,15 +87,26 @@ public final class SimpleJs {
         final var capturing = CapturingHostBindings.wrap(host, capture);
         try {
             final var program = Parser.parse(Lexer.lexWithPositions(source), capturing.strictScriptGoal());
-            final var outcome = Interpreter.run(program, capturing);
-            return resultOf(EJsonInterop.toHostEjson(contractResult(outcome)), capture, limits);
+            return resultOf(Interpreter.run(program, capturing, null, this::convertResult), capture, limits);
         } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
             final var error = describe(failure);
             if (error == null) {
                 throw failure;
             }
-            return failed(error.name(), error.message(), capture);
+            return failed(error.name(), error.message(), error.stack(), capture);
         }
+    }
+
+    /**
+     * Reports a failure that happened before a run could start - a parse error a caller compiled ahead of
+     * time - with the same name and message a run of that source would have produced.
+     */
+    public ScriptResult failure(RuntimeException failure) {
+        final var error = describe(failure);
+        if (error == null) {
+            throw failure;
+        }
+        return ScriptResult.error(error.name(), error.message(), error.stack(), List.of(), false);
     }
 
     public ScriptResult run(CompiledScript compiled, HostBindings host) {
@@ -116,16 +129,13 @@ public final class SimpleJs {
             final var program = compiled.strictScriptGoal() == capturing.strictScriptGoal()
                     ? compiled.program()
                     : Parser.parse(Lexer.lexWithPositions(compiled.source()), capturing.strictScriptGoal());
-            final var outcome = around == null
-                    ? Interpreter.run(program, capturing)
-                    : Interpreter.run(program, capturing, around);
-            return resultOf(EJsonInterop.toHostEjson(contractResult(outcome)), capture, limits);
+            return resultOf(Interpreter.run(program, capturing, around, this::convertResult), capture, limits);
         } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
             final var error = describe(failure);
             if (error == null) {
                 throw failure;
             }
-            return failed(error.name(), error.message(), capture);
+            return failed(error.name(), error.message(), error.stack(), capture);
         }
     }
 
@@ -188,7 +198,7 @@ public final class SimpleJs {
             }
             throw (Error) failure;
         }
-        return new ScriptCallableException(error.name(), error.message());
+        return new ScriptCallableException(error.name(), error.message(), error.stack());
     }
 
     private record SessionCallable(Interpreter.Session session, JsValue function) implements ScriptCallable {
@@ -224,7 +234,10 @@ public final class SimpleJs {
         }
     }
 
-    private record ScriptError(String name, String message) {
+    private record ScriptError(String name, String message, List<String> stack) {
+        ScriptError(String name, String message) {
+            this(name, message, null);
+        }
     }
 
     // The one place a failure becomes a reportable name+message, shared by run(), openCallable() and every
@@ -236,10 +249,13 @@ public final class SimpleJs {
             case ScriptMemoryException memory -> new ScriptError("ScriptMemoryError", memory.getMessage());
             case ScriptAbortException limit -> new ScriptError("ScriptLimitError", limit.getMessage());
             case JsThrowException thrown -> throwName(thrown);
-            case TypeErrorException error -> new ScriptError("TypeError", error.getMessage());
-            case ReferenceErrorException error -> new ScriptError("ReferenceError", error.getMessage());
-            case RangeErrorException error -> new ScriptError("RangeError", error.getMessage());
-            case SyntaxErrorException error -> new ScriptError("SyntaxError", error.getMessage());
+            case TypeErrorException error -> new ScriptError("TypeError", error.getMessage(), error.getCapturedStack());
+            case ReferenceErrorException error ->
+                new ScriptError("ReferenceError", error.getMessage(), error.getCapturedStack());
+            case RangeErrorException error ->
+                new ScriptError("RangeError", error.getMessage(), error.getCapturedStack());
+            case SyntaxErrorException error ->
+                new ScriptError("SyntaxError", error.getMessage(), error.getCapturedStack());
             case UnexpectedTokenException error -> new ScriptError("SyntaxError", error.getMessage());
             case UnexpectedEndOfInputException error -> new ScriptError("SyntaxError", error.getMessage());
             case UnexpectedCharacterException error -> new ScriptError("SyntaxError", error.getMessage());
@@ -249,7 +265,10 @@ public final class SimpleJs {
             case UnterminatedRegexException error -> new ScriptError("SyntaxError", error.getMessage());
             case UnsupportedNodeException error ->
                 new ScriptError("SyntaxError", "Unsupported syntax: " + error.getMessage());
-            case SimpleJsRuntimeException error -> new ScriptError("InternalError", error.getMessage());
+            case ScriptPendingResultException error ->
+                new ScriptError("ScriptPendingResultError", error.getMessage(), error.getCapturedStack());
+            case SimpleJsRuntimeException error ->
+                new ScriptError("InternalError", error.getMessage(), error.getCapturedStack());
             // A deliberate, narrow exception to "never catch these": the throw originates at one
             // script-driven allocation (or one runaway recursion in the regex matcher / JSON parser,
             // neither of which passes through the interpreter's depth counter), the oversized object
@@ -266,7 +285,7 @@ public final class SimpleJs {
     private static ScriptError throwName(JsThrowException thrown) {
         final var value = thrown.getValue();
         if (value instanceof JsObject object) {
-            return new ScriptError(errorName(object), field(object));
+            return new ScriptError(errorName(object), field(object), object.getErrorStack());
         }
         return new ScriptError("Error", JsCoercion.toStr(value));
     }
@@ -280,7 +299,8 @@ public final class SimpleJs {
             final var size = EJsonInterop.estimatedBytes(element);
             if (size > max) {
                 return failed("ScriptResultTooLargeError",
-                        "Script result of about " + size + " bytes exceeds the maximum of " + max + " bytes", capture);
+                        "Script result of about " + size + " bytes exceeds the maximum of " + max + " bytes", null,
+                        capture);
             }
         }
         return ok(element, capture);
@@ -290,8 +310,14 @@ public final class SimpleJs {
         return ScriptResult.value(value, capture.lines(), capture.isTruncated());
     }
 
-    private ScriptResult failed(String name, String message, ConsoleCapture capture) {
-        return ScriptResult.error(name, message, capture.lines(), capture.isTruncated());
+    private ScriptResult failed(String name, String message, List<String> stack, ConsoleCapture capture) {
+        return ScriptResult.error(name, message, stack, capture.lines(), capture.isTruncated());
+    }
+
+    // Runs while the interpreter is still alive so an accessor-valued property is read through its getter
+    // rather than dropped, and so the getter's own work is charged to the run's budgets.
+    private JsonBaseElement convertResult(Interpreter.ProgramOutcome outcome, InterpreterOps ops) {
+        return EJsonInterop.toHostEjson(contractResult(outcome), ops);
     }
 
     private JsValue contractResult(Interpreter.ProgramOutcome outcome) {
@@ -309,8 +335,8 @@ public final class SimpleJs {
         return JsUndefined.getInstance();
     }
 
-    // The event loop has already drained, so a promise at the top level is normally settled; one that
-    // never settles inside the sandbox contributes undefined.
+    // The event loop has already drained, so a promise at the top level is normally settled; one that is
+    // still pending can never settle, which is an error rather than a null result.
     private static JsValue settled(JsValue value) {
         if (!(value instanceof JsPromise promise)) {
             return value;
@@ -319,7 +345,7 @@ public final class SimpleJs {
         return switch (promise.getState()) {
             case FULFILLED -> promise.getResult();
             case REJECTED -> throw new JsThrowException(promise.getResult());
-            case PENDING -> JsUndefined.getInstance();
+            case PENDING -> throw new ScriptPendingResultException("The script's result promise never settled");
         };
     }
 

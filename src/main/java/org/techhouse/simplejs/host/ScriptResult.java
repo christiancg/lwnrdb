@@ -10,15 +10,17 @@ public final class ScriptResult {
     private final boolean error;
     private final List<String> logs;
     private final boolean logsTruncated;
+    private final List<String> errorStack;
 
     private ScriptResult(JsonBaseElement value, String errorName, String errorMessage, boolean error, List<String> logs,
-            boolean logsTruncated) {
+            boolean logsTruncated, List<String> errorStack) {
         this.value = value;
         this.errorName = errorName;
         this.errorMessage = errorMessage;
         this.error = error;
         this.logs = logs == null ? List.of() : List.copyOf(logs);
         this.logsTruncated = logsTruncated;
+        this.errorStack = errorStack == null ? null : List.copyOf(errorStack);
     }
 
     public static ScriptResult value(JsonBaseElement value) {
@@ -26,7 +28,7 @@ public final class ScriptResult {
     }
 
     public static ScriptResult value(JsonBaseElement value, List<String> logs, boolean logsTruncated) {
-        return new ScriptResult(value, null, null, false, logs, logsTruncated);
+        return new ScriptResult(value, null, null, false, logs, logsTruncated, null);
     }
 
     public static ScriptResult error(String name, String message) {
@@ -34,7 +36,12 @@ public final class ScriptResult {
     }
 
     public static ScriptResult error(String name, String message, List<String> logs, boolean logsTruncated) {
-        return new ScriptResult(null, name, message, true, logs, logsTruncated);
+        return new ScriptResult(null, name, message, true, logs, logsTruncated, null);
+    }
+
+    public static ScriptResult error(String name, String message, List<String> errorStack, List<String> logs,
+            boolean logsTruncated) {
+        return new ScriptResult(null, name, message, true, logs, logsTruncated, errorStack);
     }
 
     public boolean isError() {
@@ -51,6 +58,10 @@ public final class ScriptResult {
 
     public String getErrorMessage() {
         return errorMessage;
+    }
+
+    public List<String> getErrorStack() {
+        return errorStack;
     }
 
     public List<String> getLogs() {

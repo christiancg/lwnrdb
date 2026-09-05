@@ -2,8 +2,10 @@ package org.techhouse.simplejs.values;
 
 import java.util.Collections;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.techhouse.simplejs.internal.interpreter.StackCapture;
 
 public final class JsObject extends JsValue {
     public record PropertyFlags(boolean writable, boolean enumerable, boolean configurable) {
@@ -12,6 +14,7 @@ public final class JsObject extends JsValue {
 
     private final PropertyTable table = new PropertyTable();
     private boolean errorData;
+    private List<String> errorStack;
     private JsClass klass;
     private Map<PrivateName, JsValue> privateFields;
     private Set<JsClass> privateBrands;
@@ -93,8 +96,15 @@ public final class JsObject extends JsValue {
         return errorData;
     }
 
+    public List<String> getErrorStack() {
+        return errorStack;
+    }
+
+    // Every error object is branded here, so the trace is taken here too rather than at each of the
+    // three construction sites: it has to be captured before the Java stack it was thrown on unwinds.
     public void markErrorData() {
         errorData = true;
+        errorStack = StackCapture.current();
     }
 
     public JsClass getKlass() {

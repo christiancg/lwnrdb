@@ -495,6 +495,9 @@ def test_cancellation_is_not_catchable(conn: Conn):
                        "collectionName": OUT_COLL, "_id": "finally-ran"})
     check("the finally block did not run", found.get("status") != "OK",
           f"the finalizer's write is present: {found!r}")
+    # A cancellation is not a program error, so it carries no frames
+    check("a cancelled run carries no stack", not response.get("stack"),
+          f"stack={response.get('stack')!r}")
 
 
 def test_a_parked_run_is_cancelled_promptly(conn: Conn):

@@ -104,11 +104,12 @@ public final class ModuleEvaluator {
         }
         final var compiled = resolved.compiled();
         final var reusable = compiled != null && compiled.strictScriptGoal() == host.strictScriptGoal();
-        return interp.importModule(resolved.moduleId(), () -> reusable ? compiled.program() : parse(resolved.source()));
+        return interp.importModule(resolved.moduleId(), resolved.displayName(),
+                () -> reusable ? compiled.program() : parse(resolved.source()));
     }
 
     private JsValue importText(String moduleId, String source) {
-        return interp.importModule(moduleId, () -> parse(source));
+        return interp.importModule(moduleId, moduleId, () -> parse(source));
     }
 
     private Program parse(String source) {

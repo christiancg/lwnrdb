@@ -63,6 +63,6 @@ public final class ProcedureCallHelper {
         }
         return new CallProcedureResponse(result.getErrorName() + ": " + result.getErrorMessage(),
                 ScriptOperationHelper.errorCodeFor(result.getErrorName()), result.getLogs(), result.isLogsTruncated(),
-                runId);
+                runId, result.getErrorStack());
     }
 }

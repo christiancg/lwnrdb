@@ -201,7 +201,28 @@ public final class Coroutine {
         resume();
     }
 
+    // The interpreter uses this to give a coroutine its own call-stack segment for the duration of a
+    // resumption: a suspended generator's frames must not show up in the trace of whoever resumed it.
+    @FunctionalInterface
+    public interface AroundResume {
+        void around(Runnable resume);
+    }
+
+    private AroundResume aroundResume;
+
+    public void setAroundResume(AroundResume value) {
+        this.aroundResume = value;
+    }
+
     private void resume() {
+        if (aroundResume == null) {
+            resumeBody();
+            return;
+        }
+        aroundResume.around(this::resumeBody);
+    }
+
+    private void resumeBody() {
         if (!running.compareAndSet(false, true)) {
             throw new TypeErrorException("Generator is already running");
         }

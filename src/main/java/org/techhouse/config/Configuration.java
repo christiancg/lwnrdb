@@ -62,6 +62,7 @@ public final class Configuration {
     private long aggregationScriptMaxSourceBytes;
     private int maxConcurrentScripts;
     private long scriptQueueWaitMs;
+    private int scriptCompiledCacheSize;
     private int procedureCacheSize;
     private long procedureCacheMaxBytes;
     private long schemaCacheMaxBytes;
@@ -157,6 +158,7 @@ public final class Configuration {
         aggregationScriptMaxSourceBytes = sizeOf(configs, "aggregationScriptMaxSourceBytes");
         maxConcurrentScripts = intOf(configs, "maxConcurrentScripts");
         scriptQueueWaitMs = longOf(configs, "scriptQueueWaitMs");
+        scriptCompiledCacheSize = intOf(configs, "scriptCompiledCacheSize");
         procedureCacheSize = intOf(configs, "procedureCacheSize");
         procedureCacheMaxBytes = sizeOf(configs, "procedureCacheMaxBytes");
         schemaCacheMaxBytes = sizeOf(configs, "schemaCacheMaxBytes");
@@ -427,6 +429,10 @@ public final class Configuration {
 
     public long getScriptQueueWaitMs() {
         return scriptQueueWaitMs;
+    }
+
+    public int getScriptCompiledCacheSize() {
+        return scriptCompiledCacheSize;
     }
 
     public int getProcedureCacheSize() {

@@ -13,6 +13,7 @@ public class RunScriptResponse extends OperationResponse {
     private List<String> logs;
     private boolean logsTruncated;
     private String runId;
+    private List<String> stack;
 
     public RunScriptResponse(String message, JsonBaseElement result, List<String> logs, boolean logsTruncated,
             String runId) {
@@ -25,10 +26,16 @@ public class RunScriptResponse extends OperationResponse {
 
     public RunScriptResponse(String message, ErrorCode errorCode, List<String> logs, boolean logsTruncated,
             String runId) {
+        this(message, errorCode, logs, logsTruncated, runId, null);
+    }
+
+    public RunScriptResponse(String message, ErrorCode errorCode, List<String> logs, boolean logsTruncated,
+            String runId, List<String> stack) {
         super(OperationType.RUN_SCRIPT, message, errorCode);
         this.logs = logs;
         this.logsTruncated = logsTruncated;
         this.runId = runId;
+        this.stack = stack;
     }
 
     public JsonBaseElement getResult() {
@@ -57,6 +64,14 @@ public class RunScriptResponse extends OperationResponse {
 
     public String getRunId() {
         return runId;
+    }
+
+    public List<String> getStack() {
+        return stack;
+    }
+
+    public void setStack(List<String> stack) {
+        this.stack = stack;
     }
 
     public void setRunId(String runId) {

@@ -955,12 +955,12 @@ commands above; the limitations below are the ones that need an explanation rath
 
 | # | Limitation | Notes |
 |---|---|---|
-| 1 | **A top-level promise that never settles yields `undefined`** | The result contract awaits a promise returned (or default-exported) at top level, but the event loop has already drained to quiescence, so a promise still pending at that point contributes JSON `null` rather than blocking. |
+| 1 | **A top-level promise that never settles is reported as an error** | Closed. The event loop has drained to quiescence by the time the result contract is applied, so a promise still pending then can never settle. It used to contribute JSON `null`, indistinguishable from a script that deliberately returned null; it now fails the run as `ScriptPendingResultError` (`400-20`). |
 | 2 | **A canonical array index at or past `Integer.MAX_VALUE` is only reachable through `Object.defineProperty`, not through ordinary `arr[i] = v`** | `JsArray` backs indices at or beyond `MAX_DENSE_LENGTH` (2^24) with a sparse map instead of a dense list (keyed by the same `int` index every consumer already used), so a `length` up to the spec's 2^32-1 ceiling is now representable and `new Array(4294967295)`, `arr.length = N`, `Object.defineProperty(arr, "length", {value: N})` and `Object.defineProperty(arr, String(hugeIndex), desc)` all work for the full range. One narrower gap remains: the interpreter's ordinary array `[[Set]]` fast path (`internal/interpreter/MemberEvaluator`) resolves an index via `InterpreterUtils.arrayIndex`, which returns a Java `int` and so never recognises an index at or past 2^31 as a canonical array index — `arr[i] = v` for such an `i` lands as an ordinary named property instead of updating `length` (a storage change alone cannot fix this; it needs `arrayIndex` to widen to `long`, which ripples into every caller). A second, unrelated gap: `Object.defineProperty`/`defineProperties` coercing a non-primitive `length` value (one whose `toString`/`valueOf` must be invoked) throws `RangeError` instead, because `defineOwnProperty` has no route to invoke user code for that coercion — `values/JsValue.defineOwnProperty`'s signature would need to thread an `InterpreterOps` through, cascading into every override. |
 | 3 | **`super.m()` on a native super is a `TypeError`** | There are no native method tables to chain into. |
-| 4 | **`e.stack` is one synthetic frame**, and `Function.prototype.toString` retains no source for a function parsed from a template substitution | No interpreter call stack is kept. Source text *is* retained now (see *Function source text*), except inside a template literal's substitution: the lexer re-lexes each `${…}` into its own token list with no positions, so a function written there has no span to slice and falls back to the `NativeFunction` form — legal, since `HostHasSourceTextAvailable` is false for it. |
-| 5 | **`EJsonInterop` reads data properties only** | The host boundary (the script result and `db` payloads) runs *after* `Interpreter.run` has drained the event loop, so invoking a user getter there would re-enter a finished interpreter. A getter-valued property is therefore absent from the script result, while `JSON.stringify` — the spec-visible path — does invoke it. |
-| 6 | **The Unicode version is the build JDK's, not a pinned one** | A conformant engine pins the UCD version the spec requires; with no ICU dependency ours is whatever the JDK ships — Unicode 16.0 on JDK 25, 17.0 on JDK 26. `internal/regex/UnicodeProperty` resolves a `\p{…}` name to a `CodePointSet` by using `java.util.regex.Pattern` purely as a one-time, per-property *oracle* (compiled once, then every code point tested against it and the truth table cached) — never as the matching engine itself (see *Regex engine* below) — so it still inherits the JDK's Unicode version for anything not covered by the pinned resource below. So `\p{…}` escapes answer differently across the two supported build JDKs for anything added in 17.0, and on JDK 25 the scripts added there (`Sidetic`, `Tolong_Siki`, `Tai_Yo`, `Beria_Erfe`) throw a `SyntaxError` instead of compiling. This is why `built-ins/RegExp/property-escapes/generated/` is excluded from the gate rather than baselined — see `config/test262-exclusions.txt`. **Properties of strings** (`\p{RGI_Emoji}` and its six siblings) are the one exception: they are sets of *strings*, so the JDK has no data for them at all, and `UnicodeProperty.StringProperties` expands each into an alternation of literal sequences from `src/main/resources/simplejs/emoji-sequences.txt` — data that is **ours and pinned to Unicode 17.0** (regenerate with `test_utils/gen_emoji_sequences.py`, which reads the UTS #51 sequence files). These escapes therefore answer identically on JDK 25 and 26, unlike every other `\p{…}`; the price is that the table must be regenerated when the pinned corpus moves to a new UCD. Property names are now matched **exactly** — loose matching (`\p{ gc = X }`) is an early error — and the `Hex` alias is supported. |
+| 4 | **`Function.prototype.toString` retains no source for a function parsed from a template substitution** | `e.stack` is no longer synthetic - see *Call stacks* below. Source text *is* retained for functions generally (see *Function source text*), except inside a template literal's substitution: the lexer re-lexes each `${...}` into its own token list with no positions, so a function written there has no span to slice and falls back to the `NativeFunction` form - legal, since `HostHasSourceTextAvailable` is false for it. The same missing positions mean a frame for such a function reports its module without a line and column. |
+| 5 | **`EJsonInterop.toEjson` reads data properties only; `toHostEjson` no longer does** | Closed for the host boundary. The script result is now converted *inside* the interpreter's lifetime (via `Interpreter.run`'s `ResultFinisher`) and `DbModule` passes its `InterpreterOps` through, so an accessor-valued property is read through its getter on the way to the caller and into the database - and the getter's own work is charged to the run's budgets, so a runaway getter aborts the run instead of hanging the boundary. The no-`ops` overload keeps the data-property-only behaviour for an embedding with no live interpreter. |
+| 6 | **Property escapes do not match the UCD exhaustively** | The build-JDK half is closed: **JDK 26 or newer is now required** (a `maven-enforcer-plugin` rule fails an older build), so the UCD is Unicode 17.0 everywhere - matching the version the corpus is generated against - and `\p{...}` answers identically on every node. Re-measuring `built-ins/RegExp/property-escapes/generated/` on that footing rather than assuming it scores **66.31% (311/469)**, so a genuine per-code-point gap remains between our resolution of a property name and the exhaustive set the corpus asserts; the subtree therefore stays excluded, now for that reason rather than for portability, and closing the gap is what would add those tests to the denominator. `internal/regex/UnicodeProperty` still resolves a property name to a `CodePointSet` by using `java.util.regex.Pattern` as a one-time, per-property *oracle* (compiled once, every code point tested, the truth table cached) - never as the matching engine - so the data is still the JDK's rather than a pinned UCD of our own; a future JDK bumping Unicode will move these escapes with it. **Properties of strings** (`\p{RGI_Emoji}` and its six siblings) remain the exception: they are sets of *strings*, so the JDK has no data for them at all, and `UnicodeProperty.StringProperties` expands each into an alternation of literal sequences from `src/main/resources/simplejs/emoji-sequences.txt` - data that is **ours and pinned to Unicode 17.0** (regenerate with `test_utils/gen_emoji_sequences.py`). Property names are matched **exactly** - loose matching (`\p{ gc = X }`) is an early error - and the `Hex` alias is supported. |
 | 7 | **Allocation that is O(1) per instruction is bounded only by the instruction budget** | `scriptMaxMemoryBytes` charges the allocations proportional to a script-supplied length (see *Host-contract notes*), which is what escapes `tick()`. A script that allocates a small object per instruction is still bounded only by `scriptInstructionBudget`, so a large instruction budget permits substantial retained heap. Sizing the two together is the operator's job. |
 | 8 | **`String.prototype.localeCompare` ignores its `locales`/`options` arguments** | It always collates with the host's locale (`InterpreterOps.locale()`, i.e. `scriptLocale` under the database binding) rather than the requested one. Honouring the argument means deciding how much of `Intl` to take on, which is a separate call — the host-boundary work only made the *default* host-controlled instead of the JVM's. |
 
@@ -976,11 +976,72 @@ between iterations; a lookbehind containing a backreference being rejected at co
 cannot express ECMA-262's Pattern Semantics exactly. They closed together when the matching engine
 was replaced; see *Regex engine* below.
 
+### Call stacks
+
+A thrown error carries the frames it came from, so a stored procedure, trigger or scheduled procedure
+that fails unattended names where it broke rather than only what broke.
+
+```
+TypeError: Cannot read properties of null (reading 'total')
+    at applyRule (procedures/rules:12:7)
+    at onWrite (procedures/audit:31:14)
+    at main:4:1
+```
+
+- **Frames are return addresses.** `internal/interpreter/CallStack` keeps a deque of
+  `CallFrame`s; entering a function saves the *caller's* function, module and position, and leaving it
+  restores them. `Interpreter.callFunction` pushes and pops beside the existing `depth` counter, so the
+  frame list is already bounded by `scriptMaxDepth`, and `evalStatement` writes the current line and
+  column - two int stores per statement. Positions come from the parser, which stamps every statement
+  plus every call and `new` expression (`JsNode.getPosition`); a parse path with no positions (the
+  token-list entry point, a template substitution) leaves them null and the frame degrades to a bare
+  module name.
+- **The trace is captured when the error is constructed**, not when it is reported.
+  `InterpreterUtils.toErrorValue` turns a runtime error into a JS object at the *catch* site, by which
+  point every frame has been unwound, so `JsObject.markErrorData` (the one place an error object is
+  branded) and `SimpleJsRuntimeException`'s constructor both take a snapshot through
+  `internal/interpreter/StackCapture` - an `InheritableThreadLocal`, so a coroutine's virtual thread
+  sees the stack its parent installed. It is installed for the length of a run and cleared afterwards,
+  unlike the intrinsics thread-local beside it in `ErrorBuiltins`, because connection threads are
+  reused.
+- **A coroutine owns its own segment.** A generator's body runs interleaved with its consumer's, so
+  sharing one frame list would leave a suspended generator's frame in the trace of whatever resumed it.
+  `Coroutine.setAroundResume` lets the interpreter swap in that coroutine's `CallStack.Segment` for the
+  length of each resumption; async functions and async generators use the same mechanism, which is what
+  keeps an async frame correct after an `await` rather than only before the first one.
+- **A frame is labelled with the module the function was written in**, recorded on the `JsFunction`
+  when it is created rather than read off the stack when it is called - otherwise a function imported
+  from `procedures/lib` and called from `main` would claim to be in `main`. `host/ResolvedModule` now
+  carries a `displayName` (`procedures/<name>`, defaulted to the module id) so the id's version suffix
+  stays out of the trace.
+- **Sandbox aborts carry no frames.** A timeout, a cancellation or a budget/depth limit is not a
+  program error, and `ScriptAbortException` deliberately does not capture.
+- **Where it surfaces**: `ScriptResult.getErrorStack()`, the `stack` field on the `RUN_SCRIPT` and
+  `CALL_PROCEDURE` responses, and - joined onto one line as `stack=[frame | frame]` by
+  `ScriptOperationHelper.renderStack` - the `TriggerDispatcher`, `ScheduleDispatcher` and `logRun`
+  warning lines. A pipeline callable's `ScriptCallableException` carries it too. The capture is capped
+  at `StackCapture.MAX_FRAMES` (32) with a trailing `... N more frames`.
+- The engine's own `Error.prototype.stack` accessor renders the same frames under the usual
+  `name: message` header. An error built with no interpreter in scope keeps the single synthetic frame
+  it always had.
+
 ### Host-contract notes
 
 - **A promise returned at top level is awaited.** `return f()` for an `async f` resolves the script
-  to the fulfilment value; a rejection becomes the script error (name/message), and a still-pending
-  promise resolves to JSON `null`. The same applies to `export default`.
+  to the fulfilment value; a rejection becomes the script error (name/message), and a promise still
+  pending once the loop has drained fails the run as `ScriptPendingResultError` (`400-20`) rather than
+  quietly contributing JSON `null`. The same applies to `export default`.
+- **The result is converted while the interpreter is still alive.** `SimpleJs.run` hands
+  `Interpreter.run` a `ResultFinisher` that applies the result contract and the `EJsonInterop`
+  conversion before the coroutines are cancelled, then drains once more. That is what lets an
+  accessor-valued property be read through its getter, and what makes the getter's own work count
+  against the instruction budget and the deadline.
+- **The `db` surface stays read+write and single-database, deliberately.** No DDL, no index
+  management, no user operations, and no access to a database other than the run's own scope. Opening
+  DDL to scripts would put `CREATE_INDEX`/`DROP_COLLECTION` behind the invoker rights a
+  `CALL_PROCEDURE` runs under and the definer rights a trigger runs under, and a schedule firing on
+  every node would race the admin coordinator's DDL serialization. A migration is a client driving DDL
+  over the wire and calling a script for the data half.
 - **`strictScriptGoal` (`host/ResourceLimits`) selects the spec's Script goal.** It defaults to
   `false`, which is what the database host uses: `SimpleJs.run`'s result contract deliberately allows
   a top-level `return`, and `import.meta`, `new.target`/`super` in global code and a top-level
@@ -1088,9 +1149,19 @@ entirely, so a script could not tell a refused write from a successful one — a
 unreachable owner saw no error at all.
 
 **Outcome mapping.** A `ScriptResult` error becomes `408-1` for `ScriptTimeoutError`, `400-11` for
-`ScriptLimitError` and `400-9` for everything else (a thrown value, a syntax error, a rejected
-top-level promise), with the message `"<ErrorName>: <message>"`. Captured `console` output rides
-along on **every** outcome, so a failed run is still debuggable.
+`ScriptLimitError`, `400-20` for `ScriptPendingResultError` and `400-9` for everything else (a thrown
+value, a syntax error, a rejected top-level promise), with the message `"<ErrorName>: <message>"`.
+Captured `console` output rides along on **every** outcome, so a failed run is still debuggable, and a
+failed run also carries a `stack` of frames (see *Call stacks*).
+
+**The parsed program is cached.** `ops/CompiledScriptCache` keys an ad-hoc script's parse tree by a
+SHA-256 of its source (`scriptCompiledCacheSize`, default 128 entries; `0` parses on every call), so a
+client repeating a script does not re-lex and re-parse it. A content hash cannot go stale, which is why
+this cache needs no invalidation hook - and why it is a separate class from `CompiledProcedureCache`,
+whose key carries a procedure version instead. A **parse failure is cached alongside the successes**
+and replayed, because a client looping on a broken script would otherwise re-parse it every time; the
+caller still answers the same `400-9` it always did, which is the contract the source-overload call
+used to protect.
 
 **The result is capped.** `SimpleJs` estimates the converted result with
 `EJsonInterop.estimatedBytes` and fails the run with `ScriptResultTooLargeError` → `400-15` when it
@@ -1208,6 +1279,14 @@ request in `conn/MessageProcessor` so a client cannot claim one. It is a request
 `ThreadLocal` because a `ThreadLocal` resets to zero on the node a write is forwarded to, which would make a
 cross-node cascade unbounded. `allowCascade` defaults to `false`, so the common configuration cannot cascade
 even once; with it on, a chain terminates at `triggerMaxDepth`.
+
+**Testing a trigger without installing it.** There is no dry-run operation, deliberately: one would need
+its own permission rule, its own always-rollback transaction path and its own cluster routing to reach an
+outcome that is largely reachable already. Put the logic in a stored procedure, exercise it with
+`CALL_PROCEDURE` against a representative document, and make the trigger itself a thin
+`import`-and-delegate wrapper - which is the shape the `procedures/` resolver exists to support. The
+residual gap is real and worth stating: this exercises the trigger *body*, not trigger *dispatch* -
+cascade depth, definer rights and the pending-run record are not covered by it.
 
 ### Scheduled procedures
 
@@ -1370,7 +1449,10 @@ script is `analyze`). That is what makes the feature safe rather than merely bou
 already holds collection read locks on the calling thread, so a re-entrant `db` call would invite
 lock-ordering trouble, and with no `db` a pipeline script cannot issue an `AGGREGATE` - there is no
 recursion to bound. Time zone and locale still come from `scriptTimeZone`/`scriptLocale`, so a
-computed date field answers identically on every node.
+computed date field answers identically on every node. Both absences are settled decisions rather
+than pending work: the two supported windows into a misbehaving pipeline script are `analyze` and the
+error itself, which since the call-stack work names the failing function and line on the
+`ScriptCallableException` the wire codes below are built from.
 
 **Memory is charged and released per document.** `SessionCallable.invoke` charges
 `EJsonInterop.estimatedBytes(document)` (plus the accumulator, for a fold) before the call and

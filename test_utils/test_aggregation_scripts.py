@@ -413,9 +413,11 @@ def test_sandbox(conn: Conn):
     oversize = "export default (doc) => { /* " + "x" * MAX_SOURCE_BYTES + " */ return true; };"
     check_code("an oversize source is refused", conn.aggregate([script_filter(oversize)]), "ERROR", "400-10")
 
-    check_code("a throwing script is a script failure",
-               conn.aggregate([script_filter("export default (doc) => { throw new Error('boom'); };")]),
-               "ERROR", "400-9")
+    thrown = conn.aggregate([script_filter("export default (doc) => { throw new Error('boom'); };")])
+    check_code("a throwing script is a script failure", thrown, "ERROR", "400-9")
+    # The callable now carries a trace internally; the wire contract must not have moved with it
+    check("the message is still the bare thrown message", (thrown.get("message") or "") == "boom",
+          f"message={thrown.get('message')!r}")
     check_code("a script exporting nothing is a script failure",
                conn.aggregate([script_filter("const x = 1;")]), "ERROR", "400-9")
     check_code("a blank source is rejected", conn.aggregate([script_filter("   ")]), "ERROR", "400-1")

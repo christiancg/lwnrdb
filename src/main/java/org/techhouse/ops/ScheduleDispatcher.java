@@ -71,6 +71,7 @@ public final class ScheduleDispatcher {
         if (result.isError()) {
             scheduleExecutor.countFailure();
             logger.warning(logPrefix + " outcome=" + result.getErrorName() + ": " + result.getErrorMessage()
+                    + ScriptOperationHelper.renderStack(result.getErrorStack())
                     + (result.getLogs().isEmpty() ? "" : " logs=" + result.getLogs()));
         }
     }

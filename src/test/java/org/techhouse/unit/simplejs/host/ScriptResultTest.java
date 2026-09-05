@@ -23,6 +23,24 @@ public class ScriptResultTest {
         assertNull(result.getErrorMessage());
     }
 
+    @Test
+    public void test_error_result_carries_a_stack() {
+        final var result = ScriptResult.error("TypeError", "boom", java.util.List.of("f (main:1:1)"),
+                java.util.List.of(), false);
+        assertTrue(result.isError());
+        assertEquals(java.util.List.of("f (main:1:1)"), result.getErrorStack());
+    }
+
+    @Test
+    public void test_value_result_has_no_stack() {
+        assertNull(ScriptResult.value(new JsonString("ok")).getErrorStack());
+    }
+
+    @Test
+    public void test_error_result_without_a_stack_reports_null() {
+        assertNull(ScriptResult.error("TypeError", "boom").getErrorStack());
+    }
+
     // An error result carries name + message and no value
     @Test
     public void test_error_result() {
@@ -58,7 +76,9 @@ public class ScriptResultTest {
         assertFalse(result.isLogsTruncated());
     }
 
-    // The log list is defensively copied and exposed immutably
+    // The log list is defensively copied and exposed immutably. Modifying the immutable list is the
+    // assertion itself, not a mistake, so the data-flow warning about it is suppressed here.
+    @SuppressWarnings("DataFlowIssue")
     @Test
     public void test_logs_are_defensively_copied() {
         final var source = new ArrayList<String>();

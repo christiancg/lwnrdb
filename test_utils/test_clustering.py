@@ -844,6 +844,38 @@ def test_forwarded_script_reads_and_writes():
                    all_nodes_see(DB, "scripted", doc_id, 7, ports=all_ports(), timeout_s=15.0))
 
 
+def test_forwarded_script_relays_its_stack():
+    section("Script node selection — a forwarded failure relays its stack")
+
+    # The stack field crosses ops/resp/ResponseParser, which rebuilds a forwarded owner's response
+    # through each subclass's public constructor; a regression here would drop the trace only
+    # under clustering.
+    script = ("function inner() {\n"
+              "  throw new Error('forwarded boom');\n"
+              "}\n"
+              "function outer() {\n"
+              "  inner();\n"
+              "}\n"
+              "outer();")
+
+    def _batch(round_no):
+        conn = authed(nodes[0].client_port)
+        try:
+            return [send(conn.s, conn.f, {"type": "RUN_SCRIPT", "databaseName": DB, "script": script})
+                    for _ in range(8)]
+        finally:
+            conn.close()
+
+    results, forwarded = until_forwarded(nodes[0].client_port, _batch)
+    check_true("at least one failing run was forwarded", forwarded > 0)
+    for response in results:
+        stack = response.get("stack")
+        check_true("the failure carries its frames", isinstance(stack, list) and len(stack) >= 3,
+                   detail=f"stack={stack!r}")
+        check_true("the innermost frame survived the relay",
+                   bool(stack) and stack[0].startswith("inner ("), detail=f"stack={stack!r}")
+
+
 def test_forwarded_script_preserves_the_acting_user():
     section("Script node selection — the acting user survives the forward")
 
@@ -1269,6 +1301,7 @@ def main():
         test_admin_transaction_ops()
         test_script_placement_forwards_runs()
         test_forwarded_script_reads_and_writes()
+        test_forwarded_script_relays_its_stack()
         test_forwarded_script_preserves_the_acting_user()
         test_long_forwarded_script_is_not_cut_off()
         test_script_routing_disabled_stays_local()

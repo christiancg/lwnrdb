@@ -1,6 +1,7 @@
 package org.techhouse.ops;
 
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
 import org.techhouse.cache.Cache;
@@ -28,6 +29,7 @@ public final class ScriptOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ScriptRunRegistry registry = IocContainer.get(ScriptRunRegistry.class);
     private static final ScriptAdmission admission = IocContainer.get(ScriptAdmission.class);
+    private static final CompiledScriptCache compiledScripts = IocContainer.get(CompiledScriptCache.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(ScriptOperationHelper.class);
     private static final String EXHAUSTED_MESSAGE = "Script exhausted available memory";
@@ -56,12 +58,15 @@ public final class ScriptOperationHelper {
         try {
             final var run = registry.register(ScriptRunKind.RUN_SCRIPT, dbName, null, username, clientId);
             try {
-                // Deliberately the source overload, not compile(): a syntax error has to stay a 400-9 response
-                // rather than an exception, which is the contract this operation already had.
+                // The parse failure is cached and replayed rather than thrown, so a syntax error stays the
+                // 400-9 response this operation has always answered with.
+                final var compilation = compiledScripts.get(source);
                 final var host = hostFor(request.getArgs(), dbName, username, clientId,
                         DatabaseHostBindings.limitsFromConfiguration(), null, run);
                 final var start = System.currentTimeMillis();
-                final var result = simpleJs.run(source, host);
+                final var result = compilation.failure() == null
+                        ? simpleJs.run(compilation.compiled(), host)
+                        : simpleJs.failure(compilation.failure());
                 logRun("RUN_SCRIPT user=" + username + " database=" + dbName, run.runId(),
                         System.currentTimeMillis() - start, result);
                 return toRunScriptResponse(result, run.runId());
@@ -114,7 +119,8 @@ public final class ScriptOperationHelper {
 
     private static void logRun(String logPrefix, String runId, long durationMs, ScriptResult result) {
         final var outcome = result.isError() ? result.getErrorName() + ": " + result.getErrorMessage() : "ok";
-        final var line = logPrefix + " runId=" + runId + " durationMs=" + durationMs + " outcome=" + outcome;
+        final var line = logPrefix + " runId=" + runId + " durationMs=" + durationMs + " outcome=" + outcome
+                + renderStack(result.getErrorStack());
         // An exhausted heap means the allocation budget failed to bound the script, or that the JVM was
         // already under pressure from the cache rather than from this script. Either needs an operator.
         if (EXHAUSTED_MESSAGE.equals(result.getErrorMessage())) {
@@ -130,7 +136,13 @@ public final class ScriptOperationHelper {
                     result.isLogsTruncated(), runId);
         }
         return new RunScriptResponse(result.getErrorName() + ": " + result.getErrorMessage(),
-                errorCodeFor(result.getErrorName()), result.getLogs(), result.isLogsTruncated(), runId);
+                errorCodeFor(result.getErrorName()), result.getLogs(), result.isLogsTruncated(), runId,
+                result.getErrorStack());
+    }
+
+    // One line, so the trace stays greppable in a log a human is tailing.
+    public static String renderStack(List<String> stack) {
+        return stack == null || stack.isEmpty() ? "" : " stack=[" + String.join(" | ", stack) + "]";
     }
 
     static ErrorCode errorCodeFor(String errorName) {
@@ -140,6 +152,7 @@ public final class ScriptOperationHelper {
             case "ScriptLimitError" -> ErrorCode.SCRIPT_LIMIT_EXCEEDED;
             case "ScriptMemoryError" -> ErrorCode.SCRIPT_MEMORY_EXCEEDED;
             case "ScriptResultTooLargeError" -> ErrorCode.SCRIPT_RESULT_TOO_LARGE;
+            case "ScriptPendingResultError" -> ErrorCode.SCRIPT_RESULT_PENDING;
             default -> ErrorCode.SCRIPT_FAILED;
         };
     }

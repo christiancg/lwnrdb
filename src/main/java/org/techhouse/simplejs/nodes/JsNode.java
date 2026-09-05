@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.nodes;
 
+import org.techhouse.simplejs.elements.SourcePosition;
+
 public abstract class JsNode {
     // The construct's verbatim source text, retained by the parser only for the function-like and
     // class nodes whose runtime value has an observable [[SourceText]] (Function.prototype.toString).
@@ -7,6 +9,9 @@ public abstract class JsNode {
     // template substitution's nested token stream - which is what makes the callable report the
     // NativeFunction form instead.
     private String sourceText;
+    // Where the construct starts, for the interpreter's call stack. Null on the same parse paths
+    // that leave sourceText null, so a frame degrades to a name without a position.
+    private SourcePosition position;
 
     public enum NodeType {
         PROGRAM, VARIABLE_DECLARATION, VARIABLE_DECLARATOR, BLOCK_STATEMENT, IF_STATEMENT, WHILE_STATEMENT, DO_WHILE_STATEMENT, FOR_STATEMENT, FOR_IN_STATEMENT, FOR_OF_STATEMENT, TRY_STATEMENT, CATCH_CLAUSE, THROW_STATEMENT, SWITCH_STATEMENT, SWITCH_CASE, RETURN_STATEMENT, BREAK_STATEMENT, CONTINUE_STATEMENT, LABELED_STATEMENT, EXPRESSION_STATEMENT, FUNCTION_DECLARATION, EMPTY_STATEMENT, NUMBER_LITERAL, BIGINT_LITERAL, STRING_LITERAL, BOOLEAN_LITERAL, NULL_LITERAL, UNDEFINED_LITERAL, REGEX_LITERAL, TEMPLATE_LITERAL, IDENTIFIER, THIS_EXPRESSION, ARRAY_EXPRESSION, OBJECT_EXPRESSION, PROPERTY, UNARY_EXPRESSION, UPDATE_EXPRESSION, BINARY_EXPRESSION, LOGICAL_EXPRESSION, ASSIGNMENT_EXPRESSION, CONDITIONAL_EXPRESSION, CALL_EXPRESSION, MEMBER_EXPRESSION, NEW_EXPRESSION, FUNCTION_EXPRESSION, ARROW_FUNCTION_EXPRESSION, CLASS_DECLARATION, CLASS_EXPRESSION, CLASS_BODY, METHOD_DEFINITION, FIELD_DEFINITION, STATIC_BLOCK, SUPER_EXPRESSION, PRIVATE_IDENTIFIER, AWAIT_EXPRESSION, YIELD_EXPRESSION, SPREAD_ELEMENT, REST_ELEMENT, ARRAY_PATTERN, OBJECT_PATTERN, ASSIGNMENT_PATTERN, IMPORT_DECLARATION, IMPORT_ATTRIBUTE, IMPORT_SPECIFIER, IMPORT_DEFAULT_SPECIFIER, IMPORT_NAMESPACE_SPECIFIER, EXPORT_NAMED_DECLARATION, EXPORT_SPECIFIER, EXPORT_DEFAULT_DECLARATION, EXPORT_ALL_DECLARATION, TAGGED_TEMPLATE_EXPRESSION, IMPORT_EXPRESSION, META_PROPERTY, SEQUENCE_EXPRESSION
@@ -22,6 +27,14 @@ public abstract class JsNode {
 
     public void setSourceText(String sourceText) {
         this.sourceText = sourceText;
+    }
+
+    public SourcePosition getPosition() {
+        return position;
+    }
+
+    public void setPosition(SourcePosition position) {
+        this.position = position;
     }
 
     private static NodeType internalGetType(Object object) {

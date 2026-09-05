@@ -39,6 +39,7 @@ it never touches an unrelated LWNRDB process.
 
 import json
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -128,6 +129,17 @@ def check_failed_script(label: str, response: dict, expected_code: str, message_
     check(label, ok,
           f"expected {expected_code} containing {message_contains!r} got "
           f"{response.get('errorCode')} msg={response.get('message')!r}")
+
+
+def check_stack(label: str, response: dict, frames_contain=(), min_frames: int = 1):
+    stack = response.get("stack")
+    ok = isinstance(stack, list) and len(stack) >= min_frames \
+        and all(any(needle in frame for frame in stack) for needle in frames_contain)
+    check(label, ok, f"expected >= {min_frames} frames containing {list(frames_contain)!r} got {stack!r}")
+
+
+def check_no_stack(label: str, response: dict):
+    check(label, not response.get("stack"), f"expected no stack, got {response.get('stack')!r}")
 
 
 # ── connection / protocol ────────────────────────────────────────────────────
@@ -305,6 +317,79 @@ def test_basics(conn: Conn):
                  {"list": [1, 2, 3], "nested": {"ok": True}, "missing": None})
     check_failed_script("a rejected promise fails the run",
                         conn.run("return Promise.reject(new Error('nope'));"), "400-9", "Error: nope")
+    check_result("an accessor-valued property is read through its getter",
+                 conn.run("return { get total() { return 6 * 7; }, plain: 1 };"), {"total": 42, "plain": 1})
+    check_failed_script("a throwing getter fails the run",
+                        conn.run("return { get bad() { throw new RangeError('nope'); } };"),
+                        "400-9", "RangeError: nope")
+
+
+def test_stack_traces(conn: Conn):
+    section("Stack traces")
+    thrown = conn.run("function inner() {\n"
+                      "  throw new Error('boom');\n"
+                      "}\n"
+                      "function outer() {\n"
+                      "  inner();\n"
+                      "}\n"
+                      "outer();")
+    check_failed_script("a nested throw fails the run", thrown, "400-9", "Error: boom")
+    check_stack("frames name each function", thrown, ("inner (", "outer (", "main:"), min_frames=3)
+    frames = thrown.get("stack") or []
+    check("the innermost frame comes first", bool(frames) and frames[0].startswith("inner ("),
+          f"stack={frames!r}")
+    check("frames carry a line and column", bool(frames) and re.search(r":\d+:\d+\)$", frames[0]) is not None,
+          f"stack={frames!r}")
+
+    runtime = conn.run("function read() {\n"
+                       "  const x = null;\n"
+                       "  return x.total;\n"
+                       "}\n"
+                       "read();")
+    check_code("a runtime TypeError fails the run", runtime, "ERROR", "400-9")
+    check_stack("a runtime error carries frames too", runtime, ("read (",))
+
+    check_no_stack("a successful run carries no stack", conn.run("return 1;"))
+
+    # A sandbox abort is not a program error, so it deliberately reports no frames
+    check_no_stack("an instruction-budget abort carries no stack", conn.run("while (true) {}"))
+    check_no_stack("a depth abort carries no stack",
+                   conn.run("function recurse(n) { return recurse(n + 1); }\nreturn recurse(0);"))
+
+    deep = conn.run("function down(n) {\n"
+                    "  if (n === 0) { throw new Error('bottom'); }\n"
+                    "  return down(n - 1);\n"
+                    "}\n"
+                    "down(60);")
+    deep_frames = deep.get("stack") or []
+    check("a deep stack is truncated with a marker",
+          bool(deep_frames) and deep_frames[-1].startswith("... "), f"stack tail={deep_frames[-1:]!r}")
+
+
+def test_pending_promise(conn: Conn):
+    section("A result promise that never settles")
+    check_code("a never-settling returned promise is reported",
+               conn.run("return new Promise(function () {});"), "ERROR", "400-20")
+    check_code("a never-settling default export is reported",
+               conn.run("export default new Promise(function () {});"), "ERROR", "400-20")
+    check_result("an explicit null result is still a value", conn.run("return null;"), None)
+    check_result("a promise settled by a timer still succeeds",
+                 conn.run("return new Promise(function (resolve) { setTimeout(function () "
+                          "{ resolve('late'); }, 5); });"), "late")
+
+
+def test_compiled_script_cache(conn: Conn):
+    section("Compiled-script cache")
+    for attempt in range(3):
+        check_result(f"the same source answers identically (run {attempt + 1})",
+                     conn.run("return 6 * 7;"), 42)
+    for attempt in range(3):
+        check_failed_script(f"a syntax error stays 400-9 (run {attempt + 1})",
+                            conn.run("return (;"), "400-9", "SyntaxError")
+    stats = conn.send({"type": "GET_DATABASE_STATS"})
+    entries = ((stats.get("stats") or {}).get("scripts") or {}).get("compiledCacheEntries")
+    check("the cache reports its entry count", isinstance(entries, (int, float)) and entries >= 1,
+          f"compiledCacheEntries={entries!r}")
 
 
 def test_console_output(conn: Conn):
@@ -359,6 +444,9 @@ def test_sandbox_limits(conn: Conn):
                  conn.run('return "x".repeat(1000).length;'), 1000)
     check_result("incremental string building is not penalised by the memory budget",
                  conn.run('let s = "";\nfor (let i = 0; i < 20000; i++) s += "x";\nreturn s.length;'), 20000)
+    # The result conversion runs inside the sandbox, so a runaway getter aborts rather than hanging
+    check_code("a runaway getter hits the instruction budget",
+               conn.run("return { get n() { while (true) {} } };"), "ERROR", "400-11")
 
 
 def test_request_validation(conn: Conn):
@@ -412,6 +500,10 @@ def test_host_writes(conn: Conn):
                  conn.run('import db from "db";\n'
                           f'db.save(db.name, "{COLL}", {{ _id: "w1", name: "written", n: 42 }});\n'
                           f'return db.findById(db.name, "{COLL}", "w1").n;'), 42)
+    check_result("a getter-valued property is persisted, not dropped",
+                 conn.run('import db from "db";\n'
+                          f'db.save(db.name, "{COLL}", {{ _id: "g1", get computed() {{ return 21 * 2; }} }});\n'
+                          f'return db.findById(db.name, "{COLL}", "g1").computed;'), 42)
     check_result("save is an upsert",
                  conn.run('import db from "db";\n'
                           f'db.save(db.name, "{COLL}", {{ _id: "w1", name: "updated", n: 43 }});\n'
@@ -1168,6 +1260,9 @@ def main():
         with admin_conn() as conn:
             setup_data(conn)
             test_basics(conn)
+            test_stack_traces(conn)
+            test_pending_promise(conn)
+            test_compiled_script_cache(conn)
             test_console_output(conn)
             test_sandbox_limits(conn)
             test_request_validation(conn)

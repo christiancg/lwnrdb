@@ -244,6 +244,27 @@ public class ProcedureImportIntegrationTest {
         assertEquals("undefined", response.getResult().asJsonString().getValue(), response.getMessage());
     }
 
+    // The frame for imported code is labelled with the module it was written in, not the importer's
+    @Test
+    public void test_stack_names_both_the_importer_and_the_imported_module() throws Exception {
+        save(TestGlobals.DB, "lib", """
+                export function explode() {
+                  throw new Error('from the library');
+                }
+                """);
+        final var response = run("""
+                import { explode } from "procedures/lib";
+                function caller() {
+                  explode();
+                }
+                caller();
+                """);
+        final var stack = response.getStack();
+        assertNotNull(stack, response.getMessage());
+        assertTrue(stack.getFirst().startsWith("explode (procedures/lib:"), stack::toString);
+        assertTrue(stack.stream().anyMatch(frame -> frame.startsWith("caller (main:")), stack::toString);
+    }
+
     @Test
     public void test_unknown_procedure_throws_catchable_error() {
         final var response = run("""

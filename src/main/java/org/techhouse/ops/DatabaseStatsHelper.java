@@ -22,6 +22,7 @@ public final class DatabaseStatsHelper {
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private static final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
     private static final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
+    private static final CompiledScriptCache compiledScripts = IocContainer.get(CompiledScriptCache.class);
     private static final ScriptAdmission scriptAdmission = IocContainer.get(ScriptAdmission.class);
     private static final ScriptPlacement scriptPlacement = IocContainer.get(ScriptPlacement.class);
 
@@ -99,6 +100,7 @@ public final class DatabaseStatsHelper {
         scripts.addProperty("forwarded", scriptPlacement.getForwarded());
         scripts.addProperty("forwardFallbacks", scriptPlacement.getForwardFallbacks());
         scripts.addProperty("cancelled", scriptRunRegistry.getCancelled());
+        scripts.addProperty("compiledCacheEntries", (long) compiledScripts.size());
         return scripts;
     }
 

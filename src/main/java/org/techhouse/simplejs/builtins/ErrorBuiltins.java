@@ -78,10 +78,21 @@ public final class ErrorBuiltins {
         if (!(thisArg instanceof JsObject error) || !error.isErrorData()) {
             return JsUndefined.getInstance();
         }
-        // No interpreter call stack is retained, so the trace is a single synthetic frame.
         final var name = error.has("name") ? JsCoercion.toStr(error.get("name")) : "Error";
         final var message = error.has("message") ? JsCoercion.toStr(error.get("message")) : "";
-        return new JsString(name + ": " + message + "\n    at <script>");
+        return new JsString(name + ": " + message + renderFrames(error.getErrorStack()));
+    }
+
+    // An error built with no interpreter in scope keeps the single synthetic frame this used to be.
+    private static String renderFrames(List<String> frames) {
+        if (frames == null || frames.isEmpty()) {
+            return "\n    at <script>";
+        }
+        final var rendered = new StringBuilder();
+        for (final var frame : frames) {
+            rendered.append("\n    at ").append(frame);
+        }
+        return rendered.toString();
     }
 
     private static JsValue setStack(JsObject home, JsValue thisArg, JsValue value, InterpreterOps ops) {

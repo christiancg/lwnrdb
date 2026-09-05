@@ -170,6 +170,26 @@ public class ProcedureCallHelperTest {
     }
 
     @Test
+    public void test_failure_carries_a_stack_naming_the_procedure() throws Exception {
+        store("deep", """
+                function inner() {
+                  throw new Error('nope');
+                }
+                inner();
+                """);
+        final var response = call("deep", ADMIN);
+        assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), response.getErrorCode());
+        assertNotNull(response.getStack());
+        assertTrue(response.getStack().getFirst().startsWith("inner ("), response.getStack()::toString);
+    }
+
+    @Test
+    public void test_successful_call_carries_no_stack() throws Exception {
+        store("fine", "return 1;");
+        assertNull(call("fine", ADMIN).getStack());
+    }
+
+    @Test
     public void test_timeout_maps_to_408() throws Exception {
         store("spin", "while (true) { }");
         TestUtils.setPrivateField(configuration, "scriptTimeoutMs", 50L);

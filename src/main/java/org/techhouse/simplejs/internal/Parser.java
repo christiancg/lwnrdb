@@ -193,6 +193,10 @@ public final class Parser {
         // The span ends at the last token consumed - the closing '}' or the concise body's final
         // token - so trailing trivia stays out of it, while any comment *inside* the construct is
         // kept verbatim because the slice is taken from the source rather than rebuilt from tokens.
+        private SourcePosition positionAt(int index) {
+            return positions == null ? null : positions.get(Math.min(index, positions.size() - 1));
+        }
+
         private String spanFrom(int start) {
             if (start < 0) {
                 return null;
@@ -360,6 +364,15 @@ public final class Parser {
         }
 
         private Statement parseStatement() {
+            final var position = positionAt(pos);
+            final var statement = parseStatementBody();
+            if (statement.getPosition() == null) {
+                statement.setPosition(position);
+            }
+            return statement;
+        }
+
+        private Statement parseStatementBody() {
             if (isSeparator('{')) {
                 return parseBlock();
             }
@@ -1759,7 +1772,9 @@ public final class Parser {
                     expectSeparator(']');
                     expr = new MemberExpression(expr, property, true, false);
                 } else if (isSeparator('(')) {
+                    final var callPosition = positionAt(pos);
                     expr = new CallExpression(expr, parseArguments());
+                    expr.setPosition(callPosition);
                 } else if (current().getType() == JsType.TEMPLATE_STRING) {
                     // A tagged template is not part of an optional chain: `a?.b`x`` is an early error.
                     if (optionalChain) {
@@ -1776,7 +1791,10 @@ public final class Parser {
 
         private Expression parseOptionalTail(Expression object) {
             if (isSeparator('(')) {
-                return new CallExpression(object, parseArguments(), true);
+                final var callPosition = positionAt(pos);
+                final var call = new CallExpression(object, parseArguments(), true);
+                call.setPosition(callPosition);
+                return call;
             }
             if (isSeparator('[')) {
                 advance();
@@ -1840,6 +1858,7 @@ public final class Parser {
         }
 
         private Expression parseNew() {
+            final var newPosition = positionAt(pos);
             expectKeyword("new");
             if (matchOperator(".")) {
                 if (!isContextualKeyword("target")) {
@@ -1855,7 +1874,9 @@ public final class Parser {
             if (isSeparator('(')) {
                 arguments = parseArguments();
             }
-            return new NewExpression(callee, arguments);
+            final var expression = new NewExpression(callee, arguments);
+            expression.setPosition(newPosition);
+            return expression;
         }
 
         private Expression parseNewCalleeTail(Expression start) {

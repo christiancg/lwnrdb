@@ -270,6 +270,14 @@ def stop_server(proc):
         time.sleep(0.2)
 
 
+def read_log(log_path: str) -> str:
+    try:
+        with open(log_path, "rb") as fp:
+            return fp.read().decode(errors="replace")
+    except OSError:
+        return ""
+
+
 def dump_log(log_path: str):
     try:
         with open(log_path, "rb") as fp:
@@ -675,6 +683,38 @@ def test_trigger_import_failure(conn: Conn):
                  conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "auditor"), "OK")
 
 
+def test_trigger_failure_logs_a_stack(conn: Conn, log_path: str):
+    section("A failing trigger names where it failed")
+    check_status("install a procedure that throws two frames deep",
+                 conn.save_procedure("audit_explodes",
+                                     "function inner() {\n"
+                                     "  throw new Error('trigger blew up');\n"
+                                     "}\n"
+                                     "function outer() {\n"
+                                     "  inner();\n"
+                                     "}\n"
+                                     "outer();"), "OK")
+    check_status("point the trigger at it",
+                 conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "audit_explodes"), "OK")
+    before = trigger_failures(conn)
+    check_status("a write still succeeds with the trigger throwing",
+                 conn.save_doc({"_id": "stacked1", "n": 1}), "OK")
+    deadline = time.time() + 15.0
+    while trigger_failures(conn) <= before and time.time() < deadline:
+        time.sleep(0.2)
+    check("the failure is counted", trigger_failures(conn) > before, f"failures did not increase from {before}")
+
+    # Nobody is waiting on a response, so the server log is where the trace has to appear
+    log = read_log(log_path)
+    line = next((entry for entry in log.splitlines()
+                 if "TRIGGER name=audit_writes" in entry and "trigger blew up" in entry), "")
+    check("the trigger's failure line carries a stack", "stack=[" in line, f"line={line!r}")
+    check("the stack names the throwing function", "inner (" in line, f"line={line!r}")
+
+    check_status("restore the original audit trigger",
+                 conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "auditor"), "OK")
+
+
 def trigger_failures(conn: Conn) -> int:
     stats = conn.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("triggers", {})
     return stats.get("failed", 0)
@@ -818,6 +858,7 @@ def main():
             test_procedure_imports(conn)
             test_trigger_imports(conn)
             test_trigger_import_failure(conn)
+            test_trigger_failure_logs_a_stack(conn, log_path)
             test_batch_mode(conn)
             test_cascade(conn)
             test_stats(conn)

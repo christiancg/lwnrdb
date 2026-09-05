@@ -53,7 +53,7 @@ public final class ProcedureModuleResolver implements ModuleResolver {
         final var version = definition.getVersion();
         final var source = definition.getSource();
         return new ResolvedModule(moduleId(name, version), source,
-                compiledProcedures.get(scopedDatabase, name, version, source));
+                compiledProcedures.get(scopedDatabase, name, version, source), PREFIX + name);
     }
 
     private String moduleId(String name, long version) {

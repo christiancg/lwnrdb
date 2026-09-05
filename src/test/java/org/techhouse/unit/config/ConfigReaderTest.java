@@ -96,6 +96,7 @@ public class ConfigReaderTest {
         expectedConfig.put("scriptCursorMaxBatchSize", "5000");
         expectedConfig.put("maxConcurrentScripts", "16");
         expectedConfig.put("scriptQueueWaitMs", "250");
+        expectedConfig.put("scriptCompiledCacheSize", "128");
         expectedConfig.put("procedureCacheSize", "128");
         expectedConfig.put("triggersEnabled", "false");
         expectedConfig.put("triggerThreads", "2");

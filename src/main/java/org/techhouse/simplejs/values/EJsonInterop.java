@@ -15,6 +15,7 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 
 public final class EJsonInterop {
@@ -31,17 +32,26 @@ public final class EJsonInterop {
 
     // The spec path, shared with JSON.stringify: a BigInt has no JSON representation and must throw.
     public static JsonBaseElement toEjson(JsValue value) {
-        return convert(value, new Conversion(false, new IdentityHashMap<>()), "");
+        return convert(value, new Conversion(false, new IdentityHashMap<>(), null), "");
     }
 
     // The host path, used by the script result contract and by everything heading into the database:
     // a BigInt that is exactly representable becomes a number, anything larger throws naming the
     // property path, because the error fires at the boundary rather than where the value was produced.
     public static JsonBaseElement toHostEjson(JsValue value) {
-        return convert(value, new Conversion(true, new IdentityHashMap<>()), "");
+        return toHostEjson(value, null);
     }
 
-    private record Conversion(boolean hostMode, Map<JsValue, Boolean> visited) {
+    /**
+     * The host path with the interpreter still in scope, so an accessor-valued property is read through its
+     * getter rather than skipped. A null {@code ops} keeps the data-property-only behaviour, which is what an
+     * embedding with no live interpreter gets.
+     */
+    public static JsonBaseElement toHostEjson(JsValue value, InterpreterOps ops) {
+        return convert(value, new Conversion(true, new IdentityHashMap<>(), ops), "");
+    }
+
+    private record Conversion(boolean hostMode, Map<JsValue, Boolean> visited, InterpreterOps ops) {
     }
 
     private static JsonBaseElement convert(JsValue value, Conversion mode, String path) {
@@ -135,13 +145,20 @@ public final class EJsonInterop {
             if (!object.isEnumerable(key)) {
                 continue;
             }
-            final var converted = convert(object.get(key), mode, memberPath(path, key));
+            final var converted = convert(ownValue(object, key, mode.ops()), mode, memberPath(path, key));
             if (converted != null) {
                 result.add(key, converted);
             }
         }
         mode.visited().remove(object);
         return result;
+    }
+
+    private static JsValue ownValue(JsObject object, String key, InterpreterOps ops) {
+        if (ops != null && object.hasAccessor(key)) {
+            return ops.getMember(object, new JsString(key));
+        }
+        return object.get(key);
     }
 
     private static void guardCycle(JsValue value, Map<JsValue, Boolean> visited) {

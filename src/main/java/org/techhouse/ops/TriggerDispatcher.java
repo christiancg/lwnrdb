@@ -102,6 +102,7 @@ public final class TriggerDispatcher {
             consumeQuietly(runId, trigger.getName());
             triggerExecutor.countFailure();
             logger.warning(line + " outcome=" + result.getErrorName() + ": " + result.getErrorMessage()
+                    + ScriptOperationHelper.renderStack(result.getErrorStack())
                     + (result.getLogs().isEmpty() ? "" : " logs=" + result.getLogs()));
             return;
         }
