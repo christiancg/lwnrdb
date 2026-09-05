@@ -213,6 +213,12 @@ public final class SimpleJs {
                     accumulator);
         }
 
+        @Override
+        public JsonBaseElement applyWithContext(JsonObject document, JsonObject context) {
+            return invoke(List.of(EJsonInterop.fromEjson(document), EJsonInterop.fromEjson(context)), document,
+                    context);
+        }
+
         // The document (and the fold's accumulator) is charged before the call and released after it, so a
         // scan of a million documents costs one document of the memory budget rather than a million.
         private JsonBaseElement invoke(List<JsValue> args, JsonObject document, JsonBaseElement accumulator) {

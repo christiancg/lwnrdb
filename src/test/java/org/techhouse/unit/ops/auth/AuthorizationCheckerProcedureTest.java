@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.data.auth.ScriptPermissionLevel;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.auth.AuthorizationChecker;
@@ -25,6 +26,7 @@ import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
+import org.techhouse.ops.req.TestTriggerRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -80,10 +82,16 @@ public class AuthorizationCheckerProcedureTest {
 
     // A schedule runs with its installer's authority, so installing one carries the same privilege as
     // installing a trigger and belongs on the same list.
+    // Executing a hook is a management action, not a read: it is grouped with the installers so a RUN-level
+    // user cannot run arbitrary code through it.
+    private static TestTriggerRequest testTrigger() {
+        return new TestTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "t", "CREATED", new JsonObject());
+    }
+
     private static List<OperationRequest> managementRequests() {
         return List.of(saveProcedure(), new DeleteProcedureRequest(TestGlobals.DB, "p"), saveTrigger(),
                 new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "t"), saveSchedule(),
-                new DeleteScheduleRequest(TestGlobals.DB, "sch"));
+                new DeleteScheduleRequest(TestGlobals.DB, "sch"), testTrigger());
     }
 
     @Test
@@ -182,7 +190,7 @@ public class AuthorizationCheckerProcedureTest {
         for (final var type : List.of(OperationType.SAVE_PROCEDURE, OperationType.DELETE_PROCEDURE,
                 OperationType.LIST_PROCEDURES, OperationType.CALL_PROCEDURE, OperationType.SAVE_TRIGGER,
                 OperationType.DELETE_TRIGGER, OperationType.LIST_TRIGGERS, OperationType.SAVE_SCHEDULE,
-                OperationType.DELETE_SCHEDULE, OperationType.LIST_SCHEDULES)) {
+                OperationType.DELETE_SCHEDULE, OperationType.LIST_SCHEDULES, OperationType.TEST_TRIGGER)) {
             final var request = switch (type) {
                 case SAVE_PROCEDURE -> saveProcedure();
                 case DELETE_PROCEDURE -> new DeleteProcedureRequest(TestGlobals.DB, "p");
@@ -193,6 +201,7 @@ public class AuthorizationCheckerProcedureTest {
                 case SAVE_SCHEDULE -> saveSchedule();
                 case DELETE_SCHEDULE -> new DeleteScheduleRequest(TestGlobals.DB, "sch");
                 case LIST_SCHEDULES -> new ListSchedulesRequest(TestGlobals.DB);
+                case TEST_TRIGGER -> testTrigger();
                 default -> new ListTriggersRequest(TestGlobals.DB, TestGlobals.COLL);
             };
             assertFalse(AuthorizationChecker.check(request, nobody).isAllowed(), type.name());

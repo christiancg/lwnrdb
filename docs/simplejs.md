@@ -1267,11 +1267,12 @@ layer's documented "eventually consistent" into indefinitely stale. On overflow 
 dropped and counted — an unbounded queue of retained documents is the heap risk `ConsoleCapture`'s ring
 buffer already guards against, and dropping beats blocking a write.
 
-Because a trigger runs after the fact it **cannot veto or modify** the write — for rejecting a
-non-compliant document use a per-collection JSON Schema, which runs before the commit. A trigger failure
-never reaches the writer either: it is logged at WARN with the captured console output and counted in
-`GET_DATABASE_STATS` (`triggers.fired`/`failed`/`dropped`/`queued`), which is the operator's only window
-into an execution path no client is waiting on.
+Because an **after** trigger runs after the fact it **cannot veto or modify** the write — that is what
+the `before` timing below exists for, and for a purely declarative rejection a per-collection JSON Schema
+still runs earlier still, at the edge. An after trigger's failure never reaches the writer either: it is
+logged at WARN with the captured console output and counted in `GET_DATABASE_STATS`
+(`triggers.fired`/`failed`/`dropped`/`queued`), which is the operator's only window into an execution path
+no client is waiting on.
 
 **Cascades.** A write a trigger performs carries `triggerDepth + 1` on the request itself — a field on
 `ops/req/OperationRequest`, stamped by `EnforcingDatabaseAccess` and zeroed for every client-originated
@@ -1280,13 +1281,79 @@ request in `conn/MessageProcessor` so a client cannot claim one. It is a request
 cross-node cascade unbounded. `allowCascade` defaults to `false`, so the common configuration cannot cascade
 even once; with it on, a chain terminates at `triggerMaxDepth`.
 
-**Testing a trigger without installing it.** There is no dry-run operation, deliberately: one would need
-its own permission rule, its own always-rollback transaction path and its own cluster routing to reach an
-outcome that is largely reachable already. Put the logic in a stored procedure, exercise it with
+**Testing a trigger without installing it.** `TEST_TRIGGER` is the dry run, and it covers **before**
+triggers only - which is not an arbitrary restriction but the whole reason it could be built: a before
+trigger is a plain synchronous callable, so testing one is the same call the write path makes, with no
+locks taken and nothing written. An after trigger has no such handle; a dry run for one would need its own
+always-rollback transaction path and its own cluster routing to reach an outcome that is largely reachable
+already. For that case the advice is unchanged: put the logic in a stored procedure, exercise it with
 `CALL_PROCEDURE` against a representative document, and make the trigger itself a thin
 `import`-and-delegate wrapper - which is the shape the `procedures/` resolver exists to support. The
 residual gap is real and worth stating: this exercises the trigger *body*, not trigger *dispatch* -
 cascade depth, definer rights and the pending-run record are not covered by it.
+
+### Before-write hooks
+
+A trigger's `timing` is `after` (the default, everything above) or `before`. A **before** trigger runs
+**synchronously, on the writing thread, inside the collection write lock, before the document reaches the
+write helpers**, and what it returns decides the write: nothing (or `true`) accepts it, a plain object
+replaces the document, anything else or a `throw` refuses the write with `400-21`. It is invoked from
+`ops/OperationProcessor`'s three write handlers and from `TransactionOperationHelper.buffer*` - the same
+seam rule `TriggerHelper` follows, and for the same reason: `ReplicatedApplyHelper` reaches the write
+helpers directly, and a hook there would transform a document the owner had already transformed.
+
+**It runs on the pipeline-script seam, not `SimpleJs.run`.** `ops/BeforeHookContext` opens a
+`ScriptCallable` (`SimpleJs.openCallable`), which is the one entry point whose call happens on the
+*caller's* thread - `Interpreter.Session.call` - and which refuses an async or generator callable up
+front. That matters twice over: the collection write lock is thread-owned, so a body that hopped onto a
+coroutine thread could not hold it; and one interpreter serves the whole request, so a `BULK_SAVE` of N
+documents evaluates each module body once and shares one instruction budget, one deadline and one memory
+budget across all N invocations rather than getting a fresh budget per row. The one seam in that claim is
+bounded at 2x: `applyBulkBeforeHooks` opens a context per event kind, so a batch that mixes inserts and
+updates on a collection hooked for both `CREATED` and `UPDATED` runs two of them, each with its own budget.
+
+**There is no `db`.** `host/HookHostBindings` returns null for `database()` and `network()` for the reason
+`PipelineHostBindings` already documents - a re-entrant `db` call from under a held write lock would take a
+lock this thread owns, or (under clustering) make a network round trip while a writer waits. The one
+divergence from the pipeline bindings is `moduleResolver()`, which is kept so a hook can `import` a shared
+procedure: that resolves against already-cached metadata and takes no locks. Three consequences follow and
+are enforced at `SAVE_TRIGGER` time: `mode: "batch"` is rejected (an array-in/array-out contract buys
+nothing when the callable is already shared), `allowCascade` is rejected (a hook writes nothing, so there
+is no cascade to bound), and the `definer` is recorded but **not enforced** - a hook exercises no
+authority, so unlike an after trigger a deleted definer does not disable it.
+
+**Fail-closed, and the replacement is checked.** Every failure stops the write, a timeout included. A
+thrown error reads as the hook deciding no (`400-21`); a sandbox abort keeps its own code (`408-1`,
+`400-11`, `400-12`) so an operator can tell a hook that said no from one that never finished. A returned
+document may not change `_id` - that would relocate the document rather than modify it, silently turning an
+update into an insert elsewhere - and is re-validated against the collection's JSON Schema, because
+`SchemaValidationHelper` runs at the *edge*, before the hook, and without the re-check a hook could
+manufacture a document the schema forbids. On the transactional path the replacement is also re-measured
+against `maxEntrySize`, since a hook can inflate a document past it.
+
+Several hooks on one collection chain in **ascending name order** (not file order, so the sequence is
+stable across nodes and readable from `LIST_TRIGGERS`), each one's output feeding the next, and the first
+refusal stops the chain. Console output is discarded on the live path - a hook runs once per document, so
+a `console.log` over a bulk save is a log-flood risk - which is exactly what `TEST_TRIGGER` exists to
+replace: the dry run captures it. Budgets come from `beforeHookInstructionBudget`/`beforeHookTimeoutMs`,
+deliberately an order below the `RUN_SCRIPT` budget because a client write is blocked while a hook runs.
+Counters land in `GET_DATABASE_STATS` as `triggers.beforeApplied`/`beforeReplaced`/`beforeRejected`/
+`beforeFailed`. A running hook is visible to `LIST_SCRIPTS` and stoppable with `CANCEL_SCRIPT` under the
+`BEFORE_HOOK` run kind, registered **once per request** (named for the collection) rather than once per
+document: the request is what owns the budget, and the module body is evaluated inside `openCallable`, so a
+per-invocation registration would leave that window uncancellable. A cancelled hook refuses the write with
+`408-2`, fail-closed like every other way a hook can fail to finish. Hooks are exempt from
+`ScriptAdmission` for the reason triggers are: a write refused for want of a script permit would be a
+failed write, not a queued one.
+
+Under clustering the hook runs on the collection's **owner**. `ClusterRouter` forwards the raw request
+JSON, so a hook applied at the edge would have its mutation discarded in transit; the owner is also where
+the write lock that makes the decision binding is actually held.
+
+**Rolling upgrade.** An older node re-executing a `SAVE_TRIGGER` under `REPLICATE_ADMIN` drops the unknown
+`timing` field and would install the hook as an after trigger - silently changing *when* it runs. Roll
+every node before installing a before trigger, the same constraint `ScriptPermissionLevel` already
+carries.
 
 ### Scheduled procedures
 

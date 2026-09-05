@@ -23,7 +23,7 @@ public final class AuthorizationChecker {
             OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD, OperationType.STOP_LISTEN);
     private static final Set<OperationType> SCRIPT_MANAGEMENT_OPERATIONS = Set.of(OperationType.SAVE_PROCEDURE,
             OperationType.DELETE_PROCEDURE, OperationType.SAVE_TRIGGER, OperationType.DELETE_TRIGGER,
-            OperationType.SAVE_SCHEDULE, OperationType.DELETE_SCHEDULE);
+            OperationType.SAVE_SCHEDULE, OperationType.DELETE_SCHEDULE, OperationType.TEST_TRIGGER);
 
     private AuthorizationChecker() {
     }

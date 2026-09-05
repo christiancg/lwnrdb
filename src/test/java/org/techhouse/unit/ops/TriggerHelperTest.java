@@ -22,7 +22,10 @@ import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TriggerHelper;
+import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -201,5 +204,13 @@ public class TriggerHelperTest {
                 List.of(), "alice", 0)).isEmpty());
         assertTrue(capture(() -> TriggerHelper.afterWriteIds(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, null,
                 "alice", 0)).isEmpty());
+    }
+
+    // afterBulkSave fires only for a BulkSaveResponse: a bulk save that failed has no inserts or updates
+    // to report, so nothing must be queued.
+    @Test
+    public void test_after_bulk_save_fires_nothing_for_a_failed_write() {
+        assertTrue(capture(() -> TriggerHelper.afterBulkSave(TestGlobals.DB, TestGlobals.COLL,
+                new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING), "alice", 0)).isEmpty());
     }
 }

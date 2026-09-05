@@ -110,6 +110,8 @@ public class ConfigReaderTest {
         expectedConfig.put("metadataMissCacheMaxEntries", "4096");
         expectedConfig.put("triggerRunLogEnabled", "true");
         expectedConfig.put("triggerRunRetentionMs", "86400000");
+        expectedConfig.put("beforeHookInstructionBudget", "200000");
+        expectedConfig.put("beforeHookTimeoutMs", "200");
         expectedConfig.put("schedulesEnabled", "true");
         expectedConfig.put("scheduleThreads", "2");
         expectedConfig.put("scheduleQueueSize", "100");

@@ -13,9 +13,12 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.resp.BulkSaveResponse;
+import org.techhouse.ops.resp.OperationResponse;
 
 /**
- * Queues the triggers a committed write fires.
+ * Queues the after triggers a committed write fires. A before trigger is never queued here: it already ran
+ * synchronously on the writing thread ({@code ops.BeforeHookContext}) and has no effect left to apply.
  *
  * <p>
  * Called from OperationProcessor's write handlers only, never from SaveOperationHelper or
@@ -46,7 +49,7 @@ public final class TriggerHelper {
             return;
         }
         for (final var trigger : triggers) {
-            if (!trigger.isEnabled() || !trigger.getEvents().contains(type)) {
+            if (trigger.isBefore() || !trigger.isEnabled() || !trigger.getEvents().contains(type)) {
                 continue;
             }
             // allowCascade defaults to false, so the common configuration cannot cascade even once: a write
@@ -97,6 +100,16 @@ public final class TriggerHelper {
         }
     }
 
+    // A BULK_SAVE reports its inserts and updates separately, so it fires two events rather than one.
+    // Nothing fires unless the write actually produced a BulkSaveResponse.
+    public static void afterBulkSave(String dbName, String collName, OperationResponse response, String actingUser,
+            int depth) {
+        if (response instanceof BulkSaveResponse bulkSaveResponse) {
+            afterWriteIds(dbName, collName, EventType.CREATED, bulkSaveResponse.getInserted(), actingUser, depth);
+            afterWriteIds(dbName, collName, EventType.UPDATED, bulkSaveResponse.getUpdated(), actingUser, depth);
+        }
+    }
+
     // Reads the document a DELETE is about to remove, so a DELETED trigger can see it. Returns null when no
     // DELETED trigger would fire, which is the common case and costs one map lookup.
     public static DbEntry captureForDelete(String dbName, String collName, String id, int depth) {
@@ -124,7 +137,8 @@ public final class TriggerHelper {
             return true;
         }
         for (final var trigger : cache.getTriggersFor(dbName, collName)) {
-            if (trigger.isEnabled() && trigger.getEvents().contains(type) && (depth == 0 || trigger.isAllowCascade())) {
+            if (!trigger.isBefore() && trigger.isEnabled() && trigger.getEvents().contains(type)
+                    && (depth == 0 || trigger.isAllowCascade())) {
                 return false;
             }
         }

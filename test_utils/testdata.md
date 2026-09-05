@@ -1784,6 +1784,54 @@ Batch mode — one run for a whole `BULK_SAVE`, with `documents` instead of `id`
 {"type": "BULK_SAVE", "databaseName": "test", "collectionName": "joinMe", "objects": [{"joinField": 1}, {"joinField": 2}]}
 ```
 
+A **before** trigger runs synchronously, before the write, and may veto it or replace the document
+
+```json
+{"type": "SAVE_PROCEDURE", "databaseName": "test", "name": "normalizeOrder", "script": "export default function (doc, ctx) {\n  if (doc.qty < 0) { throw new Error('qty must not be negative'); }\n  if (ctx.event === 'DELETED') { return; }\n  return { ...doc, total: doc.qty * 10 };\n}"}
+```
+
+```json
+{"type": "SAVE_TRIGGER", "databaseName": "test", "collectionName": "testCollection", "name": "normalizeOrder", "events": ["CREATED", "UPDATED"], "procedureName": "normalizeOrder", "timing": "before"}
+```
+
+The stored document carries the computed field — no polling, the hook ran before the commit
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "beforeHooked", "qty": 3}}
+```
+
+```json
+{"type": "FIND_BY_ID", "databaseName": "test", "collectionName": "testCollection", "_id": "beforeHooked"}
+```
+
+A document the hook throws on is refused → `400-21`, and nothing is written
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "beforeRejected", "qty": -1}}
+```
+
+`batch` mode and `allowCascade` are meaningless for a before trigger (it has no `db`) → `400-14`
+
+```json
+{"type": "SAVE_TRIGGER", "databaseName": "test", "collectionName": "testCollection", "name": "badBefore", "events": ["CREATED"], "procedureName": "normalizeOrder", "timing": "before", "mode": "batch"}
+```
+
+Try one against a document without writing anything — `decision` is `accept`, `replace` or `reject`
+
+```json
+{"type": "TEST_TRIGGER", "databaseName": "test", "collectionName": "testCollection", "name": "normalizeOrder", "event": "CREATED", "document": {"_id": "dryRun", "qty": 4}}
+```
+
+```json
+{"type": "TEST_TRIGGER", "databaseName": "test", "collectionName": "testCollection", "name": "normalizeOrder", "event": "CREATED", "document": {"_id": "dryRun", "qty": -1}}
+```
+
+Only a before trigger can be tested, because only it is directly callable → `400-14`
+
+```json
+{"type": "TEST_TRIGGER", "databaseName": "test", "collectionName": "testCollection", "name": "auditWrites", "event": "CREATED", "document": {"_id": "dryRun"}}
+```
+
 List them — omit `collectionName` to list every trigger in the database
 
 ```json

@@ -37,7 +37,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 
 - [ ] Javascript engine to support additional features 
   - [x] Stored procedures (the [`SAVE_PROCEDURE`](#save_procedure) / [`CALL_PROCEDURE`](#call_procedure) operations)
-  - [x] Triggers (the [`SAVE_TRIGGER`](#save_trigger) operation)
+  - [x] Triggers, after and before the write (the [`SAVE_TRIGGER`](#save_trigger) and [`TEST_TRIGGER`](#test_trigger) operations)
   - [x] Scheduled procedures (the [`SAVE_SCHEDULE`](#save_schedule) operation)
   - [x] Run script (the [`RUN_SCRIPT`](#run_script) operation)
   - [x] Shared code between procedures: a script, procedure, trigger or schedule can `import … from "procedures/<name>"` to reuse a stored procedure as a module (`scriptProcedureImportEnabled`, on by default) — see [docs/simplejs.md](docs/simplejs.md) → *Module loading*
@@ -658,7 +658,7 @@ Stops the run named by `runId` (from `LIST_SCRIPTS`, or from the `runId` on a `R
 - **A cancelled trigger run is dropped, not retried.** Trigger execution is otherwise exactly-once, but a cancellation consumes the run's pending record — cancelling a runaway trigger stops it rather than queueing it up again. See [docs/simplejs.md](docs/simplejs.md).
 
 #### `SAVE_TRIGGER`
-Runs a stored procedure after a committed write to a collection. Requires admin privileges, ownership, or `MANAGE`. Off by default: set `triggersEnabled=true` for triggers to fire (the DDL works either way).
+Runs a stored procedure around a write to a collection — **after** it commits (the default) or **before**, where it can veto or rewrite the document. Requires admin privileges, ownership, or `MANAGE`. Off by default: set `triggersEnabled=true` for triggers to fire (the DDL works either way).
 
 ```json
 {
@@ -668,6 +668,7 @@ Runs a stored procedure after a committed write to a collection. Requires admin 
   "name": "auditWrites",
   "events": ["CREATED", "UPDATED", "DELETED"],
   "procedureName": "recalcTotals",
+  "timing": "after",
   "mode": "document",
   "allowCascade": false,
   "enabled": true,
@@ -678,7 +679,8 @@ Runs a stored procedure after a committed write to a collection. Requires admin 
 {"type":"SAVE_TRIGGER","status":"OK","message":"Trigger saved successfully","version":2,"definer":"alice"}
 ```
 
-- **Fires after the write commits**, asynchronously, on its own worker pool. It therefore cannot reject or modify the write — use a [collection schema](#schema-validation) for that — and a trigger failure never reaches the writer; it is logged and counted in [`GET_DATABASE_STATS`](#get_database_stats-admin-only).
+- `timing` is `after` (the default) or `before`. The two differ in almost every respect, so they are described separately below. An omitted `timing` reads as `after`, so every trigger written before this existed keeps its meaning.
+- **An `after` trigger fires once the write has committed**, asynchronously, on its own worker pool. It therefore cannot reject or modify the write — use a `before` trigger or a [collection schema](#schema-validation) for that — and its failure never reaches the writer; it is logged and counted in [`GET_DATABASE_STATS`](#get_database_stats-admin-only).
 - **Runs with the installer's authority** (`definer`), not the writer's, so it behaves identically no matter who wrote — which is what lets an audit trigger record a write by a user who has no access to the audit collection. Re-saving re-stamps the definer to the saving user. If the definer is deleted the trigger stops firing (it never falls back to the writer or to an admin).
 - **A write inside a transaction fires when the transaction commits**, never before, so a rolled-back write fires nothing. The event is the one the write actually performed: a new document fires `CREATED`, an overwrite `UPDATED`, and a delete fires `DELETED` carrying the document as it stood when the delete was buffered.
 - `mode` is `document` (one run per document, the default) or `batch` (one run for a whole `BULK_SAVE`).
@@ -687,7 +689,68 @@ Runs a stored procedure after a committed write to a collection. Requires admin 
 - Triggers are stored **with their collection**, in `{filePath}/{database}/{collection}/{collection}-triggers.json`, so dropping the collection removes them.
 - **Errors**: `403-1` not permitted, `404-4` unknown collection, `404-8` unknown or disabled procedure, `400-14` no events / an unknown event / an unknown mode, `409-8` version conflict.
 - **A failing trigger names where it failed.** Nobody is waiting on a response, so the run's warning line in the server log carries `stack=[…]` — the frames the error came from, innermost first, naming the procedure and line.
-- **Testing one before installing it.** There is no dry-run operation. Put the logic in a stored procedure, exercise it with [`CALL_PROCEDURE`](#call_procedure) against a representative document, and make the trigger a thin wrapper that imports and delegates to it. That exercises the body, not dispatch — cascade depth, definer rights and the pending-run record still need a real write to observe.
+- **Testing an `after` trigger before installing it.** There is no dry run for one (`TEST_TRIGGER` covers `before` triggers only, because only those are directly callable). Put the logic in a stored procedure, exercise it with [`CALL_PROCEDURE`](#call_procedure) against a representative document, and make the trigger a thin wrapper that imports and delegates to it. That exercises the body, not dispatch — cascade depth, definer rights and the pending-run record still need a real write to observe.
+
+##### `timing: "before"` — validating and mutating hooks
+
+A `before` trigger runs **synchronously, on the writing thread, inside the collection write lock, before the document is written**. It is the hook to reach for when a write has to be rejected or a field computed server-side.
+
+```js
+// procedures/normalizeOrder
+export default function (document, context) {
+    if (!document.customerId) {
+        throw new Error("customerId is required");   // -> the write is refused with 400-21
+    }
+    if (context.event === "DELETED") {
+        return;                                     // -> the delete proceeds
+    }
+    return { ...document, total: document.qty * document.price };
+}
+```
+
+- The procedure is called once per document with `(document, context)`, where `context` is `{event, database, collection, trigger, actingUser, firedAt, id}`. What it returns decides the write:
+
+  | Returned | Outcome |
+  |---|---|
+  | `undefined` / `null` / `true` | accept — the write proceeds with the original document |
+  | a plain object | **replace** — the write proceeds with the returned document |
+  | anything else (number, string, array, `false`) | refuse the write with `400-21` |
+  | `throw` | refuse the write with `400-21`, the thrown message included |
+  | a sandbox abort | refuse the write with `408-1` / `400-11` / `400-12` |
+  | cancelled via [`CANCEL_SCRIPT`](#cancel_script-admin-only) | refuse the write with `408-2` |
+
+- **Fail-closed.** Every failure stops the write, including a timeout: a hook that could not run must never let a write through.
+- **A replacement may not change `_id`**, and is **re-validated against the collection's schema** — schema validation runs at the edge, before the hook, so without that a hook could manufacture a document the schema forbids. On a `DELETED` event there is nothing to replace, so returning a document is an error rather than a silently ignored value.
+- **There is no `db`.** A hook running under a held write lock must not re-enter the database (nor, under clustering, make a network call while a writer waits), so `import db from "db"` fails inside one — the same posture a [pipeline script](#script-operators-simplejs-in-the-pipeline) has. It may still `import` a stored procedure to share library code. With no `db` a hook writes nothing, which is why `mode: "batch"` and `allowCascade` are **rejected** on a `before` trigger.
+- **The `definer` is recorded but not enforced.** A hook exercises no authority, so — unlike an `after` trigger — deleting the definer does not disable it.
+- **Several hooks on one collection chain in ascending name order**, each one's output feeding the next; the first refusal stops the chain.
+- **Budgets are per request, not per document.** One interpreter serves the whole request, so a `BULK_SAVE` of 10,000 documents evaluates the module body once and shares one `beforeHookInstructionBudget` and one `beforeHookTimeoutMs` across all of them. The first refusal fails the whole `BULK_SAVE`; nothing from the batch is written. (One exception, bounded at 2×: a `BULK_SAVE` that mixes inserts and updates on a collection carrying hooks for **both** `CREATED` and `UPDATED` runs two sets of hooks, each with its own budget and deadline.)
+- **A running hook is visible to [`LIST_SCRIPTS`](#list_scripts-admin-only) and stoppable with [`CANCEL_SCRIPT`](#cancel_script-admin-only)**, as one run per request named for the collection — not one per document, since the whole request shares a budget. Cancelling it refuses the write with `408-2`, like any other way a hook can fail to finish. Hooks are exempt from `maxConcurrentScripts` for the reason triggers are: a write refused for want of a script permit would be a failed write, not a queued one.
+- **Console output is discarded** on the write path (a hook runs once per document, so a `console.log` over a bulk save is a log-flood risk). [`TEST_TRIGGER`](#test_trigger) is the window that replaces it.
+- Under clustering the hook runs on the collection's **owner**, where the write commits, not on the node the client is connected to.
+- **Rolling upgrade:** an older node re-executing a `SAVE_TRIGGER` does not understand `timing` and would install the hook as an `after` trigger. Roll every node before installing a `before` trigger.
+
+#### `TEST_TRIGGER`
+Runs a `before` trigger against a document you supply and reports what it would do, **without writing anything**. Requires admin privileges, ownership, or `MANAGE` — it executes code. Not routed: it runs on the node you are connected to.
+
+```json
+{
+  "type": "TEST_TRIGGER",
+  "databaseName": "mydb",
+  "collectionName": "orders",
+  "name": "normalizeOrder",
+  "event": "CREATED",
+  "document": {"_id": "o1", "qty": 2, "price": 10}
+}
+```
+```json
+{"type":"TEST_TRIGGER","status":"OK","message":"Trigger tested successfully","decision":"replace",
+ "document":{"_id":"o1","qty":2,"price":10,"total":20},"logs":["checking o1"],"logsTruncated":false}
+```
+
+- `decision` is `accept`, `replace` (with the resulting `document`) or `reject` (with a `reason` and a `stack`). A rejection is an `OK` response: the operation succeeded in telling you the hook says no. A hook that could not *run* — a sandbox abort — is an error response carrying the same code the write itself would have got.
+- **Console output is captured and returned** in `logs`, unlike the live write path. That asymmetry is the point of the operation.
+- **Errors**: `403-2` scripting disabled, `403-1` not permitted, `404-4` unknown collection, `404-9` unknown trigger, `404-8` unknown or disabled procedure, `400-14` an unknown event / an event the trigger does not watch / naming an `after` trigger.
 
 #### `DELETE_TRIGGER`
 ```json
@@ -978,7 +1041,7 @@ Ownership takes precedence over `databasePermissions` and `collectionPermissions
 |---|---|
 | `NONE` (or absent) | nothing |
 | `RUN` | [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) |
-| `MANAGE` | everything `RUN` allows, plus installing procedures, triggers and schedules ([`SAVE_PROCEDURE`](#save_procedure), [`DELETE_PROCEDURE`](#delete_procedure), [`SAVE_TRIGGER`](#save_trigger), [`DELETE_TRIGGER`](#delete_trigger), [`SAVE_SCHEDULE`](#save_schedule), [`DELETE_SCHEDULE`](#delete_schedule)) |
+| `MANAGE` | everything `RUN` allows, plus installing procedures, triggers and schedules ([`SAVE_PROCEDURE`](#save_procedure), [`DELETE_PROCEDURE`](#delete_procedure), [`SAVE_TRIGGER`](#save_trigger), [`DELETE_TRIGGER`](#delete_trigger), [`TEST_TRIGGER`](#test_trigger), [`SAVE_SCHEDULE`](#save_schedule), [`DELETE_SCHEDULE`](#delete_schedule)) |
 
 Admins and database owners have an implicit `MANAGE` on the databases they reach. A grant on one database says nothing about another. The boolean form written by older clients (`{"mydb": true}`) is still accepted and reads as `RUN`; `false` reads as `NONE`. A value that is neither a boolean nor a level name is rejected with `400-1` rather than read as a denial.
 
@@ -1026,6 +1089,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-18` | `ERROR` | A saved procedure imports a `procedures/<name>` that does not exist or is disabled |
 | `400-19` | `ERROR` | A `SCRIPT` operator is not allowed in a `LISTEN` pipeline |
 | `400-20` | `ERROR` | The script's result promise never settled |
+| `400-21` | `ERROR` | A before trigger rejected this write |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
@@ -1173,6 +1237,8 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `triggerTimeoutMs` | Max wall-clock ms a single trigger run may take (>= 1, default `1000`). Tighter than `scriptTimeoutMs` because nobody is waiting on the result |
 | `triggerRunLogEnabled` | `true` or `false` (default `true`). Whether a fired trigger is recorded durably before it runs, so a run queued when the process dies is replayed at startup. The run's effects and the consumption of its record commit together, so a replay cannot apply it twice; turning this off trades that for one less admin write per fired trigger. The record is **node-local** — see [docs/clustering.md](docs/clustering.md) → *Pending trigger runs are node-local* |
 | `triggerRunRetentionMs` | Valid number ≥ 1 (default `86400000`). How long a pending trigger-run record is kept before it is garbage-collected as stranded — its collection was dropped, or the node that owned it never came back |
+| `beforeHookInstructionBudget` | Valid number ≥ 1 (default `200000`). Instruction budget for the before triggers of **one request** — a `BULK_SAVE` of N documents shares it rather than getting a fresh one per row. A client write is blocked while a hook runs, so it is deliberately an order below `scriptInstructionBudget`. |
+| `beforeHookTimeoutMs` | Valid number ≥ 1 (default `200`). Wall clock all the before triggers of one request may take together. Exceeding it **refuses the write** (`408-1`): a hook that could not run must never let a write through. |
 | `schedulesEnabled` | `true` or `false` (default `true`). Whether schedules fire. Separate from `scriptsEnabled`/`triggersEnabled`: a scheduled run executes code on a clock, with no client asking for it and with its installer's authority. Leaving it on costs a ticker thread and nothing else until somebody installs a schedule — and installing one requires `scriptsEnabled`, since a schedule can only name a stored procedure. While it is off the three schedule operations answer `403-2` |
 | `scheduleThreads` | Valid number ≥ 1 (default `2`). Workers running scheduled procedures. Its own pool rather than the trigger executor's, because a scheduled job may hold a worker for its whole timeout |
 | `scheduleQueueSize` | Valid number ≥ 1 (default `100`). Bounded queue of due runs; on overflow the oldest is dropped with a warning and counted, since no client is waiting and the schedule fires again at its next occurrence |

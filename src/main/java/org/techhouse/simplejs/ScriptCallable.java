@@ -17,6 +17,8 @@ public interface ScriptCallable extends AutoCloseable {
 
     JsonBaseElement apply(JsonBaseElement accumulator, JsonObject document);
 
+    JsonBaseElement applyWithContext(JsonObject document, JsonObject context);
+
     @Override
     void close();
 }

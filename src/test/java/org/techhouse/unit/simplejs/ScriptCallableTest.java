@@ -313,4 +313,28 @@ public class ScriptCallableTest {
         }
     }
 
+    @Test
+    public void test_applies_a_document_and_a_context() {
+        try (var callable = open("export default (doc, ctx) => doc.price + '/' + ctx.event;")) {
+            final var context = new JsonObject();
+            context.add("event", new JsonString("CREATED"));
+            assertEquals("5/CREATED", callable.applyWithContext(document(5), context).asJsonString().getValue());
+        }
+    }
+
+    @Test
+    public void test_a_context_call_shares_the_budget() {
+        final var limits = new ResourceLimits(3_000L, 5_000L, 50, false, false, java.util.List.of(), -1, -1, false,
+                false, 8, 100, 100);
+        try (var callable = simpleJs.openCallable(
+                "export default (doc, ctx) => { let n = 0;" + " for (let i = 0; i < 200; i++) { n += i; } return n; };",
+                host(limits))) {
+            final var context = new JsonObject();
+            assertThrows(ScriptCallableException.class, () -> {
+                for (var i = 0; i < 100; i++) {
+                    callable.applyWithContext(document(i), context);
+                }
+            });
+        }
+    }
 }

@@ -66,6 +66,10 @@ public final class DatabaseStatsHelper {
         triggers.addProperty("dropped", triggerExecutor.getDropped());
         triggers.addProperty("queued", (long) triggerExecutor.getQueued());
         triggers.addProperty("runLogEnabled", Configuration.getInstance().isTriggerRunLogEnabled());
+        triggers.addProperty("beforeApplied", BeforeHookContext.getApplied());
+        triggers.addProperty("beforeReplaced", BeforeHookContext.getReplaced());
+        triggers.addProperty("beforeRejected", BeforeHookContext.getRejected());
+        triggers.addProperty("beforeFailed", BeforeHookContext.getFailed());
         // Runs recorded but not yet applied. A number that stays above zero while nothing is queued means
         // runs are stranded - their node never came back, or their collection was dropped - and they will be
         // garbage-collected after triggerRunRetentionMs rather than ever running.

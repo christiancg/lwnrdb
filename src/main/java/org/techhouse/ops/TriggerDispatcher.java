@@ -45,7 +45,7 @@ public final class TriggerDispatcher {
         // Both may have been dropped while the event was queued - the staleness EventProcessorHelper
         // already guards against for a dropped collection.
         final var trigger = findTrigger(event);
-        if (trigger == null || !trigger.isEnabled()) {
+        if (trigger == null || !trigger.isEnabled() || trigger.isBefore()) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             return;
         }

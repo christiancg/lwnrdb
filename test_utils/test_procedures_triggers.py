@@ -26,6 +26,12 @@ What is covered:
   * cascade: allowCascade=false fires exactly once, and a cascading chain terminates at
     triggerMaxDepth;
   * cascade deletes: DROP_COLLECTION removes the trigger file, DROP_DATABASE the whole lot;
+  * before hooks: a synchronous BEFORE trigger that computes a field, vetoes a write, chains in
+    name order, is fail-closed on a timeout, has no `db` binding, and applies on the
+    transactional path too - asserted on the SAVE response itself, since unlike an after
+    trigger nothing here is asynchronous;
+  * dry run: TEST_TRIGGER reports accept/replace/reject, captures console output the live
+    path discards, and writes nothing;
   * stats: GET_DATABASE_STATS reports the trigger counters.
 
 The server lifecycle is managed via a tracked subprocess handle (not pgrep), so stopping it
@@ -70,6 +76,8 @@ MAX_MEMORY_BYTES = 4 * 1024 * 1024
 MAX_RESULT_BYTES = 64 * 1024
 TRIGGER_MAX_DEPTH = 2
 TRIGGER_TIMEOUT_MS = 4_000
+BEFORE_HOOK_BUDGET = 200_000
+BEFORE_HOOK_TIMEOUT_MS = 500
 
 failures = 0
 
@@ -152,6 +160,10 @@ class Conn:
         payload.update(extra)
         return self.send(payload)
 
+    def test_trigger(self, name, event, document, coll=COLL, db=DB) -> dict:
+        return self.send({"type": "TEST_TRIGGER", "databaseName": db, "collectionName": coll,
+                          "name": name, "event": event, "document": document})
+
     def save_doc(self, doc, coll=COLL, db=DB) -> dict:
         return self.send({"type": "SAVE", "databaseName": db, "collectionName": coll, "object": doc})
 
@@ -227,6 +239,8 @@ def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool):
         "triggerQueueSize=1000\n"
         f"triggerMaxDepth={TRIGGER_MAX_DEPTH}\n"
         f"triggerTimeoutMs={TRIGGER_TIMEOUT_MS}\n"
+        f"beforeHookInstructionBudget={BEFORE_HOOK_BUDGET}\n"
+        f"beforeHookTimeoutMs={BEFORE_HOOK_TIMEOUT_MS}\n"
     )
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write(cfg)
@@ -765,6 +779,367 @@ def test_cascade(conn: Conn):
                             "name": "cascade_test"}), "OK")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Phase 1 — before hooks (synchronous)
+# ══════════════════════════════════════════════════════════════════════════
+
+# A before hook is synchronous, so every assertion below is on the SAVE response itself and on an
+# immediate FIND_BY_ID. Anything here that needed await_doc would be testing the wrong thing.
+
+def install_hook(conn: Conn, name, procedure, source, events, coll=COLL):
+    check_status(f"install the {procedure} procedure", conn.save_procedure(procedure, source), "OK")
+    return conn.save_trigger(name, events, procedure, coll=coll, timing="before")
+
+
+def drop_hook(conn: Conn, name, coll=COLL):
+    conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": coll, "name": name})
+
+
+def test_before_hooks(conn: Conn):
+    section("Before hooks - the happy path")
+    check_status("install a normalizing before hook",
+                 install_hook(conn, "normalize", "normalizer",
+                              "export default (doc) => ({ ...doc, total: doc.qty * doc.price });",
+                              ["CREATED", "UPDATED"]), "OK")
+    listed = conn.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": COLL})
+    row = next((x for x in listed.get("triggers", []) if x.get("name") == "normalize"), None)
+    check("the row reports its timing", row is not None and row.get("timing") == "before", f"got {row}")
+
+    saved = conn.save_doc({"_id": "h1", "qty": 2, "price": 10})
+    check_status("the write succeeds", saved, "OK")
+    # No polling: the hook already ran on the writing thread before the write committed
+    stored = conn.find("h1")
+    check("the stored document carries the computed field",
+          (stored.get("object") or {}).get("total") == 20, f"got {stored}")
+
+    check_status("a hook returning nothing accepts unchanged",
+                 install_hook(conn, "noop_hook", "noophook", "export default (doc) => { };", ["CREATED", "UPDATED"]),
+                 "OK")
+    drop_hook(conn, "normalize")
+    check_status("write again", conn.save_doc({"_id": "h2", "qty": 3, "price": 4}), "OK")
+    unchanged = conn.find("h2")
+    check("the document is untouched", "total" not in (unchanged.get("object") or {}), f"got {unchanged}")
+    drop_hook(conn, "noop_hook")
+
+
+def test_before_hook_veto(conn: Conn):
+    section("Before hooks - veto")
+    check_status("install a vetoing hook",
+                 install_hook(conn, "require_customer", "requirecustomer",
+                              "export default (doc) => { if (!doc.customerId) {"
+                              " throw new Error('customerId is required'); } };",
+                              ["CREATED", "UPDATED"]), "OK")
+    rejected = conn.save_doc({"_id": "v1", "qty": 1})
+    check_code("a non-compliant write is refused", rejected, "ERROR", "400-21")
+    check("the message carries the thrown text", "customerId is required" in (rejected.get("message") or ""),
+          f"got {rejected}")
+    check("and nothing was written", conn.find("v1").get("status") != "OK")
+    # The hook is not wedged by having said no once
+    check_status("a compliant write still succeeds",
+                 conn.save_doc({"_id": "v2", "qty": 1, "customerId": "c1"}), "OK")
+    check("it is stored", conn.find("v2").get("status") == "OK")
+    drop_hook(conn, "require_customer")
+
+
+def test_before_hook_contract(conn: Conn):
+    section("Before hooks - the return contract")
+    cases = [
+        ("returns a number", "export default (doc) => 42;"),
+        ("returns a string", "export default (doc) => 'nope';"),
+        ("returns an array", "export default (doc) => [1, 2];"),
+        ("returns false", "export default (doc) => false;"),
+        ("changes _id", "export default (doc) => ({ ...doc, _id: 'somewhere-else' });"),
+    ]
+    for index, (label, source) in enumerate(cases):
+        check_status(f"install a hook that {label}",
+                     install_hook(conn, "contract", f"contract{index}", source, ["CREATED", "UPDATED"]), "OK")
+        check_code(f"a hook that {label} refuses the write",
+                   conn.save_doc({"_id": f"c{index}", "qty": 1}), "ERROR", "400-21")
+        check(f"and nothing was written for {label}", conn.find(f"c{index}").get("status") != "OK")
+    drop_hook(conn, "contract")
+
+    # A DELETED hook replaces nothing, so returning a document is an error rather than a silent no-op
+    check_status("seed a document to delete", conn.save_doc({"_id": "cd1", "qty": 1}), "OK")
+    check_status("install a DELETED hook that returns a document",
+                 install_hook(conn, "del_returns", "delreturns", "export default (doc) => ({ ...doc });",
+                              ["DELETED"]), "OK")
+    refused = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "cd1"})
+    check_code("returning a document on DELETED is refused", refused, "ERROR", "400-21")
+    check("the document survives", conn.find("cd1").get("status") == "OK")
+    drop_hook(conn, "del_returns")
+
+
+def test_before_hook_schema_recheck(conn: Conn):
+    section("Before hooks - a replacement is re-validated")
+    schema = {"type": "object", "properties": {"qty": {"type": "number"}}, "required": ["qty"],
+              "additionalProperties": False}
+    check_status("install a schema", conn.send(
+        {"type": "SAVE_SCHEMA", "databaseName": DB, "collectionName": "hooked", "schema": schema}), "OK")         if False else None
+    check_status("create a schema-guarded collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": "guarded"}), "OK")
+    check_status("save the schema", conn.send(
+        {"type": "SAVE_SCHEMA", "databaseName": DB, "collectionName": "guarded", "schema": schema}), "OK")
+    check_status("install a hook that adds a forbidden field",
+                 install_hook(conn, "sneak", "sneaky", "export default (doc) => ({ ...doc, extra: 1 });",
+                              ["CREATED", "UPDATED"], coll="guarded"), "OK")
+    # The edge validated the caller's own document; the replacement has to be checked too
+    rejected = conn.save_doc({"_id": "g1", "qty": 1}, coll="guarded")
+    check_code("a replacement failing the schema is refused", rejected, "ERROR", "400-21")
+    check("and nothing was written", conn.find("g1", coll="guarded").get("status") != "OK")
+    drop_hook(conn, "sneak", coll="guarded")
+
+
+def test_before_hook_on_delete(conn: Conn):
+    section("Before hooks - delete")
+    check_status("seed a locked document", conn.save_doc({"_id": "d1", "qty": 1, "locked": True}), "OK")
+    check_status("seed an unlocked one", conn.save_doc({"_id": "d2", "qty": 1, "locked": False}), "OK")
+    # The hook vetoes on a field only the *stored* document has - the request carries just the _id
+    check_status("install a delete guard",
+                 install_hook(conn, "guard_delete", "guarddelete",
+                              "export default (doc) => { if (doc.locked) { throw new Error('locked'); } };",
+                              ["DELETED"]), "OK")
+    refused = conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "d1"})
+    check_code("deleting a locked document is refused", refused, "ERROR", "400-21")
+    check("the locked document survives", conn.find("d1").get("status") == "OK")
+    check_status("deleting an unlocked one succeeds",
+                 conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "d2"}), "OK")
+    check("it is gone", conn.find("d2").get("status") != "OK")
+    drop_hook(conn, "guard_delete")
+
+
+def test_before_hook_bulk_save(conn: Conn):
+    section("Before hooks - bulk save")
+    # A module-level counter written into every document: proof the body evaluated once for the batch
+    check_status("install a counting hook",
+                 install_hook(conn, "bulk_calc", "bulkcalc",
+                              "let opened = 0; opened++;"
+                              " export default (doc) => ({ ...doc, total: doc.qty * 2, opened: opened });",
+                              ["CREATED", "UPDATED"]), "OK")
+    docs = [{"_id": f"bk{i}", "qty": i} for i in range(10)]
+    check_status("bulk save ten documents", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL, "objects": docs}), "OK")
+    first = (conn.find("bk1").get("object") or {})
+    last = (conn.find("bk9").get("object") or {})
+    check("every document carries the computed field", first.get("total") == 2 and last.get("total") == 18,
+          f"got {first} / {last}")
+    check("the module body evaluated once for the whole batch",
+          first.get("opened") == 1 and last.get("opened") == 1, f"got {first} / {last}")
+    drop_hook(conn, "bulk_calc")
+
+    check_status("install a hook that vetoes the fourth document",
+                 install_hook(conn, "bulk_veto", "bulkveto",
+                              "export default (doc) => { if (doc.qty === 3) { throw new Error('no'); } };",
+                              ["CREATED", "UPDATED"]), "OK")
+    batch = [{"_id": f"bv{i}", "qty": i} for i in range(10)]
+    check_code("the whole request is refused", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL, "objects": batch}), "ERROR", "400-21")
+    stored = [i for i in range(10) if conn.find(f"bv{i}").get("status") == "OK"]
+    check("not one document from the batch was stored", stored == [], f"stored {stored}")
+    drop_hook(conn, "bulk_veto")
+
+
+def test_before_hook_chaining(conn: Conn):
+    section("Before hooks - chaining in name order")
+    check_status("install the first hook",
+                 install_hook(conn, "a_stamp", "astamp", "export default (doc) => ({ ...doc, trail: 'a' });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_status("install the second",
+                 install_hook(conn, "b_double", "bdouble",
+                              "export default (doc) => ({ ...doc, trail: doc.trail + 'b' });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_status("write", conn.save_doc({"_id": "ch1", "qty": 1}), "OK")
+    check("the second hook saw the first hook's output",
+          (conn.find("ch1").get("object") or {}).get("trail") == "ab", f"got {conn.find('ch1')}")
+    drop_hook(conn, "a_stamp")
+    drop_hook(conn, "b_double")
+
+    # Ascending name order, not install order: reversing the names reverses the result
+    check_status("install them again with the order flipped",
+                 install_hook(conn, "a_double", "adouble",
+                              "export default (doc) => ({ ...doc, trail: (doc.trail || '') + 'b' });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_status("and the stamper second",
+                 install_hook(conn, "b_stamp", "bstamp", "export default (doc) => ({ ...doc, trail: 'a' });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_status("write again", conn.save_doc({"_id": "ch2", "qty": 1}), "OK")
+    check("name order decided the chain, not install order",
+          (conn.find("ch2").get("object") or {}).get("trail") == "a", f"got {conn.find('ch2')}")
+    drop_hook(conn, "a_double")
+    drop_hook(conn, "b_stamp")
+
+
+def test_before_hook_sandbox(conn: Conn):
+    section("Before hooks - fail-closed")
+    check_status("install a hook that never returns",
+                 install_hook(conn, "spin", "spinner", "export default (doc) => { while (true) { } };",
+                              ["CREATED", "UPDATED"]), "OK")
+    started = time.time()
+    timed_out = conn.save_doc({"_id": "to1", "qty": 1})
+    elapsed = time.time() - started
+    # The single most important case: a hook that could not run must never let the write through.
+    # Which limit bites first (the wall clock, 408-1, or the instruction budget, 400-11) depends on how
+    # the two are configured relative to each other, so the invariant asserted here is fail-closed
+    # itself; BeforeHookContextTest pins each code precisely with a config tuned per case.
+    check("a hook that never finishes refuses the write",
+          timed_out.get("status") == "ERROR" and timed_out.get("errorCode") in ("408-1", "400-11"),
+          f"got {timed_out}")
+    check("and nothing was written", conn.find("to1").get("status") != "OK")
+    check("it gave up near the configured budget", elapsed < 10, f"took {elapsed:.1f}s")
+    drop_hook(conn, "spin")
+
+
+def test_before_hook_no_db(conn: Conn):
+    section("Before hooks - the capability boundary")
+    check_status("install a hook that reaches for db",
+                 install_hook(conn, "needs_db", "needsdb",
+                              "import db from 'db'; export default (doc) => doc;", ["CREATED", "UPDATED"]), "OK")
+    refused = conn.save_doc({"_id": "nd1", "qty": 1})
+    check_code("a hook with no db binding refuses the write", refused, "ERROR", "400-21")
+    check("the message says database access is unavailable",
+          "Database access is not available" in (refused.get("message") or ""), f"got {refused}")
+    drop_hook(conn, "needs_db")
+
+    # The one module a hook deliberately keeps
+    check_status("install a shared library procedure",
+                 conn.save_procedure("hooklib", "export function tag(d) { return { ...d, via: 'lib' }; }"), "OK")
+    check_status("install a hook that imports it",
+                 install_hook(conn, "uses_lib", "useslib",
+                              "import { tag } from 'procedures/hooklib';"
+                              " export default (doc) => tag(doc);", ["CREATED", "UPDATED"]), "OK")
+    check_status("the write succeeds", conn.save_doc({"_id": "nd2", "qty": 1}), "OK")
+    check("the imported library ran", (conn.find("nd2").get("object") or {}).get("via") == "lib",
+          f"got {conn.find('nd2')}")
+    drop_hook(conn, "uses_lib")
+
+
+def test_before_hook_in_transaction(conn: Conn):
+    section("Before hooks - inside a transaction")
+    check_status("install a normalizing hook",
+                 install_hook(conn, "tx_calc", "txcalc",
+                              "export default (doc) => ({ ...doc, total: doc.qty * 5 });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("buffer a save", conn.save_doc({"_id": "tx1", "qty": 3}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("the committed document is the hook's output",
+          (conn.find("tx1").get("object") or {}).get("total") == 15, f"got {conn.find('tx1')}")
+    drop_hook(conn, "tx_calc")
+
+    check_status("install a vetoing hook",
+                 install_hook(conn, "tx_veto", "txveto", "export default (doc) => { throw new Error('nope'); };",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_status("start another transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_code("the buffered save is refused at buffer time", conn.save_doc({"_id": "tx2", "qty": 1}),
+               "ERROR", "400-21")
+    check_status("commit the empty transaction", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("nothing was written", conn.find("tx2").get("status") != "OK")
+    drop_hook(conn, "tx_veto")
+
+
+def test_before_hook_validation(conn: Conn):
+    section("Before hooks - validation")
+    check_status("install a procedure to point at", conn.save_procedure("hookproc", "export default (d) => d;"), "OK")
+    check_code("an unknown timing is refused",
+               conn.save_trigger("bad_timing", ["CREATED"], "hookproc", timing="sideways"), "ERROR", "400-14")
+    check_code("batch mode on a before trigger is refused",
+               conn.save_trigger("bad_batch", ["CREATED"], "hookproc", timing="before", mode="batch"),
+               "ERROR", "400-14")
+    check_code("allowCascade on a before trigger is refused",
+               conn.save_trigger("bad_cascade", ["CREATED"], "hookproc", timing="before", allowCascade=True),
+               "ERROR", "400-14")
+    check_code("a before trigger naming a missing procedure is refused",
+               conn.save_trigger("bad_proc", ["CREATED"], "no_such_procedure", timing="before"), "NOT_FOUND", "404-8")
+
+
+def test_before_hook_definer_is_not_enforced(conn: Conn):
+    section("Before hooks - the definer divergence")
+    # An after trigger stops when its definer is deleted (test_definer_rights covers that). A before hook
+    # exercises no authority at all, so it must keep working - the difference is deliberate.
+    check_status("create a throwaway installer", conn.send({
+        "type": "CREATE_USER", "username": "hook_installer", "password": USER_PASSWORD, "admin": False,
+        "databasePermissions": {DB: "READ_WRITE"}, "scriptPermissions": {DB: "MANAGE"}}), "OK")
+    with user_conn("hook_installer") as installer:
+        check_status("they install a before hook",
+                     install_hook(installer, "by_installer", "byinstaller",
+                                  "export default (doc) => ({ ...doc, stamped: true });",
+                                  ["CREATED", "UPDATED"]), "OK")
+    check_status("delete the installer",
+                 conn.send({"type": "DELETE_USER", "username": "hook_installer"}), "OK")
+    check_status("a write still succeeds", conn.save_doc({"_id": "df1", "qty": 1}), "OK")
+    check("the hook still ran despite the definer being gone",
+          (conn.find("df1").get("object") or {}).get("stamped") is True, f"got {conn.find('df1')}")
+    drop_hook(conn, "by_installer")
+
+    # Deliberately left installed: phase 2 restarts this same data directory with the switches off and
+    # asserts that a vetoing before hook stops running rather than refusing every write forever.
+    check_status("leave a vetoing hook installed for phase 2",
+                 install_hook(conn, "off_hook", "offhook",
+                              "export default (doc) => { throw new Error('always refuses'); };",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_code("it refuses while the switches are on", conn.save_doc({"_id": "off0", "qty": 1}), "ERROR", "400-21")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Phase 1 — the dry run
+# ══════════════════════════════════════════════════════════════════════════
+
+def test_dry_run(conn: Conn):
+    section("TEST_TRIGGER - the dry run")
+    check_status("install a hook that logs and computes",
+                 install_hook(conn, "dry", "dryrun",
+                              "export default (doc) => { console.log('checking ' + doc._id);"
+                              " if (doc.qty < 0) { throw new Error('qty must not be negative'); }"
+                              " if (doc.qty === 0) { return; }"
+                              " return { ...doc, total: doc.qty * 7 }; };",
+                              ["CREATED", "UPDATED"]), "OK")
+
+    replaced = conn.test_trigger("dry", "CREATED", {"_id": "dr1", "qty": 2})
+    check_status("a replacing verdict is OK", replaced, "OK")
+    check("it reports replace", replaced.get("decision") == "replace", f"got {replaced}")
+    check("and returns the resulting document", (replaced.get("document") or {}).get("total") == 14,
+          f"got {replaced}")
+    # The asymmetry the feature rests on: the dry run keeps console output, the live path discards it
+    check("it captures the console output", replaced.get("logs") == ["checking dr1"], f"got {replaced}")
+
+    accepted = conn.test_trigger("dry", "CREATED", {"_id": "dr2", "qty": 0})
+    check("an accepting verdict reports accept", accepted.get("decision") == "accept", f"got {accepted}")
+    check("and echoes the document unchanged", (accepted.get("document") or {}).get("_id") == "dr2",
+          f"got {accepted}")
+
+    rejected = conn.test_trigger("dry", "CREATED", {"_id": "dr3", "qty": -1})
+    check_status("a rejecting verdict is still an OK response", rejected, "OK")
+    check("it reports reject", rejected.get("decision") == "reject", f"got {rejected}")
+    check("with the thrown message", "qty must not be negative" in (rejected.get("reason") or ""),
+          f"got {rejected}")
+    check("and a stack naming where it broke", bool(rejected.get("stack")), f"got {rejected}")
+
+    check("nothing was written", conn.find("dr1").get("status") != "OK")
+
+    # The same hook on the live path produces no logs at all
+    live = conn.save_doc({"_id": "dr4", "qty": 1})
+    check_status("the live write succeeds", live, "OK")
+    check("the live path returns no logs", "logs" not in live, f"got {live}")
+
+    check_code("an unknown trigger is not found", conn.test_trigger("no_such", "CREATED", {"_id": "x"}),
+               "NOT_FOUND", "404-9")
+    check_code("an unknown event is refused", conn.test_trigger("dry", "EXPLODED", {"_id": "x"}), "ERROR", "400-14")
+    check_code("an event the trigger does not watch is refused",
+               conn.test_trigger("dry", "DELETED", {"_id": "x"}), "ERROR", "400-14")
+
+    check_status("install an after trigger", conn.save_trigger("after_only", ["CREATED"], "dryrun"), "OK")
+    check_code("an after trigger cannot be tested", conn.test_trigger("after_only", "CREATED", {"_id": "x"}),
+               "ERROR", "400-14")
+    drop_hook(conn, "after_only")
+
+    with user_conn(RUNNER) as runner:
+        check_code("a RUN-level user may not test a trigger",
+                   runner.test_trigger("dry", "CREATED", {"_id": "x"}), "FORBIDDEN", "403-1")
+    with user_conn(MANAGER) as manager:
+        check_status("a MANAGE-level user may",
+                     manager.test_trigger("dry", "CREATED", {"_id": "dr5", "qty": 1}), "OK")
+    drop_hook(conn, "dry")
+
+
 def test_stats(conn: Conn):
     section("Statistics")
     stats = conn.send({"type": "GET_DATABASE_STATS"})
@@ -772,6 +1147,9 @@ def test_stats(conn: Conn):
     check("stats report the trigger counters", "fired" in triggers and "dropped" in triggers, f"got {stats}")
     check("triggers are reported as enabled", triggers.get("enabled") is True, f"got {triggers}")
     check("and at least one has fired", (triggers.get("fired") or 0) > 0, f"got {triggers}")
+    check("before hooks are counted too",
+          (triggers.get("beforeReplaced") or 0) > 0 and (triggers.get("beforeRejected") or 0) > 0,
+          f"got {triggers}")
 
 
 def test_cascade_deletes(conn: Conn, work_dir: str):
@@ -819,9 +1197,18 @@ def test_switches_off(conn: Conn):
     check_status("a write still succeeds", conn.save_doc({"_id": "quiet", "n": 1}), "OK")
     quiet = await_absent(conn, "UPDATED-quiet")
     check("triggersEnabled=false fires nothing", quiet.get("status") != "OK", f"got {quiet}")
+    # A before hook is on the write path, so triggersEnabled=false has to stop it running at all -
+    # otherwise a vetoing hook would keep refusing writes after the switch was turned off.
+    check_status("a write guarded by a vetoing before hook still succeeds",
+                 conn.save_doc({"_id": "off1", "qty": 1}), "OK")
+    check("the write landed", conn.find("off1").get("status") == "OK")
+    check_code("TEST_TRIGGER is refused with scripts off",
+               conn.test_trigger("off_hook", "CREATED", {"_id": "x"}), "FORBIDDEN", "403-2")
     stats = conn.send({"type": "GET_DATABASE_STATS"})
     triggers = (stats.get("stats") or {}).get("triggers") or {}
     check("stats report triggers as disabled", triggers.get("enabled") is False, f"got {triggers}")
+    check("stats report the before-hook counters",
+          "beforeApplied" in triggers and "beforeRejected" in triggers, f"got {triggers}")
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -852,6 +1239,18 @@ def main():
         with admin_conn() as conn:
             test_triggers(conn)
             test_trigger_validation(conn)
+            test_before_hooks(conn)
+            test_before_hook_veto(conn)
+            test_before_hook_contract(conn)
+            test_before_hook_schema_recheck(conn)
+            test_before_hook_on_delete(conn)
+            test_before_hook_bulk_save(conn)
+            test_before_hook_chaining(conn)
+            test_before_hook_sandbox(conn)
+            test_before_hook_no_db(conn)
+            test_before_hook_in_transaction(conn)
+            test_before_hook_validation(conn)
+            test_dry_run(conn)
             test_result_cap(conn)
         test_definer_rights()
         with admin_conn() as conn:
@@ -864,6 +1263,9 @@ def main():
             test_stats(conn)
             test_storage_placement(work_dir)
             test_cascade_deletes(conn, work_dir)
+            # Last of phase 1: it deliberately leaves a vetoing before hook installed for phase 2, so
+            # nothing that writes may run after it.
+            test_before_hook_definer_is_not_enforced(conn)
 
         # Phase 2: same data directory, both switches off
         stop_server(proc)

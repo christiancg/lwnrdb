@@ -91,6 +91,8 @@ public final class ConfigurationValidator {
         validatePositiveLong(configs, "triggerTimeoutMs", errors);
         validateBoolean(configs, "triggerRunLogEnabled", errors);
         validatePositiveLong(configs, "triggerRunRetentionMs", errors);
+        validatePositiveLong(configs, "beforeHookInstructionBudget", errors);
+        validatePositiveLong(configs, "beforeHookTimeoutMs", errors);
         validateBoolean(configs, "schedulesEnabled", errors);
         validateInt(configs, "scheduleThreads", 1, errors);
         validateInt(configs, "scheduleQueueSize", 1, errors);

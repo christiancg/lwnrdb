@@ -8,6 +8,7 @@ public class SaveTriggerRequest extends OperationRequest {
     private List<String> events;
     private String procedureName;
     private String mode;
+    private String timing;
     private Boolean allowCascade;
     private Boolean enabled;
     private Long ifVersion;
@@ -61,6 +62,14 @@ public class SaveTriggerRequest extends OperationRequest {
 
     public void setMode(String mode) {
         this.mode = mode;
+    }
+
+    public String getTiming() {
+        return timing;
+    }
+
+    public void setTiming(String timing) {
+        this.timing = timing;
     }
 
     public boolean isAllowCascade() {

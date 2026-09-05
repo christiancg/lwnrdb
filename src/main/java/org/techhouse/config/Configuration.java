@@ -75,6 +75,8 @@ public final class Configuration {
     private long triggerTimeoutMs;
     private boolean triggerRunLogEnabled;
     private long triggerRunRetentionMs;
+    private long beforeHookInstructionBudget;
+    private long beforeHookTimeoutMs;
     private boolean schedulesEnabled;
     private int scheduleThreads;
     private int scheduleQueueSize;
@@ -171,6 +173,8 @@ public final class Configuration {
         triggerTimeoutMs = longOf(configs, "triggerTimeoutMs");
         triggerRunLogEnabled = booleanOf(configs, "triggerRunLogEnabled");
         triggerRunRetentionMs = longOf(configs, "triggerRunRetentionMs");
+        beforeHookInstructionBudget = longOf(configs, "beforeHookInstructionBudget");
+        beforeHookTimeoutMs = longOf(configs, "beforeHookTimeoutMs");
         schedulesEnabled = booleanOf(configs, "schedulesEnabled");
         scheduleThreads = intOf(configs, "scheduleThreads");
         scheduleQueueSize = intOf(configs, "scheduleQueueSize");
@@ -481,6 +485,14 @@ public final class Configuration {
 
     public long getTriggerRunRetentionMs() {
         return triggerRunRetentionMs;
+    }
+
+    public long getBeforeHookInstructionBudget() {
+        return beforeHookInstructionBudget;
+    }
+
+    public long getBeforeHookTimeoutMs() {
+        return beforeHookTimeoutMs;
     }
 
     public boolean isSchedulesEnabled() {

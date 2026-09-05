@@ -40,6 +40,7 @@ import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
+import org.techhouse.ops.req.TestTriggerRequest;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 
@@ -87,6 +88,7 @@ public class RequestValidator {
             case SAVE_TRIGGER -> validateSaveTrigger((SaveTriggerRequest) request);
             case DELETE_TRIGGER -> validateDeleteTrigger((DeleteTriggerRequest) request);
             case LIST_TRIGGERS -> validateListTriggers((ListTriggersRequest) request);
+            case TEST_TRIGGER -> validateTestTrigger((TestTriggerRequest) request);
             case SAVE_SCHEDULE -> validateSaveSchedule((SaveScheduleRequest) request);
             case DELETE_SCHEDULE -> validateDeleteSchedule((DeleteScheduleRequest) request);
             case LIST_SCHEDULES -> validateDbNameOnly(request.getDatabaseName());
@@ -173,6 +175,21 @@ public class RequestValidator {
             return namesResult;
         }
         return validateProcedureName(request.getName());
+    }
+
+    private static ValidationResult validateTestTrigger(TestTriggerRequest request) {
+        final var namesResult = validateDbAndColl(request, true);
+        if (!namesResult.isValid()) {
+            return namesResult;
+        }
+        final var nameResult = validateProcedureName(request.getName());
+        if (!nameResult.isValid()) {
+            return nameResult;
+        }
+        if (request.getDocument() == null) {
+            return ValidationResult.fail("A document is required");
+        }
+        return ValidationResult.ok();
     }
 
     // The collection is optional: omitting it lists every trigger in the database.

@@ -25,12 +25,15 @@ import org.techhouse.ejson.elements.JsonString;
 public class TriggerDefinition {
     public static final String MODE_DOCUMENT = "document";
     public static final String MODE_BATCH = "batch";
+    public static final String TIMING_AFTER = "after";
+    public static final String TIMING_BEFORE = "before";
 
     private static final String TRIGGERS_FIELD = "triggers";
     private static final String NAME_FIELD = "name";
     private static final String EVENTS_FIELD = "events";
     private static final String PROCEDURE_NAME_FIELD = "procedureName";
     private static final String MODE_FIELD = "mode";
+    private static final String TIMING_FIELD = "timing";
     private static final String ALLOW_CASCADE_FIELD = "allowCascade";
     private static final String ENABLED_FIELD = "enabled";
     private static final String DEFINER_FIELD = "definer";
@@ -43,6 +46,7 @@ public class TriggerDefinition {
     private Set<EventType> events;
     private String procedureName;
     private String mode;
+    private String timing;
     private boolean allowCascade;
     private boolean enabled;
     private String definer;
@@ -54,15 +58,24 @@ public class TriggerDefinition {
     public TriggerDefinition() {
         this.events = new LinkedHashSet<>();
         this.mode = MODE_DOCUMENT;
+        this.timing = TIMING_AFTER;
     }
 
     public TriggerDefinition(String name, Set<EventType> events, String procedureName, String mode,
+            boolean allowCascade, boolean enabled, String definer, long version, long createdAt, long updatedAt,
+            String updatedBy) {
+        this(name, events, procedureName, mode, TIMING_AFTER, allowCascade, enabled, definer, version, createdAt,
+                updatedAt, updatedBy);
+    }
+
+    public TriggerDefinition(String name, Set<EventType> events, String procedureName, String mode, String timing,
             boolean allowCascade, boolean enabled, String definer, long version, long createdAt, long updatedAt,
             String updatedBy) {
         this.name = name;
         this.events = events == null ? new LinkedHashSet<>() : events;
         this.procedureName = procedureName;
         this.mode = mode == null ? MODE_DOCUMENT : mode;
+        this.timing = timing == null ? TIMING_AFTER : timing;
         this.allowCascade = allowCascade;
         this.enabled = enabled;
         this.definer = definer;
@@ -84,6 +97,8 @@ public class TriggerDefinition {
         result.procedureName = stringOrNull(object, PROCEDURE_NAME_FIELD);
         final var mode = stringOrNull(object, MODE_FIELD);
         result.mode = mode == null ? MODE_DOCUMENT : mode;
+        final var timing = stringOrNull(object, TIMING_FIELD);
+        result.timing = timing == null ? TIMING_AFTER : timing;
         result.allowCascade = booleanOrDefault(object, ALLOW_CASCADE_FIELD, false);
         result.enabled = booleanOrDefault(object, ENABLED_FIELD, true);
         result.definer = stringOrNull(object, DEFINER_FIELD);
@@ -102,6 +117,7 @@ public class TriggerDefinition {
         json.add(EVENTS_FIELD, eventsArray);
         json.add(PROCEDURE_NAME_FIELD, new JsonString(procedureName));
         json.add(MODE_FIELD, new JsonString(mode));
+        json.add(TIMING_FIELD, new JsonString(timing));
         json.add(ALLOW_CASCADE_FIELD, new JsonBoolean(allowCascade));
         json.add(ENABLED_FIELD, new JsonBoolean(enabled));
         if (definer != null) {
@@ -191,6 +207,14 @@ public class TriggerDefinition {
         return MODE_BATCH.equals(mode);
     }
 
+    public String getTiming() {
+        return timing;
+    }
+
+    public boolean isBefore() {
+        return TIMING_BEFORE.equals(timing);
+    }
+
     public boolean isAllowCascade() {
         return allowCascade;
     }
@@ -228,20 +252,20 @@ public class TriggerDefinition {
         return allowCascade == that.allowCascade && enabled == that.enabled && version == that.version
                 && createdAt == that.createdAt && updatedAt == that.updatedAt && Objects.equals(name, that.name)
                 && Objects.equals(events, that.events) && Objects.equals(procedureName, that.procedureName)
-                && Objects.equals(mode, that.mode) && Objects.equals(definer, that.definer)
-                && Objects.equals(updatedBy, that.updatedBy);
+                && Objects.equals(mode, that.mode) && Objects.equals(timing, that.timing)
+                && Objects.equals(definer, that.definer) && Objects.equals(updatedBy, that.updatedBy);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(name, events, procedureName, mode, allowCascade, enabled, definer, version, createdAt,
-                updatedAt, updatedBy);
+        return Objects.hash(name, events, procedureName, mode, timing, allowCascade, enabled, definer, version,
+                createdAt, updatedAt, updatedBy);
     }
 
     @Override
     public String toString() {
         return "TriggerDefinition(name=" + name + ", events=" + events + ", procedureName=" + procedureName + ", mode="
-                + mode + ", allowCascade=" + allowCascade + ", enabled=" + enabled + ", definer=" + definer
-                + ", version=" + version + ")";
+                + mode + ", timing=" + timing + ", allowCascade=" + allowCascade + ", enabled=" + enabled + ", definer="
+                + definer + ", version=" + version + ")";
     }
 }

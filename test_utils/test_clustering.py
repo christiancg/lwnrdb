@@ -444,6 +444,9 @@ class Node:
             f"scriptRoutingEnabled={'false' if self.index == 2 else 'true'}\n"
             # Schedules: a short tick so an interval schedule is observable inside a test, and a short
             # refresh so a rejoining node's registry picks up what anti-entropy brought in promptly.
+            "triggersEnabled=true\n"
+            "beforeHookInstructionBudget=200000\n"
+            "beforeHookTimeoutMs=2000\n"
             "schedulesEnabled=true\n"
             "scheduleTickMs=200\n"
             "scheduleRefreshMs=2000\n"
@@ -1191,6 +1194,61 @@ def fire_count(port, coll, db=SCHEDULE_DB) -> int:
     return int(value) if value is not None else 0
 
 
+def test_before_hook_runs_on_the_owner():
+    section("Before hooks — a write forwarded to the owner still runs the hook")
+
+    # The case that cannot be caught on one node: ClusterRouter forwards the raw request JSON, so a hook
+    # wired at the edge instead of the owner would ship an unmodified document and pass every
+    # single-node test. Writing through a node that does not own the collection is what proves it.
+    check("CREATE_COLLECTION for the hooked data", create_coll(nodes[0].client_port, DB, "hooked"), "OK")
+
+    conn = authed(nodes[0].client_port)
+    try:
+        check("install the hook procedure", send(conn.s, conn.f, {
+            "type": "SAVE_PROCEDURE", "databaseName": DB, "name": "hookcalc",
+            "script": "export default (doc) => ({ ...doc, v: doc.v * 2, hooked: true });"}), "OK")
+        check("install the before trigger", send(conn.s, conn.f, {
+            "type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": "hooked", "name": "double",
+            "events": ["CREATED", "UPDATED"], "procedureName": "hookcalc", "timing": "before"}), "OK")
+    finally:
+        conn.close()
+
+    # Write the same collection through every node in turn: at most one of them owns it, so the rest
+    # exercise the forward.
+    for i in range(NODE_COUNT):
+        _id = f"h{i}"
+        r = save(nodes[i].client_port, DB, "hooked", {"_id": _id, "v": 5})
+        check(f"SAVE via node-{i} commits", r, "OK")
+        check_true(f"the hook ran for a write entering at node-{i}",
+                   all_nodes_see(DB, "hooked", _id, 10),
+                   detail=f"_id={_id} should have been doubled by the owner's before hook")
+
+    # A veto must travel back to the edge as the owner's own error, not be swallowed by the forward.
+    conn = authed(nodes[0].client_port)
+    try:
+        check("install a vetoing hook", send(conn.s, conn.f, {
+            "type": "SAVE_PROCEDURE", "databaseName": DB, "name": "hookveto",
+            "script": "export default (doc) => { throw new Error('refused by the owner'); };"}), "OK")
+        check("point the trigger at it", send(conn.s, conn.f, {
+            "type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": "hooked", "name": "double",
+            "events": ["CREATED", "UPDATED"], "procedureName": "hookveto", "timing": "before"}), "OK")
+    finally:
+        conn.close()
+
+    for i in range(NODE_COUNT):
+        r = save(nodes[i].client_port, DB, "hooked", {"_id": f"hv{i}", "v": 1})
+        check_true(f"a veto reaches the client that wrote via node-{i}",
+                   r.get("errorCode") == "400-21",
+                   detail=f"got {r}")
+
+    conn = authed(nodes[0].client_port)
+    try:
+        send(conn.s, conn.f, {"type": "DELETE_TRIGGER", "databaseName": DB,
+                              "collectionName": "hooked", "name": "double"})
+    finally:
+        conn.close()
+
+
 def test_schedule_replication_and_single_firing():
     section("Scheduled procedures — DDL replicates, and a schedule fires on exactly one node")
 
@@ -1306,6 +1364,7 @@ def main():
         test_long_forwarded_script_is_not_cut_off()
         test_script_routing_disabled_stays_local()
         test_script_placement_falls_back_when_the_target_dies()
+        test_before_hook_runs_on_the_owner()
         test_schedule_replication_and_single_firing()
         # Failure / rejoin last: they degrade then restore the cluster.
         test_node_failure_quorum_maintained()

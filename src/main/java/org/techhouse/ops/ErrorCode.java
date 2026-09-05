@@ -47,7 +47,10 @@ public enum ErrorCode {
                                                                                                                                                     OperationStatus.ERROR), SCRIPT_RESULT_PENDING(
                                                                                                                                                             "400-20",
                                                                                                                                                             "The script's result promise never settled",
-                                                                                                                                                            OperationStatus.ERROR),
+                                                                                                                                                            OperationStatus.ERROR), BEFORE_HOOK_REJECTED(
+                                                                                                                                                                    "400-21",
+                                                                                                                                                                    "A before trigger rejected this write",
+                                                                                                                                                                    OperationStatus.ERROR),
 
     // ── 401 Unauthenticated ───────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(

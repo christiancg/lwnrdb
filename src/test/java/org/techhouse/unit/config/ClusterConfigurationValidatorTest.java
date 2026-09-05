@@ -76,6 +76,8 @@ public class ClusterConfigurationValidatorTest {
         map.put("metadataMissCacheMaxEntries", "4096");
         map.put("triggerRunLogEnabled", "true");
         map.put("triggerRunRetentionMs", "86400000");
+        map.put("beforeHookInstructionBudget", "200000");
+        map.put("beforeHookTimeoutMs", "200");
         map.put("schedulesEnabled", "false");
         map.put("scheduleThreads", "2");
         map.put("scheduleQueueSize", "100");

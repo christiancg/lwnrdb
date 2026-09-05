@@ -57,9 +57,9 @@ import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
+import org.techhouse.ops.req.TestTriggerRequest;
 import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
-import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.CancelScriptResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
 import org.techhouse.ops.resp.CreateCollectionResponse;
@@ -162,6 +162,7 @@ public class OperationProcessor {
             case SAVE_TRIGGER -> processSaveTrigger((SaveTriggerRequest) operationRequest, actingUser);
             case DELETE_TRIGGER -> processDeleteTrigger((DeleteTriggerRequest) operationRequest);
             case LIST_TRIGGERS -> processListTriggers((ListTriggersRequest) operationRequest);
+            case TEST_TRIGGER -> processTestTrigger((TestTriggerRequest) operationRequest, actingUser);
             case SAVE_SCHEDULE -> processSaveSchedule((SaveScheduleRequest) operationRequest, actingUser);
             case DELETE_SCHEDULE -> processDeleteSchedule((DeleteScheduleRequest) operationRequest);
             case LIST_SCHEDULES -> processListSchedules((ListSchedulesRequest) operationRequest);
@@ -199,16 +200,6 @@ public class OperationProcessor {
         return ProcedureCallHelper.execute(request, actingUser, clientId);
     }
 
-    private void fireBulkSaveTriggers(String dbName, String collName, OperationResponse response, String actingUser,
-            int depth) {
-        if (response instanceof BulkSaveResponse bulkSaveResponse) {
-            TriggerHelper.afterWriteIds(dbName, collName, EventType.CREATED, bulkSaveResponse.getInserted(), actingUser,
-                    depth);
-            TriggerHelper.afterWriteIds(dbName, collName, EventType.UPDATED, bulkSaveResponse.getUpdated(), actingUser,
-                    depth);
-        }
-    }
-
     private OperationResponse processSaveTrigger(SaveTriggerRequest request, String actingUser) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
@@ -239,6 +230,12 @@ public class OperationProcessor {
 
     private OperationResponse processListTriggers(ListTriggersRequest request) {
         return TriggerOperationHelper.executeList(request);
+    }
+
+    // No lock and no write: the hook is run against the caller's own document, so nothing on disk is
+    // touched and nothing needs serializing against a concurrent save.
+    private OperationResponse processTestTrigger(TestTriggerRequest request, String actingUser) {
+        return TriggerOperationHelper.executeTest(request, actingUser);
     }
 
     private OperationResponse processSaveSchedule(SaveScheduleRequest request, String actingUser) {
@@ -274,9 +271,13 @@ public class OperationProcessor {
         }
         try {
             locks.lock(dbName, collName);
+            final var hookError = BeforeHookHelper.beforeBulkSave(bulkSaveRequest, actingUser);
+            if (hookError != null) {
+                return hookError;
+            }
             final var response = ClusterWriteHelper.afterBulkSave(dbName, collName,
                     SaveOperationHelper.executeBulkSave(bulkSaveRequest));
-            fireBulkSaveTriggers(dbName, collName, response, actingUser, bulkSaveRequest.getTriggerDepth());
+            TriggerHelper.afterBulkSave(dbName, collName, response, actingUser, bulkSaveRequest.getTriggerDepth());
             return response;
         } catch (Exception exception) {
             return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
@@ -299,6 +300,11 @@ public class OperationProcessor {
         final var isInsert = saveRequest.get_id() == null || saveRequest.get_id().isBlank();
         try {
             locks.lock(dbName, collName);
+            final var hookError = BeforeHookHelper.beforeSave(saveRequest,
+                    isInsert ? EventType.CREATED : EventType.UPDATED, actingUser);
+            if (hookError != null) {
+                return hookError;
+            }
             final var response = ClusterWriteHelper.afterSave(dbName, collName,
                     SaveOperationHelper.executeSave(saveRequest));
             if (response instanceof SaveResponse saveResponse) {
@@ -422,6 +428,10 @@ public class OperationProcessor {
             // is a no-op unless a DELETED trigger actually exists on the collection.
             final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),
                     deleteRequest.getTriggerDepth());
+            final var hookError = BeforeHookHelper.beforeDelete(deleteRequest, actingUser);
+            if (hookError != null) {
+                return hookError;
+            }
             final var response = ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
                     DeleteOperationHelper.executeDelete(deleteRequest));
             if (response instanceof DeleteResponse) {
