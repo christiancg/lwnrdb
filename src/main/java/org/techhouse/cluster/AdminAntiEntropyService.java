@@ -9,6 +9,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
@@ -16,6 +17,9 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.data.ProcedureDefinition;
+import org.techhouse.data.ScheduleDefinition;
+import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
@@ -43,12 +47,15 @@ public class AdminAntiEntropyService implements MembershipListener {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final org.techhouse.ops.CompiledProcedureCache compiledProcedures = IocContainer
+            .get(org.techhouse.ops.CompiledProcedureCache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
+    private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private final ExecutorService reconcileExecutor = Executors.newSingleThreadExecutor(r -> {
         final var t = new Thread(r, "cluster-admin-anti-entropy");
         t.setDaemon(true);
@@ -67,6 +74,7 @@ public class AdminAntiEntropyService implements MembershipListener {
             return;
         }
         started = true;
+        publishSyncState();
         if (clusterConfig.antiEntropyIntervalMs() <= 0) {
             return;
         }
@@ -82,6 +90,7 @@ public class AdminAntiEntropyService implements MembershipListener {
     public void stop() {
         started = false;
         adminSyncCompleted.set(false);
+        publishSyncState();
         if (periodicScheduler != null) {
             periodicScheduler.shutdownNow();
             periodicScheduler = null;
@@ -93,6 +102,13 @@ public class AdminAntiEntropyService implements MembershipListener {
     // manually-wired tests are unaffected.
     public boolean hasCompletedAdminSync() {
         return !started || adminSyncCompleted.get();
+    }
+
+    // Gossiped so peers can keep a script off a node whose admin state is not caught up yet
+    // (cluster/ScriptPlacement). Inert while the service is stopped, which is what keeps the standalone path
+    // and the manually-wired tests eligible.
+    private void publishSyncState() {
+        membershipService.setAdminSyncing(!hasCompletedAdminSync());
     }
 
     @Override
@@ -141,6 +157,7 @@ public class AdminAntiEntropyService implements MembershipListener {
             }
         } finally {
             adminSyncCompleted.set(true);
+            publishSyncState();
         }
     }
 
@@ -153,16 +170,35 @@ public class AdminAntiEntropyService implements MembershipListener {
         }
         final var collections = new ArrayList<JsonObject>();
         final var schemas = new JsonObject();
+        final var procedures = new JsonObject();
+        final var triggers = new JsonObject();
+        final var schedules = new JsonObject();
         for (final var dbName : cache.getUserDatabaseNames()) {
+            for (final var procedureName : fs.listProcedureNames(dbName)) {
+                final var procedure = cache.loadProcedureUncached(dbName, procedureName);
+                if (procedure != null) {
+                    procedures.add(Cache.getCollectionIdentifier(dbName, procedureName), procedure.toJsonObject());
+                }
+            }
+            for (final var scheduleName : fs.listScheduleNames(dbName)) {
+                final var schedule = cache.loadScheduleUncached(dbName, scheduleName);
+                if (schedule != null) {
+                    schedules.add(Cache.getCollectionIdentifier(dbName, scheduleName), schedule.toJsonObject());
+                }
+            }
             for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
                 final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
                 if (collEntry != null) {
                     final var json = collEntry.getData().deepCopy();
                     json.addProperty(Globals.PK_FIELD, collEntry.get_id());
                     collections.add(json);
-                    final var schema = cache.getCollectionSchema(dbName, collName);
+                    final var schema = cache.loadSchemaUncached(dbName, collName);
                     if (schema != null) {
                         schemas.add(collEntry.get_id(), schema);
+                    }
+                    final var collTriggers = cache.loadTriggersUncached(dbName, collName);
+                    if (!collTriggers.isEmpty()) {
+                        triggers.add(collEntry.get_id(), TriggerDefinition.toJsonArray(collTriggers));
                     }
                 }
             }
@@ -171,13 +207,16 @@ public class AdminAntiEntropyService implements MembershipListener {
         for (final var userEntry : cache.getAllAdminUserEntries()) {
             users.add(userEntry.getData());
         }
-        return new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas);
+        return new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas, procedures,
+                triggers, schedules);
     }
 
     private void conform(AdminSnapshotPayload snapshot) throws Exception {
         final var snapshotUsers = conformUsers(snapshot);
         removeAbsentUsers(snapshotUsers);
         final var snapshotDbs = conformDatabases(snapshot);
+        conformProcedures(snapshot, snapshotDbs);
+        conformSchedules(snapshot, snapshotDbs);
         final var snapshotColls = conformCollections(snapshot, snapshotDbs);
         dropAbsentCollections(snapshotDbs, snapshotColls);
         dropAbsentDatabases(snapshotDbs);
@@ -233,13 +272,110 @@ public class AdminAntiEntropyService implements MembershipListener {
             snapshotColls.add(coll.get_id());
             final var schemaEl = snapshot.getSchemas().get(coll.get_id());
             final var desiredSchema = schemaEl != null && schemaEl.isJsonObject() ? schemaEl.asJsonObject() : null;
-            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema);
+            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema, snapshot.getTriggers());
         }
         return snapshotColls;
     }
 
+    // Converges each database's stored procedures to the snapshot: write when different, delete the ones
+    // the snapshot does not have. No per-record version comparison - the admin epoch is the ordering, the
+    // same rule collection schemas follow.
+    private void conformProcedures(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs)
+            throws Exception {
+        final var desired = new HashMap<String, JsonObject>();
+        for (final var entry : snapshot.getProcedures().entrySet()) {
+            desired.put(entry.getKey(), entry.getValue().asJsonObject());
+        }
+        for (final var dbName : snapshotDbs.keySet()) {
+            locks.lock(dbName, Globals.PROCEDURES_FOLDER);
+            try {
+                for (final var existingName : new ArrayList<>(fs.listProcedureNames(dbName))) {
+                    if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
+                        fs.deleteProcedure(dbName, existingName);
+                        cache.removeProcedure(dbName, existingName);
+                        compiledProcedures.invalidateProcedure(dbName, existingName);
+                    }
+                }
+                for (final var entry : desired.entrySet()) {
+                    final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
+                    if (parts.length < 2 || !parts[0].equals(dbName)) {
+                        continue;
+                    }
+                    final var definition = ProcedureDefinition.fromJsonObject(entry.getValue());
+                    if (!definition.equals(cache.loadProcedureUncached(dbName, parts[1]))) {
+                        fs.writeProcedure(dbName, parts[1], eJson.toJson(entry.getValue()));
+                        cache.removeProcedure(dbName, parts[1]);
+                    }
+                }
+            } finally {
+                locks.release(dbName, Globals.PROCEDURES_FOLDER);
+            }
+        }
+    }
+
+    // Converges each database's schedules to the snapshot, on the same terms as conformProcedures: write
+    // when different, delete the ones the snapshot does not have, ordering by the admin epoch rather than
+    // any per-record version. The registry is rebuilt for a database that changed, so the scheduler picks
+    // up what anti-entropy brought in without waiting for scheduleRefreshMs.
+    private void conformSchedules(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs)
+            throws Exception {
+        final var desired = new HashMap<String, JsonObject>();
+        for (final var entry : snapshot.getSchedules().entrySet()) {
+            desired.put(entry.getKey(), entry.getValue().asJsonObject());
+        }
+        for (final var dbName : snapshotDbs.keySet()) {
+            var changed = false;
+            locks.lock(dbName, Globals.SCHEDULES_FOLDER);
+            try {
+                for (final var existingName : new ArrayList<>(fs.listScheduleNames(dbName))) {
+                    if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
+                        fs.deleteSchedule(dbName, existingName);
+                        cache.removeSchedule(dbName, existingName);
+                        changed = true;
+                    }
+                }
+                for (final var entry : desired.entrySet()) {
+                    final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
+                    if (parts.length < 2 || !parts[0].equals(dbName)) {
+                        continue;
+                    }
+                    final var definition = ScheduleDefinition.fromJsonObject(entry.getValue());
+                    if (!definition.equals(cache.loadScheduleUncached(dbName, parts[1]))) {
+                        fs.writeSchedule(dbName, parts[1], eJson.toJson(entry.getValue()));
+                        cache.removeSchedule(dbName, parts[1]);
+                        changed = true;
+                    }
+                }
+            } finally {
+                locks.release(dbName, Globals.SCHEDULES_FOLDER);
+            }
+            if (changed) {
+                scheduleRegistry.reload(dbName);
+            }
+        }
+    }
+
+    // Converges the collection's trigger file/cache to the snapshot, under the collection lock the caller
+    // already holds. Idempotent, so the periodic sweep does not rewrite an already-matching list.
+    private void conformTriggers(String dbName, String collName, JsonObject snapshotTriggers) throws Exception {
+        final var key = Cache.getCollectionIdentifier(dbName, collName);
+        final var desired = snapshotTriggers.has(key) && snapshotTriggers.get(key).isJsonArray()
+                ? TriggerDefinition.fromJsonArray(snapshotTriggers.get(key).asJsonArray())
+                : new ArrayList<TriggerDefinition>();
+        if (desired.equals(cache.loadTriggersUncached(dbName, collName))) {
+            return;
+        }
+        if (desired.isEmpty()) {
+            fs.deleteTriggers(dbName, collName);
+            cache.removeTriggers(dbName, collName);
+            return;
+        }
+        fs.writeTriggers(dbName, collName, eJson.toJson(TriggerDefinition.toFileJson(desired)));
+        cache.removeTriggers(dbName, collName);
+    }
+
     private void conformCollection(String dbName, String collName, java.util.Set<String> desiredIndexes,
-            JsonObject desiredSchema) throws Exception {
+            JsonObject desiredSchema, JsonObject snapshotTriggers) throws Exception {
         locks.lock(dbName, collName);
         try {
             if (cache.getAdminCollectionEntry(dbName, collName) == null) {
@@ -261,6 +397,7 @@ public class AdminAntiEntropyService implements MembershipListener {
                 }
             }
             conformSchema(dbName, collName, desiredSchema);
+            conformTriggers(dbName, collName, snapshotTriggers);
         } finally {
             locks.release(dbName, collName);
         }
@@ -269,11 +406,11 @@ public class AdminAntiEntropyService implements MembershipListener {
     // Converges the collection's schema file/cache to the snapshot: write when different, delete when the
     // snapshot has none. Idempotent, so the periodic sweep does not rewrite an already-matching schema.
     private void conformSchema(String dbName, String collName, JsonObject desiredSchema) throws Exception {
-        final var current = cache.getCollectionSchema(dbName, collName);
+        final var current = cache.loadSchemaUncached(dbName, collName);
         if (desiredSchema != null) {
             if (!desiredSchema.equals(current)) {
                 fs.writeCollectionSchema(dbName, collName, eJson.toJson(desiredSchema));
-                cache.putCollectionSchema(dbName, collName, desiredSchema);
+                cache.removeCollectionSchema(dbName, collName);
             }
         } else if (current != null) {
             fs.deleteCollectionSchema(dbName, collName);

@@ -1,5 +1,8 @@
 package org.techhouse.config;
 
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.log.Logger;
 
@@ -19,6 +22,7 @@ public final class Configuration {
     private String defaultAdminPassword;
     private long maxMemoryBytes;
     private long transactionLockTimeoutMs;
+    private long shutdownTimeoutMs;
     private boolean tlsEnabled;
     private String tlsKeystorePath;
     private String tlsKeystorePassword;
@@ -35,10 +39,69 @@ public final class Configuration {
     private long replicationAckTimeoutMs;
     private int virtualNodesPerNode;
     private boolean readFallbackToLocal;
+    private boolean scriptRoutingEnabled;
     private boolean clusterTlsEnabled;
     private String clusterSecret;
     private long antiEntropyIntervalMs;
     private long tombstoneRetentionMs;
+    private String scriptTimeZone;
+    private String scriptLocale;
+    private boolean scriptsEnabled;
+    private long scriptInstructionBudget;
+    private long scriptTimeoutMs;
+    private int scriptMaxDepth;
+    private long scriptMaxSourceBytes;
+    private int scriptMaxLogLines;
+    private int scriptMaxLogLineChars;
+    private boolean scriptTextImportEnabled;
+    private boolean scriptProcedureImportEnabled;
+    private long scriptMaxMemoryBytes;
+    private long scriptMaxResultBytes;
+    private int scriptCursorBatchSize;
+    private int scriptCursorMaxBatchSize;
+    private long aggregationScriptInstructionBudget;
+    private long aggregationScriptTimeoutMs;
+    private long aggregationScriptMaxSourceBytes;
+    private int maxConcurrentScripts;
+    private long scriptQueueWaitMs;
+    private int maxConcurrentScriptsPerUser;
+    private int maxConcurrentScriptsPerDatabase;
+    private int scriptCompiledCacheSize;
+    private boolean scriptRunHistoryEnabled;
+    private String scriptRunHistoryKinds;
+    private long scriptRunHistoryRetentionMs;
+    private boolean scriptRunHistoryIncludeLogs;
+    private int scriptRunHistoryMaxErrorChars;
+    private boolean scriptFetchEnabled;
+    private String scriptFetchAllowlistRaw;
+    private long scriptFetchTimeoutMs;
+    private long scriptFetchMaxResponseBytes;
+    private int procedureCacheSize;
+    private long procedureCacheMaxBytes;
+    private long schemaCacheMaxBytes;
+    private int triggerCacheMaxEntries;
+    private int metadataMissCacheMaxEntries;
+    private boolean triggersEnabled;
+    private int triggerThreads;
+    private int triggerQueueSize;
+    private int triggerMaxDepth;
+    private long triggerTimeoutMs;
+    private boolean triggerRunLogEnabled;
+    private long triggerRunRetentionMs;
+    private int triggerMaxAttempts;
+    private long triggerRetryBackoffMs;
+    private long triggerRetryMaxBackoffMs;
+    private long triggerDeadLetterRetentionMs;
+    private long beforeHookInstructionBudget;
+    private long beforeHookTimeoutMs;
+    private boolean schedulesEnabled;
+    private int scheduleThreads;
+    private int scheduleQueueSize;
+    private long scheduleTickMs;
+    private long scheduleRefreshMs;
+    private long scheduleTimeoutMs;
+    private int scheduleMaxPerDatabase;
+    private long scheduleCacheMaxBytes;
 
     private Configuration() {
     }
@@ -51,44 +114,126 @@ public final class Configuration {
                     + String.join(Globals.NEWLINE, errors));
             throw new InvalidConfigurationException(errors);
         }
-        for (var config : configs.entrySet()) {
-            switch (config.getKey()) {
-                case "port" -> port = Integer.parseInt(config.getValue());
-                case "maxConnections" -> maxConnections = Integer.parseInt(config.getValue());
-                case "filePath" -> filePath = config.getValue();
-                case "backgroundProcessingThreads" -> backgroundProcessingThreads = Integer.parseInt(config.getValue());
-                case "logPath" -> logPath = config.getValue();
-                case "maxLogFiles" -> maxLogFiles = Integer.parseInt(config.getValue());
-                case "maxPageSize" -> maxPageSize = SizeParser.parse(config.getValue());
-                case "maxEntrySize" -> maxEntrySize = SizeParser.parse(config.getValue());
-                case "defaultAdminUsername" -> defaultAdminUsername = config.getValue();
-                case "defaultAdminPassword" -> defaultAdminPassword = config.getValue();
-                case "maxMemory" -> maxMemoryBytes = SizeParser.parse(config.getValue());
-                case "transactionLockTimeoutMs" -> transactionLockTimeoutMs = Long.parseLong(config.getValue());
-                case "tlsEnabled" -> tlsEnabled = Boolean.parseBoolean(config.getValue());
-                case "tlsKeystorePath" -> tlsKeystorePath = config.getValue();
-                case "tlsKeystorePassword" -> tlsKeystorePassword = config.getValue();
-                case "clusterEnabled" -> clusterEnabled = Boolean.parseBoolean(config.getValue());
-                case "clusterPort" -> clusterPort = Integer.parseInt(config.getValue());
-                case "clusterBindAddress" -> clusterBindAddress = config.getValue();
-                case "clusterAdvertisedAddress" -> clusterAdvertisedAddress = config.getValue();
-                case "clusterSeeds" -> clusterSeeds = config.getValue();
-                case "nodeId" -> nodeId = config.getValue();
-                case "clusterExpectedSize" -> clusterExpectedSize = Integer.parseInt(config.getValue());
-                case "gossipIntervalMs" -> gossipIntervalMs = Long.parseLong(config.getValue());
-                case "suspectTimeoutMs" -> suspectTimeoutMs = Long.parseLong(config.getValue());
-                case "deadTimeoutMs" -> deadTimeoutMs = Long.parseLong(config.getValue());
-                case "replicationAckTimeoutMs" -> replicationAckTimeoutMs = Long.parseLong(config.getValue());
-                case "virtualNodesPerNode" -> virtualNodesPerNode = Integer.parseInt(config.getValue());
-                case "readFallbackToLocal" -> readFallbackToLocal = Boolean.parseBoolean(config.getValue());
-                case "clusterTlsEnabled" -> clusterTlsEnabled = Boolean.parseBoolean(config.getValue());
-                case "clusterSecret" -> clusterSecret = config.getValue();
-                case "antiEntropyIntervalMs" -> antiEntropyIntervalMs = Long.parseLong(config.getValue());
-                case "tombstoneRetentionMs" -> tombstoneRetentionMs = Long.parseLong(config.getValue());
-                default -> {
-                }
-            }
-        }
+        apply(configs);
+    }
+
+    // One unconditional assignment per field, read straight out of the merged map, rather than a
+    // switch inside a loop over the entries: a per-key case can only be reached on the iteration that
+    // happens to carry that key, so every write reads as a possibly-dead store and the field's value
+    // silently depends on iteration order. A key absent from both the bundled defaults and the config
+    // file leaves the field at its Java default, exactly as the unmatched-case arm used to.
+    private void apply(Map<String, String> configs) {
+        port = intOf(configs, "port");
+        maxConnections = intOf(configs, "maxConnections");
+        filePath = configs.get("filePath");
+        backgroundProcessingThreads = intOf(configs, "backgroundProcessingThreads");
+        logPath = configs.get("logPath");
+        maxLogFiles = intOf(configs, "maxLogFiles");
+        maxPageSize = sizeOf(configs, "maxPageSize");
+        maxEntrySize = sizeOf(configs, "maxEntrySize");
+        defaultAdminUsername = configs.get("defaultAdminUsername");
+        defaultAdminPassword = configs.get("defaultAdminPassword");
+        maxMemoryBytes = sizeOf(configs, "maxMemory");
+        transactionLockTimeoutMs = longOf(configs, "transactionLockTimeoutMs");
+        shutdownTimeoutMs = longOf(configs, "shutdownTimeoutMs");
+        tlsEnabled = booleanOf(configs, "tlsEnabled");
+        tlsKeystorePath = configs.get("tlsKeystorePath");
+        tlsKeystorePassword = configs.get("tlsKeystorePassword");
+        clusterEnabled = booleanOf(configs, "clusterEnabled");
+        clusterPort = intOf(configs, "clusterPort");
+        clusterBindAddress = configs.get("clusterBindAddress");
+        clusterAdvertisedAddress = configs.get("clusterAdvertisedAddress");
+        clusterSeeds = configs.get("clusterSeeds");
+        nodeId = configs.get("nodeId");
+        clusterExpectedSize = intOf(configs, "clusterExpectedSize");
+        gossipIntervalMs = longOf(configs, "gossipIntervalMs");
+        suspectTimeoutMs = longOf(configs, "suspectTimeoutMs");
+        deadTimeoutMs = longOf(configs, "deadTimeoutMs");
+        replicationAckTimeoutMs = longOf(configs, "replicationAckTimeoutMs");
+        virtualNodesPerNode = intOf(configs, "virtualNodesPerNode");
+        readFallbackToLocal = booleanOf(configs, "readFallbackToLocal");
+        scriptRoutingEnabled = booleanOf(configs, "scriptRoutingEnabled");
+        clusterTlsEnabled = booleanOf(configs, "clusterTlsEnabled");
+        clusterSecret = configs.get("clusterSecret");
+        antiEntropyIntervalMs = longOf(configs, "antiEntropyIntervalMs");
+        tombstoneRetentionMs = longOf(configs, "tombstoneRetentionMs");
+        scriptTimeZone = configs.get("scriptTimeZone");
+        scriptLocale = configs.get("scriptLocale");
+        scriptsEnabled = booleanOf(configs, "scriptsEnabled");
+        scriptInstructionBudget = longOf(configs, "scriptInstructionBudget");
+        scriptTimeoutMs = longOf(configs, "scriptTimeoutMs");
+        scriptMaxDepth = intOf(configs, "scriptMaxDepth");
+        scriptMaxSourceBytes = sizeOf(configs, "scriptMaxSourceBytes");
+        scriptMaxLogLines = intOf(configs, "scriptMaxLogLines");
+        scriptMaxLogLineChars = intOf(configs, "scriptMaxLogLineChars");
+        scriptTextImportEnabled = booleanOf(configs, "scriptTextImportEnabled");
+        scriptProcedureImportEnabled = booleanOf(configs, "scriptProcedureImportEnabled");
+        scriptMaxMemoryBytes = sizeOf(configs, "scriptMaxMemoryBytes");
+        scriptMaxResultBytes = sizeOf(configs, "scriptMaxResultBytes");
+        scriptCursorBatchSize = intOf(configs, "scriptCursorBatchSize");
+        scriptCursorMaxBatchSize = intOf(configs, "scriptCursorMaxBatchSize");
+        aggregationScriptInstructionBudget = longOf(configs, "aggregationScriptInstructionBudget");
+        aggregationScriptTimeoutMs = longOf(configs, "aggregationScriptTimeoutMs");
+        aggregationScriptMaxSourceBytes = sizeOf(configs, "aggregationScriptMaxSourceBytes");
+        maxConcurrentScripts = intOf(configs, "maxConcurrentScripts");
+        scriptQueueWaitMs = longOf(configs, "scriptQueueWaitMs");
+        maxConcurrentScriptsPerUser = intOf(configs, "maxConcurrentScriptsPerUser");
+        maxConcurrentScriptsPerDatabase = intOf(configs, "maxConcurrentScriptsPerDatabase");
+        scriptCompiledCacheSize = intOf(configs, "scriptCompiledCacheSize");
+        scriptRunHistoryEnabled = booleanOf(configs, "scriptRunHistoryEnabled");
+        scriptRunHistoryKinds = configs.get("scriptRunHistoryKinds");
+        scriptRunHistoryRetentionMs = longOf(configs, "scriptRunHistoryRetentionMs");
+        scriptRunHistoryIncludeLogs = booleanOf(configs, "scriptRunHistoryIncludeLogs");
+        scriptRunHistoryMaxErrorChars = intOf(configs, "scriptRunHistoryMaxErrorChars");
+        scriptFetchEnabled = booleanOf(configs, "scriptFetchEnabled");
+        scriptFetchAllowlistRaw = configs.get("scriptFetchAllowlist");
+        scriptFetchTimeoutMs = longOf(configs, "scriptFetchTimeoutMs");
+        scriptFetchMaxResponseBytes = sizeOf(configs, "scriptFetchMaxResponseBytes");
+        procedureCacheSize = intOf(configs, "procedureCacheSize");
+        procedureCacheMaxBytes = sizeOf(configs, "procedureCacheMaxBytes");
+        schemaCacheMaxBytes = sizeOf(configs, "schemaCacheMaxBytes");
+        triggerCacheMaxEntries = intOf(configs, "triggerCacheMaxEntries");
+        metadataMissCacheMaxEntries = intOf(configs, "metadataMissCacheMaxEntries");
+        triggersEnabled = booleanOf(configs, "triggersEnabled");
+        triggerThreads = intOf(configs, "triggerThreads");
+        triggerQueueSize = intOf(configs, "triggerQueueSize");
+        triggerMaxDepth = intOf(configs, "triggerMaxDepth");
+        triggerTimeoutMs = longOf(configs, "triggerTimeoutMs");
+        triggerRunLogEnabled = booleanOf(configs, "triggerRunLogEnabled");
+        triggerRunRetentionMs = longOf(configs, "triggerRunRetentionMs");
+        triggerMaxAttempts = intOf(configs, "triggerMaxAttempts");
+        triggerRetryBackoffMs = longOf(configs, "triggerRetryBackoffMs");
+        triggerRetryMaxBackoffMs = longOf(configs, "triggerRetryMaxBackoffMs");
+        triggerDeadLetterRetentionMs = longOf(configs, "triggerDeadLetterRetentionMs");
+        beforeHookInstructionBudget = longOf(configs, "beforeHookInstructionBudget");
+        beforeHookTimeoutMs = longOf(configs, "beforeHookTimeoutMs");
+        schedulesEnabled = booleanOf(configs, "schedulesEnabled");
+        scheduleThreads = intOf(configs, "scheduleThreads");
+        scheduleQueueSize = intOf(configs, "scheduleQueueSize");
+        scheduleTickMs = longOf(configs, "scheduleTickMs");
+        scheduleRefreshMs = longOf(configs, "scheduleRefreshMs");
+        scheduleTimeoutMs = longOf(configs, "scheduleTimeoutMs");
+        scheduleMaxPerDatabase = intOf(configs, "scheduleMaxPerDatabase");
+        scheduleCacheMaxBytes = sizeOf(configs, "scheduleCacheMaxBytes");
+    }
+
+    private static int intOf(Map<String, String> configs, String key) {
+        final var value = configs.get(key);
+        return value == null ? 0 : Integer.parseInt(value);
+    }
+
+    private static long longOf(Map<String, String> configs, String key) {
+        final var value = configs.get(key);
+        return value == null ? 0L : Long.parseLong(value);
+    }
+
+    private static long sizeOf(Map<String, String> configs, String key) {
+        final var value = configs.get(key);
+        return value == null ? 0L : SizeParser.parse(value);
+    }
+
+    private static boolean booleanOf(Map<String, String> configs, String key) {
+        return Boolean.parseBoolean(configs.get(key));
     }
 
     public static Configuration getInstance() {
@@ -152,6 +297,10 @@ public final class Configuration {
 
     public boolean isCacheUnlimited() {
         return maxMemoryBytes == Globals.CACHE_UNLIMITED;
+    }
+
+    public long getShutdownTimeoutMs() {
+        return shutdownTimeoutMs;
     }
 
     public boolean isTlsEnabled() {
@@ -218,6 +367,10 @@ public final class Configuration {
         return readFallbackToLocal;
     }
 
+    public boolean isScriptRoutingEnabled() {
+        return scriptRoutingEnabled;
+    }
+
     public boolean isClusterTlsEnabled() {
         return clusterTlsEnabled;
     }
@@ -232,5 +385,248 @@ public final class Configuration {
 
     public long getTombstoneRetentionMs() {
         return tombstoneRetentionMs;
+    }
+
+    public String getScriptTimeZone() {
+        return scriptTimeZone;
+    }
+
+    public String getScriptLocale() {
+        return scriptLocale;
+    }
+
+    public boolean isScriptsEnabled() {
+        return scriptsEnabled;
+    }
+
+    public long getScriptInstructionBudget() {
+        return scriptInstructionBudget;
+    }
+
+    public long getScriptTimeoutMs() {
+        return scriptTimeoutMs;
+    }
+
+    public int getScriptMaxDepth() {
+        return scriptMaxDepth;
+    }
+
+    public long getScriptMaxSourceBytes() {
+        return scriptMaxSourceBytes;
+    }
+
+    public int getScriptMaxLogLines() {
+        return scriptMaxLogLines;
+    }
+
+    public int getScriptMaxLogLineChars() {
+        return scriptMaxLogLineChars;
+    }
+
+    public boolean isScriptTextImportEnabled() {
+        return scriptTextImportEnabled;
+    }
+
+    public boolean isScriptProcedureImportEnabled() {
+        return scriptProcedureImportEnabled;
+    }
+
+    public long getScriptMaxMemoryBytes() {
+        return scriptMaxMemoryBytes;
+    }
+
+    public long getScriptMaxResultBytes() {
+        return scriptMaxResultBytes;
+    }
+
+    public int getScriptCursorBatchSize() {
+        return scriptCursorBatchSize;
+    }
+
+    public long getAggregationScriptInstructionBudget() {
+        return aggregationScriptInstructionBudget;
+    }
+
+    public long getAggregationScriptTimeoutMs() {
+        return aggregationScriptTimeoutMs;
+    }
+
+    public long getAggregationScriptMaxSourceBytes() {
+        return aggregationScriptMaxSourceBytes;
+    }
+
+    public int getScriptCursorMaxBatchSize() {
+        return scriptCursorMaxBatchSize;
+    }
+
+    public int getMaxConcurrentScripts() {
+        return maxConcurrentScripts;
+    }
+
+    public long getScriptQueueWaitMs() {
+        return scriptQueueWaitMs;
+    }
+
+    public int getMaxConcurrentScriptsPerUser() {
+        return maxConcurrentScriptsPerUser;
+    }
+
+    public int getMaxConcurrentScriptsPerDatabase() {
+        return maxConcurrentScriptsPerDatabase;
+    }
+
+    public int getScriptCompiledCacheSize() {
+        return scriptCompiledCacheSize;
+    }
+
+    public boolean isScriptRunHistoryEnabled() {
+        return scriptRunHistoryEnabled;
+    }
+
+    public String getScriptRunHistoryKinds() {
+        return scriptRunHistoryKinds;
+    }
+
+    public long getScriptRunHistoryRetentionMs() {
+        return scriptRunHistoryRetentionMs;
+    }
+
+    public boolean isScriptRunHistoryIncludeLogs() {
+        return scriptRunHistoryIncludeLogs;
+    }
+
+    public int getScriptRunHistoryMaxErrorChars() {
+        return scriptRunHistoryMaxErrorChars;
+    }
+
+    public boolean isScriptFetchEnabled() {
+        return scriptFetchEnabled;
+    }
+
+    /** The configured hosts, parsed. An empty list denies every host - see the key's documentation. */
+    public List<String> getScriptFetchAllowlist() {
+        if (scriptFetchAllowlistRaw == null || scriptFetchAllowlistRaw.isBlank()) {
+            return List.of();
+        }
+        final var hosts = new ArrayList<String>();
+        for (final var entry : scriptFetchAllowlistRaw.split(",")) {
+            final var trimmed = entry.trim();
+            if (!trimmed.isEmpty()) {
+                hosts.add(trimmed);
+            }
+        }
+        return List.copyOf(hosts);
+    }
+
+    public long getScriptFetchTimeoutMs() {
+        return scriptFetchTimeoutMs;
+    }
+
+    public long getScriptFetchMaxResponseBytes() {
+        return scriptFetchMaxResponseBytes;
+    }
+
+    public int getProcedureCacheSize() {
+        return procedureCacheSize;
+    }
+
+    public long getProcedureCacheMaxBytes() {
+        return procedureCacheMaxBytes;
+    }
+
+    public long getSchemaCacheMaxBytes() {
+        return schemaCacheMaxBytes;
+    }
+
+    public int getTriggerCacheMaxEntries() {
+        return triggerCacheMaxEntries;
+    }
+
+    public int getMetadataMissCacheMaxEntries() {
+        return metadataMissCacheMaxEntries;
+    }
+
+    public boolean isTriggersEnabled() {
+        return triggersEnabled;
+    }
+
+    public int getTriggerThreads() {
+        return triggerThreads;
+    }
+
+    public int getTriggerQueueSize() {
+        return triggerQueueSize;
+    }
+
+    public int getTriggerMaxDepth() {
+        return triggerMaxDepth;
+    }
+
+    public long getTriggerTimeoutMs() {
+        return triggerTimeoutMs;
+    }
+
+    public boolean isTriggerRunLogEnabled() {
+        return triggerRunLogEnabled;
+    }
+
+    public int getTriggerMaxAttempts() {
+        return triggerMaxAttempts;
+    }
+
+    public long getTriggerRetryBackoffMs() {
+        return triggerRetryBackoffMs;
+    }
+
+    public long getTriggerRetryMaxBackoffMs() {
+        return triggerRetryMaxBackoffMs;
+    }
+
+    public long getTriggerDeadLetterRetentionMs() {
+        return triggerDeadLetterRetentionMs;
+    }
+
+    public long getTriggerRunRetentionMs() {
+        return triggerRunRetentionMs;
+    }
+
+    public long getBeforeHookInstructionBudget() {
+        return beforeHookInstructionBudget;
+    }
+
+    public long getBeforeHookTimeoutMs() {
+        return beforeHookTimeoutMs;
+    }
+
+    public boolean isSchedulesEnabled() {
+        return schedulesEnabled;
+    }
+
+    public int getScheduleThreads() {
+        return scheduleThreads;
+    }
+
+    public int getScheduleQueueSize() {
+        return scheduleQueueSize;
+    }
+
+    public long getScheduleTickMs() {
+        return scheduleTickMs;
+    }
+
+    public long getScheduleRefreshMs() {
+        return scheduleRefreshMs;
+    }
+
+    public long getScheduleTimeoutMs() {
+        return scheduleTimeoutMs;
+    }
+
+    public int getScheduleMaxPerDatabase() {
+        return scheduleMaxPerDatabase;
+    }
+
+    public long getScheduleCacheMaxBytes() {
+        return scheduleCacheMaxBytes;
     }
 }

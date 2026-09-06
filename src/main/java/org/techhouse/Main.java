@@ -5,6 +5,9 @@ import java.util.HashMap;
 import java.util.HashSet;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.ScheduleExecutor;
+import org.techhouse.bckg_ops.ScheduleRegistry;
+import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.cluster.AdminAntiEntropyService;
@@ -12,6 +15,7 @@ import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.AntiEntropyService;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterServer;
+import org.techhouse.cluster.MetadataCachePruner;
 import org.techhouse.cluster.TransactionSessionReaper;
 import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
@@ -30,7 +34,12 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.ScheduleDispatcher;
+import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TriggerDispatcher;
+import org.techhouse.ops.TriggerRunRecovery;
+import org.techhouse.simplejs.host.HostAllowlist;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -38,10 +47,16 @@ public class Main {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private static final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
+    private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
+    private static final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
+    private static final MetadataCachePruner metadataCachePruner = IocContainer.get(MetadataCachePruner.class);
+    private static final ShutdownCoordinator shutdownCoordinator = IocContainer.get(ShutdownCoordinator.class);
+    private static ClusterServer clusterServer;
     private static final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
             .get(AdminAntiEntropyService.class);
@@ -49,6 +64,7 @@ public class Main {
     private static final TransactionSessionReaper transactionSessionReaper = IocContainer
             .get(TransactionSessionReaper.class);
     private static final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
+    private static final ScriptRunHistory scriptRunHistory = IocContainer.get(ScriptRunHistory.class);
     private static final Logger logger = Logger.logFor(Main.class);
 
     private static int getPort(String[] args) {
@@ -72,17 +88,46 @@ public class Main {
         bootstrapDefaultAdmin();
         final var port = getPort(args);
         backgroundTaskManager.startBackgroundWorkers();
+        // Its own pool, not the background queue: see TriggerExecutor.
+        triggerExecutor.start(TriggerDispatcher::dispatch);
+        // After cleanupOrphanedTransactions above, which finishes any run whose commit was in flight and so
+        // removes its record; whatever records remain are runs that genuinely never applied.
+        TriggerRunRecovery.garbageCollect();
+        TriggerRunRecovery.warnAboutStrandedRuns();
+        TriggerRunRecovery.recoverLocal();
+        startSchedulerIfEnabled();
         listenManager.startWorkers();
         memoryManagement.loadProfileFromAdmin();
         memoryManagement.startSweepThread();
+        scriptRunHistory.startSweep();
         warnIfXmxExceedsMaxMemory();
+        warnIfCachesExceedHeap();
         warnIfDefaultAdminPassword();
+        warnIfScriptFetchEnabled();
         startClusterIfEnabled();
         // Built eagerly so a self-signed keystore is generated (and its security warning logged) at startup,
         // not lazily on the first client connection.
         final var sslServerSocketFactory = createTlsFactory();
         final var server = new SocketServer(port, sslServerSocketFactory);
+        registerShutdownHook(server);
         server.serve();
+    }
+
+    // The registry walks the filesystem, so it is only built when the feature is on: a node with schedules
+    // disabled must not pay a per-database directory listing at startup.
+    private static void startSchedulerIfEnabled() {
+        if (!config.isSchedulesEnabled()) {
+            return;
+        }
+        scheduleRegistry.loadAll();
+        scheduleExecutor.start(ScheduleDispatcher::dispatch);
+    }
+
+    // Registered before serve() blocks, so a SIGTERM (a container stop, a systemctl stop, a rolling restart)
+    // runs the ordered shutdown instead of killing the JVM with queues still full.
+    private static void registerShutdownHook(SocketServer server) {
+        Runtime.getRuntime()
+                .addShutdownHook(new Thread(() -> shutdownCoordinator.shutdown(server, clusterServer), "shutdown"));
     }
 
     private static void startClusterIfEnabled() {
@@ -91,11 +136,13 @@ public class Main {
         }
         try {
             final var factory = clusterConfig.tlsEnabled() ? TlsContextFactory.createServerSocketFactory(config) : null;
-            final var clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(),
-                    factory);
+            clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(), factory);
             clusterServer.start();
             adminEpoch.load();
             membershipService.addListener(ownershipManager);
+            // Right after the ownership manager: listeners fire in registration order, so the ring this
+            // reads is already the rebuilt one.
+            membershipService.addListener(metadataCachePruner);
             // Register the admin listener before the document one so a rejoining node conforms its structure
             // (databases/collections/indexes/users) before the document reconciliation repopulates them.
             membershipService.addListener(adminAntiEntropyService);
@@ -137,6 +184,56 @@ public class Main {
                     + "Change it in lwnrdb.cfg and update the admin user's password immediately to avoid "
                     + "unauthorized access.");
         }
+    }
+
+    // Outbound HTTP from stored code is a capability worth naming at startup rather than leaving in a
+    // config file: an operator reading the log should be able to see what this node may reach.
+    static void warnIfScriptFetchEnabled() {
+        if (!config.isScriptFetchEnabled()) {
+            return;
+        }
+        final var allowlist = config.getScriptFetchAllowlist();
+        if (HostAllowlist.allowsEverything(allowlist)) {
+            logger.warning("SECURITY WARNING: scriptFetchAllowlist is '*', so any script may make this server "
+                    + "issue HTTP requests to any host it can reach - including services inside your network "
+                    + "and the cloud instance-metadata endpoint (169.254.169.254), not just the public "
+                    + "internet. Narrow it in lwnrdb.cfg to the hosts your scripts actually call, or set "
+                    + "scriptFetchEnabled=false to remove the capability.");
+        } else if (allowlist.isEmpty()) {
+            logger.warning("scriptFetchEnabled is true but scriptFetchAllowlist is empty, so every fetch will be "
+                    + "refused. Name the hosts scripts may reach.");
+        } else {
+            logger.info("Script fetch is enabled for: " + String.join(", ", allowlist));
+        }
+    }
+
+    // The metadata caps are budgeted separately from maxMemory, so the heap a fully-warm node needs is the
+    // sum of the two. Warned about together because an operator sizing -Xmx from maxMemory alone undercounts.
+    static void warnIfCachesExceedHeap() {
+        final var xmx = Runtime.getRuntime().maxMemory();
+        final var metadataCap = config.getProcedureCacheMaxBytes() + config.getSchemaCacheMaxBytes()
+                + config.getScheduleCacheMaxBytes();
+        final var userCap = config.isCachingDisabled() || config.isCacheUnlimited() ? 0L : config.getMaxMemoryBytes();
+        final var scriptCap = scriptBudgetBytes();
+        final var total = userCap + metadataCap + scriptCap;
+        if (total > xmx) {
+            logger.warning("The configured memory budgets total " + total + " bytes (maxMemory " + userCap
+                    + " + procedureCacheMaxBytes/schemaCacheMaxBytes/scheduleCacheMaxBytes " + metadataCap
+                    + " + concurrent script budgets " + scriptCap + ") but JVM -Xmx is only " + xmx
+                    + " bytes. Lower the budgets or raise -Xmx, otherwise a fully-warm node cannot fit in heap.");
+        }
+    }
+
+    // The concurrent interpreters this node can hold at once: client runs are capped by
+    // maxConcurrentScripts, triggers and schedules by their own worker pools. Each may allocate up to
+    // scriptMaxMemoryBytes, and that is additive with the cache budgets.
+    private static long scriptBudgetBytes() {
+        if (!config.isScriptsEnabled()) {
+            return 0L;
+        }
+        final var interpreters = (long) config.getMaxConcurrentScripts() + config.getTriggerThreads()
+                + config.getScheduleThreads();
+        return interpreters * config.getScriptMaxMemoryBytes();
     }
 
     static void warnIfXmxExceedsMaxMemory() {

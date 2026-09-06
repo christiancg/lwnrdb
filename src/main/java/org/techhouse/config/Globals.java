@@ -20,6 +20,18 @@ public final class Globals {
     // collection (user data, stored in the collection folder). Absent = the collection is unconstrained.
     public static final String SCHEMA_FILE_NAME = "schema";
     public static final String SCHEMA_FILE_EXTENSION = ".json";
+    // Per-database stored procedures live in a folder beside the database's collection folders. The
+    // leading '.' cannot appear in a collection name, so the folder can never collide with one.
+    public static final String PROCEDURES_FOLDER = ".procedures";
+    public static final String PROCEDURE_FILE_EXTENSION = ".json";
+    // Per-database schedules live beside the procedures folder, and cannot collide with a collection name
+    // for the same reason: a leading '.' is unrepresentable in one.
+    public static final String SCHEDULES_FOLDER = ".schedules";
+    public static final String SCHEDULE_FILE_EXTENSION = ".json";
+    // Per-collection trigger file infix: {coll}-triggers.json holds every trigger on the collection,
+    // stored in the collection folder beside its schema so a DROP_COLLECTION removes it with the data.
+    public static final String TRIGGERS_FILE_NAME = "triggers";
+    public static final String TRIGGERS_FILE_EXTENSION = ".json";
     public static final String RW_PERMISSIONS = "rwd";
     public static final String R_PERMISSIONS = "r";
     public static final char COLL_IDENTIFIER_SEPARATOR = '|';
@@ -41,6 +53,10 @@ public final class Globals {
     public static final String ADMIN_PAGES_PER_COLLECTION_NAME = "%s_%s";
     public static final String ADMIN_COLLECTION_USAGE_NAME = "collection_usage";
     public static final String ADMIN_TRANSACTIONS_COLLECTION_NAME = "transactions";
+    public static final String ADMIN_TRIGGER_RUNS_COLLECTION_NAME = "trigger_runs";
+    // A reserved collection in every user database, holding the history of the script runs that
+    // touched it. Reserved so a client cannot write one by hand and a trigger cannot fire on it.
+    public static final String SCRIPT_RUNS_COLLECTION_NAME = "script_runs";
     public static final long CACHE_DISABLED = -1L;
     public static final long CACHE_UNLIMITED = 0L;
     public static final int PASSWORD_MIN_LENGTH = 8;

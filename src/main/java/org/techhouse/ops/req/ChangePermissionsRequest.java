@@ -7,6 +7,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -18,6 +19,7 @@ public class ChangePermissionsRequest extends OperationRequest {
     private JsonArray globalPermissions;
     private JsonObject databasePermissions;
     private JsonObject collectionPermissions;
+    private JsonObject scriptPermissions;
 
     public ChangePermissionsRequest() {
         super(OperationType.CHANGE_PERMISSIONS, null, null);
@@ -25,6 +27,7 @@ public class ChangePermissionsRequest extends OperationRequest {
         this.globalPermissions = new JsonArray();
         this.databasePermissions = new JsonObject();
         this.collectionPermissions = new JsonObject();
+        this.scriptPermissions = new JsonObject();
     }
 
     public String getUsername() {
@@ -36,7 +39,7 @@ public class ChangePermissionsRequest extends OperationRequest {
     }
 
     public Boolean getAdmin() {
-        return admin != null ? admin : false;
+        return admin != null && admin;
     }
 
     public void setAdmin(Boolean admin) {
@@ -85,11 +88,31 @@ public class ChangePermissionsRequest extends OperationRequest {
         perms.forEach((k, v) -> this.collectionPermissions.add(k, new JsonString(v.name())));
     }
 
+    public void setScriptPermissions(Map<String, ScriptPermissionLevel> perms) {
+        this.scriptPermissions = new JsonObject();
+        perms.forEach((k, v) -> this.scriptPermissions.add(k, new JsonString(v.name())));
+    }
+
     public JsonObject getRawDatabasePermissions() {
         return databasePermissions;
     }
 
+    // Accepts both the legacy boolean form and a level name, so an existing client keeps working.
+    public Map<String, ScriptPermissionLevel> getScriptPermissions() {
+        if (scriptPermissions == null)
+            return new HashMap<>();
+        final var result = new HashMap<String, ScriptPermissionLevel>();
+        for (var entry : scriptPermissions.entrySet()) {
+            result.put(entry.getKey(), ScriptPermissionLevel.fromJson(entry.getValue()));
+        }
+        return result;
+    }
+
     public JsonObject getRawCollectionPermissions() {
         return collectionPermissions;
+    }
+
+    public JsonObject getRawScriptPermissions() {
+        return scriptPermissions;
     }
 }

@@ -1,0 +1,472 @@
+package org.techhouse.unit.simplejs.internal;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+
+import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.internal.Interpreter;
+import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.values.JsArray;
+import org.techhouse.simplejs.values.JsString;
+
+public class InterpreterAsyncGeneratorTest {
+    private static String str(String source) {
+        return ((JsString) Interpreter.run(source)).getValue();
+    }
+
+    // reads the accumulator array reference after the event loop has drained
+    private static String joined(String source) {
+        final var array = (JsArray) Interpreter.run(source);
+        final var sb = new StringBuilder();
+        for (var i = 0; i < array.length(); i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append(JsCoercion.toStr(array.get(i)));
+        }
+        return sb.toString();
+    }
+
+    private static JsArray arr() {
+        return (JsArray) Interpreter.run(
+                "let out = [];\nasync function* g() {}\nasync function main() { for await (const x of g()) out.push(x); out.push('end'); }\nmain();\nout\n");
+    }
+
+    // an async generator call is an object with next/return/throw methods
+    @Test
+    public void test_async_generator_is_object() {
+        assertEquals("object", str("typeof (async function* () {})()"));
+        assertEquals("function", str("typeof (async function* () {})().next"));
+    }
+
+    // for-await consumes an async generator to completion
+    @Test
+    public void test_for_await_consumes_async_generator() {
+        final var source = """
+                let out = [];
+                async function* g() { yield 1; yield 2; yield 3; }
+                async function main() { for await (const x of g()) out.push(x); }
+                main();
+                out
+                """;
+        assertEquals("1,2,3", joined(source));
+    }
+
+    // an async generator may await between yields
+    @Test
+    public void test_await_between_yields() {
+        final var source = """
+                let out = [];
+                async function* g() { yield await Promise.resolve(10); yield 20; }
+                async function main() { for await (const x of g()) out.push(x); }
+                main();
+                out
+                """;
+        assertEquals("10,20", joined(source));
+    }
+
+    // manual next() calls return promises of {value, done}
+    @Test
+    public void test_manual_next() {
+        final var source = """
+                let out = [];
+                async function* g() { yield 'a'; yield 'b'; }
+                const it = g();
+                it.next()
+                    .then(s => { out.push(s.value); out.push(String(s.done)); return it.next(); })
+                    .then(s => { out.push(s.value); return it.next(); })
+                    .then(s => { out.push(String(s.done)); });
+                out
+                """;
+        assertEquals("a,false,b,true", joined(source));
+    }
+
+    // for-await awaits each element of a sync iterable of promises
+    @Test
+    public void test_for_await_over_promise_array() {
+        final var source = """
+                let out = [];
+                async function main() {
+                    for await (const x of [Promise.resolve(1), 2, Promise.resolve(3)]) out.push(x);
+                }
+                main();
+                out
+                """;
+        assertEquals("1,2,3", joined(source));
+    }
+
+    // yield* delegates to another async generator
+    @Test
+    public void test_async_yield_star() {
+        final var source = """
+                let out = [];
+                async function* inner() { yield 1; yield 2; }
+                async function* outer() { yield* inner(); yield 3; }
+                async function main() { for await (const x of outer()) out.push(x); }
+                main();
+                out
+                """;
+        assertEquals("1,2,3", joined(source));
+    }
+
+    // throw() injects into the generator body and is catchable
+    @Test
+    public void test_throw_into_async_generator() {
+        final var source = """
+                let out = [];
+                async function* g() { try { yield 1; } catch (e) { out.push('caught:' + e); } }
+                const it = g();
+                it.next().then(() => it.throw('boom')).then(s => out.push('done:' + s.done));
+                out
+                """;
+        assertEquals("caught:boom,done:true", joined(source));
+    }
+
+    // return() unwinds through finally and reports done
+    @Test
+    public void test_return_runs_finally() {
+        final var source = """
+                let out = [];
+                async function* g() { try { yield 1; yield 2; } finally { out.push('cleanup'); } }
+                const it = g();
+                it.next().then(() => it.return('x')).then(s => out.push('r:' + s.value + ':' + s.done));
+                out
+                """;
+        assertEquals("cleanup,r:x:true", joined(source));
+    }
+
+    // Per spec, `return <expr>;` inside an async generator body must Await the expression's value
+    // before completing - a `return` of a thenable resolves to its settled value, not the raw
+    // thenable object. Regression test: this await used to be entirely missing, since by the time
+    // the completion reached the function-body runner, an explicit `return undefined;` and a bare
+    // `return;` had already collapsed into the same value with no way to tell them apart - the fix
+    // has to live in the statement evaluator itself, where the AST still distinguishes them.
+    @Test
+    public void test_explicit_return_of_a_thenable_is_awaited() {
+        final var source = """
+                let out = [];
+                async function* g() { return Promise.resolve('resolved-value'); }
+                const it = g();
+                it.next().then(r => out.push(r.value + ':' + r.done));
+                out
+                """;
+        assertEquals("resolved-value:true", joined(source));
+    }
+
+    // A bare `return;` (no argument at all) must not attempt to await anything - it settles
+    // immediately with `undefined`, exercising the argument == null branch left untouched by the
+    // fix above.
+    @Test
+    public void test_bare_return_with_no_argument_settles_with_undefined() {
+        final var source = """
+                let out = [];
+                async function* g() { yield 1; return; }
+                async function main() { for await (const x of g()) out.push(x); out.push('done'); }
+                main();
+                out
+                """;
+        assertEquals("1,done", joined(source));
+    }
+
+    // an async generator class method works
+    @Test
+    public void test_async_generator_class_method() {
+        final var source = """
+                let out = [];
+                class C { async *gen() { yield 1; yield 2; } }
+                async function main() { const c = new C(); for await (const x of c.gen()) out.push(x); }
+                main();
+                out
+                """;
+        assertEquals("1,2", joined(source));
+    }
+
+    // a rejected await inside an async generator surfaces as a rejected step
+    @Test
+    public void test_rejected_await_rejects_step() {
+        final var source = """
+                let out = [];
+                async function* g() { yield await Promise.reject('bad'); }
+                g().next().then(s => out.push('ok'), e => out.push('err:' + e));
+                out
+                """;
+        assertEquals("err:bad", joined(source));
+    }
+
+    // for await is valid at the top level (top-level await), consuming a list of promises
+    @Test
+    public void test_top_level_for_await_consumes_promises() {
+        final var source = """
+                let out = [];
+                for await (const x of [Promise.resolve(1), Promise.resolve(2)]) out.push(x);
+                out
+                """;
+        assertEquals("1,2", joined(source));
+    }
+
+    // for await inside a plain (non-async) function is still a syntax error
+    @Test
+    public void test_for_await_inside_plain_function_throws() {
+        assertThrows(SyntaxErrorException.class,
+                () -> Interpreter.run("function f() { for await (const x of [1]) {} } f()"));
+    }
+
+    // an empty async generator completes immediately
+    @Test
+    public void test_empty_async_generator() {
+        assertEquals("end", ((JsString) arr().get(0)).getValue());
+    }
+
+    // Async generator methods resolve through a patchable prototype too
+    @Test
+    public void test_async_generator_prototype_is_patchable() {
+        assertEquals("object", str("async function* g() { yield 1; } typeof Object.getPrototypeOf(g())"));
+        assertEquals("9", joined("""
+                let out = [];
+                async function* g() { yield 1; }
+                const it = g();
+                Object.getPrototypeOf(it).next = function() { return Promise.resolve({value: 9, done: false}); };
+                it.next().then(r => out.push(r.value));
+                out
+                """));
+        assertEquals("1", joined("""
+                let out = [];
+                async function* g() { yield 1; }
+                g().next().then(r => out.push(r.value));
+                out
+                """));
+    }
+
+    // GetIterator(obj, async) prefers @@asyncIterator and must not touch @@iterator at all when it
+    // is present - the corpus asserts this with a poisoned @@iterator getter
+    @Test
+    public void test_async_yield_star_ignores_sync_iterator_when_async_present() {
+        final var source = """
+                let out = [];
+                const obj = {
+                    get [Symbol.iterator]() { out.push('sync-read'); return undefined; },
+                    [Symbol.asyncIterator]() {
+                        let i = 0;
+                        return { next() { return Promise.resolve(i < 2 ? {value: i++, done: false} : {done: true}); } };
+                    }
+                };
+                async function* g() { yield* obj; }
+                async function main() { for await (const v of g()) out.push(v); }
+                main();
+                out
+                """;
+        assertEquals("0,1", joined(source));
+    }
+
+    // A present-but-non-callable @@asyncIterator is a TypeError per GetMethod, not a silent
+    // fallback to synchronous iteration
+    @Test
+    public void test_async_yield_star_non_callable_async_iterator_throws() {
+        final var source = """
+                let out = [];
+                const obj = { [Symbol.asyncIterator]: 0 };
+                async function* g() { yield* obj; }
+                async function main() {
+                    try { for await (const v of g()) out.push(v); }
+                    catch (e) { out.push(e.constructor.name); }
+                }
+                main();
+                out
+                """;
+        assertEquals("TypeError", joined(source));
+    }
+
+    // A sync-only iterable is opened through CreateAsyncFromSyncIterator, awaiting each value
+    @Test
+    public void test_async_yield_star_awaits_sync_iterator_values() {
+        final var source = """
+                let out = [];
+                const obj = { *[Symbol.iterator]() { yield Promise.resolve('a'); yield 'b'; } };
+                async function* g() { yield* obj; }
+                async function main() { for await (const v of g()) out.push(v); }
+                main();
+                out
+                """;
+        assertEquals("a,b", joined(source));
+    }
+
+    // for await applies the same GetIterator rules as async yield*
+    @Test
+    public void test_for_await_rejects_non_callable_async_iterator() {
+        final var source = """
+                let out = [];
+                async function main() {
+                    try { for await (const v of { [Symbol.asyncIterator]: 0 }) out.push(v); }
+                    catch (e) { out.push(e.constructor.name); }
+                }
+                main();
+                out
+                """;
+        assertEquals("TypeError", joined(source));
+    }
+
+    // Per spec, a `yield*` return-completion into an inner async iterator that has no own `return`
+    // method must still Await the returned value when the *outer* generator is async - regardless
+    // of whether the inner iterable itself came from a sync-to-async adapter. Regression test for a
+    // bug where this await was gated on the wrong condition (fromSync instead of async), so a real
+    // async inner iterator without `return` skipped the await entirely and leaked an unresolved
+    // thenable instead of its resolved value.
+    @Test
+    public void test_yield_star_return_without_inner_return_method_awaits_the_value() {
+        final var source = """
+                let out = [];
+                async function* g() {
+                    yield* {
+                        [Symbol.asyncIterator]() {
+                            return { next() { return Promise.resolve({ value: 1, done: false }); } };
+                        }
+                    };
+                }
+                async function main() {
+                    const it = g();
+                    await it.next();
+                    const r = await it.return(Promise.resolve('done-value'));
+                    out.push(r.value);
+                }
+                main();
+                out
+                """;
+        assertEquals("done-value", joined(source));
+    }
+
+    // three next() calls made before any settles queue up and resolve in request order
+    @Test
+    public void test_request_queue_preserves_order() {
+        final var source = """
+                let out = [];
+                async function* g() { yield 'first'; yield 'second'; }
+                const it = g();
+                const a = it.next();
+                const b = it.next();
+                const c = it.next();
+                c.then(s => out.push('c:' + s.value + ':' + s.done));
+                b.then(s => out.push('b:' + s.value));
+                a.then(s => out.push('a:' + s.value));
+                out
+                """;
+        assertEquals("a:first,b:second,c:undefined:true", joined(source));
+    }
+
+    // a next() issued from the generator's own body queues instead of deadlocking on itself
+    @Test
+    public void test_reentrant_next_queues_instead_of_deadlocking() {
+        final var source = """
+                let out = [];
+                let it;
+                async function* g() {
+                    it.next().then(s => out.push('inner:' + s.value));
+                    yield 1;
+                    yield 2;
+                }
+                it = g();
+                it.next().then(s => out.push('outer:' + s.value));
+                out
+                """;
+        assertEquals("outer:1,inner:2", joined(source));
+    }
+
+    // AsyncGeneratorYield awaits its operand, so a yielded promise reaches the consumer unwrapped
+    @Test
+    public void test_yielded_promise_is_awaited() {
+        final var source = """
+                let out = [];
+                async function* g() { yield Promise.resolve('unwrapped'); }
+                async function main() { for await (const v of g()) out.push(v); }
+                main();
+                out
+                """;
+        assertEquals("unwrapped", joined(source));
+    }
+
+    // a yielded promise that rejects re-enters the body at the yield expression
+    @Test
+    public void test_rejected_yield_operand_throws_at_the_yield() {
+        final var source = """
+                let out = [];
+                async function* g() {
+                    try { yield Promise.reject('bad'); }
+                    catch (e) { out.push('caught:' + e); }
+                }
+                async function main() { for await (const v of g()) out.push(v); }
+                main();
+                out
+                """;
+        assertEquals("caught:bad", joined(source));
+    }
+
+    // return() before the body starts awaits its argument (AsyncGeneratorAwaitReturn)
+    @Test
+    public void test_return_at_suspended_start_awaits_its_value() {
+        final var source = """
+                let out = [];
+                async function* g() { yield 1; }
+                g().return(Promise.resolve('done')).then(s => out.push(s.value + ':' + s.done));
+                out
+                """;
+        assertEquals("done:true", joined(source));
+    }
+
+    // AsyncGeneratorAwaitReturn's PromiseResolve(%Promise%, value) reads value.constructor even when
+    // value is already a promise; a poisoned accessor there must reject return()'s promise rather
+    // than being silently skipped (return() would otherwise resolve when it should reject).
+    @Test
+    public void test_return_at_suspended_start_propagates_a_broken_promise_constructor() {
+        final var source = """
+                let out = [];
+                async function* g() { throw new Error('must not resume'); }
+                let broken = Promise.resolve(42);
+                Object.defineProperty(broken, 'constructor', { get() { throw new Error('broken promise'); } });
+                g().return(broken).then(
+                    () => out.push('resolved'),
+                    e => out.push('rejected:' + e.message)
+                );
+                out
+                """;
+        assertEquals("rejected:broken promise", joined(source));
+    }
+
+    // The same poisoned-constructor promise, returned while suspended at a yield, is awaited before
+    // resuming the body - so the throw is injected at the yield point as a catchable exception.
+    @Test
+    public void test_return_at_suspended_yield_injects_the_broken_promise_error_at_the_yield() {
+        final var source = """
+                let out = [];
+                async function* g() {
+                    try { yield; } catch (e) { out.push('caught:' + e.message); }
+                }
+                let broken = Promise.resolve(42);
+                Object.defineProperty(broken, 'constructor', { get() { throw new Error('broken promise'); } });
+                async function main() {
+                    let it = g();
+                    await it.next();
+                    await it.return(broken);
+                }
+                main();
+                out
+                """;
+        assertEquals("caught:broken promise", joined(source));
+    }
+
+    // yield* hands a delegated value through untouched rather than awaiting it a second time
+    @Test
+    public void test_delegated_values_are_not_unwrapped() {
+        final var source = """
+                let out = [];
+                const inner = Promise.resolve('inner');
+                const source_ = {
+                    [Symbol.asyncIterator]() { return this; },
+                    next() { return { value: inner, done: false }; }
+                };
+                async function* g() { yield* source_; }
+                g().next().then(s => out.push(String(s.value === inner)));
+                out
+                """;
+        assertEquals("true", joined(source));
+    }
+}

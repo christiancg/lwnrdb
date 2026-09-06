@@ -15,9 +15,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
-          java-version: '25'
+          java-version: '26'
           distribution: 'temurin'
           architecture: x64
           cache: maven
@@ -126,6 +126,56 @@ jobs:
             run: |
               python3 test_utils/test_clustering.py
 
+          # Self-contained: RUN_SCRIPT needs a configured script sandbox the shared
+          # server does not have, and the suite restarts its own instance (port 8995)
+          # with scriptsEnabled=false to prove the master switch.
+          - name: run-script
+            start_server: false
+            run: |
+              python3 test_utils/test_run_script.py
+
+          # Self-contained for the same reason, on port 8996: procedures and triggers need
+          # both scriptsEnabled and triggersEnabled, and the suite restarts its own instance
+          # with each switch off to prove they refuse independently.
+          - name: procedures-triggers
+            start_server: false
+            run: |
+              python3 test_utils/test_procedures_triggers.py
+
+          # Self-contained for the same reason, on port 8995: schedules need both
+          # scriptsEnabled and schedulesEnabled, and the suite restarts its own instance
+          # with the switch off to prove it refuses independently.
+          - name: schedules
+            start_server: false
+            run: |
+              python3 test_utils/test_schedules.py
+
+          # Self-contained, on port 8997: the cap has to be a small known value for a
+          # burst to reach it, and the suite restarts its own instance three times -
+          # reject-immediately, absorb-by-waiting, and cap disabled as the control.
+          - name: script-admission
+            start_server: false
+            run: |
+              python3 test_utils/test_script_admission.py
+
+          # Self-contained, on port 8998: LIST_SCRIPTS / CANCEL_SCRIPT need scripts, triggers and
+          # schedules all enabled plus a deliberately generous script timeout (so a cancellation is
+          # never mistaken for a timeout), and the suite restarts its own instance to prove a
+          # cancelled trigger run is not replayed by startup recovery.
+          - name: script-control
+            start_server: false
+            run: |
+              python3 test_utils/test_script_control.py
+
+          # Self-contained, on port 8999: the SCRIPT operators inside an AGGREGATE pipeline need a
+          # deliberately tight aggregation sandbox (small budget, short deadline, small source cap) the
+          # shared server does not have, and the suite restarts its own instance with scriptsEnabled=false
+          # - the only server-side switch the feature has - to prove it refuses every scripted pipeline.
+          - name: aggregation-scripts
+            start_server: false
+            run: |
+              python3 test_utils/test_aggregation_scripts.py
+
           # Needs a server already up (it connects + loads data, then restarts
           # the server itself to measure cold-cache latency via pgrep).
           - name: cache-warmup-bench
@@ -138,9 +188,9 @@ jobs:
               python3 test_utils/bench_cache_warmup.py
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
-          java-version: '25'
+          java-version: '26'
           distribution: 'temurin'
           architecture: x64
       - name: Download jar
@@ -170,6 +220,48 @@ jobs:
         run: pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
 
   # ---------------------------------------------------------------------------
+  # test262 conformance. Its own job rather than an integration matrix row: the
+  # matrix legs only download the shaded jar, while the worker JVM needs both
+  # target/classes and target/test-classes. Runs outside mvn verify's critical
+  # path because a conformance run must survive tests that hang or blow the JVM
+  # stack. The corpus is fetched on demand and cached, never committed.
+  # ---------------------------------------------------------------------------
+  test262:
+    name: test262 Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with:
+          java-version: '26'
+          distribution: 'temurin'
+          architecture: x64
+          cache: maven
+      - name: Compile (main + test classes)
+        run: mvn -B --no-transfer-progress -DskipTests test-compile
+      - name: Cache test262 corpus
+        uses: actions/cache@v4
+        with:
+          path: test262
+          key: test262-${{ hashFiles('config/test262.properties') }}
+      - name: Fetch corpus
+        run: python3 test_utils/test262.py --fetch
+      - name: Driver self-test
+        run: python3 test_utils/test262.py --self-test
+      - name: Run conformance
+        # 20s (vs the 10s local default): shared runners see CPU steal/oversubscription that can
+        # inflate a CPU-heavy-but-finite test (e.g. the decodeURI/decodeURIComponent RFC 3629
+        # combinatorial tests, ~2s warm-JVM locally) by 10x+, flagging it as a false HANG.
+        run: python3 test_utils/test262.py --gate baseline --require-corpus --timeout 20
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test262-report
+          path: test_log/test262-report.md
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
   # Single aggregate gate. This is the check required by branch protection
   # (named "Verify" to match the existing rule): it succeeds only when the build
   # and every integration leg succeeded, so the split pipeline still reports one
@@ -178,14 +270,14 @@ jobs:
   # ---------------------------------------------------------------------------
   verify:
     name: Verify
-    needs: [build, integration]
+    needs: [build, integration, test262]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs succeeded
         run: |
-          echo "build=${{ needs.build.result }} integration=${{ needs.integration.result }}"
-          if [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.integration.result }}" != "success" ]; then
+          echo "build=${{ needs.build.result }} integration=${{ needs.integration.result }} test262=${{ needs.test262.result }}"
+          if [ "${{ needs.build.result }}" != "success" ] || [ "${{ needs.integration.result }}" != "success" ] || [ "${{ needs.test262.result }}" != "success" ]; then
             echo "::error::one or more jobs failed"
             exit 1
           fi

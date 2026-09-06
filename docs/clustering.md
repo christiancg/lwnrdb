@@ -128,6 +128,197 @@ follow:
 was down when B was created — both implemented; see *Admin / DDL replication* and
 *Admin/DDL anti-entropy* below.)
 
+### Scripts (`RUN_SCRIPT`)
+
+A script is **placed by availability**, not by ownership. There is no owner to route it to — a script is
+scoped to a database but may touch any number of collections in it, owned by different nodes — so
+`ClusterRouter` instead chooses a live node by current script load and forwards the whole run there,
+relaying the target's response JSON verbatim. This is on by default (`scriptRoutingEnabled=true`), so one
+node cannot end up running every script in the cluster just because a load balancer sent it every
+connection; setting it to `false` restores the older behaviour of executing on the node that received the
+request, which is what you want when scripts do many small reads and clients already connect to the node
+that owns the data.
+
+`cluster/ScriptPlacement.choose()` makes the choice by **power of two choices**: sample two distinct
+`ALIVE` members of the local membership view at random and take the less loaded one — load **relative to
+`maxConcurrentScripts`**, not absolute, since a node running 3/4 is nearly full where one running 6/32 is
+idle, and a sample already at its cap loses outright to one that is not (a saturated target could only
+answer `503-6`). A member reporting capacity `0` is either uncapped or too old to gossip the field, so
+that pair falls back to comparing absolute load; ties break on `nodeId`, so two edges sampling the same
+pair agree. Picking the globally least-loaded
+node would herd — every edge sees the same gossiped view, stale by up to one `gossipIntervalMs`, so they
+would all forward to the same node at once and then all see it saturated. Sampling needs no accurate
+global view, is O(1), and still keeps the maximum load exponentially closer to the mean than random
+placement. `choose()` answering "this node" (or a cluster of one) means the script runs locally.
+
+A **pipeline script** (a `SCRIPT` operator or a `REDUCE` step inside an `AGGREGATE`) is the exception, and
+needs no new code: an `AGGREGATE` this node does not own is forwarded to the collection's owner as raw
+request JSON, so the script runs on the owner, beside the data it filters. A pipeline script is therefore
+the *more* local of the two — it has no `db` module and cannot issue an operation of its own, so there is
+nothing for it to round-trip.
+
+The load signal is `NodeInfo.scriptLoad`, the number of script runs executing on a node right now
+(`RUN_SCRIPT`, `CALL_PROCEDURE`, trigger dispatch and scheduled runs alike — all interpreter CPU), read by
+`ops/ScriptLoad` from the `ops/ScriptRunRegistry` every entry point registers with, and published on each gossip round alongside
+`NodeInfo.scriptCapacity` (this node's `maxConcurrentScripts`, from `ops/ScriptAdmission.capacity()`) and
+the two admin-catch-up fields below. All four ride the existing gossip payload with no wire change, and adopting a
+peer's new values (`NodeInfo.copyTelemetryFrom`) deliberately does **not** count as a membership change:
+firing the membership listeners every round would rebuild the ownership ring and re-run anti-entropy for
+nothing. A node running an older version reports `0` load and so attracts traffic — roll every node before
+setting `scriptRoutingEnabled=true`.
+
+A peer is eligible only if all three hold: it is `ALIVE` in the local membership view, it is **not still
+catching up on admin metadata** (`adminSyncing`, gossiped from `AdminAntiEntropyService.hasCompletedAdminSync`),
+and it reports an **`adminEpoch` at least as high as this node's**. The last two matter because admin/DDL and
+user ops are replicated to a *majority* and the rest converge through admin anti-entropy: without them a
+script could land on a node that has not applied the `CREATE_DATABASE`/`SAVE_PROCEDURE` the caller is relying
+on and fail with a transient `404-4`/`404-8` that a local run would never have hit. Both signals ride the
+same gossip round as the heartbeat and the load. Two consequences worth knowing: for up to one
+`gossipIntervalMs` after a DDL every peer looks behind, so scripts run locally until the new epoch
+propagates; and an older node that does not report an epoch at all reads as `0`, so once this node's epoch is
+non-zero it is never chosen — the safe direction, and another reason to roll the whole cluster promptly. This node itself is always a candidate: running locally is the fallback in every other case too, and
+the epoch comparison is against its own epoch.
+
+Quorum is deliberately still not an input: a script that lands on a node lacking quorum fails on its first
+write with the existing `503-2`, which is the correct and already-tested outcome. A forward that fails (unreachable target, timeout, `ERROR` reply)
+**falls back to local execution** rather than erroring: the script would have run here anyway before
+placement existed, so local is always correct and placement can never make a working call fail. The
+fallback is logged at WARNING and counted. A `503-6` from the chosen node is **not** one of those
+failures: it is a real `FORWARD_RESPONSE`, so it is relayed to the client verbatim rather than retried
+locally. Falling back there would let the cluster route around the very cap protecting the target, and the
+caller should simply retry. Because a forwarded script must be given the whole script
+budget, `forwardScript` waits `scriptTimeoutMs + replicationAckTimeoutMs` rather than the ack timeout
+sized for a single write. No forwarding loop is possible: the target runs the script through
+`ClusterConnectionHandler.executeForwarded` → `OperationProcessor` directly, bypassing
+`MessageProcessor` and therefore `ClusterRouter`.
+
+Authorization stays at the edge (`AuthorizationChecker` runs on the caller's own record before routing),
+and the acting username travels on the `FORWARD_REQUEST` so the target runs the script as the original
+user. `scriptsEnabled` and the `script*` sandbox keys must therefore be **uniform across the cluster**:
+the sandbox comes from the *executing* node's configuration, and a target with `scriptsEnabled=false`
+answers `403-2`, which the edge relays.
+
+**The trade-off is locality.** Placement spreads interpreter CPU; it does not move the script closer to
+its data. Each operation the script issues is still routed normally by `host/EnforcingDatabaseAccess`
+(forwarded to its collection's owner, with `db.transaction` spanning owners through the same 2PC the wire
+protocol uses), so a forwarded script is usually remote from the collections it touches and pays one
+round trip per operation. A script doing many small reads is fastest on the owner of the collections it
+reads; a script that is mostly computation is best spread. `ScriptPlacement` is isolated enough that a
+locality term could be added later without touching the routing, wire or execution paths.
+
+`GET_DATABASE_STATS` reports placement per node under `scripts`: `routingEnabled`, `running` (the live
+count), `forwarded`, `forwardFallbacks` and `cancelled`.
+
+Because placement decides where a run executes, **visibility and cancellation are cluster-wide from the
+start**: the admin-only `LIST_SCRIPTS` and `CANCEL_SCRIPT` operations (`cluster/ScriptRunDirectory`) run on
+the node that receives them and fan out to every live member, the pattern `LIST_TRANSACTIONS` already
+establishes. Neither is in `ROUTABLE`, `SCRIPT_OPS` or `ADMIN_DDL` — the router must not claim them, or the
+listing would only ever describe one node. A run is reported on the node **executing** it, which under
+default routing is usually not the node that accepted the request: each row carries that node's address, so
+`LIST_SCRIPTS` on node B shows a run node A is executing with A's address. `CANCEL_SCRIPT` cancels locally
+first and only broadcasts when the run is not here, so the common case costs no messages; an id no live node
+is running answers `cancelled:false` with status `OK`. An unreachable peer is logged and skipped rather than
+failing the whole listing, which means a listing is a best-effort view of the live members — a run on a
+partitioned node is invisible until it is reachable again, and a `CANCEL_SCRIPT` cannot reach it either. The
+run count `LIST_SCRIPTS` reports and the `scriptLoad` placement acts on are the same `ops/ScriptRunRegistry`
+by construction, so the two can never disagree.
+
+### Stored procedures and triggers
+
+Procedure and trigger DDL (`SAVE_PROCEDURE`, `DELETE_PROCEDURE`, `SAVE_TRIGGER`, `DELETE_TRIGGER`) is in
+`ClusterAdminHelper`'s `ADMIN_DDL`, so it is serialized by the admin coordinator, quorum-guarded, replicated
+by **re-execution**, and ordered by the admin epoch — exactly like `SAVE_SCHEMA`/`DELETE_SCHEMA`, which it
+now matches in every respect (stored with the data, replicated through the coordinator). They also ride the
+`ADMIN_SNAPSHOT` payload, so a node that was down for a DDL op catches up on rejoin.
+
+Re-execution is only safe because the coordinator **stamps the derived fields onto the request** during its
+own local execution: `version`, `updatedAt`, `updatedBy` and — for a trigger — `definer`. Without that each
+peer would compute its own `System.currentTimeMillis()` and the files would diverge, which the admin
+anti-entropy would then flip-flop on. The `definer` in particular must be stamped rather than re-derived: a
+peer re-executing has no acting user of its own, and two nodes disagreeing about a trigger's definer would
+mean the same write runs under different authority depending on which node owns the collection.
+
+`CALL_PROCEDURE` is placed exactly like `RUN_SCRIPT` (both are in `ClusterRouter`'s `SCRIPT_OPS`): a
+procedure is scoped to a database but may touch collections owned by different nodes, so there is no single
+owner to route to and it is instead forwarded to a live node chosen by script load when
+`scriptRoutingEnabled` is on (the default), else run on the node that received it. Either way each operation it issues is
+routed normally, `db.transaction` included.
+
+A **trigger fires only on the collection's owner**, because `TriggerHelper` is called from
+`OperationProcessor`'s write handlers and a replica applies a `REPLICATE`/`REPLICATE_TX` through
+`ReplicatedApplyHelper`/`ReplicatedTxApplyHelper`, which bypass it. The cascade bound holds across nodes too:
+`triggerDepth` rides on the request, and `ClusterConnectionHandler`'s forward paths preserve it (they are
+authenticated by `clusterSecret`), while the edge zeroes it for client requests.
+
+### Scheduled procedures
+
+A schedule is hashed onto the **existing** ring under the key `{db}|.schedules|{name}`, so
+`OwnershipManager.isOwner` answers whether this node should fire it — no new ring key kind, no new
+coordinator role. That spreads schedules across the cluster (a database with ten schedules will usually fire
+them from several nodes) and hands them off automatically on a membership change, exactly as a collection's
+ownership does. When clustering is off there is no ring, so the scheduler runs everything locally.
+
+`SAVE_SCHEDULE`/`DELETE_SCHEDULE` are in `ADMIN_DDL` alongside the procedure and trigger DDL: coordinator-
+serialized, quorum-guarded, replicated by re-execution, ordered by the admin epoch, and carried on the
+`ADMIN_SNAPSHOT` payload so a node that was down for the save catches up on rejoin (`conformSchedules`, which
+also reloads that database's registry so the scheduler picks the change up without waiting for
+`scheduleRefreshMs`). Re-execution is safe for the same reason it is for a trigger: the coordinator stamps
+`version`, `updatedAt`, `updatedBy` and `definer` onto the request, and the `definer` in particular must be
+stamped rather than re-derived, since two nodes disagreeing about it would mean the job runs under different
+authority depending on which node owns the schedule.
+
+**Handoff skips a tick rather than duplicating one.** A new owner computes `nextAfter(now)` — the next
+*future* occurrence — so an instant the previous owner may already have run is never replayed. That is the
+whole at-most-once guarantee, and it is why `nextRunAt` lives only in memory: persisting a `lastRunAt` would
+mean an admin write per run and would churn the admin epoch for no benefit. The cost is the other side of the
+same coin: a membership change during a tick can drop that tick, and **missed runs while a node was down are
+skipped, not caught up**.
+
+The schedule cache is partitioned by ownership on the same terms as the trigger cache below —
+`MetadataCachePruner` drops the schedules this node no longer owns, asking the ring the same question the
+scheduler's tick asks — and `AdminAntiEntropyService` reads schedules straight from disk
+(`Cache.loadScheduleUncached`) rather than through the cache.
+
+### The trigger cache is partitioned by ownership
+
+A trigger only ever fires on its collection's owner — `ops/TriggerHelper.afterWrite` is called from
+`OperationProcessor`'s write handlers, and writes route to the owner — so a node has no use for the
+trigger lists of collections it does not own. `cluster/MetadataCachePruner`, a `MembershipListener`
+registered immediately after `OwnershipManager` (listeners fire in registration order, so it reads
+the rebuilt ring), drops exactly those on every membership change. The cache is derived from
+`{db}/{coll}/{coll}-triggers.json`, which every node has, so handoff costs the new owner one lazy
+re-read and nothing is lost. Entries are **dropped, never blanked**: `TriggerDispatcher` looks the
+list up again when it runs a queued event, and a cached empty list would make an in-flight trigger
+silently not fire.
+
+For the same reason `cluster/AdminAntiEntropyService` no longer reads through the cache.
+`buildSnapshot` and the `conform*` comparisons load procedures, triggers and schemas straight from
+disk (`Cache.loadProcedureUncached`/`loadTriggersUncached`/`loadSchemaUncached`) and a conform write
+*invalidates* the cache rather than populating it — otherwise every sweep would pull every procedure
+source on the node into memory regardless of what anyone had called.
+
+### Shutdown and departure
+
+`ShutdownCoordinator` leaves the cluster last, after the queues have drained, so peers keep routing
+here only while this node can still answer. There is, however, **no graceful LEAVE message**: a
+departing node is detected the same way a crashed one is, by missed heartbeats, so peers wait out
+`deadTimeoutMs` (15s by default) before reassigning its collections. During that window writes to
+those collections fail with `503-4 OWNER_UNREACHABLE` (reads fall back locally when
+`readFallbackToLocal` is on). Adding a LEAVE to `ClusterMessageType` so membership reassigns
+immediately is a worthwhile follow-up; drain the node's traffic at the load balancer first if that
+window matters.
+
+### Pending trigger runs are node-local
+
+`admin/trigger_runs` is not replicated. A node recovers its own pending runs when it restarts, the
+way each participant recovers its own `admin/transactions` markers. A node that never comes back
+keeps its pending runs on its own disk, where no survivor can see them: those runs are lost, not
+double-applied. Extending the exactly-once guarantee across permanent node loss would mean
+quorum-replicating each run record before its events are queued — a network round trip on the write
+path — and is deliberately not implemented. Best-effort replication is **not** an acceptable
+substitute: a lost completion notification would resurrect a consumed run and double-apply it, which
+is the failure the design exists to prevent.
+
 ## Admin / DDL replication
 
 Admin and DDL operations mutate cluster-wide metadata (databases, collections,
@@ -352,7 +543,7 @@ See the *Clustering* row of the configuration table in the main
 `clusterPort`, `clusterBindAddress`, `clusterAdvertisedAddress`, `clusterSeeds`,
 `nodeId`, `clusterExpectedSize`, `gossipIntervalMs`, `suspectTimeoutMs`,
 `deadTimeoutMs`, `replicationAckTimeoutMs`, `virtualNodesPerNode`,
-`readFallbackToLocal`, `clusterTlsEnabled`, `clusterSecret`,
+`readFallbackToLocal`, `scriptRoutingEnabled`, `clusterTlsEnabled`, `clusterSecret`,
 `antiEntropyIntervalMs`, `tombstoneRetentionMs`.
 
 ## Operations runbook

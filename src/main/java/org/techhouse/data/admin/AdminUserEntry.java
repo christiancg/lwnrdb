@@ -10,6 +10,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonObject;
@@ -21,12 +22,16 @@ public class AdminUserEntry extends DbEntry {
     private static final String GLOBAL_PERMISSIONS_FIELD = "globalPermissions";
     private static final String DATABASE_PERMISSIONS_FIELD = "databasePermissions";
     private static final String COLLECTION_PERMISSIONS_FIELD = "collectionPermissions";
+    private static final String SCRIPT_PERMISSIONS_FIELD = "scriptPermissions";
 
     private String passwordHash;
     private boolean admin;
     private Set<GlobalPermissionType> globalPermissions;
     private Map<String, PermissionLevel> databasePermissions;
     private Map<String, PermissionLevel> collectionPermissions;
+    // Per-database script permission: database name -> level. NONE denies, RUN allows RUN_SCRIPT and
+    // CALL_PROCEDURE, MANAGE additionally allows installing procedures and triggers.
+    private Map<String, ScriptPermissionLevel> scriptPermissions;
 
     private AdminUserEntry() {
         super.setDatabaseName(Globals.ADMIN_DB_NAME);
@@ -36,6 +41,13 @@ public class AdminUserEntry extends DbEntry {
     public AdminUserEntry(String username, String passwordHash, boolean admin,
             Set<GlobalPermissionType> globalPermissions, Map<String, PermissionLevel> databasePermissions,
             Map<String, PermissionLevel> collectionPermissions) {
+        this(username, passwordHash, admin, globalPermissions, databasePermissions, collectionPermissions,
+                new HashMap<>());
+    }
+
+    public AdminUserEntry(String username, String passwordHash, boolean admin,
+            Set<GlobalPermissionType> globalPermissions, Map<String, PermissionLevel> databasePermissions,
+            Map<String, PermissionLevel> collectionPermissions, Map<String, ScriptPermissionLevel> scriptPermissions) {
         super.setDatabaseName(Globals.ADMIN_DB_NAME);
         super.setCollectionName(Globals.ADMIN_USERS_COLLECTION_NAME);
         this.set_id(username);
@@ -44,6 +56,7 @@ public class AdminUserEntry extends DbEntry {
         this.globalPermissions = globalPermissions;
         this.databasePermissions = databasePermissions;
         this.collectionPermissions = collectionPermissions;
+        this.scriptPermissions = scriptPermissions == null ? new HashMap<>() : scriptPermissions;
         rebuildData();
     }
 
@@ -73,6 +86,15 @@ public class AdminUserEntry extends DbEntry {
             result.collectionPermissions.put(entry.getKey(), level);
         }
 
+        // Absent in records written before per-database script permissions existed, and boolean-valued in
+        // records written before MANAGE existed - ScriptPermissionLevel.fromJson accepts both.
+        result.scriptPermissions = new HashMap<>();
+        if (object.has(SCRIPT_PERMISSIONS_FIELD) && !object.get(SCRIPT_PERMISSIONS_FIELD).isJsonNull()) {
+            for (final var entry : object.get(SCRIPT_PERMISSIONS_FIELD).asJsonObject().entrySet()) {
+                result.scriptPermissions.put(entry.getKey(), ScriptPermissionLevel.fromJson(entry.getValue()));
+            }
+        }
+
         result.setDatabaseName(Globals.ADMIN_DB_NAME);
         result.setCollectionName(Globals.ADMIN_USERS_COLLECTION_NAME);
         return result;
@@ -96,6 +118,13 @@ public class AdminUserEntry extends DbEntry {
         collectionPermissions.forEach((coll, level) -> collPermsObj.add(coll, new JsonString(level.name())));
         json.add(COLLECTION_PERMISSIONS_FIELD, collPermsObj);
 
+        // The string form from now on: a record read from the legacy boolean form converts on its next
+        // write. A node running a version without ScriptPermissionLevel cannot parse it - see the README
+        // upgrade note before rolling a cluster.
+        final var scriptPermsObj = new JsonObject();
+        scriptPermissions.forEach((db, level) -> scriptPermsObj.add(db, new JsonString(level.name())));
+        json.add(SCRIPT_PERMISSIONS_FIELD, scriptPermsObj);
+
         this.setData(json);
     }
 
@@ -115,6 +144,10 @@ public class AdminUserEntry extends DbEntry {
         final var collPermsObj = new JsonObject();
         collectionPermissions.forEach((k, v) -> collPermsObj.add(k, new JsonString(v.name())));
         obj.add("collectionPermissions", collPermsObj);
+
+        final var scriptPermsObj = new JsonObject();
+        scriptPermissions.forEach((k, v) -> scriptPermsObj.add(k, new JsonString(v.name())));
+        obj.add("scriptPermissions", scriptPermsObj);
 
         final var ownedDbsArr = new JsonArray();
         ownedDatabases.forEach(ownedDbsArr::add);
@@ -153,6 +186,23 @@ public class AdminUserEntry extends DbEntry {
         return collectionPermissions;
     }
 
+    public Map<String, ScriptPermissionLevel> getScriptPermissions() {
+        return scriptPermissions;
+    }
+
+    public boolean canRunScripts(String databaseName) {
+        return levelFor(databaseName).covers(ScriptPermissionLevel.RUN);
+    }
+
+    public boolean canManageScripts(String databaseName) {
+        return levelFor(databaseName).covers(ScriptPermissionLevel.MANAGE);
+    }
+
+    private ScriptPermissionLevel levelFor(String databaseName) {
+        final var level = scriptPermissions.get(databaseName);
+        return level == null ? ScriptPermissionLevel.NONE : level;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o)
@@ -164,19 +214,20 @@ public class AdminUserEntry extends DbEntry {
         return admin == that.admin && Objects.equals(passwordHash, that.passwordHash)
                 && Objects.equals(globalPermissions, that.globalPermissions)
                 && Objects.equals(databasePermissions, that.databasePermissions)
-                && Objects.equals(collectionPermissions, that.collectionPermissions);
+                && Objects.equals(collectionPermissions, that.collectionPermissions)
+                && Objects.equals(scriptPermissions, that.scriptPermissions);
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(super.hashCode(), passwordHash, admin, globalPermissions, databasePermissions,
-                collectionPermissions);
+                collectionPermissions, scriptPermissions);
     }
 
     @Override
     public String toString() {
         return "AdminUserEntry(super=" + super.toString() + ", passwordHash=***, admin=" + admin
                 + ", globalPermissions=" + globalPermissions + ", databasePermissions=" + databasePermissions
-                + ", collectionPermissions=" + collectionPermissions + ")";
+                + ", collectionPermissions=" + collectionPermissions + ", scriptPermissions=" + scriptPermissions + ")";
     }
 }

@@ -7,6 +7,7 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
@@ -266,5 +267,74 @@ public class UserRequestValidationTest {
             throw new RuntimeException(e);
         }
         assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_create_user_accepts_script_permissions() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.setScriptPermissions(Map.of("mydb", ScriptPermissionLevel.RUN));
+        assertTrue(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_create_user_rejects_reserved_database_in_script_permissions() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.setScriptPermissions(Map.of("admin", ScriptPermissionLevel.RUN));
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_create_user_rejects_invalid_database_name_in_script_permissions() {
+        final var req = new CreateUserRequest();
+        req.setUsername("user");
+        req.setPassword("password123");
+        req.setScriptPermissions(Map.of("a", ScriptPermissionLevel.RUN));
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    // READ is a collection permission level, not a script one: a typo'd level must fail loudly rather
+    // than read as NONE, which the operator could not then explain.
+    @Test
+    public void test_change_permissions_rejects_unknown_script_permission_level() {
+        final var req = org.techhouse.ops.req.RequestParser.parseRequest(
+                "{\"type\":\"CHANGE_PERMISSIONS\",\"username\":\"user\",\"scriptPermissions\":{\"mydb\":\"READ\"}}");
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_change_permissions_accepts_manage_level() {
+        final var req = (ChangePermissionsRequest) org.techhouse.ops.req.RequestParser.parseRequest(
+                "{\"type\":\"CHANGE_PERMISSIONS\",\"username\":\"user\",\"scriptPermissions\":{\"mydb\":\"MANAGE\"}}");
+        assertTrue(RequestValidator.validate(req).isValid());
+        assertEquals(Map.of("mydb", ScriptPermissionLevel.MANAGE), req.getScriptPermissions());
+    }
+
+    @Test
+    public void test_change_permissions_parses_boolean_script_permission() {
+        final var req = (ChangePermissionsRequest) org.techhouse.ops.req.RequestParser.parseRequest(
+                "{\"type\":\"CHANGE_PERMISSIONS\",\"username\":\"user\",\"scriptPermissions\":{\"mydb\":true}}");
+        assertTrue(RequestValidator.validate(req).isValid());
+        assertEquals(Map.of("mydb", ScriptPermissionLevel.RUN), req.getScriptPermissions());
+    }
+
+    @Test
+    public void test_change_permissions_accepts_script_permissions() {
+        final var req = new ChangePermissionsRequest();
+        req.setUsername("user");
+        req.setScriptPermissions(Map.of("mydb", ScriptPermissionLevel.NONE));
+        assertTrue(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void test_change_permissions_without_script_permissions_reads_as_empty() {
+        final var req = (ChangePermissionsRequest) org.techhouse.ops.req.RequestParser
+                .parseRequest("{\"type\":\"CHANGE_PERMISSIONS\",\"username\":\"user\"}");
+        assertTrue(RequestValidator.validate(req).isValid());
+        assertTrue(req.getScriptPermissions().isEmpty());
+        assertTrue(req.getRawScriptPermissions().entrySet().isEmpty());
     }
 }

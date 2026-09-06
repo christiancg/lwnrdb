@@ -2,8 +2,12 @@ package org.techhouse.ops;
 
 import java.lang.management.ManagementFactory;
 import java.util.Set;
+import org.techhouse.bckg_ops.ScheduleExecutor;
+import org.techhouse.bckg_ops.ScheduleRegistry;
+import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.CacheableResource;
+import org.techhouse.cluster.ScriptPlacement;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
@@ -13,6 +17,14 @@ import org.techhouse.ops.resp.OperationResponse;
 
 public final class DatabaseStatsHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
+    private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
+    private static final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
+    private static final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
+    private static final CompiledScriptCache compiledScripts = IocContainer.get(CompiledScriptCache.class);
+    private static final ScriptAdmission scriptAdmission = IocContainer.get(ScriptAdmission.class);
+    private static final ScriptPlacement scriptPlacement = IocContainer.get(ScriptPlacement.class);
 
     private DatabaseStatsHelper() {
     }
@@ -22,6 +34,9 @@ public final class DatabaseStatsHelper {
             final var stats = new JsonObject();
             stats.add("memory", buildMemoryStats());
             stats.add("inDoubtTransactions", buildInDoubtTransactions());
+            stats.add("triggers", buildTriggerStats());
+            stats.add("schedules", buildScheduleStats());
+            stats.add("scripts", buildScriptStats());
 
             final var dbNames = cache.getUserDatabaseNames();
             final var dbArray = new JsonArray();
@@ -41,6 +56,74 @@ public final class DatabaseStatsHelper {
     // In-doubt distributed transactions still holding this node's write locks (a prepared 2PC participant
     // whose coordinator has not yet delivered a decision), so an operator can spot them and, if needed,
     // force a resolution with RESOLVE_TRANSACTION.
+    // A trigger runs asynchronously with no client waiting on it, so these counters are the operator's
+    // only window into whether they are running, failing or being dropped under load.
+    private static JsonObject buildTriggerStats() {
+        final var triggers = new JsonObject();
+        triggers.addProperty("enabled", Configuration.getInstance().isTriggersEnabled());
+        triggers.addProperty("fired", triggerExecutor.getFired());
+        triggers.addProperty("failed", triggerExecutor.getFailed());
+        triggers.addProperty("dropped", triggerExecutor.getDropped());
+        triggers.addProperty("queued", (long) triggerExecutor.getQueued());
+        triggers.addProperty("retried", triggerExecutor.getRetried());
+        triggers.addProperty("deadLettered", triggerExecutor.getDeadLettered());
+        triggers.addProperty("runLogEnabled", Configuration.getInstance().isTriggerRunLogEnabled());
+        triggers.addProperty("beforeApplied", BeforeHookContext.getApplied());
+        triggers.addProperty("beforeReplaced", BeforeHookContext.getReplaced());
+        triggers.addProperty("beforeRejected", BeforeHookContext.getRejected());
+        triggers.addProperty("beforeFailed", BeforeHookContext.getFailed());
+        // Runs recorded but not yet applied. A number that stays above zero while nothing is queued means
+        // runs are stranded - their node never came back, or their collection was dropped - and they will be
+        // garbage-collected after triggerRunRetentionMs rather than ever running.
+        triggers.addProperty("pendingRuns", (long) pendingRunCount());
+        return triggers;
+    }
+
+    // Like a trigger, a scheduled run has no client waiting on it, so these counters are the operator's only
+    // window into whether jobs are firing, failing, being skipped or being dropped under load.
+    private static JsonObject buildScheduleStats() {
+        final var schedules = new JsonObject();
+        schedules.addProperty("enabled", Configuration.getInstance().isSchedulesEnabled());
+        schedules.addProperty("registered", (long) scheduleRegistry.size());
+        schedules.addProperty("fired", scheduleExecutor.getFired());
+        schedules.addProperty("failed", scheduleExecutor.getFailed());
+        schedules.addProperty("skipped", scheduleExecutor.getSkipped());
+        schedules.addProperty("dropped", scheduleExecutor.getDropped());
+        schedules.addProperty("queued", (long) scheduleExecutor.getQueued());
+        return schedules;
+    }
+
+    // Where scripts are running: this node's live count plus how often placement forwarded a run elsewhere
+    // and how often that forward failed and the run stayed here.
+    private static JsonObject buildScriptStats() {
+        final var scripts = new JsonObject();
+        scripts.addProperty("routingEnabled", Configuration.getInstance().isScriptRoutingEnabled());
+        scripts.addProperty("running", (long) scriptLoad.current());
+        scripts.addProperty("capacity", (long) scriptAdmission.capacity());
+        scripts.addProperty("available", (long) scriptAdmission.available());
+        scripts.addProperty("rejected", scriptAdmission.getRejected());
+        scripts.addProperty("capacityPerUser", (long) scriptAdmission.perUserCapacity());
+        scripts.addProperty("capacityPerDatabase", (long) scriptAdmission.perDatabaseCapacity());
+        scripts.addProperty("rejectedPerUser", scriptAdmission.getRejectedPerUser());
+        scripts.addProperty("rejectedPerDatabase", scriptAdmission.getRejectedPerDatabase());
+        scripts.addProperty("waited", scriptAdmission.getWaited());
+        scripts.addProperty("forwarded", scriptPlacement.getForwarded());
+        scripts.addProperty("forwardFallbacks", scriptPlacement.getForwardFallbacks());
+        scripts.addProperty("cancelled", scriptRunRegistry.getCancelled());
+        scripts.addProperty("compiledCacheEntries", (long) compiledScripts.size());
+        scripts.addProperty("historyRecorded", ScriptRunHistory.getRecorded());
+        scripts.addProperty("historyDropped", ScriptRunHistory.getDropped());
+        return scripts;
+    }
+
+    private static int pendingRunCount() {
+        try {
+            return TriggerRunLog.pending().size();
+        } catch (Exception e) {
+            return -1;
+        }
+    }
+
     private static JsonObject buildInDoubtTransactions() {
         final var inDoubt = new JsonObject();
         final var ids = new JsonArray();
@@ -67,7 +150,28 @@ public final class DatabaseStatsHelper {
         memory.addProperty("maxMemoryBytes", config.getMaxMemoryBytes());
         memory.addProperty("cachingDisabled", config.isCachingDisabled());
         memory.addProperty("cacheUnlimited", config.isCacheUnlimited());
+        memory.add("adminMetadataCache", buildAdminMetadataCacheStats(config));
         return memory;
+    }
+
+    private static JsonObject buildAdminMetadataCacheStats(Configuration config) {
+        final var stats = cache.metadataCacheStats();
+        final var json = new JsonObject();
+        json.addProperty("procedureBytes", stats.procedureBytes());
+        json.addProperty("procedureEntries", (long) stats.procedureEntries());
+        json.addProperty("triggerBytes", stats.triggerBytes());
+        json.addProperty("triggerEntries", (long) stats.triggerEntries());
+        json.addProperty("schemaBytes", stats.schemaBytes());
+        json.addProperty("schemaEntries", (long) stats.schemaEntries());
+        json.addProperty("scheduleBytes", stats.scheduleBytes());
+        json.addProperty("scheduleEntries", (long) stats.scheduleEntries());
+        json.addProperty("missEntries", (long) stats.missEntries());
+        json.addProperty("procedureCacheMaxBytes", config.getProcedureCacheMaxBytes());
+        json.addProperty("schemaCacheMaxBytes", config.getSchemaCacheMaxBytes());
+        json.addProperty("triggerCacheMaxEntries", (long) config.getTriggerCacheMaxEntries());
+        json.addProperty("scheduleCacheMaxBytes", config.getScheduleCacheMaxBytes());
+        json.addProperty("metadataMissCacheMaxEntries", (long) config.getMetadataMissCacheMaxEntries());
+        return json;
     }
 
     private static JsonObject buildDatabaseStats(String dbName, Totals totals) {

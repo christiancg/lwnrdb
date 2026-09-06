@@ -11,21 +11,30 @@ import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.validations.AggregationStepValidator;
 
 public final class AuthorizationChecker {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final Set<OperationType> ADMIN_ONLY_OPERATIONS = Set.of(OperationType.CREATE_USER,
             OperationType.DELETE_USER, OperationType.CHANGE_PERMISSIONS, OperationType.SET_DATABASE_OWNERS,
             OperationType.LIST_USERS, OperationType.GET_DATABASE_STATS, OperationType.RESOLVE_TRANSACTION,
-            OperationType.LIST_TRANSACTIONS);
+            OperationType.LIST_TRANSACTIONS, OperationType.LIST_SCRIPTS, OperationType.CANCEL_SCRIPT,
+            OperationType.LIST_TRIGGER_RUNS, OperationType.RESOLVE_TRIGGER_RUN);
     private static final Set<OperationType> ALWAYS_ALLOWED_OPERATIONS = Set.of(OperationType.LIST_DATABASES,
             OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD, OperationType.STOP_LISTEN);
+    private static final Set<OperationType> SCRIPT_MANAGEMENT_OPERATIONS = Set.of(OperationType.SAVE_PROCEDURE,
+            OperationType.DELETE_PROCEDURE, OperationType.SAVE_TRIGGER, OperationType.DELETE_TRIGGER,
+            OperationType.SAVE_SCHEDULE, OperationType.DELETE_SCHEDULE, OperationType.TEST_TRIGGER);
 
     private AuthorizationChecker() {
     }
 
     private static boolean isAdminOnly(OperationType type) {
         return ADMIN_ONLY_OPERATIONS.contains(type);
+    }
+
+    private static boolean isScriptManagementOperation(OperationType type) {
+        return SCRIPT_MANAGEMENT_OPERATIONS.contains(type);
     }
 
     public static AuthorizationResult check(OperationRequest req, AdminUserEntry user) {
@@ -73,6 +82,28 @@ public final class AuthorizationChecker {
             return AuthorizationResult.allow();
         }
 
+        // Admins (allowed above) and owners (just above) may always run a script; anybody else needs the
+        // script permission for this specific database. Each operation the script issues is authorized on
+        // its own request, so the grant alone never widens what the script may read or write.
+        if (type == OperationType.RUN_SCRIPT || type == OperationType.CALL_PROCEDURE) {
+            return user.canRunScripts(dbName)
+                    ? AuthorizationResult.allow()
+                    : AuthorizationResult.deny("action is forbidden, no permissions");
+        }
+
+        // Installing is its own level rather than a fall-through to the collection-permission check below.
+        // A procedure called through CALL_PROCEDURE runs with the caller's authority, so whoever installs
+        // one hands every higher-privileged caller code to execute - and a trigger runs with the
+        // installer's authority, which makes installing strictly more powerful than writing. Neither
+        // should follow from a READ_WRITE grant on a collection. These ops are deliberately NOT in
+        // ADMIN_ONLY_OPERATIONS: that set is tested before the ownership short-circuit above, so putting
+        // them there would lock out database owners.
+        if (isScriptManagementOperation(type)) {
+            return user.canManageScripts(dbName)
+                    ? AuthorizationResult.allow()
+                    : AuthorizationResult.deny("action is forbidden, no permissions");
+        }
+
         final var requiredLevel = getRequiredPermissionLevel(type);
         final var collName = req.getCollectionName();
 
@@ -97,6 +128,13 @@ public final class AuthorizationChecker {
             }
         }
 
+        // A pipeline carrying a script executes code, which is a strictly wider capability than the READ
+        // the operation itself needs - so it takes the same per-database grant RUN_SCRIPT does. Admins and
+        // owners short-circuited above, exactly as they do for RUN_SCRIPT.
+        if (AggregationStepValidator.containsScript(stepsToCheck) && !user.canRunScripts(dbName)) {
+            return AuthorizationResult.deny("action is forbidden, no permissions");
+        }
+
         return AuthorizationResult.allow();
     }
 
@@ -114,7 +152,8 @@ public final class AuthorizationChecker {
 
     private static PermissionLevel getRequiredPermissionLevel(OperationType type) {
         return switch (type) {
-            case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS, LISTEN -> PermissionLevel.READ;
+            case FIND_BY_ID, AGGREGATE, LIST_COLLECTIONS, LISTEN, LIST_PROCEDURES, LIST_TRIGGERS, LIST_SCHEDULES ->
+                PermissionLevel.READ;
             default -> PermissionLevel.READ_WRITE;
         };
     }

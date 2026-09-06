@@ -1,0 +1,189 @@
+package org.techhouse.ops;
+
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.UUID;
+import java.util.function.Consumer;
+import org.techhouse.cache.Cache;
+import org.techhouse.config.Configuration;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
+import org.techhouse.ops.req.RunScriptRequest;
+import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.resp.RunScriptResponse;
+import org.techhouse.simplejs.CompiledScript;
+import org.techhouse.simplejs.SimpleJs;
+import org.techhouse.simplejs.host.DatabaseHostBindings;
+import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
+import org.techhouse.simplejs.host.ResourceLimits;
+import org.techhouse.simplejs.host.ScriptResult;
+
+// Runs a client-supplied script through SimpleJs, scoped to the requested database and bounded by the
+// script* configuration keys. Whether the caller may run a script at all is decided earlier, by
+// AuthorizationChecker; every operation the script itself issues is authorized again on its own request.
+// The sandbox and outcome mapping below are shared with ProcedureCallHelper, which differs only in where
+// the source comes from.
+public final class ScriptOperationHelper {
+    private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
+    private static final Cache cache = IocContainer.get(Cache.class);
+    private static final ScriptRunRegistry registry = IocContainer.get(ScriptRunRegistry.class);
+    private static final ScriptAdmission admission = IocContainer.get(ScriptAdmission.class);
+    private static final CompiledScriptCache compiledScripts = IocContainer.get(CompiledScriptCache.class);
+    private static final Configuration configuration = Configuration.getInstance();
+    private static final Logger logger = Logger.logFor(ScriptOperationHelper.class);
+    private static final String EXHAUSTED_MESSAGE = "Script exhausted available memory";
+
+    private ScriptOperationHelper() {
+    }
+
+    public static OperationResponse execute(RunScriptRequest request, String username, UUID clientId) {
+        if (!configuration.isScriptsEnabled()) {
+            return new OperationResponse(OperationType.RUN_SCRIPT, ErrorCode.SCRIPTS_DISABLED);
+        }
+        final var dbName = request.getDatabaseName();
+        if (cache.getAdminDbEntry(dbName) == null) {
+            return new OperationResponse(OperationType.RUN_SCRIPT, "Database '" + dbName + "' not found",
+                    ErrorCode.DATABASE_NOT_FOUND);
+        }
+        final var source = request.getScript();
+        if (source.getBytes(StandardCharsets.UTF_8).length > configuration.getScriptMaxSourceBytes()) {
+            return new OperationResponse(OperationType.RUN_SCRIPT, ErrorCode.SCRIPT_TOO_LARGE);
+        }
+        // Admitted only after the checks above, so a request that was never going to run does not consume
+        // one of the node's script permits.
+        final var permit = admission.acquire(username, dbName);
+        if (permit == null) {
+            return concurrencyRefusal(OperationType.RUN_SCRIPT);
+        }
+        try (permit) {
+            final var run = registry.register(ScriptRunKind.RUN_SCRIPT, dbName, null, username, clientId);
+            try {
+                // The parse failure is cached and replayed rather than thrown, so a syntax error stays the
+                // 400-9 response this operation has always answered with.
+                final var compilation = compiledScripts.get(source);
+                final var database = new EnforcingDatabaseAccess(username, clientId, dbName);
+                final var host = hostFor(request.getArgs(), database, DatabaseHostBindings.limitsFromConfiguration(),
+                        null, run);
+                final var start = System.currentTimeMillis();
+                final var raw = compilation.failure() == null
+                        ? simpleJs.run(compilation.compiled(), host)
+                        : simpleJs.failure(compilation.failure());
+                final var elapsed = System.currentTimeMillis() - start;
+                final var result = raw
+                        .withMetrics(raw.getMetrics().withHostCounters(database.operationCount(), elapsed));
+                logRun("RUN_SCRIPT user=" + username + " database=" + dbName, run.runId(), elapsed, result);
+                ScriptRunHistory.record(historyOf(run.runId(), ScriptRunKind.RUN_SCRIPT, dbName, null, username, start,
+                        elapsed, result));
+                return toRunScriptResponse(result, run.runId());
+            } finally {
+                registry.unregister(run.runId());
+            }
+        }
+    }
+
+    /** Names which of the three ceilings refused the run, so an operator can act on the right one. */
+    static OperationResponse concurrencyRefusal(OperationType type) {
+        final var scope = admission.lastRefusalScope();
+        return new OperationResponse(type,
+                ErrorCode.SCRIPT_CONCURRENCY_LIMIT.getDefaultMessage() + " (" + scope + " limit)",
+                ErrorCode.SCRIPT_CONCURRENCY_LIMIT);
+    }
+
+    /** A finished run and the id it was visible under while it ran, so a caller can report both. */
+    public record RunOutcome(String runId, ScriptResult result) {
+    }
+
+    // The shared body: build the configured sandbox, run an already-parsed program, log the outcome.
+    // Callers map the ScriptResult onto their own response subclass. The kind and name come from the caller
+    // rather than being inferred here, because CALL_PROCEDURE, a trigger and a schedule all share this body
+    // and each is a different thing to see in LIST_SCRIPTS.
+    static RunOutcome runCompiled(CompiledScript compiled, JsonObject args, String dbName, String username,
+            UUID clientId, String logPrefix, ScriptRunKind kind, String name) {
+        return runCompiled(compiled, args, dbName, username, clientId, logPrefix, kind, name,
+                DatabaseHostBindings.limitsFromConfiguration(), null);
+    }
+
+    // The overload a scheduled run uses: the sandbox is the configured one with its wall clock replaced,
+    // and the console is teed to the server log because nobody is waiting on a response to carry it.
+    static RunOutcome runCompiled(CompiledScript compiled, JsonObject args, String dbName, String username,
+            UUID clientId, String logPrefix, ScriptRunKind kind, String name, ResourceLimits limits,
+            Consumer<String> console) {
+        final var run = registry.register(kind, dbName, name, username, clientId);
+        try {
+            final var database = new EnforcingDatabaseAccess(username, clientId, dbName);
+            final var host = hostFor(args, database, limits, console, run);
+            final var start = System.currentTimeMillis();
+            final var raw = simpleJs.run(compiled, host);
+            final var elapsed = System.currentTimeMillis() - start;
+            final var result = raw.withMetrics(raw.getMetrics().withHostCounters(database.operationCount(), elapsed));
+            logRun(logPrefix, run.runId(), elapsed, result);
+            // A trigger and a schedule record their own rows: each knows context this shared body does not -
+            // the collection, event and attempt for one, the procedure behind the schedule name for the other.
+            if (kind != ScriptRunKind.TRIGGER && kind != ScriptRunKind.SCHEDULE) {
+                ScriptRunHistory.record(historyOf(run.runId(), kind, dbName, name, username, start, elapsed, result));
+            }
+            return new RunOutcome(run.runId(), result);
+        } finally {
+            registry.unregister(run.runId());
+        }
+    }
+
+    // A null console sink leaves the capture capturing only, so the output travels back on the response
+    // instead of into the server log.
+    private static DatabaseHostBindings hostFor(JsonObject args, EnforcingDatabaseAccess database,
+            ResourceLimits limits, Consumer<String> console, ScriptRun run) {
+        return DatabaseHostBindings.of(args, database, console, limits, run::isCancelled);
+    }
+
+    private static void logRun(String logPrefix, String runId, long durationMs, ScriptResult result) {
+        final var outcome = result.isError() ? result.getErrorName() + ": " + result.getErrorMessage() : "ok";
+        final var metrics = result.getMetrics();
+        final var line = logPrefix + " runId=" + runId + " durationMs=" + durationMs + " outcome=" + outcome
+                + " instructions=" + metrics.instructions() + " peakMemoryBytes=" + metrics.peakMemoryBytes()
+                + " dbOps=" + metrics.dbOperations() + renderStack(result.getErrorStack());
+        // An exhausted heap means the allocation budget failed to bound the script, or that the JVM was
+        // already under pressure from the cache rather than from this script. Either needs an operator.
+        if (EXHAUSTED_MESSAGE.equals(result.getErrorMessage())) {
+            logger.warning(line);
+        } else {
+            logger.info(line);
+        }
+    }
+
+    private static OperationResponse toRunScriptResponse(ScriptResult result, String runId) {
+        final var response = result.isError()
+                ? new RunScriptResponse(result.getErrorName() + ": " + result.getErrorMessage(),
+                        errorCodeFor(result.getErrorName()), result.getLogs(), result.isLogsTruncated(), runId,
+                        result.getErrorStack())
+                : new RunScriptResponse("Script executed successfully", result.getValue(), result.getLogs(),
+                        result.isLogsTruncated(), runId);
+        response.setMetrics(result.getMetrics().toJson());
+        return response;
+    }
+
+    static ScriptRunRecord historyOf(String runId, ScriptRunKind kind, String dbName, String name, String username,
+            long startedAt, long durationMs, ScriptResult result) {
+        return new ScriptRunRecord(runId, kind, dbName, name, name, null, null, username, username, startedAt,
+                durationMs, 1, result.isError() ? ScriptRunRecord.OUTCOME_ERROR : ScriptRunRecord.OUTCOME_OK,
+                result.getErrorName(), result.getErrorMessage(), result.getErrorStack(), result.getMetrics(),
+                result.getLogs(), result.isLogsTruncated());
+    }
+
+    // One line, so the trace stays greppable in a log a human is tailing.
+    public static String renderStack(List<String> stack) {
+        return stack == null || stack.isEmpty() ? "" : " stack=[" + String.join(" | ", stack) + "]";
+    }
+
+    static ErrorCode errorCodeFor(String errorName) {
+        return switch (errorName) {
+            case "ScriptTimeoutError" -> ErrorCode.SCRIPT_TIMEOUT;
+            case "ScriptCancelledError" -> ErrorCode.SCRIPT_CANCELLED;
+            case "ScriptLimitError" -> ErrorCode.SCRIPT_LIMIT_EXCEEDED;
+            case "ScriptMemoryError" -> ErrorCode.SCRIPT_MEMORY_EXCEEDED;
+            case "ScriptResultTooLargeError" -> ErrorCode.SCRIPT_RESULT_TOO_LARGE;
+            case "ScriptPendingResultError" -> ErrorCode.SCRIPT_RESULT_PENDING;
+            default -> ErrorCode.SCRIPT_FAILED;
+        };
+    }
+}

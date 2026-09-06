@@ -40,34 +40,38 @@ public final class SchemaValidationHelper {
     }
 
     private static OperationResponse checkSave(SaveRequest request) {
-        final var schema = cache.getCollectionSchema(request.getDatabaseName(), request.getCollectionName());
-        if (schema == null) {
-            return null;
-        }
-        final var result = eJson.validateWithSchema(withoutId(request.getObject()), schema);
-        if (result.isValid()) {
+        final var errors = schemaErrors(request.getDatabaseName(), request.getCollectionName(), request.getObject());
+        if (errors == null) {
             return null;
         }
         return new OperationResponse(OperationType.SAVE,
-                ErrorCode.SCHEMA_VALIDATION_FAILED.getDefaultMessage() + ": " + String.join("; ", result.getErrors()),
+                ErrorCode.SCHEMA_VALIDATION_FAILED.getDefaultMessage() + ": " + errors,
                 ErrorCode.SCHEMA_VALIDATION_FAILED);
     }
 
     private static OperationResponse checkBulkSave(BulkSaveRequest request) {
-        final var schema = cache.getCollectionSchema(request.getDatabaseName(), request.getCollectionName());
-        if (schema == null) {
-            return null;
-        }
         for (final var object : request.getObjects()) {
-            final var result = eJson.validateWithSchema(withoutId(object), schema);
-            if (!result.isValid()) {
+            final var errors = schemaErrors(request.getDatabaseName(), request.getCollectionName(), object);
+            if (errors != null) {
                 return new OperationResponse(
                         OperationType.BULK_SAVE, ErrorCode.SCHEMA_VALIDATION_FAILED.getDefaultMessage()
-                                + " for document '" + idOf(object) + "': " + String.join("; ", result.getErrors()),
+                                + " for document '" + idOf(object) + "': " + errors,
                         ErrorCode.SCHEMA_VALIDATION_FAILED);
             }
         }
         return null;
+    }
+
+    // Also the entry point a before trigger's replacement document is re-validated through: the checks
+    // above run at the edge, before the hook, so without this a hook could produce a document the
+    // collection's schema forbids. Returns the joined violations, or null when the document complies.
+    public static String schemaErrors(String dbName, String collName, JsonObject object) {
+        final var schema = cache.getCollectionSchema(dbName, collName);
+        if (schema == null) {
+            return null;
+        }
+        final var result = eJson.validateWithSchema(withoutId(object), schema);
+        return result.isValid() ? null : String.join("; ", result.getErrors());
     }
 
     // Validates the user document without the reserved _id field: _id is a system-assigned primary key

@@ -41,10 +41,54 @@ public class ConfigurationValidatorTest {
         map.put("replicationAckTimeoutMs", "5000");
         map.put("virtualNodesPerNode", "128");
         map.put("readFallbackToLocal", "true");
+        map.put("scriptRoutingEnabled", "true");
         map.put("clusterTlsEnabled", "false");
         map.put("clusterSecret", "");
         map.put("antiEntropyIntervalMs", "60000");
         map.put("tombstoneRetentionMs", "86400000");
+        map.put("scriptTimeZone", "UTC");
+        map.put("scriptLocale", "en-US");
+        map.put("scriptsEnabled", "false");
+        map.put("scriptInstructionBudget", "10000000");
+        map.put("scriptTimeoutMs", "5000");
+        map.put("scriptMaxDepth", "200");
+        map.put("scriptMaxSourceBytes", "256Kb");
+        map.put("scriptMaxLogLines", "1000");
+        map.put("scriptMaxLogLineChars", "4096");
+        map.put("scriptMaxMemoryBytes", "64Mb");
+        map.put("scriptMaxResultBytes", "16Mb");
+        map.put("scriptCursorBatchSize", "500");
+        map.put("scriptCursorMaxBatchSize", "5000");
+        map.put("aggregationScriptInstructionBudget", "1000000");
+        map.put("aggregationScriptTimeoutMs", "2000");
+        map.put("aggregationScriptMaxSourceBytes", "16Kb");
+        map.put("maxConcurrentScripts", "16");
+        map.put("scriptQueueWaitMs", "250");
+        map.put("procedureCacheSize", "128");
+        map.put("triggersEnabled", "false");
+        map.put("triggerThreads", "2");
+        map.put("triggerQueueSize", "10000");
+        map.put("triggerMaxDepth", "3");
+        map.put("triggerTimeoutMs", "1000");
+        map.put("shutdownTimeoutMs", "15000");
+        map.put("procedureCacheMaxBytes", "32Mb");
+        map.put("schemaCacheMaxBytes", "32Mb");
+        map.put("triggerCacheMaxEntries", "4096");
+        map.put("metadataMissCacheMaxEntries", "4096");
+        map.put("triggerRunLogEnabled", "true");
+        map.put("triggerRunRetentionMs", "86400000");
+        map.put("beforeHookInstructionBudget", "200000");
+        map.put("beforeHookTimeoutMs", "200");
+        map.put("schedulesEnabled", "false");
+        map.put("scheduleThreads", "2");
+        map.put("scheduleQueueSize", "100");
+        map.put("scheduleTickMs", "1000");
+        map.put("scheduleRefreshMs", "60000");
+        map.put("scheduleTimeoutMs", "30000");
+        map.put("scheduleMaxPerDatabase", "100");
+        map.put("scheduleCacheMaxBytes", "8Mb");
+        map.put("scriptTextImportEnabled", "false");
+        map.put("scriptProcedureImportEnabled", "true");
         return map;
     }
 
@@ -246,5 +290,100 @@ public class ConfigurationValidatorTest {
         config.remove("port");
         final var errors = ConfigurationValidator.validate(config);
         assertFalse(errors.isEmpty());
+    }
+
+    @Test
+    public void test_script_time_zone_accepts_a_fixed_offset_zone(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("scriptTimeZone", "+05:30");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_script_time_zone_rejects_an_unknown_zone(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptTimeZone", "Mars/Olympus", "scriptTimeZone");
+    }
+
+    @Test
+    public void test_script_time_zone_rejects_a_blank_value(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptTimeZone", "  ", "scriptTimeZone");
+    }
+
+    @Test
+    public void test_script_locale_rejects_a_malformed_tag(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptLocale", "not a locale", "scriptLocale");
+    }
+
+    @Test
+    public void test_script_locale_rejects_a_blank_value(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptLocale", "", "scriptLocale");
+    }
+
+    @Test
+    public void test_invalid_script_sandbox_values(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptsEnabled", "maybe", "scriptsEnabled");
+        assertHasError(tempDir, "scriptTextImportEnabled", "maybe", "scriptTextImportEnabled");
+        assertHasError(tempDir, "scriptProcedureImportEnabled", "maybe", "scriptProcedureImportEnabled");
+        assertHasError(tempDir, "scriptInstructionBudget", "0", "scriptInstructionBudget");
+        assertHasError(tempDir, "scriptInstructionBudget", "not-a-number", "scriptInstructionBudget");
+        assertHasError(tempDir, "scriptTimeoutMs", "0", "scriptTimeoutMs");
+        assertHasError(tempDir, "scriptMaxDepth", "0", "scriptMaxDepth");
+        assertHasError(tempDir, "scriptMaxSourceBytes", "nonsense", "scriptMaxSourceBytes");
+        assertHasError(tempDir, "scriptMaxSourceBytes", "0", "scriptMaxSourceBytes");
+        assertHasError(tempDir, "scriptMaxLogLines", "0", "scriptMaxLogLines");
+        assertHasError(tempDir, "scriptMaxLogLineChars", "0", "scriptMaxLogLineChars");
+        assertHasError(tempDir, "scriptMaxMemoryBytes", "nonsense", "scriptMaxMemoryBytes");
+        assertHasError(tempDir, "scriptMaxMemoryBytes", "0", "scriptMaxMemoryBytes");
+    }
+
+    @Test
+    public void test_invalid_script_result_and_cursor_bounds(@TempDir Path tempDir) {
+        assertHasError(tempDir, "scriptMaxResultBytes", "nonsense", "scriptMaxResultBytes");
+        assertHasError(tempDir, "scriptMaxResultBytes", "0", "scriptMaxResultBytes");
+        assertHasError(tempDir, "scriptCursorBatchSize", "0", "scriptCursorBatchSize");
+        assertHasError(tempDir, "scriptCursorMaxBatchSize", "0", "scriptCursorMaxBatchSize");
+    }
+
+    @Test
+    public void test_invalid_aggregation_script_bounds(@TempDir Path tempDir) {
+        assertHasError(tempDir, "aggregationScriptInstructionBudget", "0", "aggregationScriptInstructionBudget");
+        assertHasError(tempDir, "aggregationScriptInstructionBudget", "not-a-number",
+                "aggregationScriptInstructionBudget");
+        assertHasError(tempDir, "aggregationScriptTimeoutMs", "0", "aggregationScriptTimeoutMs");
+        assertHasError(tempDir, "aggregationScriptMaxSourceBytes", "nonsense", "aggregationScriptMaxSourceBytes");
+        assertHasError(tempDir, "aggregationScriptMaxSourceBytes", "0", "aggregationScriptMaxSourceBytes");
+    }
+
+    // 0 is legal for both: it means "no cap" and "reject immediately" respectively.
+    @Test
+    public void test_invalid_script_admission_bounds(@TempDir Path tempDir) {
+        assertHasError(tempDir, "maxConcurrentScripts", "-1", "maxConcurrentScripts");
+        assertHasError(tempDir, "maxConcurrentScripts", "not-a-number", "maxConcurrentScripts");
+        assertHasError(tempDir, "scriptQueueWaitMs", "-1", "scriptQueueWaitMs");
+        assertHasError(tempDir, "scriptQueueWaitMs", "not-a-number", "scriptQueueWaitMs");
+    }
+
+    @Test
+    public void test_zero_script_admission_bounds_are_valid(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("maxConcurrentScripts", "0");
+        config.put("scriptQueueWaitMs", "0");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_cursor_batch_size_must_not_exceed_the_maximum(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("scriptCursorBatchSize", "5001");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("must not be greater than scriptCursorMaxBatchSize")));
+    }
+
+    @Test
+    public void test_scripts_enabled_true_is_valid(@TempDir Path tempDir) {
+        final var config = baseValid(tempDir);
+        config.put("scriptsEnabled", "true");
+        config.put("scriptTextImportEnabled", "true");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
     }
 }

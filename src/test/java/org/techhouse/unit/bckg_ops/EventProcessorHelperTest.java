@@ -14,9 +14,12 @@ import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.bckg_ops.events.ScriptRunHistoryEvent;
 import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
+import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -24,6 +27,9 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.ScriptRunHistory;
+import org.techhouse.ops.ScriptRunKind;
+import org.techhouse.ops.ScriptRunRecord;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -44,6 +50,27 @@ public class EventProcessorHelperTest {
         final var event = new Event(EventType.CREATED) {
         };
         Assertions.assertThrows(IllegalStateException.class, () -> EventProcessorHelper.processEvent(event));
+    }
+
+    @Test
+    public void processScriptRunHistoryEventTest() throws Exception {
+        TestUtils.createTestDatabaseAndCollection();
+        TestUtils.setPrivateField(Configuration.getInstance(), "scriptRunHistoryEnabled", true);
+        TestUtils.setPrivateField(Configuration.getInstance(), "scriptRunHistoryKinds", "TRIGGER");
+        TestUtils.setPrivateField(Configuration.getInstance(), "scriptRunHistoryMaxErrorChars", 2000);
+        ScriptRunHistory.reset();
+        final var record = new ScriptRunRecord("evt-run-1", ScriptRunKind.TRIGGER, TestGlobals.DB, "job", "proc",
+                TestGlobals.COLL, "CREATED", "u1", "u2", System.currentTimeMillis(), 3L, 1, ScriptRunRecord.OUTCOME_OK,
+                null, null, null, null, null, false);
+
+        EventProcessorHelper.processEvent(new ScriptRunHistoryEvent(record));
+
+        Assertions.assertEquals(1L, ScriptRunHistory.getRecorded());
+        final var stored = IocContainer.get(Cache.class)
+                .getWholeCollection(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME).get("evt-run-1");
+        Assertions.assertNotNull(stored);
+        TestUtils.setPrivateField(Configuration.getInstance(), "scriptRunHistoryEnabled", false);
+        ScriptRunHistory.reset();
     }
 
     @Test

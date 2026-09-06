@@ -28,6 +28,7 @@ import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 import org.techhouse.ops.req.agg.step.MapAggregationStep;
+import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.utils.JsonUtils;
@@ -73,8 +74,17 @@ public final class AggregationOperationHelper {
         return identifiers;
     }
 
+    // The context wraps the terminal operation as well as the loop: a Stream is lazy, so a SCRIPT
+    // operator's callable is invoked while resultStream.toList() runs, long after the loop has ended.
     private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
             String dbName, String collName) throws IOException {
+        try (var context = new PipelineScriptContext()) {
+            return applySteps(steps, initialStream, dbName, collName, context);
+        }
+    }
+
+    private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
+            String dbName, String collName, PipelineScriptContext context) throws IOException {
         Stream<JsonObject> resultStream = initialStream;
         var startIndex = 0;
         if (resultStream == null) {
@@ -89,8 +99,8 @@ public final class AggregationOperationHelper {
         for (var i = startIndex; i < steps.size(); i++) {
             final var step = steps.get(i);
             resultStream = switch (step.getType()) {
-                case FILTER -> processFilterStep(step, resultStream, dbName, collName);
-                case MAP -> processMapStep(step, resultStream, dbName, collName);
+                case FILTER -> processFilterStep(step, resultStream, dbName, collName, context);
+                case MAP -> processMapStep(step, resultStream, dbName, collName, context);
                 case GROUP_BY -> processGroupByStep(step, resultStream, dbName, collName);
                 case JOIN -> processJoinStep(step, resultStream, dbName, collName);
                 case COUNT -> processCountStep(resultStream, dbName, collName);
@@ -98,6 +108,7 @@ public final class AggregationOperationHelper {
                 case LIMIT -> processLimitStep(step, resultStream, dbName, collName);
                 case SKIP -> processSkipStep(step, resultStream, dbName, collName);
                 case SORT -> processSortStep(step, resultStream, dbName, collName);
+                case REDUCE -> processReduceStep(step, resultStream, dbName, collName, context);
             };
         }
         try {
@@ -121,23 +132,31 @@ public final class AggregationOperationHelper {
     }
 
     private static Stream<JsonObject> processFilterStep(BaseAggregationStep baseFilterStep,
-            Stream<JsonObject> resultStream, String dbName, String collName) throws IOException {
+            Stream<JsonObject> resultStream, String dbName, String collName, PipelineScriptContext context)
+            throws IOException {
         final var filterStep = (FilterAggregationStep) baseFilterStep;
         final var filterOperator = filterStep.getOperator();
-        return FilterOperatorHelper.processOperator(filterOperator, resultStream, dbName, collName);
+        return FilterOperatorHelper.processOperator(filterOperator, resultStream, dbName, collName, context);
     }
 
     private static Stream<JsonObject> processMapStep(BaseAggregationStep baseMapStep, Stream<JsonObject> resultStream,
-            String dbName, String collName) throws IOException {
+            String dbName, String collName, PipelineScriptContext context) throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var mapStep = (MapAggregationStep) baseMapStep;
         for (var step : mapStep.getOperators()) {
             resultStream = resultStream.map(jsonObject -> {
                 final var copy = jsonObject.deepCopy();
-                return MapOperatorHelper.processOperator(step, copy);
+                return MapOperatorHelper.processOperator(step, copy, context);
             });
         }
         return resultStream;
+    }
+
+    private static Stream<JsonObject> processReduceStep(BaseAggregationStep baseReduceStep,
+            Stream<JsonObject> resultStream, String dbName, String collName, PipelineScriptContext context)
+            throws IOException {
+        return ReduceOperatorHelper.processReduceStep((ReduceAggregationStep) baseReduceStep, resultStream, dbName,
+                collName, context);
     }
 
     private static Stream<JsonObject> processGroupByStep(BaseAggregationStep baseGroupByStep,
@@ -151,6 +170,9 @@ public final class AggregationOperationHelper {
             }
         }
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
+        // The reassignment above defeats the IDE's consumed-stream tracking: it sees the parameter passed
+        // to initializeStreamIfNecessary and cannot tell the value read back is a different stream.
+        //noinspection DataFlowIssue
         return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, groupByStep.getFieldName()))
                 .collect(Collectors
                         .groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, groupByStep.getFieldName())))

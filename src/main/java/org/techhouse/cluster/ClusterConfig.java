@@ -79,6 +79,10 @@ public class ClusterConfig {
         return configuration.isReadFallbackToLocal();
     }
 
+    public boolean scriptRoutingEnabled() {
+        return configuration.isScriptRoutingEnabled();
+    }
+
     public boolean tlsEnabled() {
         return configuration.isClusterTlsEnabled();
     }

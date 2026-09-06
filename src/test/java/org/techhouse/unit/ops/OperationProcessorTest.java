@@ -27,6 +27,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.SaveOperationHelper;
+import org.techhouse.ops.ScriptAdmission;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CloseConnectionRequest;
@@ -856,6 +857,20 @@ public class OperationProcessorTest {
         assertTrue(stats.has("memory"));
         assertTrue(stats.has("totals"));
         assertTrue(stats.has("databases"));
+        assertTrue(stats.has("scripts"));
+
+        final var scripts = stats.get("scripts").asJsonObject();
+        assertTrue(scripts.has("routingEnabled"));
+        assertEquals(0L, scripts.get("running").asJsonNumber().getValue().longValue());
+        final var admission = IocContainer.get(ScriptAdmission.class);
+        assertEquals(admission.capacity(), scripts.get("capacity").asJsonNumber().getValue().longValue());
+        assertEquals(admission.available(), scripts.get("available").asJsonNumber().getValue().longValue());
+        assertEquals(admission.getRejected(), scripts.get("rejected").asJsonNumber().getValue().longValue());
+        assertEquals(admission.getWaited(), scripts.get("waited").asJsonNumber().getValue().longValue());
+        assertTrue(scripts.has("forwarded"));
+        assertTrue(scripts.has("forwardFallbacks"));
+        assertEquals(IocContainer.get(org.techhouse.ops.ScriptRunRegistry.class).getCancelled(),
+                scripts.get("cancelled").asJsonNumber().getValue().longValue());
 
         final var memory = stats.get("memory").asJsonObject();
         assertTrue(memory.has("heapUsedBytes"));

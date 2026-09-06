@@ -15,6 +15,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.MembershipListener;
 import org.techhouse.cluster.MembershipView;
@@ -27,16 +28,24 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ScriptAdmission;
+import org.techhouse.ops.ScriptLoad;
 
 public class MembershipService {
     private final Logger logger = Logger.logFor(MembershipService.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
+    private final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
+    private final ScriptAdmission scriptAdmission = IocContainer.get(ScriptAdmission.class);
+    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Map<String, NodeInfo> members = new ConcurrentHashMap<>();
     private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
     private final List<MembershipListener> listeners = new CopyOnWriteArrayList<>();
     private final AtomicLong heartbeatCounter = new AtomicLong();
     private final AtomicBoolean changed = new AtomicBoolean();
+    // Pushed in by AdminAntiEntropyService rather than read from it: it already depends on this service, and
+    // the IoC container resolves fields during construction, so a field back to it would recurse.
+    private volatile boolean adminSyncing;
     private volatile NodeInfo self;
     private ScheduledExecutorService scheduler;
 
@@ -46,6 +55,10 @@ public class MembershipService {
 
     public NodeInfo getSelf() {
         return self;
+    }
+
+    public void setAdminSyncing(boolean syncing) {
+        adminSyncing = syncing;
     }
 
     public MembershipView membershipView() {
@@ -106,6 +119,10 @@ public class MembershipService {
     public void gossipTick() {
         final var now = System.currentTimeMillis();
         self.setHeartbeat(heartbeatCounter.incrementAndGet());
+        self.setScriptLoad(scriptLoad.current());
+        self.setScriptCapacity(scriptAdmission.capacity());
+        self.setAdminSyncing(adminSyncing);
+        self.setAdminEpoch(adminEpoch.current());
         lastSeen.put(self.getNodeId(), now);
         for (var member : members.values()) {
             if (member.getNodeId().equals(self.getNodeId()) || member.getState() != NodeState.ALIVE) {
@@ -176,8 +193,10 @@ public class MembershipService {
             if (existing == null) {
                 lastSeen.put(id, System.currentTimeMillis());
                 changed.set(true);
-                return new NodeInfo(id, incoming.getHost(), incoming.getPort(), NodeState.ALIVE,
+                final var joined = new NodeInfo(id, incoming.getHost(), incoming.getPort(), NodeState.ALIVE,
                         incoming.getIncarnation(), incoming.getHeartbeat());
+                joined.copyTelemetryFrom(incoming);
+                return joined;
             }
             final var fresher = incoming.getIncarnation() > existing.getIncarnation()
                     || (incoming.getIncarnation() == existing.getIncarnation()
@@ -187,6 +206,9 @@ public class MembershipService {
                 existing.setHeartbeat(incoming.getHeartbeat());
                 existing.setHost(incoming.getHost());
                 existing.setPort(incoming.getPort());
+                // Deliberately not a `changed` event: telemetry moves on every round and firing the
+                // membership listeners that often would rebuild the ring and re-run anti-entropy for nothing.
+                existing.copyTelemetryFrom(incoming);
                 lastSeen.put(id, System.currentTimeMillis());
                 if (existing.getState() != NodeState.ALIVE) {
                     existing.setState(NodeState.ALIVE);
@@ -228,7 +250,7 @@ public class MembershipService {
 
     private NodeInfo buildSelf(String nodeId) {
         return new NodeInfo(nodeId, clusterConfig.advertisedAddress(), clusterConfig.clusterPort(), NodeState.ALIVE,
-                System.currentTimeMillis(), 0L);
+                System.currentTimeMillis(), 0L, 0, scriptAdmission.capacity());
     }
 
     private String resolveNodeId() {

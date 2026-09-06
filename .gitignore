@@ -41,6 +41,9 @@ build/
 CLAUDE.md
 .claude/
 
+### Plans (local-only, not tracked) ###
+plans/
+
 ### DB files ###
 logs/
 db/
@@ -48,6 +51,11 @@ db/
 
 ### Test logs ###
 test_log/
+
+### test262 corpus (fetched, never committed) ###
+# Anchored: an unanchored `test262/` would also ignore the worker's Java package
+# (src/test/java/org/techhouse/unit/simplejs/test262/).
+/test262/
 
 ### TLS keystores (auto-generated, contain private keys — never commit) ###
 certs/

@@ -1,0 +1,2365 @@
+# SimpleJS
+
+SimpleJS is a small, dependency-free JavaScript engine embedded in LWNRDB. Its
+purpose is to let user-supplied scripts run inside the database — the same
+zero-runtime-dependency constraint that governs EJson and the JSON Schema
+validator applies here: everything is hand-rolled under
+`org.techhouse.simplejs`, with no external parser or JS runtime.
+
+The engine is a classic three-stage pipeline:
+
+```
+source String
+  → Lexer.lex(source)      → List<JsBaseElement>   (tokens)
+  → Parser.parse(tokens)   → Program               (AST)
+  → Interpreter.run(ast)   → result                (evaluation)
+```
+
+The **lexer** and **parser** are implemented and cover the ES2020–ES2026
+syntactic surface. The **interpreter** is complete: sub-phases **6a–6f** plus every
+follow-up (async generators, regex, tagged templates, `using`, the engine-completion
+phases, spec-gap Phases A–G, the ES2022–2026 stdlib additions, ASI, always-on strict
+mode and the ES2026 conformance phases) are done, so the whole document below
+describes the engine **as built**. The engine is reached through
+`SimpleJs.run(source, HostBindings)`, and clients reach that through the `RUN_SCRIPT`
+wire operation (see *The `RUN_SCRIPT` operation* below).
+
+Two lists bound what the engine does **not** do: the
+[verified gaps and divergences](#known-gaps-and-divergences)
+(things a conformant engine has that this one is missing or gets wrong — candidates
+for closing) and the
+[deliberately unimplemented features](#deliberately-unimplemented-es2026-features-out-of-scope-for-a-database-interpreter)
+(design decisions, not gaps).
+
+> **Status legend:** ✅ implemented · ⬜ not yet built.
+
+## Package layout
+
+| Package | Responsibility |
+|---|---|
+| `simplejs/elements/` | ✅ Token types produced by the lexer. `JsBaseElement` is the abstract base with a `JsType` enum resolved by a centralized `internalGetType` switch; each concrete token (`JsKeyword`, `JsIdentifier`, `JsPrivateIdentifier`, `JsNumber`, `JsBigInt`, `JsString`, `JsBoolean`, `JsNull`, `JsUndefined`, `JsOperator`, `JsSeparator`, `JsRegex`, `JsTemplateString`, `JsEOF`) is a small immutable class with `getX()` getters. Singletons (`JsNull`/`JsUndefined`/`JsEOF`) use `getInstance()`. `SourcePosition` (offset/length/line/column) is a token-location value held **parallel** to the token stream rather than on the tokens, so the singletons keep their identity. |
+| `simplejs/nodes/` | ✅ AST node types produced by the parser. Mirrors the `elements/` convention exactly: an abstract `JsNode` base with a `NodeType` enum resolved by a centralized `internalGetType` switch, plus `Expression`/`Statement` marker abstract subclasses for parser type-safety. |
+| `simplejs/internal/` | `Lexer` (✅), `Parser` (✅), and `Interpreter` (✅ phases 6a–6f). Phase 6f adds the host-aware `Interpreter.run(Program, HostBindings) → ProgramOutcome` (the legacy `run(Program)`/`run(String)` overloads keep returning the last value, now allowing a top-level `return`), `import`/`export` handling (module binding + the return/export result contract), and the sandbox `tick()` checked at loop back-edges and call entries plus a recursion depth cap. Async/generator execution runs on `Coroutine` (a virtual-thread cooperative coroutine) driven by an `EventLoop` microtask queue, both in this package. Each is a `final` class with a public `static` entry point wrapping encapsulated state. `Lexer.lexWithPositions` returns a `LexResult(source, tokens, positions)`; `Lexer.lex` delegates to it and returns just the tokens. `Parser.parse` has a `LexResult` overload (position-aware errors) alongside the token-list overload (index-based errors). `Interpreter.run(Program)` (and the `run(String)` convenience overload that lexes+parses first) tree-walks the AST; it resolves array/string instance methods lazily via `ArrayBuiltins`/`StringBuiltins`, runs a single unified destructuring routine (declarations, params, assignment LHS, `catch`) parameterized by a leaf binder, and (phase 6d) evaluates classes — building a `JsClass`, constructing instances via the field-ordering constructor chain, dispatching methods/getters/setters and `super`, and evaluating private-member access and `instanceof`. The interpreter's runtime helpers `Environment` (scope chain, `this` binding, home-class binding for `super`, function-scope hoisting), `Completion` (control-flow signal), `JsCoercion` (type conversions), `JsOperators` (operator semantics) and `RegexTranslator` (JS regex pattern/flags → an `internal/regex/RegexProgram`, compiled and matched by the custom engine — see *Regex engine*) live here too. Both big classes were later split into sub-packages for maintainability: `internal/parser/` (`ParserTables` precedences, `TokenStream` cursor + `newlineBefore` access, `PatternConverter` cover-grammar conversion) and `internal/interpreter/` (`ExpressionEvaluator`, `StatementEvaluator`, `MemberEvaluator`, `BindingEvaluator`, `ClassEvaluator`, `ModuleEvaluator`, `Iteration`, `ProxyDispatch`, `InterpreterUtils`) — `Parser`/`Interpreter` remain the entry points. |
+| `simplejs/values/` | ✅ (phases 6a–6e) Runtime value model, mirroring the `nodes/` convention: an abstract `JsValue` base with a `JsValueType` enum resolved by a centralized `internalGetType` switch. Concrete types: `JsNumber` (double), `JsString`, `JsBoolean` (`TRUE`/`FALSE` constants), `JsBigInt` (`BigInteger`), `JsUndefined`/`JsNull` (singletons via `getInstance()`), `JsObject` (insertion-ordered property map, with a `freeze` flag for `Object.freeze`, plus a nullable `klass` link + lazy private-field map for class instances), `JsArray`, `JsFunction` (a closure: params, body, captured `Environment`, arrow/expression-body flags), `JsNativeFunction` (a host/built-in function backed by a `BiFunction`, plus an optional static-property map for callable namespaces like `Number.isNaN`), and `JsClass` (phase 6d: a constructable class value holding constructor/instance/static method+accessor tables, static properties, the instance-field list, private-member tables and the shared method scope; `typeof` a class is `"function"`). `EJsonInterop` converts `JsValue ↔ org.techhouse.ejson` elements (used by `JSON.parse`/`stringify`; custom-type mapping is minimal until the DB sub-phase). A dedicated model (not EJson) so JS `undefined`/`null` and coercion rules stay faithful. Phase 6e adds `JsPromise` (a pending/fulfilled/rejected promise whose reactions are scheduled on the `EventLoop`) and `JsGenerator` (a generator object wrapping a `Coroutine`); both are `typeof "object"`. `JsAsyncGenerator` (an `async function*` object wrapping a `Coroutine` plus the in-flight next-`JsPromise`; `typeof "object"`) drives the async-iterator protocol. `JsRegExp` (a compiled `internal/regex/RegexProgram` — see *Regex engine* — plus the JS `source`/`flags` and a mutable `lastIndex` for `g`/`y` matching; `typeof "object"`, `toStr` renders `/source/flags`) backs regex literals and the `RegExp` global. Later phases add `JsSymbol` (+ `SameValueZero`), `JsMap`/`JsSet`/`JsDate`, `JsProxy`, `JsArguments` (mapped/unmapped) and `JsGlobalObject` (the live `globalThis`), and the binary trio `JsArrayBuffer`/`JsTypedArray`/`JsDataView`; `JsObject` grows a prototype link, accessor descriptors, per-key `PropertyFlags` and an `extensible` flag, and `JsFunction` a lazy `prototype`. |
+| `simplejs/builtins/` | ✅ (phases 6b–6e) Standard-library values installed into the global scope by `GlobalScope.install`. `ErrorBuiltins` registers the `Error`/`TypeError`/`RangeError`/`SyntaxError`/`URIError`/`ReferenceError`/`EvalError` constructors and the `{name, message}` error shape. `ObjectBuiltins` (`keys`/`values`/`entries`/`assign`/`freeze`/`isFrozen`/`seal`/`isSealed`/`preventExtensions`/`isExtensible` — the enumeration methods skip non-enumerable own keys, spec-gap Phase C), `ArrayBuiltins` (callable `Array` + `isArray` and the instance methods `map`/`filter`/`reduce`/`forEach`/`find`/`some`/`every`/`includes`/`indexOf`/`slice`/`splice`/`concat`/`join`/`push`/`pop`/`shift`/`unshift`/`sort`/`flat`), `StringBuiltins` (`slice`/`substring`/`split`/`replace`/`replaceAll`/`match`/`matchAll`/`search`/`toUpperCase`/`toLowerCase`/`trim`/`includes`/`startsWith`/`endsWith`/`padStart`/`repeat`/`charAt`/`indexOf` — the `split`/`replace`/`replaceAll`/`match`/`matchAll`/`search` methods accept a `JsRegExp`; `replace`/`replaceAll` support `$1`/`$<name>`/`$&`/`` $` ``/`$'` tokens and a function replacer), `NumberBuiltins` (callable `Number` + `isNaN`/`isInteger`/`isFinite`/`parseInt`/`parseFloat`), `MathBuiltins`, `JsonBuiltins` (`JSON.parse`/`stringify`, delegating to EJson via `EJsonInterop`), and `ConsoleBuiltins` (`log`/`error`/`warn`/`info`, routed to a per-run sink supplied by `HostBindings.console()`, falling back to a redirectable static sink → stdout). `PromiseBuiltins` (phase 6e) installs `Promise` (`new Promise(executor)`, `resolve`/`reject`/`all`/`race`/`allSettled`/`any`; `any` rejects with an `ErrorBuiltins.makeAggregateError` when all reject). `DbModule` (phase 6f) builds the `db` module object over a `host/DatabaseAccess`. `RegexBuiltins` installs the `RegExp` global (constructable from a string pattern or by cloning a regex) and the `JsRegExp` `test`/`exec` methods + `source`/`flags`/`global`/`ignoreCase`/`multiline`/`dotAll`/`sticky`/`lastIndex` accessors; JS patterns compile via `internal/RegexTranslator` → `internal/regex/RegexParser` to an `RxNode` AST that `internal/regex/RegexMatcher` executes directly — see *Regex engine* (flags `dgimsuyv`; `g`/`y` drive stateful matching, a bad pattern/flag throws a JS `SyntaxError`). `exec`/`match` (non-global)/`matchAll` return a match result object (`[0..n]`, `index`, `input`, named `groups`) rather than a real Array. Callback-taking array methods call back into user functions through the `Invoker` seam. Later phases add `ObjectProtoBuiltins`, `FunctionProtoBuiltins`, `SymbolBuiltins`, `MapBuiltins`/`SetBuiltins`/`DateBuiltins`, `JsIterators`, `TimerBuiltins`, `ReflectBuiltins`/`ProxyBuiltins`, `TypedArrayBuiltins`, `FetchBuiltins`, `IteratorBuiltins`/`AsyncIteratorBuiltins` and `GlobalFunctionsBuiltins` (URI functions, `queueMicrotask`, `structuredClone`, Annex-B `escape`/`unescape`), plus the `InterpreterOps` and `IterableToList` seams back into the interpreter. |
+| `simplejs/host/` | ✅ (phase 6f) The DB-integration seam and public entrypoint — the only place the interpreter touches the `ops`/`cache`/`conn`/`ioc` layers. `SimpleJs.run(String, HostBindings) → ScriptResult` is the public API. `HostBindings` carries the `args` payload, a nullable `DatabaseAccess`, a console sink and `ResourceLimits`; `SimpleHostBindings` is a record impl. `DatabaseAccess` is the EJson-typed DB interface (mockable for tests); `EnforcingDatabaseAccess` is the real impl that enforces auth + schema before calling `OperationProcessor`. `ScriptResult` holds the returned/exported EJson value or a thrown error's name+message. `DatabaseAccess` also carries `bulkSave` and the `beginTransaction`/`commitTransaction`/`rollbackTransaction` trio (see *`db.transaction` and `db.bulkSave`*), and `HostBindings` supplies the script's `timeZone()`/`locale()`; `DatabaseHostBindings` pins both from configuration. |
+| `simplejs/exceptions/` | ✅ Dedicated `RuntimeException` subclasses. Lexer errors: `UnexpectedCharacterException`, `UnterminatedCommentException`, `UnterminatedRegexException`, `UnterminatedStringException`, `UnterminatedTemplateException`. Parser errors: `UnexpectedTokenException`, `UnexpectedEndOfInputException` (each has both a token-index/plain constructor and a line/column constructor). Interpreter errors extend `SimpleJsRuntimeException`: `ReferenceErrorException`, `TypeErrorException`, `RangeErrorException`, `SyntaxErrorException`, `UnsupportedNodeException` (a parsed node outside the current interpreter phase's scope), and `JsThrowException` (carries the `JsValue` thrown by a `throw` statement; unwound by the nearest `try`/`catch`). Phase 6f adds `ScriptAbortException` and its subclasses `ScriptTimeoutException`/`ScriptLimitException` — resource-limit aborts that extend `RuntimeException` directly (not `SimpleJsRuntimeException`), so user `try`/`catch` cannot intercept them. |
+
+## The lexer
+
+`Lexer.lex(String)` scans source into a `List<JsBaseElement>` terminated by a
+`JsEOF` singleton. It handles line/block comments, single/double-quoted strings
+with full escape sequences (`\n`, `\xNN`, `\uNNNN`, `\u{...}`), numeric literals
+(decimal, `0x`/`0o`/`0b`, exponents, **numeric separators** like `1_000`, and
+**BigInt** `n` suffixes → `JsBigInt`), identifiers/keywords, **private
+identifiers** (`#x` → `JsPrivateIdentifier`, name stored without the `#`), a
+leading **`#!` hashbang** (skipped as trivia at offset 0 only), the multi-character
+operator set (longest-match first), separators, template literals (with nested
+`${...}` interpolations lexed recursively into sub-token-lists), and the
+regex-vs-division ambiguity via the standard "can the previous token end an
+expression?" heuristic (`startsRegex`).
+
+The recognized keyword set is `if do while for in of switch case default var let
+const break continue return try catch finally throw async await yield function
+import export this new class else typeof instanceof void delete extends super`.
+Notably **`constructor`, `static`, `get`, `set`, `from`, `as`, `using`, and
+`with` are *not* keywords** — they lex as identifiers and the parser treats them
+as contextual keywords, so `let from = 1` / `var constructor = 1` still parse.
+
+**Identifiers accept the full `ID_Start`/`ID_Continue` surface plus unicode
+escapes.** One shared scanner walks the *cooked* name for both plain and private
+identifiers, accepting `Character.isUnicodeIdentifierStart`/`Part` (plus `$`, `_`,
+ZWNJ and ZWJ) or a `\uXXXX`/`\u{…}` escape whose decoded code point is itself
+valid there — so `var \u0061 = 1` binds `a` and a class may declare `#\u{6F}_`. Per
+spec a reserved word written with an escape is a `SyntaxError` rather than an
+identifier, and a lone or truncated escape stays an `UnexpectedCharacterException`.
+
+> **Newlines are not tokens, but they are recorded.** The lexer skips all
+> whitespace as token boundaries, so a line terminator never reaches the parser as
+> a token. Instead the lexer records a **`newlineBefore` flag per token**, parallel
+> to the token stream, which is what makes real Automatic Semicolon Insertion
+> possible — see the *Automatic Semicolon Insertion* subsection of Phase 6
+> below. ASI is active only on the position-aware parse path
+> (`Parser.parse(LexResult)`); the test-only token-list overload has no newline
+> information and falls back to the permissive rule (a statement ends at `;`, `}`
+> or EOF, trailing `;` optional).
+
+> **Source positions.** The lexer records each token's location — 0-based
+> `offset`/`length` plus the 1-based `line`/`column` of its start
+> (`elements/SourcePosition`). Because `JsNull`/`JsUndefined`/`JsEOF` are shared
+> singletons, positions live in a list **parallel to `tokens`** (one entry per
+> token, EOF included) returned by `Lexer.lexWithPositions`, keyed by the parser's
+> cursor index. `Parser.parse(LexResult)` reports the offending token's line/column
+> in its exceptions; the token-list overload falls back to the token + its index.
+> Line/column are derived from `\n` offsets in the source (accurate even though
+> newlines are not emitted as tokens); nested template interpolations are lexed
+> position-less, so an error inside a `${...}` uses the index-based fallback.
+
+## The AST (`nodes/`)
+
+Every node extends `JsNode`, which mirrors `JsBaseElement`: a `NodeType` enum and
+a private `internalGetType` switch with one arm per concrete leaf node. Two empty
+abstract subclasses — `Expression` and `Statement` — let parser methods return
+`Expression`/`Statement` for type safety. `Program`, `VariableDeclarator`,
+`Property`, and the pattern/attribute helper nodes extend `JsNode` directly.
+Concrete nodes are small immutable classes with `final` fields and getters,
+exactly like the token classes.
+
+## The parser (`Parser.parse`)
+
+The parser is **recursive descent** with a **Pratt / precedence-climbing** core
+for expressions. Cursor helpers (`current`, `peek`/`peekAt`, `advance`, `atEnd`),
+matchers/expecters (`match*`/`expect*` for separators/operators/keywords, plus
+`matchContextualKeyword` for the identifier-keywords above), and an `error()` that
+throws the parser exceptions form the substrate. Statement parsing dispatches on
+the current token; expression parsing climbs the precedence ladder:
+
+```
+assignment  ( = += -= *= /= %= **= <<= >>= >>>= &= |= ^= &&= ||= ??= )  right-assoc
+conditional ( ?: )
+??  →  ||  →  &&  →  |  →  ^  →  &
+==/!=/===/!==   →   < <= > >= instanceof in
+<< >> >>>   →   + -   →   * / %   →   ** (right-assoc)
+unary       ( ! ~ + - typeof void delete await, prefix ++ -- )
+postfix     ( ++ -- )
+call/member/new   ( . ?. [] () )
+primary     ( literals, identifier, this, super, (), [], {}, function, arrow, template )
+```
+
+A `static Map<String,Integer>` holds binary precedences; `**` is the lone
+right-associative binary operator. `instanceof` and `in` arrive as `JsKeyword`
+tokens (not `JsOperator`), so binary-operator detection checks keyword values too.
+
+### Key design decisions
+
+- **Arrow detection.** An `Identifier` followed by `=>` is a single-param arrow. A
+  `(` is treated as arrow params iff a forward scan to the matching `)` is followed
+  by `=>` (`matchingParenFollowedByArrow`); otherwise it is a grouping expression.
+- **No-in production.** A `for`-header's left-hand side is parsed with a `noIn` flag
+  that suppresses `in`-as-operator (cleared inside any bracketed sub-expression via
+  `withInAllowed`), so `for (a in b)` disambiguates cleanly.
+- **Cover grammar for destructuring.** An assignment-LHS array/object is first parsed
+  as an ordinary `ArrayExpression`/`ObjectExpression`, then reinterpreted into the
+  matching pattern by `toAssignmentPattern` once a plain `=` proves the intent.
+  Binding positions instead parse patterns directly (`parseBindingTarget`/
+  `parseBindingElement`).
+- **Contextual keywords.** `static`/`get`/`set`/`from`/`as`/`using`/`with` are
+  matched only where the grammar expects them, so they remain usable as identifiers.
+- **Templates.** `JsTemplateString` carries each `${...}` interpolation as its own
+  token list (EOF-terminated), so `parseTemplate` runs a nested parser per
+  interpolation. It also carries the **raw** quasi text (escape sequences left
+  verbatim) alongside the cooked text, which tagged templates expose as `strings.raw`.
+- **Tagged templates.** A template literal following a call/member expression in
+  `parseCallMemberTail` becomes a `TaggedTemplateExpression` (tag + `TemplateLiteral`);
+  the interpreter invokes the tag with a frozen strings array (carrying a frozen `raw`
+  companion array) followed by the interpolated values. `String.raw` is provided.
+  A tagged template in the `new`-callee position (`` new tag`…` ``) is also supported:
+  `parseNewCalleeTail` consumes the template into the callee `TaggedTemplateExpression`,
+  so `` new tag`x` `` evaluates the tag call and `new`-constructs its result.
+
+## Supported grammar
+
+The parser covers the full modern grammar the keyword set implies. By category
+(node types in parentheses):
+
+- **Literals** — number, string, boolean, `null`, `undefined`, regex, template,
+  and **BigInt** (`123n` → `BigIntLiteral`, holding a `java.math.BigInteger` so the
+  "all numbers are `double`" convention never truncates; `NumberLiteral` is
+  untouched). Numeric separators (`1_000`, `0xFF_FF`) and a `#!` hashbang are handled
+  in the lexer.
+- **Expressions** — identifiers, `this` (`ThisExpression`), `super`
+  (`SuperExpression`), arrays/objects (shorthand + computed keys + spread +
+  elisions), unary/update/binary/logical/assignment/conditional, calls, member
+  access (`.`/`[]`/`?.`, including private `this.#x`), `new`, function and arrow
+  expressions (incl. `async`), `await` (`AwaitExpression`), `yield`/`yield*`
+  (`YieldExpression`), spread (`SpreadElement`), and the `#x in obj` brand check
+  (`PrivateIdentifier`).
+- **Statements** — `var`/`let`/`const` and **`using`/`await using`** declarations
+  (`VariableDeclaration`, the latter two via `kind` `"using"`/`"await using"`),
+  blocks, `if`/`else`, `while`, **`do…while`**, C-style `for`, `for-in`/`for-of`,
+  `return`/`break`/`continue` (the latter two with an optional label), **labeled
+  statements** (`LabeledStatement`), `throw`, `try`/`catch`/`finally`, `switch`,
+  function declarations (incl. `async`/generator), class declarations, `import`/
+  `export` (all forms), and expression/empty statements.
+- **Classes** — declarations and expressions with optional `extends`; a `ClassBody`
+  of `MethodDefinition` (plain, `constructor`, `get`/`set`, `static`, `async`,
+  generator, async-generator), `FieldDefinition`, **`StaticBlock`** (`static { … }`),
+  and **private members** (`#x` fields/methods/accessors).
+- **Patterns / destructuring** — `ArrayPattern`/`ObjectPattern`/`AssignmentPattern`
+  (+ `RestElement`) wherever a binding target appears: declarations, params (incl.
+  defaults), assignment LHS, `for-in`/`for-of` headers, and `catch` bindings.
+- **Modules** — `import` (bare/default/namespace/named + combined) and `export`
+  (named, re-export, `export *`/`* as ns`, declaration, default), plus ES2025
+  **import attributes** (`with { type: "json" }` → `ImportAttribute` on
+  `ImportDeclaration`/`ExportAllDeclaration`/`ExportNamedDeclaration`).
+
+## Front-end limitations and gaps
+
+The parser produces an AST but validates little semantics. Most of the following are
+intentional non-goals of the front end (semantics deferred to the interpreter); the
+first two are genuine grammar gaps and are repeated in the gap list below:
+
+- **No sequence (comma) operator** — `(a, b)` as an expression, and therefore the
+  common `for (…; …; i++, j++)` update clause, is a `SyntaxError`. Multiple
+  declarators (`let i = 0, j = 0`) are unaffected. This is a genuine gap, not a
+  design choice (see the gap list below).
+- **No `new.target`** — `new.target` is not parsed (`import.meta` is the only
+  meta-property recognised).
+- **`import` is a keyword** — but dynamic `import(...)` and `import.meta` **are**
+  parsed, without un-keywording it: `parseKeywordPrimary` peeks for `(` / `.` and
+  emits `ImportExpression`/`MetaProperty` (spec-gap Phase G).
+- **No `with` statement** — the contextual `with` of import attributes
+  (`with { type: "json" }`) is supported; the legacy `with (obj) { … }` statement is
+  rejected as a strict-mode early error.
+- **No `debugger` statement** — `debugger` is not a keyword, so `debugger;` parses as an
+  ordinary expression statement rather than a dedicated node.
+- **`async`/`await`/`yield` are keywords** — `async(x)` is never a call (`async (…)`
+  is always arrow params), and `await`/`yield` are always parsed as their
+  expressions wherever the keyword appears.
+- **Context validity is not checked** — `super`/`this` placement, `yield`/`await`
+  only inside the right function kind, private-name references, `await using` outside
+  an async context, and `export default function/class` (which yields an expression
+  value) are all interpreter concerns.
+- **The legacy import-`assert` spelling is not accepted** — only the standardized
+  `with` attribute clause is; attribute *resolution* is likewise deferred, as is
+  module placement/resolution. Explicit-resource-management disposal
+  (`Symbol.dispose`/`Symbol.asyncDispose`) is implemented by the interpreter (see Phase 6).
+
+## Phase 6 — the interpreter
+
+A tree-walking `Interpreter` over the AST. It was built in sub-phases so each
+increment stayed small and testable. **The sub-phase entries below are historical**:
+each describes the state at the end of that phase, and a "deferred"/"limitation" note
+inside one is superseded whenever a later phase or follow-up section says otherwise
+(e.g. 6b's deferred `arguments` object and object method shorthand both landed later).
+The authoritative statement of what is *still* missing is
+[Known gaps and divergences](#known-gaps-and-divergences).
+
+- **6a — evaluation core ✅** — the value model (`values/`), lexical
+  scopes/environments (`Environment`, with `var` hoisting to the function scope and
+  `let`/`const` block scoping + temporal dead zone), control flow via internal
+  completion signals (`Completion`: `NORMAL`/`BREAK`/`CONTINUE`/`RETURN`, with
+  labeled `break`/`continue`), the full expression grammar (literals incl. BigInt and
+  templates, identifiers, member reads incl. `?.`, arrays/objects, unary/update/
+  binary/logical/assignment/conditional, `typeof`/`void`/`delete`, `in`) and the
+  straight-line & loop statements (`if`/`else`, `while`, `do…while`, C-style `for`,
+  blocks, expression/empty statements, `var`/`let`/`const`). Standard operator
+  semantics live in `JsOperators`; conversions in `JsCoercion`. `this` is `undefined`
+  (no receiver yet) and `instanceof` is deferred. Any parsed node outside 6a's scope
+  raises `UnsupportedNodeException`. Not wired into the database yet.
+- **6b — functions & control flow ✅** — function declarations/expressions/arrows,
+  closures, calls, plain-function `new`, `this`/argument binding, `return`; plus the
+  remaining control flow: `throw`, `try`/`catch`/`finally` (a caught runtime error
+  arrives as a `{name, message}` object), and `switch` (strict-equality matching,
+  fall-through, labeled `break`). A minimal `Error` family (`Error`/`TypeError`/
+  `RangeError`/`SyntaxError`) is installed as global constructors. Function parameters
+  are identifiers only in 6b — rest/defaults/destructuring params and argument spread
+  arrive in 6c; the `arguments` object stays deferred. Method-shorthand object
+  properties are a parser gap, so use `key: function () { … }`.
+- **6c — objects, arrays, members, destructuring & core built-ins ✅** — spread in
+  array/object literals and call arguments; full destructuring (nested, defaults,
+  rest, computed keys) in declarations, function params, assignment LHS and `catch`;
+  built-in method dispatch on arrays/strings; and the core standard library
+  (`Object`/`Array`/`String`/`Number`/`Boolean`/`Math`/`JSON`/`console` + `parseInt`/
+  `parseFloat`/`isNaN`/`isFinite`), with `JSON` delegating to EJson via `EJsonInterop`.
+  `instanceof` and `for-in`/`for-of` remain deferred. Documented limitations:
+  `console` writes to stdout until the host binding lands; JSON mapping of EJson custom
+  types is minimal. Still not wired into the database.
+- **6d — classes ✅** — `class` declarations/expressions with `extends` heritage, methods
+  (plain/`constructor`/`get`/`set`/`static`), instance and static **fields**, **static blocks**,
+  `super` (constructor chaining `super(...)` and member dispatch `super.m()`/`super.prop`),
+  **private members** (`#x` fields/methods/accessors + `#x in obj` brand checks), `new` on a class,
+  `this` inside methods, and `instanceof`. A dedicated `values/JsClass` value carries the method
+  tables, static properties, instance-field list and the shared **method scope** (a class-scope child
+  whose home class is bound via `Environment.defineHomeClass`/`resolveHomeClass`, so `super` resolves
+  against the lexically-enclosing class rather than the receiver). Instances are plain `JsObject`s
+  with a nullable `klass` link and a lazily-created private-field map; instance methods/getters are
+  found by `getMember` on an own-property miss (unbound — the member-call path binds `this`).
+  Construction follows the standard field-ordering algorithm (base fields before the base
+  constructor; derived fields immediately after `super()` returns). Still not wired into the
+  database. (Spec-gap Phase B later gave plain functions a `prototype` object, so `instanceof`
+  also walks the proto chain for a plain-function RHS — see below.)
+- **6e — iteration, generators & async ✅** — `for-in` (own enumerable keys of objects; index
+  strings of arrays/strings; nothing for nullish) and `for-of` (arrays, strings, generators), both
+  supporting declaration or assignment/destructuring targets, per-iteration `let`/`const` bindings,
+  labeled `break`/`continue`, and iterator `close()` on early exit. Generators (`function*`, `yield`,
+  `yield*`) and `async`/`await` share **one** mechanism: a `Coroutine` runs the function body on a
+  JDK **virtual thread** and hands control back and forth through a single `ReentrantLock` + `Condition`
+  so only one thread ever runs at a time (single-threaded JS semantics, no shared-state races). An
+  `EventLoop` holds a microtask queue for Promise reactions and coroutine resumes plus a real-time,
+  due-time-ordered timer queue (macrotasks) fired after microtasks and bounded by the sandbox
+  deadline; `Interpreter.run` drains both to quiescence, then cancels any still-suspended coroutines,
+  before returning. A generator
+  call returns a `JsGenerator` whose `next`/`return`/`throw` (dispatched lazily via `getMember`, like
+  array methods) drive the coroutine and yield `{value, done}`; `return()`/cancellation unwind the
+  suspended body through `finally` blocks (`evalTry` runs its finalizer on every exit path). An
+  `async` function returns a `JsPromise` and runs its body on a coroutine; `await` coerces its operand
+  to a promise, subscribes a microtask to its settlement, and parks until resumed with the value (or
+  rethrows the rejection into the body). `builtins/PromiseBuiltins` installs `Promise` (`new
+  Promise(executor)`, `resolve`/`reject`/`all`/`race`/`allSettled`/`any`); `allSettled` never rejects
+  (each element settles to `{status:"fulfilled",value}` or `{status:"rejected",reason}`), and `any`
+  resolves on the first fulfilment or rejects with an `AggregateError` (holding an `errors` array in
+  input order) when all reject. The combinators accept any iterable (not just arrays), routed through
+  the `IterableToList` seam. `then`/`catch`/`finally` are dispatched on a `JsPromise`. **Async generators** (`async function*`) are supported (follow-up to 6e): they reuse the
+  same `Coroutine`, which now reports its pause reason (`YIELD` vs `AWAIT`) and notifies a resume
+  observer; a call returns a `JsAsyncGenerator` whose `next`/`return`/`throw` each return a `JsPromise`
+  of `{value, done}` (the driver settles it once the body reaches a real `yield`/return, so the body may
+  `await` any number of times between yields). `for await (… of …)` (a `ForOfStatement` with an `await`
+  flag; `for await` inside a plain — non-async, non-generator — function is a runtime `SyntaxError`) and
+  async `yield*` delegation consume async iterables (and sync iterables of promises, awaiting each
+  element). Async and generator **class methods** are supported, including async generators. Top-level
+  `await`/`for await` **are** supported: the module body runs inside a `Coroutine` driven by the
+  `EventLoop`, so `await` at the script root works; top-level `yield` stays a runtime `SyntaxError`
+  (`yield` is valid only inside a generator). **Timers** are a real-time macrotask layer on the same
+  `EventLoop`: `setTimeout`/`setInterval` enqueue a due-time-ordered timer and `drain(deadlineNanos)`
+  becomes a two-tier loop — flush all microtasks, then genuinely wait for and fire the single
+  earliest-due timer, repeat — so `Promise.then` runs before `setTimeout(0)` and timers fire in delay
+  order; `clearTimeout`/`clearInterval` cancel by id. The wait is **deadline-aware**: a timer due past
+  the sandbox wall-clock budget raises `ScriptTimeoutException` rather than over-sleeping, and an
+  uncaught throw in a timer callback is swallowed (it does not abort the script). **Unhandled
+  rejections** are reported: each `JsPromise` tracks whether a rejection handler was ever attached
+  (via `subscribe`), and at end-of-`drain` any still-rejected promise with no handler is reported to
+  the host console sink as `UnhandledPromiseRejection: <reason>` (gated by
+  `ResourceLimits.reportUnhandledRejections`, default `true`; no-op when the host supplies no console
+  sink). Documented limitation: abandoned (never fully consumed) generators are cancelled at
+  end-of-run. Because the legacy `run` overloads return the last top-level
+  statement value computed **before** the drain, async results observed through those overloads use a
+  mutable accumulator (array/object) that the drained reactions mutate; the host `run(…, HostBindings)`
+  entrypoint reads the `ProgramOutcome` after the drain, so a top-level `await`ed `return` value is
+  returned directly.
+  Still not wired into the database.
+- **6f — modules & host integration ✅** — the engine is wired to LWNRDB through the
+  `simplejs/host/` seam. `SimpleJs.run(String source, HostBindings host)` is the sole public
+  entrypoint: it lexes/parses/interprets and returns a `ScriptResult` (an EJson value, or an
+  error name+message). **Modules:** a script is one module; `import` resolves three
+  host-provided built-in modules — `import args from "args"` (the request payload as a map, so
+  `args[0]`, `args.name` and `args['name']` all work), `import db from "db"` (the
+  `DatabaseAccess` surfaced as an object of methods `findById`/`aggregate`/`save`/`delete`/
+  `listCollections`/`listDatabases`, built by `builtins/DbModule`) and `import script from "script"`
+  (see *Module loading* below). Any other specifier is offered to the host's
+  `ModuleResolver` and, if it is unclaimed, throws a catchable `Cannot find module '…'` error. All
+  `import` forms (default/named/namespace) bind these. Import attributes (`with { type: "json" }`)
+  are parsed and ignored. **Result contract:** a top-level `return` if the module runs one, else the collected
+  `export default`, else an object of the named exports, else `undefined` (→ JSON null).
+  **Sandboxing (`ResourceLimits`):** the interpreter checks a per-step instruction budget and a
+  wall-clock deadline at loop back-edges and call entries, and a recursion depth cap on each
+  call — throwing `ScriptTimeoutException`/`ScriptLimitException` (both extend `ScriptAbortException`,
+  which is **not** catchable by user `try/catch` — a `finally` cannot run past the abort either).
+  **Enforcement:** `host/EnforcingDatabaseAccess` (the only simplejs class that imports the
+  `ops`/`cache`/`conn`/`ioc` layers) resolves the acting `AdminUserEntry`, runs
+  `AuthorizationChecker.check` and `SchemaValidationHelper.check`, then calls
+  `OperationProcessor.processMessage`; a denial/schema violation throws a JS `Error` into the
+  script (catchable). Documented limitations: module resolution is restricted to `args`/`db`
+  (no filesystem/network) and import attributes are validated-only. Exposing this over the wire
+  came later, as the `RUN_SCRIPT` operation described below.
+
+**Explicit resource management (`using`/`await using`).** A `using`/`await using` declaration
+binds a block-scoped const-like resource and runs its disposer when the enclosing scope exits —
+on every path (normal, `return`/`break`/`continue`, or a thrown error), in **reverse** declaration
+order. `using` calls the resource's `[Symbol.dispose]()`; `await using` `await`s
+`[Symbol.asyncDispose]()` (falling back to `[Symbol.dispose]`) and is valid only in an async
+context (module top level / async function / async generator — a runtime `SyntaxError` otherwise).
+A `null`/`undefined` resource is a no-op; a non-`null` resource without a callable dispose method
+throws a `TypeError` at the declaration. When the body throws and a disposer also throws, the errors
+aggregate into a `SuppressedError` (`error` = the newest, `suppressed` = the accumulated); a
+sandbox abort (`ScriptAbortException`) skips disposal, mirroring `finally`. Disposal is wired into
+block, function-body, module-top-level, `for-of`/`for-in` (per iteration), and `switch` scopes.
+Symbols exist as a real `JsSymbol` value (`typeof` → `"symbol"`, distinct identity per `Symbol(…)`,
+string coercion throws) with the well-known `Symbol.dispose`/`Symbol.asyncDispose` and symbol-keyed
+object properties.
+
+**Object model & callable foundations (engine-completion Phase 1).** `JsObject` carries an
+optional prototype link (`getProto`/`setProto`, typed `JsValue` so any object-like value can be a
+`[[Prototype]]`); member reads fall back through the `proto`
+chain and then a shared `Object.prototype` builtin (`builtins/ObjectProtoBuiltins`:
+`hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable`, `toString` → `"[object Object]"`,
+`valueOf`) on an own-property + class-member miss. `Object` gains `create`, `getPrototypeOf`,
+`setPrototypeOf`, `defineProperty`/`defineProperties`, `getOwnPropertyNames`,
+`getOwnPropertyDescriptor`, and `fromEntries` (array-of-pairs form). Property descriptors
+support a pragmatic subset — `value` and accessor `get`/`set` (stored on the object so member
+get/set invoke them); `writable`/`configurable`/`enumerable` are **enforced** as of spec-gap
+Phase C (see below). Functions expose
+`call`/`apply`/`bind` (`builtins/FunctionProtoBuiltins`); a bound function is a plain native
+function tagged with its target + bound args (spec-gap Phase B), so `new` on it constructs the
+underlying target with the bound args prepended.
+Non-arrow functions receive an `arguments` binding and `globalThis` is installed as a global;
+both were plain stand-ins in this phase (a `JsArray` copy of the call arguments and a static
+backing object) and were **replaced** by the real exotic objects in spec-gap Phase F — see
+*Mapped `arguments` & live `globalThis`* below for the behaviour that holds today.
+The `prototype` **objects** of the builtins are not exposed as script-visible properties:
+member dispatch is internal, so `Object.prototype`/`Array.prototype`/`String.prototype` read
+as `undefined` and builtins cannot be monkey-patched or subclassed (see the gap list).
+
+**ToPrimitive protocol (ES2026 conformance Phase 1).** Object-to-primitive coercion is a real
+`OrdinaryToPrimitive`: `JsCoercion.toPrimitive(value, hint, ops)` first consults a callable
+`[Symbol.toPrimitive]` (passed the hint), then falls back to `valueOf`/`toString` ordered by the
+hint (`"string"` tries `toString` first, `"number"`/`"default"` try `valueOf` first), accepting
+the first primitive result and throwing `TypeError` when none is produced. It runs user code, so
+it takes an `InterpreterOps ops` seam; the ops-aware `toNumber(value, ops)`/`toStr(value, ops)`
+overloads (and `JsOperators.binary`/`unary`/`delta`, whose object operands are coerced with the
+right hint — `"number"` for arithmetic/relational/bitwise, `"default"` for `+`/`==`, `"string"`
+for template interpolation and `String(x)`) route through it. The legacy no-`ops` overloads
+(`ops == null`) keep the old string-only coercion and are used by paths that must **not** call
+user code (`EJsonInterop`, `JSON.stringify`, console). Arrays keep their join-based coercion; the
+`ops` path intercepts only plain `JsObject`s, so exotic objects (`Date`, `Map`, typed arrays)
+retain their dedicated `toStr`/`toNumber` arms.
+
+**Well-known symbol hooks (ES2026 conformance Phase 2).** Four more well-known symbols are real
+`JsSymbol` constants (`Symbol.hasInstance`/`toStringTag`/`match`/`replace`/`search`/`split`) and
+wired at their choke points: `instanceof` (`ClassEvaluator.evalInstanceof`) consults a callable
+`[Symbol.hasInstance]` on the right-hand side before the ordinary heritage/prototype walk (the tested
+value is passed as its argument); `Object.prototype.toString` (`ObjectProtoBuiltins`) reads a
+string-valued `[Symbol.toStringTag]` and emits `[object <tag>]` (non-string tags are ignored, default
+`[object Object]`); and the `String` methods `split`/`replace`/`replaceAll`/`match`/`search` delegate
+to a `[Symbol.split]`/`[Symbol.replace]`/`[Symbol.match]`/`[Symbol.search]` method on their argument
+when the argument is a plain object exposing one (the `JsRegExp` fast path and plain string/regex
+arguments are unchanged). All lookups go through the `InterpreterOps` seam, so absent hooks fall back
+to the existing behavior. **`Symbol.species` is intentionally not implemented:** `JsArray`/`JsTypedArray`
+carry no constructor/prototype/`klass` linkage and cannot be subclassed (`class X extends Array {}`
+requires a `JsClass` superclass), so a user array/typed array can never carry a custom species — the
+by-copy methods always allocate the default type. This is a known limitation, not a bug.
+
+**Locale methods & Proxy/Reflect completion (ES2026 conformance Phase 3).** `toLocaleString`
+defaults are installed on `Number` (`java.text.NumberFormat` with `Locale.getDefault()`; `NaN`/
+`±Infinity` render as `NaN`/`∞`/`-∞`), `Date` (`toLocaleString`/`toLocaleDateString`/
+`toLocaleTimeString` via `DateFormat`, UTC zone to match the UTC component model, `Invalid Date`
+for a `NaN` time), and `Array` (joins each element's `toLocaleString`, `null`/`undefined` → empty),
+and `String.prototype.localeCompare` is now backed by `java.text.Collator` (accent-aware ordering
+rather than code-point comparison) — no `Intl` object. The `Proxy` trap set is completed:
+`getPrototypeOf`/`setPrototypeOf`/`isExtensible`/`preventExtensions`/`defineProperty`/
+`getOwnPropertyDescriptor` are added to `ProxyDispatch` (trap-or-fallback like the existing traps)
+and exposed through six new `InterpreterOps` methods so the `Object.*`/`Reflect.*` choke points are
+proxy-aware; `Reflect` gains `isExtensible`/`preventExtensions` and routes the prototype/descriptor
+statics through the same seam. `values/JsProxy` carries a `revoked` flag and `Proxy.revocable(target,
+handler)` returns `{proxy, revoke}` — after `revoke()` every trap (guarded centrally in `trapOf`)
+throws `TypeError`. **Not done (deferred):** the `get`/`set` accessor-`receiver` for a trap-less
+proxy fallback (the trap receiver itself is already correct) — an invasive member-path change for
+negligible observable effect.
+
+**Iterator protocol, symbol keys & object-literal methods (engine-completion Phase 2).**
+The well-known `Symbol.iterator`/`Symbol.asyncIterator` are real `JsSymbol` constants, and
+`Symbol.for(key)`/`Symbol.keyFor(sym)` provide a process-wide registry of shared symbols.
+`for-of`, spread (`[...x]`), and `Object.fromEntries` now consume **any iterable**: a value that
+is not an array/string/generator is opened via its `[Symbol.iterator]()` method and driven by the
+`next()` → `{value, done}` protocol, calling the iterator's `return()` on an early exit
+(`break`/`throw`). `class R { [Symbol.iterator]() {…} }` (and other symbol-keyed methods,
+getters/setters, and fields — instance and static) are supported: computed method keys that
+evaluate to a symbol route into per-class symbol tables consulted on symbol member reads/writes.
+Object literals support **method shorthand** (`{ foo() {} }`, including computed `{ [k]() {} }`
+and `async`/generator forms) and **accessors** (`{ get x() {}, set x(v) {} }`, stored as accessor
+descriptors so member get/set invoke them); `get`/`set`/`async` stay contextual, so
+`{ get: 1 }` remains a plain property and `{ a = 1 }` still parses as a cover-initialized
+shorthand.
+
+**Map / Set / WeakMap / WeakSet & Date (engine-completion Phase 3).** Four collection globals and
+`Date` are available. `Map`/`Set` are new value types (`values/JsMap`/`values/JsSet`) backed by a
+`LinkedHashMap`/`LinkedHashSet` keyed by a **SameValueZero** normalizer (`values/SameValueZero`) so
+`+0`/`-0` collapse, `NaN` is a self-equal key, and objects compare by identity; both preserve
+insertion order and are iterable via `[Symbol.iterator]` (so `for-of`, spread `[...m]`, and
+destructuring work). `Map` exposes `get`/`set`/`has`/`delete`/`clear`/`forEach`/`keys`/`values`/
+`entries` + `size`; `Set` exposes `add`/`has`/`delete`/`clear`/`forEach`/`keys`/`values`/`entries`
++ `size` (`keys`/`values`/`entries` return iterator objects). `WeakMap`/`WeakSet` reuse
+`JsMap`/`JsSet` and are **strong, not weak** (weakness is unobservable in this sandbox), keeping
+the one observable weak constraint: a primitive key/value throws a `TypeError`. `Date`
+(`values/JsDate`, an epoch-millis `double`; `NaN` = invalid) supports `new Date()` / `new Date(ms)`
+/ `new Date(isoString)` / `new Date(y, m, …)`, the statics `Date.now`/`Date.parse`/`Date.UTC`, and
+the usual `getTime`/component getters/setters (UTC and non-UTC variants coincide — the sandbox has
+**no local time zone**, everything is UTC), `toISOString`/`toJSON`/`toString`/`valueOf`.
+`JSON.stringify(date)` emits the ISO string; a `Map`/`Set` stringifies to `{}` (no own enumerable
+properties).
+
+**Standard-library breadth (engine-completion Phase 4).** Widely-used methods/statics/constants fill
+out `Number`, `Array` and `String`. `Number` instances resolve `toFixed`/`toPrecision`/
+`toExponential`/`toString([radix])`/`valueOf` (via a `JsNumber` arm in `getMember` →
+`NumberBuiltins.getMethod`), and the `Number` namespace carries `MAX_SAFE_INTEGER`/
+`MIN_SAFE_INTEGER`/`MAX_VALUE`/`MIN_VALUE`/`EPSILON`/`POSITIVE_INFINITY`/`NEGATIVE_INFINITY`/`NaN`.
+`Array` adds `findIndex`/`findLast`/`findLastIndex`/`lastIndexOf`/`reduceRight`/`flatMap`/`fill`/
+`copyWithin`/`reverse`/`at`/`keys`/`values`/`entries` (the last three return iterator objects) plus
+the statics `Array.from` (array-like/iterable + optional map fn) and `Array.of`; arrays stay
+iterable through the built-in fast path in `Iteration`. `String` adds `charCodeAt`/`codePointAt`/
+`at`/`padEnd`/`trimStart`/`trimEnd`/`normalize`/`localeCompare`/`concat` and the statics
+`String.fromCharCode`/`String.fromCodePoint`.
+
+**Optional chaining** short-circuits across a whole chain: once any link with `?.`
+observes a nullish base, the rest of the chain is skipped and the expression evaluates
+to `undefined` without evaluating later property keys or call arguments (`a?.b.c`,
+`a?.b()`, `a?.()` on nullish `a` all yield `undefined`). A non-optional access on a
+nullish value still throws (`a.b.c` when `a.b` is nullish). Propagation uses an
+internal `SHORT_CIRCUIT` sentinel threaded through the member/call spine and unwrapped
+at the top of the chain (`Interpreter.evalMember`/`evalCall`/`evalChainObject`).
+
+**Plain-function `prototype`, `instanceof` & bound-`new` (spec-gap Phase B).** A `JsFunction`
+carries a lazily-created `prototype` `JsObject` (with a `constructor` back-reference). `new F()`
+links the fresh instance's proto to `F.prototype`, so methods assigned to `F.prototype` resolve
+through the instance's proto chain and `x instanceof F` walks that chain (true when any proto link
+is `F.prototype`). A bound function (`f.bind(…)`) is tagged with its target + bound args, so `new`
+on it constructs the underlying target (bound `this` ignored) and `instanceof` a bound function
+delegates to the target. A tagged template in the `new`-callee position (`` new tag`x` ``) is
+supported: the tag call is evaluated and its result `new`-constructed.
+
+**Property-descriptor enforcement & true `Object.freeze` (spec-gap Phase C).** `JsObject`
+carries a per-key descriptor table (`PropertyFlags(writable, enumerable, configurable)`,
+absent ⇒ all-`true`, so normal assignment-created properties stay fully mutable and
+enumerable) plus an `extensible` flag. The three attributes are now honoured across the
+member-write and enumeration paths: writing a non-writable own data property is a silent
+no-op, adding a new key to a non-extensible object is a silent no-op, and non-enumerable
+own keys are skipped by `Object.keys`/`values`/`entries`, `for-in`, `Object.assign`, object
+spread/rest, `JSON.stringify`, and `propertyIsEnumerable` (while `getOwnPropertyNames` still
+lists them). `Object.defineProperty` stores the flags (unspecified attributes default to
+`false` for a new property, preserved for a redefinition), throws a `TypeError` when adding a
+new key to a non-extensible object, and throws when redefining a non-configurable property in
+an incompatible way (making it configurable/enumerable-toggled, or changing the value/writable
+of a non-configurable non-writable data property). `getOwnPropertyDescriptor` reports the real
+flags. `Object.freeze` marks every own key non-writable + non-configurable and clears
+`extensible`; the `seal`/`isSealed`/`preventExtensions`/`isExtensible`/`isFrozen` family
+completes the set (an empty non-extensible object is both sealed and frozen). `delete` returns
+`false` for a non-configurable property. Redefinition compatibility is a pragmatic subset, not
+the full `[[DefineOwnProperty]]` state machine.
+
+**`Reflect` & `Proxy` (spec-gap Phase D).** `builtins/ReflectBuiltins` installs the `Reflect`
+namespace — `get`/`set`/`has`/`deleteProperty`/`ownKeys`/`apply`/`construct`/`getPrototypeOf`/
+`setPrototypeOf`/`defineProperty`/`getOwnPropertyDescriptor`. Each delegates back into the
+interpreter through a single `builtins/InterpreterOps` seam (`getMember`/`setMember`/`has`/
+`deleteMember`/`ownKeys`/`call`/`construct`, implemented by the `Interpreter` and threaded via
+`GlobalScope.install`); the descriptor/prototype statics reuse `ObjectBuiltins`. `Reflect.set`
+returns `true`, `Reflect.defineProperty` returns `false` instead of throwing on an illegal
+redefine, and a missing arguments-list argument is treated as empty. `values/JsProxy` is a new
+`JsValue` (`JsValueType.PROXY`) holding a `target` + `handler`; its `typeof`/string coercion
+mirror the target (`EJsonInterop`/`JsCoercion` delegate through). `new Proxy(target, handler)`
+(`builtins/ProxyBuiltins`) requires both to be objects (else `TypeError`). Trap dispatch lives
+in the interpreter's member choke points — `getMemberByKey`/`getMember` (`get`),
+`setMemberByKey`/`setMember` (`set`), `hasMember`/`in` (`has`), `evalDelete`/`delete`
+(`deleteProperty`), `enumerateKeys`/`for-in` + `Object.keys`/`values`/`entries`/
+`getOwnPropertyNames` (`ownKeys`), `callValue` (`apply`), and `constructValue`/`new`
+(`construct`) — each in a small `proxyGet`/`proxySet`/… helper that falls back to the target
+when the trap is absent. A non-function trap throws a `TypeError`. The
+`getPrototypeOf`/`setPrototypeOf`/`isExtensible`/`preventExtensions`/`defineProperty`/
+`getOwnPropertyDescriptor` traps and `Proxy.revocable` are added in ES2026 conformance Phase 3
+(see below). **Remaining limitations**: the `get`/`set` `receiver` argument is passed to the
+trap (correct), but when a trap-less proxy falls back to an accessor on the target the accessor's
+`this` is the target rather than the proxy; proxy `ownKeys` enumeration does not re-filter through
+a `getOwnPropertyDescriptor` trap for enumerability.
+
+**Mapped `arguments` & live `globalThis` (spec-gap Phase F).** A non-arrow function now
+receives a purpose-built `values/JsArguments` instead of a plain-array copy. When every
+parameter is a plain `Identifier` (no rest/default/destructured param) the object is
+**mapped**: numeric-index get/set proxy to the activation `Environment` binding for the
+corresponding parameter (built by `Interpreter.makeArguments`), so `arguments[0] = 9` writes
+the named parameter and reassigning the parameter is observed through `arguments[0]`. A
+rest/default/pattern parameter makes it **unmapped** (a plain backing store, no aliasing).
+`length` counts the passed arguments; the object is iterable (`for-of`, spread) via an
+`arrayLikeElements` snapshot. Arrows still inherit `arguments` lexically.
+
+Every own property — the canonical indices (writable/enumerable/configurable), `length`
+(writable, non-enumerable, configurable), the poison-pill `callee` accessor pair
+(non-enumerable, **non-configurable**) and `@@iterator` (%Array.prototype.values%) — lives in
+the object's `PropertyTable`, and `JsArguments` overrides the Wave-0 ordinary-object protocol
+(`getOwnProperty`/`defineOwnProperty`/`deleteOwnProperty`/`ownPropertyKeys`) so
+`Object.defineProperty`/`getOwnPropertyDescriptor`/`getOwnPropertyNames`/`keys`,
+`hasOwnProperty`, `propertyIsEnumerable`, `for-in`, `in` and `delete` all behave ordinarily.
+The [[ParameterMap]] is layered in front of the canonical index keys only: a mapped index
+reads/writes its parameter binding, and defining it as an accessor or with `writable: false`,
+or deleting it, **detaches** the mapping so the ordinary property takes over. `arguments`
+has no `caller` property at all (removed from the spec in ES2017). **Deliberate divergence**:
+the spec makes *every* strict-mode arguments object unmapped, and this engine is always-strict,
+so the mapping is a deliberate extension — it costs four test262 tests
+(`built-ins/Object/defineProperty/15.2.3.6-4-292-2`, `-293-4`,
+`language/arguments-object/10.6-10-c-ii-1-s`, `unmapped/via-strict`).
+`globalThis` is a distinguished `values/JsGlobalObject` backed by the global `Environment`:
+member reads fall through to the global binding (`Environment.tryGet`), writes assign the
+global binding declaring it if absent (`Environment.setGlobal`), and `in` consults it
+(`Environment.isDeclared`), so top-level `var`/function declarations and later global
+assignments are visible on `globalThis` and `globalThis.x = …` creates a global. **Deliberate
+limitations**: `Object.keys(globalThis)`/`for-in` do not enumerate global bindings (builtins
+have no enumerability metadata to hide), and symbol-keyed properties on `globalThis` are not
+stored.
+
+**Dynamic `import()` / `import.meta` & host-gated `fetch` (spec-gap Phase G).** Dynamic
+import and the `import.meta` meta-property are recognised without un-keywording `import`:
+the parser emits `nodes/ImportExpression` for `import(specifier[, options])` and
+`nodes/MetaProperty` for `import.meta`, both from `parseKeywordPrimary` (and at statement
+position via `isDynamicImportOrMeta`, which peeks for `(` or `.`). At runtime
+`import(spec)` returns a `JsPromise` resolving to a **module namespace object** — the
+resolved host module's own members plus a `default` binding mirroring the default import —
+so both `ns.member` and `ns.default` work; an unknown specifier **rejects** with a
+catchable `Cannot find module '…'` (parity with static import, still restricted to the
+`args`/`db` host built-ins). `import.meta` resolves to `{ url: "simplejs:main" }`.
+
+`fetch` is a host-gated, secure-by-default async global. Network access is a host
+capability routed through the `host/` seam exactly like `db`: `host/NetworkAccess`
+(`FetchRequest`/`FetchResponse` records) plus `HostBindings.network()` (**default `null`**
+→ fetch unavailable). `builtins/FetchBuiltins` installs `fetch(url[, init])` returning a
+`JsPromise` of a `Response`-like `JsObject` (`ok`/`status`/`statusText`/`headers` +
+async `text()`/`json()`, the latter reusing EJson via `EJsonInterop`). The blocking host
+call runs **off the interpreter thread** on a virtual thread and settles the promise via a
+new `EventLoop` async-job mechanism (`beginAsyncJob`/`completeAsyncJob`): the drain loop
+stays alive while async jobs are outstanding and runs each settlement back on the loop
+thread, so single-threaded JS semantics hold and microtasks still order before a fetch
+settlement. `host/ResourceLimits` gains `fetchEnabled`, `fetchHostAllowlist`,
+`maxResponseBytes`, `fetchTimeoutMillis`; `FetchBuiltins` enforces availability, the host
+allowlist (rejected before any call), the response-size cap and a per-call timeout (a
+bounded worker join), all producing a catchable `TypeError`. `host/JdkNetworkAccess`
+(`java.net.http.HttpClient`) is the only place performing real network I/O; a host opts in by
+supplying it via `network()`, which the database host does only when `scriptFetchEnabled` is set (see
+*Host-contract notes*). The allowlist is matched by `host/HostAllowlist` — exact host, `*.example.com`
+sub-domain wildcard, or a bare `*` — and an empty list denies rather than admits. **Deliberate
+limitations**: dynamic import resolves the `args`/`db`/`script` built-ins plus whatever the
+host's `ModuleResolver` claims (import options are ignored), and the `Response` is a plain object
+(no streaming body, single-value headers).
+
+**Module loading.** Every specifier — static `import`, `import()`, `export … from` — funnels
+through `ModuleEvaluator.resolveModule` into the interpreter's **per-run module registry**
+(`internal/interpreter/ModuleRegistry`). The registry keys modules by an opaque **module id**, which
+gives three properties: a module evaluates at most once per run (a second import of the same id
+returns the cached namespace), a module that threw stays failed and rethrows the original error
+rather than re-running its side effects, and an import of a module that is still evaluating is a
+**cycle** — reported as a catchable `Error("Circular import of module '…'")`. The registry is
+per-run and never shared between runs, because an evaluated module holds mutable state that would
+otherwise leak from one caller to the next. The built-ins are seeded into it under the fixed ids
+`builtin:args`, `builtin:db` and `builtin:script`.
+
+An imported module is evaluated **in the importer's own realm**: the same `Interpreter`, the same
+`Intrinsics`, the same `EventLoop`, the same coroutine and thread, and the same instruction counter
+and deadline, in a fresh module `Environment` whose parent is the global one (so its `var`s stay
+private while globals remain visible). That is what makes the boundary transparent — an array or
+error crossing it still satisfies `instanceof`, a promise or timer created by imported code settles
+on the loop the importer drains, an open `db.transaction` keeps its thread affinity, and an imported
+module's work is spent from the importer's single budget rather than a fresh one. A top-level
+`await` in an imported module parks the importer's coroutine, matching ESM's semantics. Nesting is
+bounded by `ResourceLimits.maxModuleDepth` (default 16, `-1` unlimited) purely as a guard on Java
+recursion; exceeding it throws the uncatchable `ScriptLimitException`.
+
+Beyond the built-ins, resolution is the **host's** responsibility through `host/ModuleResolver`
+(`ResolvedModule resolve(String specifier, String referrer)`, reached via
+`HostBindings.moduleResolver()`, **default `null`**). Returning `null` — or having no resolver at
+all — produces the standard catchable `Cannot find module '…'`. The returned `moduleId` is the
+registry key, so two specifiers naming the same module must return the same id or it is evaluated
+twice.
+
+A **re-export resolves its source.** `export { x } from "mod"` takes `x` from *mod*, not from the local
+scope, and introduces no local binding (so the importing module cannot read `x` itself); only a sourceless
+`export { x }` reads the local scope. `export * from "mod"` carries the named exports and deliberately
+**not** `default`, and `export { default as x } from "mod"` picks the default export up under a name —
+where *mod* is a built-in, whose members are the module, `default` means the built-in itself. Before this
+was fixed `evalExportNamed` ignored its source, which made a re-export a `ReferenceError` when no local
+happened to match and — worse — silently exported an unrelated local when one did.
+
+A **default import binds the module's default export**, while a **built-in** specifier binds the
+built-in object itself — `import db from "db"` binds the `db` object, which has no `default` member
+to unwrap. `ModuleEvaluator` therefore tags each resolution as either a built-in or a real module
+namespace (`ResolvedBinding`) and unwraps `default` only for the latter; the same distinction makes
+`await import("procedures/x")` hand back the module's own namespace rather than nesting it under a
+second `default`. A module with no default export binds `undefined`, not its namespace object. The static and dynamic namespace forms
+agree: `namespaceObject` shapes both, so `import * as ns from "db"` and `await import("db")` alike give
+an object carrying the built-in's members plus a `default` that is the built-in.
+
+**The database host resolves `procedures/<name>`** (`host/ProcedureModuleResolver`, wired by
+`host/DatabaseHostBindings.moduleResolver()`), so a script, stored procedure, trigger or scheduled
+procedure can import shared code instead of copying it: a library *is* a stored procedure, managed
+by the `SAVE_PROCEDURE`/`DELETE_PROCEDURE`/`LIST_PROCEDURES` operations that already exist, with
+nothing new persisted or replicated. The namespace is flat and scope-restricted — a name containing
+a `/` is refused (no traversal, and no ambiguity about the always-`"main"` referrer), and only the
+run's own `scopedDatabase` is searched, the same boundary `EnforcingDatabaseAccess` enforces for
+data. A missing **or disabled** procedure answers `Cannot find module 'procedures/…'`, mirroring
+`CALL_PROCEDURE` answering not-found rather than running a disabled one. The module id carries the
+procedure's version (`procedure:<db>|<name>|<version>`), which makes it meaningful in a cycle or
+depth error and is the key a compiled-form cache would need. Authority is the **importer's**,
+unchanged: an imported module's `db` calls go through the importing run's `EnforcingDatabaseAccess`,
+so a trigger importing a helper keeps its definer rights and a `RUN_SCRIPT` importing one keeps the
+caller's — importing widens what code is reachable, never what it may do. Gated by
+`scriptProcedureImportEnabled` (**default `true`**, unlike `scriptTextImportEnabled`: `importText`
+evaluates a caller-supplied string, whereas a procedure import evaluates code only `SAVE_PROCEDURE`
+could have installed).
+
+**An unresolvable import is refused at install time.** `SAVE_PROCEDURE` walks the compiled program's
+static `import`/`export … from` specifiers (`SimpleJs.moduleSpecifiers`, which keeps the AST inside the
+engine) and rejects the save with `400-18` when a `procedures/<name>` target is missing or disabled — so a
+typo reaches whoever installs the procedure rather than whoever calls it next. Three deliberate
+exclusions: the check is skipped when the request is already stamped, because that is a peer re-executing
+the op under `REPLICATE_ADMIN` and it must not reject a save the coordinator accepted before its own copy
+of the library arrived; the procedure's **own** name counts as resolvable, so a self-import behaves the
+same on the first save as on a later one and still surfaces as a runtime cycle; and only the
+`procedures/` prefix is checked, since `args`/`db`/`script` always resolve and a dynamic
+`import(expr)` is not statically visible. The consequence to know is that **install order matters** —
+a library must exist before the procedures that import it, and a mutually-importing pair can only be
+created by closing the cycle with a second save (such a pair fails at runtime anyway).
+
+**An imported library is parsed once per node, not once per run.** `ResolvedModule` carries an optional
+`CompiledScript`, which `ProcedureModuleResolver` fills from `ops/CompiledProcedureCache` — the same
+version-keyed cache `CALL_PROCEDURE` uses, so a save cannot serve a stale parse. `ModuleEvaluator`
+reuses that program only when it was parsed under the goal the run is using, re-parsing otherwise, for
+the same reason `SimpleJs.run(CompiledScript, …)` does.
+
+**Only `export`ed bindings are importable.** `Interpreter.evaluateModule` builds a namespace from
+`export default`/`export …` declarations alone, so a procedure written for `CALL_PROCEDURE` with a
+top-level `return` — legal under the relaxed script goal — imports as `{ default: undefined }` and a
+default import of it binds `undefined`. This is spec-correct ESM, but it is the one trap worth
+knowing: a procedure meant to be *called* and one meant to be *imported* are written differently.
+
+The `"script"` built-in is the in-sandbox entry to the same pipeline:
+`script.importText(source[, moduleId])` runs a **string** as a module and returns its namespace,
+skipping only the resolution step. Without an explicit id the id is content-addressed
+(`"text:" + sha256(source)`), so importing the same text twice evaluates it once. Parse failure is a
+catchable `SyntaxError`; an error thrown by the module body propagates to the importer's own
+`try/catch`. Obtaining the text is deliberately not the module's job — a script composes
+`db.findById(...)` with `importText(...)` itself. The capability is off unless the host sets
+`ResourceLimits.textImportEnabled` (default `false`, the same posture as `fetchEnabled`).
+
+**Typed arrays (spec-gap Phase E).** Binary data is backed by three new isolated value
+types. `values/JsArrayBuffer` wraps a fixed-length shared `byte[]` (`byteLength`, `slice`);
+`values/JsTypedArray` is a view over a buffer (buffer ref + `byteOffset` + element `length`
++ a `Kind` enum), reading/writing elements through the buffer's bytes in little-endian order
+(the endianness JS exposes for typed arrays) with per-kind coercion — wraparound for the
+integer kinds (`Int8`/`Uint8`/`Int16`/`Uint16`/`Int32`/`Uint32`), round-half-to-even
+clamping for `Uint8ClampedArray`, IEEE narrowing for `Float32`/`Float64`, and modulo-2⁶⁴
+`JsBigInt` elements for `BigInt64`/`BigUint64` (a non-BigInt write throws `TypeError`).
+`values/JsDataView` reads/writes numbers and BigInts at an explicit byte offset with an
+explicit `littleEndian` flag (big-endian default per spec). `builtins/TypedArrayBuiltins`
+supplies the `ArrayBuffer`/`DataView` constructors and the nine number + two BigInt element
+constructors (accepting `(length)`, `(array-like/iterable)`, or `(buffer[, offset[,
+length]])`), plus the shared `%TypedArray%` prototype methods (`forEach`/`map`/`filter`/
+`reduce`/`reduceRight`/`find`/`findIndex`/`some`/`every`/`indexOf`/`lastIndexOf`/`includes`/
+`join`/`slice`/`subarray`/`set`/`fill`/`reverse`/`at`/`keys`/`values`/`entries`/`toString`)
+and the `from`/`of` statics; `map`/`filter`/`slice` return same-kind copies while `subarray`
+returns a new view sharing the buffer. `GlobalScope` installs all constructors. The
+interpreter routes `getMember`/`setMember` numeric-index and `length`/`byteLength`/
+`byteOffset`/`buffer`/`BYTES_PER_ELEMENT` access to these types, makes them iterable
+(`for-of`, spread, `Symbol.iterator`, `Array.from`) via `arrayLikeElements`, and
+`JsCoercion`/`EJsonInterop` stringify a typed array as a comma-joined list / JSON array of
+its numeric elements (an `ArrayBuffer`/`DataView` → `[object …]` / `{}`). **Deliberate
+simplification**: `JSON.stringify` emits a plain JSON array of the elements rather than V8's
+index-keyed object form.
+
+**ES2022–2026 standard-library additions (quick wins).** A batch of pure library additions,
+no new syntax: `Object.hasOwn(obj, key)` (own-property check over objects and arrays);
+`Object.groupBy(items, cb)` and `Map.groupBy(items, cb)` (bucket an iterable by a callback key
+into a plain object / a `Map` keyed by SameValueZero — `WeakMap` has no `groupBy`);
+`Promise.withResolvers()` (returns `{promise, resolve, reject}`) and `Promise.try(fn, ...args)`
+(runs `fn`, adopting a returned promise and turning a synchronous throw into a rejection);
+`RegExp.escape(str)` (hex-escapes an alphanumeric first character, backslash-escapes syntax
+characters, named-escapes whitespace controls; throws `TypeError` on a non-string);
+`Error.isError(x)` (brand check — error objects are tagged internally by `ErrorBuiltins.makeError`,
+so a plain `{name, message}` object is **not** an error); the Array by-copy methods
+`toReversed`/`toSorted`/`toSpliced`/`with` (return a new array, leaving the receiver intact;
+`with` throws `RangeError` out of bounds); `String.prototype.isWellFormed`/`toWellFormed`
+(lone-surrogate detection / replacement with U+FFFD); and the seven Set methods
+`union`/`intersection`/`difference`/`symmetricDifference`/`isSubsetOf`/`isSupersetOf`/
+`isDisjointFrom` (each takes another `Set`; a non-`Set` argument throws `TypeError`).
+
+**Per-iteration loop bindings.** A classic `for (let …; …; …)` creates a fresh lexical
+environment for each iteration (spec `CreatePerIterationEnvironment`): after the init runs
+in the loop environment, `StatementEvaluator.evalFor` copies the bound `let`/`const` names
+forward into a new child environment before each update, so a closure created in the body
+captures that iteration's binding (`for (let i = 0; i < 3; i++) fns.push(() => i)` yields
+`0, 1, 2`). A `var` (or expression) init keeps the single-scope behaviour. `for-of`/`for-in`
+already bound per iteration.
+
+**ES2025 iterator helpers.** The `Iterator` global (`builtins/IteratorBuiltins`) exposes
+`Iterator.from` plus a `prototype` carrying `map`/`filter`/`take`/`drop`/`flatMap`/`reduce`/
+`toArray`/`forEach`/`some`/`every`/`find`. Calling `Iterator()` directly throws (abstract).
+`map`/`filter`/`take`/`drop`/`flatMap` are lazy (return a new iterator whose own result
+chains through the same dispatch), the rest consume eagerly. Helpers drive their receiver
+directly through the `InterpreterOps` seam (GetIteratorDirect — no `Symbol.iterator`
+re-invocation). The interpreter routes helper names on generators (`MemberEvaluator.generatorMethod`)
+and on any iterator-like object (own callable `next`) to the helpers, and arrays/strings now
+answer `Symbol.iterator` (`getSymbolMember`), so `[1,2,3].values().map(...).toArray()` works.
+The async equivalents live in `AsyncIteratorBuiltins` (see the ES2026 conformance closers below).
+
+**Small stdlib globals.** `BigInt(x)` (coerces integer numbers/booleans/integer strings —
+`RangeError` on a non-integer number, `SyntaxError` on a bad string, `TypeError` on an
+object; `NumberBuiltins.bigIntFunction`); `queueMicrotask(fn)` (enqueues on the existing
+`EventLoop` microtask queue); the URI functions `encodeURI`/`decodeURI`/`encodeURIComponent`/
+`decodeURIComponent` (RFC-3986 unreserved sets, UTF-8 percent-encoding, `decodeURI` preserves
+reserved-character escapes, malformed input throws `URIError`); the Annex-B `escape`/`unescape`
+(`%XX`/`%uXXXX`); and `structuredClone(x)` (deep-copy of objects/arrays/Map/Set/Date/typed
+arrays/ArrayBuffer with cycle handling; functions/symbols/proxies throw a `DataCloneError`-style
+`TypeError`). All live in `builtins/GlobalFunctionsBuiltins` except `BigInt`. `URIError` is
+installed by `ErrorBuiltins`.
+
+**Regex `/v`, Float16, resizable buffers.** The regex `v` (unicodeSets) flag is accepted
+(`RegexTranslator`, mutually exclusive with `u`) and its set notation is translated (see the
+ES2026 conformance closers below); multi-code-point `\q{}` string alternatives remain a documented
+limitation. `Float16Array`, `Math.f16round` and `DataView` `getFloat16`/`setFloat16` use the JDK
+`Float.float16ToFloat`/`floatToFloat16` half-precision conversions. `ArrayBuffer` supports
+resizable/growable buffers: the `{ maxByteLength }` constructor option, `resize`/`transfer`/
+`transferToFixedLength` and the `maxByteLength`/`resizable`/`detached` accessors; typed-array
+element access is bounds-checked against the buffer's current byte length so a shrunk buffer
+reads out-of-range indexes as `undefined`. Length-tracking auto-length views are supported (see
+the ES2026 conformance closers below): a view constructed over a resizable buffer with no
+explicit length tracks the buffer's current length.
+
+**Unicode property escapes (ES2026 conformance Phase 4).** Under the `u`/`v` flag,
+`RegexTranslator` translates `\p{…}`/`\P{…}` property escapes from ECMAScript names to their
+`java.util.regex` equivalents: general-category **short codes** (`\p{L}`, `\p{Nd}`) pass through,
+**long category names** (`\p{Letter}`, `\p{Decimal_Number}`, and `General_Category=`/`gc=`) map to
+the short code, **scripts** (`Script=`/`sc=`/`Script_Extensions=`/`scx=`) map to Java's
+`script=` (script-extensions approximated to script), and a supported subset of **binary
+properties** (`Alphabetic`, `White_Space`, `Uppercase`, `Lowercase`, `Hex_Digit`, `Ideographic`,
+`Assigned`, `Noncharacter_Code_Point`, `Join_Control`) map to the Java `Is…` form. Anything
+outside these tables (e.g. `\p{Emoji}`, an unknown key, an invalid script) throws a JS
+`SyntaxError`. `Pattern.UNICODE_CHARACTER_CLASS` is **deliberately not** enabled, so `\d`/`\w`/`\s`/
+`\b` stay ASCII in `u`-mode exactly as ECMAScript requires (enabling it would make them Unicode-
+aware, a conformance regression). The **Unicode version is the build JDK's**, not something the
+engine pins: with no ICU dependency the character data comes from `java.util.regex`, so JDK 25
+resolves these escapes against Unicode 16.0 and JDK 26 against 17.0. Property escapes therefore
+answer differently across the two supported build JDKs for code points and scripts added in 17.0
+(on 25, `\p{Script=Sidetic}` and friends do not compile at all). That is why
+`built-ins/RegExp/property-escapes/generated/` — exhaustive per-code-point assertions generated
+from one UCD version — is excluded from the conformance gate rather than baselined; the
+hand-written property-escapes tests, which cover the translation and validation this class
+actually performs, stay measured. `Intl` remains out of scope; `Temporal` is implemented (see
+*Temporal API* below) for the ISO 8601 calendar only, which is what `Intl`'s absence rules out for
+every other calendar system.
+
+**Automatic Semicolon Insertion.** The lexer records, parallel to the token stream, a
+`newlineBefore` flag per token (`Lexer.LexResult.newlineBefore`) — true when the trivia skipped
+immediately before a token contained a line terminator (`\n`/`\r`/U+2028/U+2029), including inside
+a multi-line block comment. `TokenStream.newlineBeforeCurrent`/`newlineBeforePeek` expose it, and
+`consumeSemicolon` implements the three ASI rules: a terminator is an explicit `;`, or is inserted
+before `}`, end-of-input, or a token a line terminator precedes; otherwise a missing terminator on
+the same line is a syntax error (so `a = 1 b = 2` is rejected). The **restricted productions** are
+enforced: a line terminator makes `return`/`break`/`continue` argument/label-less, makes a postfix
+`++`/`--` start a new statement, gives `yield` no argument, is a syntax error after `throw`, and is
+a syntax error between arrow parameters and `=>`. ASI runs only on the position-aware parse path
+(`Parser.parse(LexResult)`); the token-list overload (`Parser.parse(List)`, test-only) has no
+newline information and stays permissive.
+
+**Strict mode (always on).** A script is always a strict module — there is no sloppy mode and no
+`"use strict"` directive handling. Two strict runtime behaviors already held before this: assigning
+to an undeclared name throws `ReferenceError` (never creates an implicit global,
+`Environment.assign`) and `this` in a plain function call is `undefined` (never the global object).
+The strict **early errors** are enforced at lex/parse time: legacy-octal and leading-zero
+non-octal-decimal integer literals (`0755`, `08`), octal/non-octal string escapes (`\07`, `\1`,
+`\8`), duplicate bound parameter names (including inside destructuring patterns), `delete` of an
+unqualified identifier or a private reference (`delete x`, `delete this.#p`), the `with`
+statement, future-reserved words (`implements`/`interface`/`package`/`private`/`protected`/`public`)
+as binding identifiers, and `eval`/`arguments` as binding or assignment/update targets. At runtime
+the poisoned `arguments.callee` and function `caller`/`callee`/`arguments` accessors throw a
+`TypeError` (see the ES2026 conformance closers below); an arguments object has no `caller`
+property at all.
+
+Two **declaration** early errors join them, both in the parser because the negative tests assert
+that *no statement executes*: a `const` declarator with no initializer (legal only in a `for-in`/
+`for-of` head), and **lexical redeclaration**. The parser keeps a stack of
+`internal/parser/DeclarationScope` — pushed at the program, each function's parameters-plus-body,
+each block, each `for` header and the `switch` case block — in which a `let`/`const`/`class`/`using`
+name must be unique and must not collide with a `var`, parameter or function name reaching the same
+scope. A `var` name is recorded in every scope it crosses on the way up to its function boundary, so
+`{ var f; let f }` and `function x() { { let f; var f; } }` are both rejected while legal shadowing
+(`let a; { let a; }`, `function f(a) { { let a } }`) is not. A function declaration is var-scoped at
+a function boundary and lexical inside a block, so `function f(){} function f(){}` is legal at top
+level and `{ function f(){} function f(){} }` is not — the always-strict reading, with no Annex-B
+sloppy-function allowance.
+
+### The ordinary-object substrate
+
+Every value that is an object in the spec sense owns an ordinary property table. `values/PropertyTable`
+holds what `JsObject` used to keep privately — the data and accessor entries, the insertion-ordered
+`keyOrder` that gives spec own-key order, the per-key `PropertyFlags`, the symbol-keyed parallel maps
+and the `extensible` flag — and `JsValue` exposes it through `ownProperties()`, `getProto()`,
+`setProto()` and `isExtensible()`.
+
+Seventeen types hold a table: `JsObject`, `JsArray`, `JsFunction`, `JsNativeFunction`, `JsClass`,
+`JsPromise`, `JsTypedArray`, `JsArrayBuffer`, `JsDataView`, `JsDate`, `JsMap`, `JsSet`, `JsRegExp`,
+`JsArguments`, `JsGlobalObject`, `JsGenerator` and `JsAsyncGenerator`. Each keeps its exotic behaviour
+*in front of* the table — `JsArray` its index and `length` handling, `JsTypedArray` its canonical
+numeric indices, `JsGlobalObject` its `Environment` fallthrough — and delegates everything else to it,
+allocating the table lazily so an array of numbers does not carry one. The table is what makes
+`Object.defineProperty` on a function, a descriptor surface on a promise, and `delete globalThis.x`
+work at all; before it, those calls silently returned their target.
+
+The **primitives keep `ownProperties() == null`** (`JsNumber`, `JsString`, `JsBoolean`, `JsBigInt`,
+`JsUndefined`, `JsNull`, `JsSymbol`) — that null is what identifies a primitive at every choke point.
+`JsProxy` also has no table: every trap in `ProxyDispatch` intercepts ahead of one and falls back to
+the target.
+
+One consequence worth stating: descriptor validation is now a single
+`ValidateAndApplyPropertyDescriptor` over the table, rather than the three divergent implementations
+(plain, array, symbol) that preceded it.
+
+### Constructor-ness
+
+Callability and constructor-ness are separate bits, as they are in the spec. `JsNativeFunction`
+carries an explicit `[[Construct]]` flag that **defaults to false** and is set by `markConstructor()`
+at the handful of sites that install a real constructor; `JsFunction` computes it from flags it
+already had (`!arrow && !async && !generator && !method`); `JsProxy` recurses into its target.
+`InterpreterUtils.isConstructor` is the single source of truth, and `newTarget` is threaded through
+`[[Construct]]` so `Reflect.construct(target, args, newTarget)` derives the instance prototype from
+an ordinary `Get(newTarget, "prototype")`.
+
+The bit is deliberately **not** derived from `getPrototype() != null`: a script can assign
+`Array.from.prototype = {}`, and that must not make `new Array.from()` legal. For the same reason
+`ObjectBuiltins.hasPrototype` stays divergent from `isConstructor` — a generator has a `.prototype`
+but is not a constructor.
+
+## Measuring conformance
+
+Conformance is **measured, not asserted** (currently **100.00%**, 36,477/36,477 — the tracked
+baseline of known failures is empty). The denominator shrank from 36,535 when the restriction-bound
+tests below were filtered out — that step moved the rate without changing the passing count, so the
+two figures are only comparable through the ledger in `plans/simplejs-test262-100-percent-progress.md`.
+The official
+tc39/test262 corpus runs against
+`SimpleJs.run(source, HostBindings)` through a harness in `test_utils/test262.py`, filtered down to
+the language + built-ins surface a database script host actually exposes, and gated on a tracked
+baseline of known failures so the number can only ratchet upward:
+
+```bash
+# corpus fetched on demand into ./test262 (pinned + sha256-verified, never committed)
+python3 test_utils/test262.py --fetch
+python3 test_utils/test262.py --self-test         # check the harness itself; no corpus needed
+python3 test_utils/test262.py --gate baseline     # what CI runs
+python3 test_utils/test262.py --update-baseline   # after fixing a gap
+python3 test_utils/test262.py --self-check        # assert the known divergences still fail
+python3 test_utils/test262.py --dump-failures     # re-run the baseline, write the failure inventory
+```
+
+`--dump-failures` re-runs **only** the tests currently listed in `config/test262-baseline.txt` and
+writes `test_log/test262-failures.tsv` (`status`, `id`, `errorName`, `message`) — the same worker and
+the same collection path as a full run, restricted to the baselined ids, so it needs no extra worker
+mode and costs ~80s against the full run's several minutes. It exists because the driver otherwise prints a message only
+for a *regression*: the messages for the known failures — the set you actually work from when closing
+a gap — were invisible. A baselined test that now passes is reported as a count, not written to the
+file; drop it with `--update-baseline`. The crash-loop guard counts only a **dead worker**, so a
+filtered run whose batch is mostly known hangs is not mistaken for a broken classpath
+(`--max-crashes` tunes the limit, default 5).
+
+The report lands in `test_log/test262-report.md` (per-area pass rates, a totals line and the
+exclusion/skip breakdown). The pieces:
+
+| File | Role |
+|---|---|
+| `config/test262.properties` | pinned corpus commit + tarball URL + sha256 |
+| `config/test262-exclusions.txt` | what is deliberately **not** measured; the machine-readable form of *Deliberately unimplemented ES2026 features* below. A `keep:` line re-admits a subtree from a broader `dir:` exclusion, so a directory-wide omission cannot quietly swallow tests that fail for a reason we own |
+| `config/test262-baseline.txt` | known-failing test ids, with the corpus SHA in the header |
+| `config/test262-features.txt` | features already accounted for, so a corpus bump surfaces only the new ones |
+| `test_utils/test262_shims/` | the `print`/`$DONE` and `$262` shims the corpus harness expects |
+| `src/test/java/org/techhouse/unit/simplejs/test262/Test262Worker.java` | the worker JVM the driver batches jobs onto |
+
+The rate is computed over `PASS + FAIL + HANG`; excluded and skipped tests are reported but never
+counted in the denominator, so a deliberate omission cannot flatter the number. `noStrict` tests are
+**skipped, not failed** — always-strict is a design decision, not a defect. The gate fails on a new
+failure, on a baselined test that now passes (fixes must be recorded) and on a baselined test that
+the filter has started excluding.
+
+Because the baseline's line count is the honest answer to "is SimpleJS ES2026 compliant?", the table
+below is no longer a hand-maintained inventory of gaps — it lists only what is not expressible as a
+test262 id. Everything else is a diff against the baseline.
+
+## Known gaps and divergences
+
+Everything in this section is a **gap**, not a design decision: a conformant engine has it and
+SimpleJS either lacks it or gets it wrong. The next section lists the features that are missing *on
+purpose*. For the full, measured list see `config/test262-baseline.txt` and reproduce it with the
+commands above; the limitations below are the ones that need an explanation rather than a test id.
+
+### Remaining limitations
+
+| # | Limitation | Notes |
+|---|---|---|
+| 1 | **A top-level promise that never settles is reported as an error** | Closed. The event loop has drained to quiescence by the time the result contract is applied, so a promise still pending then can never settle. It used to contribute JSON `null`, indistinguishable from a script that deliberately returned null; it now fails the run as `ScriptPendingResultError` (`400-20`). |
+| 2 | **A canonical array index at or past `Integer.MAX_VALUE` is only reachable through `Object.defineProperty`, not through ordinary `arr[i] = v`** | `JsArray` backs indices at or beyond `MAX_DENSE_LENGTH` (2^24) with a sparse map instead of a dense list (keyed by the same `int` index every consumer already used), so a `length` up to the spec's 2^32-1 ceiling is now representable and `new Array(4294967295)`, `arr.length = N`, `Object.defineProperty(arr, "length", {value: N})` and `Object.defineProperty(arr, String(hugeIndex), desc)` all work for the full range. One narrower gap remains: the interpreter's ordinary array `[[Set]]` fast path (`internal/interpreter/MemberEvaluator`) resolves an index via `InterpreterUtils.arrayIndex`, which returns a Java `int` and so never recognises an index at or past 2^31 as a canonical array index — `arr[i] = v` for such an `i` lands as an ordinary named property instead of updating `length` (a storage change alone cannot fix this; it needs `arrayIndex` to widen to `long`, which ripples into every caller). A second, unrelated gap: `Object.defineProperty`/`defineProperties` coercing a non-primitive `length` value (one whose `toString`/`valueOf` must be invoked) throws `RangeError` instead, because `defineOwnProperty` has no route to invoke user code for that coercion — `values/JsValue.defineOwnProperty`'s signature would need to thread an `InterpreterOps` through, cascading into every override. |
+| 3 | **`super.m()` on a native super is a `TypeError`** | There are no native method tables to chain into. |
+| 4 | **`Function.prototype.toString` retains no source for a function parsed from a template substitution** | `e.stack` is no longer synthetic - see *Call stacks* below. Source text *is* retained for functions generally (see *Function source text*), except inside a template literal's substitution: the lexer re-lexes each `${...}` into its own token list with no positions, so a function written there has no span to slice and falls back to the `NativeFunction` form - legal, since `HostHasSourceTextAvailable` is false for it. The same missing positions mean a frame for such a function reports its module without a line and column. |
+| 5 | **`EJsonInterop.toEjson` reads data properties only; `toHostEjson` no longer does** | Closed for the host boundary. The script result is now converted *inside* the interpreter's lifetime (via `Interpreter.run`'s `ResultFinisher`) and `DbModule` passes its `InterpreterOps` through, so an accessor-valued property is read through its getter on the way to the caller and into the database - and the getter's own work is charged to the run's budgets, so a runaway getter aborts the run instead of hanging the boundary. The no-`ops` overload keeps the data-property-only behaviour for an embedding with no live interpreter. |
+| 6 | **Property escapes do not match the UCD exhaustively** | The build-JDK half is closed: **JDK 26 or newer is now required** (a `maven-enforcer-plugin` rule fails an older build), so the UCD is Unicode 17.0 everywhere - matching the version the corpus is generated against - and `\p{...}` answers identically on every node. Re-measuring `built-ins/RegExp/property-escapes/generated/` on that footing rather than assuming it scores **66.31% (311/469)**, so a genuine per-code-point gap remains between our resolution of a property name and the exhaustive set the corpus asserts; the subtree therefore stays excluded, now for that reason rather than for portability, and closing the gap is what would add those tests to the denominator. `internal/regex/UnicodeProperty` still resolves a property name to a `CodePointSet` by using `java.util.regex.Pattern` as a one-time, per-property *oracle* (compiled once, every code point tested, the truth table cached) - never as the matching engine - so the data is still the JDK's rather than a pinned UCD of our own; a future JDK bumping Unicode will move these escapes with it. **Properties of strings** (`\p{RGI_Emoji}` and its six siblings) remain the exception: they are sets of *strings*, so the JDK has no data for them at all, and `UnicodeProperty.StringProperties` expands each into an alternation of literal sequences from `src/main/resources/simplejs/emoji-sequences.txt` - data that is **ours and pinned to Unicode 17.0** (regenerate with `test_utils/gen_emoji_sequences.py`). Property names are matched **exactly** - loose matching (`\p{ gc = X }`) is an early error - and the `Hex` alias is supported. |
+| 7 | **Allocation that is O(1) per instruction is bounded only by the instruction budget** | `scriptMaxMemoryBytes` charges the allocations proportional to a script-supplied length (see *Host-contract notes*), which is what escapes `tick()`. A script that allocates a small object per instruction is still bounded only by `scriptInstructionBudget`, so a large instruction budget permits substantial retained heap. Sizing the two together is the operator's job. |
+| 8 | **`localeCompare`/`toLocaleString` honour a locale but only part of `options`** | Closed for the argument itself: `builtins/LocaleResolver` resolves the `locales` argument (a tag or an array of tags, first well-formed one wins; a structurally invalid tag is a `RangeError`) and it reaches `String.prototype.localeCompare` and the `Number`/`Date` `toLocaleString`s, defaulting to the host locale (`scriptLocale`) when absent. What remains is the option subset `java.text` cannot express without `Intl`: `sensitivity` maps onto `Collator`'s three strengths, so `case` and `variant` both land on `TERTIARY`, and `usage`, `numeric`, `caseFirst` and `ignorePunctuation` are validated (a bad value is still a `RangeError`) but not honoured. |
+
+Row 8 (a script transaction being local-only under clustering) is gone: `EnforcingDatabaseAccess`
+now routes through `ClusterRouter`, so cross-owner script transactions run the same 2PC the wire
+protocol uses. See *Script operations under clustering* below.
+
+None left: the table above previously carried four more rows (`\k<name>` on a duplicated name
+always resolving to the first alias; a capturing group inside a repeated group not resetting
+between iterations; a lookbehind containing a backreference being rejected at compile time; and
+`.`/character classes combining a well-formed surrogate pair into one code point even without
+`/u`/`/v`) — all four were specific consequences of matching through `java.util.regex`, which
+cannot express ECMA-262's Pattern Semantics exactly. They closed together when the matching engine
+was replaced; see *Regex engine* below.
+
+### Call stacks
+
+A thrown error carries the frames it came from, so a stored procedure, trigger or scheduled procedure
+that fails unattended names where it broke rather than only what broke.
+
+```
+TypeError: Cannot read properties of null (reading 'total')
+    at applyRule (procedures/rules:12:7)
+    at onWrite (procedures/audit:31:14)
+    at main:4:1
+```
+
+- **Frames are return addresses.** `internal/interpreter/CallStack` keeps a deque of
+  `CallFrame`s; entering a function saves the *caller's* function, module and position, and leaving it
+  restores them. `Interpreter.callFunction` pushes and pops beside the existing `depth` counter, so the
+  frame list is already bounded by `scriptMaxDepth`, and `evalStatement` writes the current line and
+  column - two int stores per statement. Positions come from the parser, which stamps every statement
+  plus every call and `new` expression (`JsNode.getPosition`); a parse path with no positions (the
+  token-list entry point, a template substitution) leaves them null and the frame degrades to a bare
+  module name.
+- **The trace is captured when the error is constructed**, not when it is reported.
+  `InterpreterUtils.toErrorValue` turns a runtime error into a JS object at the *catch* site, by which
+  point every frame has been unwound, so `JsObject.markErrorData` (the one place an error object is
+  branded) and `SimpleJsRuntimeException`'s constructor both take a snapshot through
+  `internal/interpreter/StackCapture` - an `InheritableThreadLocal`, so a coroutine's virtual thread
+  sees the stack its parent installed. It is installed for the length of a run and cleared afterwards,
+  unlike the intrinsics thread-local beside it in `ErrorBuiltins`, because connection threads are
+  reused.
+- **A coroutine owns its own segment.** A generator's body runs interleaved with its consumer's, so
+  sharing one frame list would leave a suspended generator's frame in the trace of whatever resumed it.
+  `Coroutine.setAroundResume` lets the interpreter swap in that coroutine's `CallStack.Segment` for the
+  length of each resumption; async functions and async generators use the same mechanism, which is what
+  keeps an async frame correct after an `await` rather than only before the first one.
+- **A frame is labelled with the module the function was written in**, recorded on the `JsFunction`
+  when it is created rather than read off the stack when it is called - otherwise a function imported
+  from `procedures/lib` and called from `main` would claim to be in `main`. `host/ResolvedModule` now
+  carries a `displayName` (`procedures/<name>`, defaulted to the module id) so the id's version suffix
+  stays out of the trace.
+- **Sandbox aborts carry no frames.** A timeout, a cancellation or a budget/depth limit is not a
+  program error, and `ScriptAbortException` deliberately does not capture.
+- **Where it surfaces**: `ScriptResult.getErrorStack()`, the `stack` field on the `RUN_SCRIPT` and
+  `CALL_PROCEDURE` responses, and - joined onto one line as `stack=[frame | frame]` by
+  `ScriptOperationHelper.renderStack` - the `TriggerDispatcher`, `ScheduleDispatcher` and `logRun`
+  warning lines. A pipeline callable's `ScriptCallableException` carries it too. The capture is capped
+  at `StackCapture.MAX_FRAMES` (32) with a trailing `... N more frames`.
+- The engine's own `Error.prototype.stack` accessor renders the same frames under the usual
+  `name: message` header. An error built with no interpreter in scope keeps the single synthetic frame
+  it always had.
+
+### Host-contract notes
+
+- **A promise returned at top level is awaited.** `return f()` for an `async f` resolves the script
+  to the fulfilment value; a rejection becomes the script error (name/message), and a promise still
+  pending once the loop has drained fails the run as `ScriptPendingResultError` (`400-20`) rather than
+  quietly contributing JSON `null`. The same applies to `export default`.
+- **The result is converted while the interpreter is still alive.** `SimpleJs.run` hands
+  `Interpreter.run` a `ResultFinisher` that applies the result contract and the `EJsonInterop`
+  conversion before the coroutines are cancelled, then drains once more. That is what lets an
+  accessor-valued property be read through its getter, and what makes the getter's own work count
+  against the instruction budget and the deadline.
+- **The `db` surface stays read+write and single-database, deliberately.** No DDL, no index
+  management, no user operations, and no access to a database other than the run's own scope. Opening
+  DDL to scripts would put `CREATE_INDEX`/`DROP_COLLECTION` behind the invoker rights a
+  `CALL_PROCEDURE` runs under and the definer rights a trigger runs under, and a schedule firing on
+  every node would race the admin coordinator's DDL serialization. A migration is a client driving DDL
+  over the wire and calling a script for the data half.
+- **`strictScriptGoal` (`host/ResourceLimits`) selects the spec's Script goal.** It defaults to
+  `false`, which is what the database host uses: `SimpleJs.run`'s result contract deliberately allows
+  a top-level `return`, and `import.meta`, `new.target`/`super` in global code and a top-level
+  `using` are tolerated rather than rejected. Set to `true` (only `Test262Worker` does) each of those
+  becomes an early `SyntaxError`, as the spec requires of a Script. The flag arrives through
+  `HostBindings.limits()`; `SimpleJs.run` keeps its signature, and `SimpleHostBindings` /
+  `EnforcingDatabaseAccess` leave it off.
+- **A run reports what it consumed.** `ScriptResult.getMetrics()` carries the instructions executed,
+  the peak bytes held, the `db` operations issued and the wall-clock duration, each beside its budget,
+  and reaches the caller as the `metrics` object on the `RUN_SCRIPT`/`CALL_PROCEDURE` responses and as
+  a column of the run's history row. The counters are filled by a holder the caller owns
+  (`Interpreter.RunMetrics`), written in `runModule`'s own `finally`, so an aborted run reports what it
+  burned before it aborted — which is the run the numbers matter most for. `peakMemoryBytes` is a
+  high-water mark rather than the closing balance, because `release()` credits a drained `db.cursor`
+  batch back and would otherwise erase the peak. A straight-line script with no loop and no call
+  reports `instructions: 0`: `tick()` runs at loop back-edges and call entries, and such a program
+  reaches neither.
+- **Outbound `fetch` ships on, and open.** The switch defaults to true and the allowlist to `*`, because a
+  capability behind a default-off flag is one nobody discovers; the cost is that the shipped posture lets
+  any script use the server's network position — internal services and the cloud metadata endpoint
+  included — so `Main.warnIfScriptFetchEnabled` says so at every startup and the operator is expected to
+  narrow it. `DatabaseHostBindings.network()` returns a shared `JdkNetworkAccess` only when
+  `scriptFetchEnabled` is true, and `limitsFromConfiguration`
+  carries `scriptFetchAllowlist`/`scriptFetchTimeoutMs`/`scriptFetchMaxResponseBytes` with it. The
+  allowlist (`host/HostAllowlist`) accepts an exact host, a `*.example.com` wildcard matching
+  sub-domains but not the apex, or a bare `*`; an **empty** list denies everything even with the switch
+  on, inverting the engine's older "empty means unrestricted" rule — enabling egress without naming a
+  host is not a decision to allow every host. The grant reaches `RUN_SCRIPT`, `CALL_PROCEDURE`,
+  triggers and scheduled procedures (whose dispatchers rebuild the limits with their own wall clock and
+  carry the fetch fields through), and deliberately not pipeline scripts or before-write hooks, which
+  run holding collection locks where a blocking egress call is a stall.
+- **`RUN_SCRIPT` exposes all of the above to clients**, with the sandbox's `ResourceLimits` built
+  from configuration (`DatabaseHostBindings.limitsFromConfiguration`) rather than supplied by the
+  caller. See *The `RUN_SCRIPT` operation* below.
+- **The per-run budgets bound one run; the admission caps bound their sum.** Every limit in
+  `ResourceLimits` is per run, so N simultaneous callers each get the full instruction budget and the
+  full `scriptMaxMemoryBytes` allocation budget. `ops/ScriptAdmission` caps the client-initiated
+  operations (`RUN_SCRIPT`, `CALL_PROCEDURE`) at `maxConcurrentScripts` concurrent runs, admitting a
+  caller after a bounded `scriptQueueWaitMs` wait and answering `503-6` if none comes free. Inside that
+  permit it then takes this caller's `maxConcurrentScriptsPerUser` slice and this database's
+  `maxConcurrentScriptsPerDatabase` slice (0 disables either). The inner two do **not** wait: the
+  bounded wait exists to smooth a node-wide burst, whereas a tenant already at its own ceiling should be
+  told so at once rather than occupy a node-wide permit while it queues. An acquisition returns a
+  `Permit` recording which pools it took, so a refusal at an inner level releases the outer one — a
+  boolean could not express that, and a leak there would let a saturated tenant drain the node by being
+  refused. The `503-6` message names the scope that refused it (`node`, `user` or `database`). Triggers
+  and scheduled procedures are deliberately **exempt** — they are already bounded by their own worker
+  pools (`triggerThreads`, `scheduleThreads`), and a trigger refused for want of a permit would be a
+  *dropped* trigger rather than a retried one, since its pending-run record is consumed by the
+  transaction that applies its effects. The node-wide ceiling on concurrent interpreters is therefore
+  `maxConcurrentScripts + triggerThreads + scheduleThreads`, and that sum times `scriptMaxMemoryBytes`
+  is the worst-case script heap an operator sizes `-Xmx` against, additive with `maxMemory` and the
+  metadata cache budgets.
+- **A script's console output is returned to the caller.** `SimpleJs.run` captures it into
+  `ScriptResult.getLogs()` on every exit path and tees it to `host.console()`; see *Captured
+  console output* below.
+- **The host supplies the time zone and locale.** `HostBindings.timeZone()`/`locale()` default to
+  the JVM's (so every existing embedding and the test262 worker are unaffected) and are threaded to
+  the builtins through `InterpreterOps.timeZone()`/`locale()`. `host/DatabaseHostBindings` overrides
+  them from the `scriptTimeZone` (default `UTC`) and `scriptLocale` (default `en-US`) configuration
+  keys, so `Date`'s local-time surface, `Temporal.Now`, `toLocaleString` and `localeCompare` answer
+  the same on every cluster node. `String.prototype.localeCompare` still ignores its own `locales`
+  argument — only the *default* is host-controlled; honouring the argument belongs with a broader
+  `Intl` decision.
+- **The allocation budget bounds bulk allocation, not live heap.** `scriptMaxMemoryBytes` is a
+  per-run **cumulative total of the allocations that are proportional to a script-supplied length or
+  to input size** — a `repeat`/`padStart` result, a dense array, a typed array or `ArrayBuffer`, a
+  `join`, a `JSON.parse`/`stringify` payload, a `structuredClone` node. It is deliberately *not* a
+  live-heap cap, for two reasons: `ThreadMXBean.getThreadAllocatedBytes` cannot be used because
+  coroutine bodies run on virtual threads, which it does not track, and a `Cleaner`-based scheme that
+  credited the counter on collection would make the limit GC-timing dependent, so the same script
+  could pass on one run and fail on the next. The dividing line is that `tick()` already bounds
+  allocation costing at least one instruction per unit, so the budget only has to cover what is O(N)
+  in a single instruction. String `+` is charged its **appended delta**, not the combined result:
+  charging the result would make `s += "x"` cost quadratically and reject ordinary string building,
+  while `s = s + s` — the doubling case `tick()` cannot see — has a delta equal to the whole
+  accumulated string and is still bounded. `OutOfMemoryError`/`StackOverflowError` are caught at the
+  `SimpleJs.run` boundary as a last resort and reported as `ScriptMemoryError`; the budget is what is
+  meant to make that unreachable, so `ScriptOperationHelper` logs it at WARN. **What the script pulls
+  out of the database is charged too**: `builtins/DbModule` charges the estimated size of every
+  document a host call materialises — `findById`'s document, each `aggregate` result *inside* the
+  conversion loop (so a runaway read aborts partway rather than after the whole JS copy exists), the
+  document `save` returns and `bulkSave`'s outcome arrays. What the script *passed in* is never
+  charged, because it was already charged when the script allocated it. A `db.cursor` batch is the one
+  charge that is credited back (`InterpreterOps.release`) when the batch is drained and replaced: the
+  release point is fixed and deterministic, so it does not reintroduce the GC-timing dependence the
+  budget deliberately avoids.
+- **BigInt has two conversions at the boundary.** `EJsonInterop.toEjson` is the spec path shared with
+  `JSON.stringify` and throws on a BigInt, as test262 requires. `EJsonInterop.toHostEjson` is the host
+  path (the script result contract and everything heading into the database): a BigInt whose absolute
+  value is at most 2^53−1 becomes a number, anything larger throws a `TypeError` naming the property
+  path (`Cannot serialize BigInt at 'items[2].total': value exceeds the exact integer range`).
+
+### The `RUN_SCRIPT` operation
+
+`RUN_SCRIPT` is the wire entry point: `{"type":"RUN_SCRIPT","databaseName":"…","script":"…","args":{…}}`
+(see the README's protocol reference for the full request/response shape). The path is
+`conn/MessageProcessor` → `RequestParser` → `RequestValidator` → `AuthorizationChecker` →
+`ops/OperationProcessor.processRunScriptOperation` → `ops/ScriptOperationHelper.execute` →
+`SimpleJs.run`, and the response is a `RunScriptResponse` carrying `result`, `logs` and
+`logsTruncated`.
+
+**Who may run one.** Admins may run a script against any database and a database owner against the
+databases it owns (both already short-circuit `AuthorizationChecker.check` ahead of the per-operation
+logic); anyone else needs a **per-database** grant — `AdminUserEntry.scriptPermissions`, a
+`{database -> boolean}` map set through `CREATE_USER`/`CHANGE_PERMISSIONS` and read by
+`AdminUserEntry.canRunScripts(db)`, where an absent entry or an explicit `false` denies. Starting a
+script is deliberately a separate capability from what it may do: each operation the script issues
+still runs `AuthorizationChecker` and `SchemaValidationHelper` on its own request against the caller's
+`databasePermissions`/`collectionPermissions`, so the grant never widens the caller's reach. The field
+is absent from user records written before it existed, which `fromJsonObject` reads as "no grants".
+
+**Database scope.** The request's `databaseName` becomes the `scopedDatabase` of the
+`host/EnforcingDatabaseAccess` the script is given. `dispatch` rejects any request naming a different
+database with a catchable JS `Error`, and `listDatabases()` answers only the scope. Since
+`RequestValidator` rejects the reserved `admin` name as a scope, a script — even one run by an admin
+user — cannot read `admin/users`, which an unscoped in-process embedding still can. The scope is
+exposed to the script as `db.name`, so a script need not hardcode its database.
+
+**Sandbox from configuration.** `DatabaseHostBindings.limitsFromConfiguration()` builds the
+`ResourceLimits` from `scriptInstructionBudget`, `scriptTimeoutMs`, `scriptMaxDepth`,
+`scriptMaxMemoryBytes` (exceeding it aborts with `400-12`), `scriptMaxLogLines`,
+`scriptMaxLogLineChars` and `scriptTextImportEnabled`; the request cannot
+influence any of them. `scriptMaxSourceBytes` caps the accepted source (`400-10`) and
+`scriptsEnabled` (default `true`) gates the operation entirely (`403-2`). `fetch` is reachable from the
+wire whenever `scriptFetchEnabled` is set — it is by default — and reaches the hosts
+`scriptFetchAllowlist` names, which ships as `*`; with the switch off, `HostBindings.network()` stays
+`null` and calling `fetch` is a catchable `TypeError`.
+
+**Failure contract of the `db` surface.** Every method throws a catchable JS `Error` (built with the
+script's own realm `Error.prototype`, so `e instanceof Error` holds) whenever the underlying
+`OperationResponse` is not OK — an `AuthorizationChecker` denial, a schema violation, `400-2`
+(entry too large), a cluster rejection (`421-1`/`503-2`/`503-3`/`503-4`) or an internal `500-x`.
+Only genuine absence stays a value: `findById` answers `null` on `404-2`, `aggregate` answers `[]` on
+`404-3` (the wire's `NO_RESULTS`), and `delete` treats `404-2` as a no-op since the intended state
+already holds. This closed a real gap: `save` used to return `null` and `delete` ignored its response
+entirely, so a script could not tell a refused write from a successful one — a script writing to an
+unreachable owner saw no error at all.
+
+**Outcome mapping.** A `ScriptResult` error becomes `408-1` for `ScriptTimeoutError`, `400-11` for
+`ScriptLimitError`, `400-20` for `ScriptPendingResultError` and `400-9` for everything else (a thrown
+value, a syntax error, a rejected top-level promise), with the message `"<ErrorName>: <message>"`.
+Captured `console` output rides along on **every** outcome, so a failed run is still debuggable, and a
+failed run also carries a `stack` of frames (see *Call stacks*).
+
+**The parsed program is cached.** `ops/CompiledScriptCache` keys an ad-hoc script's parse tree by a
+SHA-256 of its source (`scriptCompiledCacheSize`, default 128 entries; `0` parses on every call), so a
+client repeating a script does not re-lex and re-parse it. A content hash cannot go stale, which is why
+this cache needs no invalidation hook - and why it is a separate class from `CompiledProcedureCache`,
+whose key carries a procedure version instead. A **parse failure is cached alongside the successes**
+and replayed, because a client looping on a broken script would otherwise re-parse it every time; the
+caller still answers the same `400-9` it always did, which is the contract the source-overload call
+used to protect.
+
+**The result is capped.** `SimpleJs` estimates the converted result with
+`EJsonInterop.estimatedBytes` and fails the run with `ScriptResultTooLargeError` → `400-15` when it
+exceeds `ResourceLimits.maxResultBytes` (`scriptMaxResultBytes`, default `16Mb`), so a script cannot
+turn one request into an arbitrarily large response line. The cap lives with the other sandbox
+limits rather than in `ScriptOperationHelper`, which is what makes `CALL_PROCEDURE` inherit it with
+no second implementation; a **trigger** run passes `-1` instead, since `TriggerDispatcher` discards
+the result and capping it would fail a run for a value nobody reads. The failure path is the ordinary
+one, so the `console` output still comes back. An embedding that builds its `ResourceLimits` through
+any of the delegating constructors gets `-1` and skips the estimation walk entirely — which is what
+keeps the test262 worker on its previous behaviour. To *process* more data than can be returned, use
+`db.cursor` and return a summary.
+
+**Runs where it lands (for now).** Under clustering the script always executes on the node that
+received the request; only its individual operations are routed to their collections' owners. That is
+a deliberate first cut — a future phase should pick the execution node from live membership and node
+availability instead of defaulting to the local one. See *Scripts* in
+[clustering.md](clustering.md) for the open questions.
+
+### Stored procedures and triggers
+
+A stored procedure is a named script; a trigger runs one after a committed write. Both live **with their
+data** rather than in an admin collection — a procedure in `{db}/.procedures/{name}.json`, a collection's
+triggers in `{db}/{coll}/{coll}-triggers.json` beside its schema — following the per-collection JSON Schema,
+which is the established precedent for this shape of metadata. That is not merely tidier: it removes the PK
+index, page metadata and entry counts an admin collection would need, it makes `DROP_DATABASE` and
+`DROP_COLLECTION` remove them with no cascade code (`fs.deleteDatabase` deletes each child folder's files,
+`fs.deleteCollectionFiles` every file in the collection folder), and it costs nothing at startup because
+`AdminCache` loads both lazily with negative caching — the same hot-path contract
+`SchemaValidationHelper.check` already relies on for every `SAVE`. The `.procedures` folder cannot collide
+with a user collection: a collection name admits only alphanumerics plus `_` and `-`, so a leading `.` is
+unrepresentable and nothing had to be reserved. Replication is unchanged from schemas: the DDL is
+coordinator-serialized through `ClusterAdminHelper`'s `ADMIN_DDL` and ordered by the admin epoch.
+
+**Compiled once.** `SimpleJs.compile(source, strictScriptGoal)` returns a `CompiledScript` that
+`SimpleJs.run(CompiledScript, HostBindings)` executes, so a repeated `CALL_PROCEDURE` does not re-lex and
+re-parse. Sharing one parse across runs is safe because nothing in the AST is written after parsing (the
+parser is the only writer of `JsNode.sourceText`, and a regex literal holds its pattern *text* — the
+`JsRegExp` with its mutable `lastIndex` is built per evaluation), and every piece of runtime state lives in
+the per-run `Interpreter`/`Environment`/`Intrinsics`. `ops/CompiledProcedureCache` keys entries
+`db|name|version`, which makes the cache correct with no invalidation hook on the write path — a save bumps
+the version, including a save that arrived by replication or an anti-entropy conform. A **delete** is the one
+exception: it resets the version, so `DELETE_PROCEDURE` and `DROP_DATABASE` invalidate explicitly, or
+re-creating a name would be served the deleted procedure's program. `SimpleJs.run(String, HostBindings)`
+keeps its exact contract, so `RUN_SCRIPT` still reports a syntax error as `400-9` rather than throwing;
+`SAVE_PROCEDURE` uses `compile` precisely so a broken body is refused at save time (`400-13`, with the
+parser's line and column) instead of on somebody else's first call.
+
+**Who may install, and whose authority runs.** `scriptPermissions` is a per-database
+`ScriptPermissionLevel` — `NONE`/`RUN`/`MANAGE`, where `RUN` allows `RUN_SCRIPT`/`CALL_PROCEDURE` and
+`MANAGE` additionally allows installing procedures and triggers; admins and database owners have an implicit
+`MANAGE`. A boolean written by an older record or client reads as `RUN`/`NONE`, so nothing had to be
+migrated, but `AdminUserEntry` writes the string form from its next write onward — which is why a mixed
+version cluster must be rolled before granting `MANAGE` (record-shipping replication would hand an old node
+a level string it cannot parse, and it would skip the whole user record). Installing is deliberately its own
+level rather than something a `READ_WRITE` grant confers, and the reason is the split below.
+
+`CALL_PROCEDURE` uses **invoker rights**: the procedure runs as the caller, so the grant to call one never
+widens what it may do — every operation it issues is authorized again on its own request. A **trigger** uses
+**definer rights**: it runs as the user who installed it. That difference is deliberate and load-bearing.
+Under invoker rights a trigger's *effect depends on who wrote*, and an audit trigger then fails for exactly
+the low-privilege users most worth auditing — they have no write access to the audit collection — failing as
+a WARN in the server log that the writer never sees. Definer rights make the trigger behave identically
+regardless of the writer, and the escalation is bounded by the fact that only an admin, owner or `MANAGE`
+user can install one; the definer is stored on the record, returned by `LIST_TRIGGERS`, and named in every
+dispatch log line. Two consequences follow: a definer who no longer exists **disables** the trigger (no
+fallback to the writer, which would silently reinstate invoker rights, and none to an admin, which would let
+deleting a user *widen* a trigger's authority), and a definer whose permissions are later reduced silently
+narrows the trigger — nothing to fix, since `AuthorizationChecker` runs per request, but the symptom is a
+trigger that used to work, with a cause nobody would look for.
+
+**A trigger runs exactly once, not at least once.** Before a fired trigger is queued,
+`ops/TriggerRunLog` persists a pending-run record in `admin/trigger_runs` (one per queued event, carrying the
+document ids for CREATED/UPDATED and the documents themselves for DELETED, chunked so a record never exceeds
+`maxEntrySize`). `ops/TriggerDispatcher` then runs the procedure **inside a transaction** whose final buffered
+op consumes that record, so the run's effects and the evidence that would replay it commit together: a run
+that landed leaves nothing to replay, and a run that left a record did not land. `ops/TriggerRunRecovery`
+re-queues whatever is still pending at startup, after `cleanupOrphansAtStartup` has finished any commit that
+was in flight. This rests on single-node commits being crash-atomic (`ops/TxCommitLog`), which is why that
+came first — at-least-once would be unusable for the ordinary case of a trigger that increments a counter.
+
+Consequences worth knowing: a trigger run costs a transaction; a trigger whose writes target a collection
+owned by another node becomes a distributed transaction on the existing 2PC path; an explicit
+`db.transaction(...)` inside a trigger is rejected, because the run is already transactional; and the
+guarantee covers **database effects** — a replayed run re-executes the script from the top, so its console
+output can appear twice. Terminal outcomes that apply nothing (a script error, a missing definer or
+procedure, depth beyond `triggerMaxDepth`, an event shed by queue overflow) consume the record instead of
+replaying forever. Because the begin and the commit must happen on the thread the module body runs on — the
+collection locks a transactional write takes are thread-owned — the dispatcher passes a
+`Interpreter.ModuleBodyWrapper` to `SimpleJs.run` rather than opening the transaction around it.
+`triggerRunLogEnabled=false` restores the older in-memory-only behaviour, where a run queued when the process
+dies is simply lost.
+
+**Triggers fire after the commit, asynchronously.** `ops/TriggerHelper.afterWrite` is called from
+`OperationProcessor`'s SAVE/BULK_SAVE/DELETE handlers and from `TransactionOperationHelper.commit` — never
+from the write helpers, because `ReplicatedApplyHelper`/`ReplicatedTxApplyHelper` reach those directly and a
+seam there would fire once per replica instead of once per logical write. It only enqueues (one map lookup
+and a queue offer), so it is safe inside the collection write lock; no script runs on that path.
+`bckg_ops/TriggerExecutor` then runs them on **its own** bounded queue and workers, deliberately not the
+background index queue: a trigger runs arbitrary user code for up to `triggerTimeoutMs`, and sharing that
+queue would let one slow trigger stall field-index maintenance for every collection, turning the index
+layer's documented "eventually consistent" into indefinitely stale. On overflow the oldest queued event is
+dropped and counted — an unbounded queue of retained documents is the heap risk `ConsoleCapture`'s ring
+buffer already guards against, and dropping beats blocking a write.
+
+Because an **after** trigger runs after the fact it **cannot veto or modify** the write — that is what
+the `before` timing below exists for, and for a purely declarative rejection a per-collection JSON Schema
+still runs earlier still, at the edge. An after trigger's failure never reaches the writer either: it is
+logged at WARN with the captured console output and counted in `GET_DATABASE_STATS`
+(`triggers.fired`/`failed`/`dropped`/`queued`), which is the operator's only window into an execution path
+no client is waiting on.
+
+**Cascades.** A write a trigger performs carries `triggerDepth + 1` on the request itself — a field on
+`ops/req/OperationRequest`, stamped by `EnforcingDatabaseAccess` and zeroed for every client-originated
+request in `conn/MessageProcessor` so a client cannot claim one. It is a request field rather than a
+`ThreadLocal` because a `ThreadLocal` resets to zero on the node a write is forwarded to, which would make a
+cross-node cascade unbounded. `allowCascade` defaults to `false`, so the common configuration cannot cascade
+even once; with it on, a chain terminates at `triggerMaxDepth`.
+
+**Testing a trigger without installing it.** `TEST_TRIGGER` is the dry run, and it covers **before**
+triggers only - which is not an arbitrary restriction but the whole reason it could be built: a before
+trigger is a plain synchronous callable, so testing one is the same call the write path makes, with no
+locks taken and nothing written. An after trigger has no such handle; a dry run for one would need its own
+always-rollback transaction path and its own cluster routing to reach an outcome that is largely reachable
+already. For that case the advice is unchanged: put the logic in a stored procedure, exercise it with
+`CALL_PROCEDURE` against a representative document, and make the trigger itself a thin
+`import`-and-delegate wrapper - which is the shape the `procedures/` resolver exists to support. The
+residual gap is real and worth stating: this exercises the trigger *body*, not trigger *dispatch* -
+cascade depth, definer rights and the pending-run record are not covered by it.
+
+### Before-write hooks
+
+A trigger's `timing` is `after` (the default, everything above) or `before`. A **before** trigger runs
+**synchronously, on the writing thread, inside the collection write lock, before the document reaches the
+write helpers**, and what it returns decides the write: nothing (or `true`) accepts it, a plain object
+replaces the document, anything else or a `throw` refuses the write with `400-21`. It is invoked from
+`ops/OperationProcessor`'s three write handlers and from `TransactionOperationHelper.buffer*` - the same
+seam rule `TriggerHelper` follows, and for the same reason: `ReplicatedApplyHelper` reaches the write
+helpers directly, and a hook there would transform a document the owner had already transformed.
+
+**It runs on the pipeline-script seam, not `SimpleJs.run`.** `ops/BeforeHookContext` opens a
+`ScriptCallable` (`SimpleJs.openCallable`), which is the one entry point whose call happens on the
+*caller's* thread - `Interpreter.Session.call` - and which refuses an async or generator callable up
+front. That matters twice over: the collection write lock is thread-owned, so a body that hopped onto a
+coroutine thread could not hold it; and one interpreter serves the whole request, so a `BULK_SAVE` of N
+documents evaluates each module body once and shares one instruction budget, one deadline and one memory
+budget across all N invocations rather than getting a fresh budget per row. The one seam in that claim is
+bounded at 2x: `applyBulkBeforeHooks` opens a context per event kind, so a batch that mixes inserts and
+updates on a collection hooked for both `CREATED` and `UPDATED` runs two of them, each with its own budget.
+
+**There is no `db`.** `host/HookHostBindings` returns null for `database()` and `network()` for the reason
+`PipelineHostBindings` already documents - a re-entrant `db` call from under a held write lock would take a
+lock this thread owns, or (under clustering) make a network round trip while a writer waits. The one
+divergence from the pipeline bindings is `moduleResolver()`, which is kept so a hook can `import` a shared
+procedure: that resolves against already-cached metadata and takes no locks. Three consequences follow and
+are enforced at `SAVE_TRIGGER` time: `mode: "batch"` is rejected (an array-in/array-out contract buys
+nothing when the callable is already shared), `allowCascade` is rejected (a hook writes nothing, so there
+is no cascade to bound), and the `definer` is recorded but **not enforced** - a hook exercises no
+authority, so unlike an after trigger a deleted definer does not disable it.
+
+**Fail-closed, and the replacement is checked.** Every failure stops the write, a timeout included. A
+thrown error reads as the hook deciding no (`400-21`); a sandbox abort keeps its own code (`408-1`,
+`400-11`, `400-12`) so an operator can tell a hook that said no from one that never finished. A returned
+document may not change `_id` - that would relocate the document rather than modify it, silently turning an
+update into an insert elsewhere - and is re-validated against the collection's JSON Schema, because
+`SchemaValidationHelper` runs at the *edge*, before the hook, and without the re-check a hook could
+manufacture a document the schema forbids. On the transactional path the replacement is also re-measured
+against `maxEntrySize`, since a hook can inflate a document past it.
+
+Several hooks on one collection chain in **ascending name order** (not file order, so the sequence is
+stable across nodes and readable from `LIST_TRIGGERS`), each one's output feeding the next, and the first
+refusal stops the chain. Console output is discarded on the live path - a hook runs once per document, so
+a `console.log` over a bulk save is a log-flood risk - which is exactly what `TEST_TRIGGER` exists to
+replace: the dry run captures it. Budgets come from `beforeHookInstructionBudget`/`beforeHookTimeoutMs`,
+deliberately an order below the `RUN_SCRIPT` budget because a client write is blocked while a hook runs.
+Counters land in `GET_DATABASE_STATS` as `triggers.beforeApplied`/`beforeReplaced`/`beforeRejected`/
+`beforeFailed`. A running hook is visible to `LIST_SCRIPTS` and stoppable with `CANCEL_SCRIPT` under the
+`BEFORE_HOOK` run kind, registered **once per request** (named for the collection) rather than once per
+document: the request is what owns the budget, and the module body is evaluated inside `openCallable`, so a
+per-invocation registration would leave that window uncancellable. A cancelled hook refuses the write with
+`408-2`, fail-closed like every other way a hook can fail to finish. Hooks are exempt from
+`ScriptAdmission` for the reason triggers are: a write refused for want of a script permit would be a
+failed write, not a queued one.
+
+Under clustering the hook runs on the collection's **owner**. `ClusterRouter` forwards the raw request
+JSON, so a hook applied at the edge would have its mutation discarded in transit; the owner is also where
+the write lock that makes the decision binding is actually held.
+
+**Rolling upgrade.** An older node re-executing a `SAVE_TRIGGER` under `REPLICATE_ADMIN` drops the unknown
+`timing` field and would install the hook as an after trigger - silently changing *when* it runs. Roll
+every node before installing a before trigger, the same constraint `ScriptPermissionLevel` already
+carries.
+
+### Scheduled procedures
+
+A schedule is a named, persisted binding of `{cron | intervalMs} -> procedure + args`, stored with its
+database in `{db}/.schedules/{name}.json` for the same reason a procedure is — `fs.deleteDatabase` removes it
+with everything else, so `DROP_DATABASE` needs no cascade code — and replicated by the same
+coordinator-serialized `ADMIN_DDL` path, with the derived fields (`version`, `updatedAt`, `updatedBy`,
+`definer`) stamped onto the request during the coordinator's local execution so re-execution on a peer writes
+a byte-identical file.
+
+Because the project carries no runtime dependencies the cron parser is ours: `ops/schedule/CronExpression`,
+standard five fields, advancing **field-wise** (next candidate month, then day, then hour, then minute) rather
+than minute by minute, and giving up after a four-year horizon so an unsatisfiable expression such as
+`0 0 30 2 *` answers `null` instead of spinning. Candidates are walked as *local* date-times and only then
+resolved against the zone, which is what makes a daily schedule fire once across a DST transition: a local
+time inside a spring-forward gap resolves to the instant just after it, and a local time inside a fall-back
+overlap resolves to the earlier of its two instants. Evaluation uses the configured `scriptTimeZone`, not the
+JVM default, for the same reason `DatabaseHostBindings` pins it — `0 3 * * *` must mean the same instant on
+every node.
+
+**Definer rights**, like a trigger and for the same reason: a scheduled job has no caller, so running it as
+its installer makes it behave identically regardless of who happens to be connected. A definer who no longer
+exists disables the schedule; there is deliberately no fallback to an admin, which would let deleting a user
+widen a job's authority.
+
+**A scheduled run is not transactional.** A trigger runs inside a transaction because its pending-run record
+must be consumed atomically with its effects; a schedule has no run record, so wrapping it would only hold
+collection write locks for the whole job. A scheduled procedure that wants atomicity opens its own
+`db.transaction(...)` — which, unlike inside a trigger, is permitted. `triggerDepth` is 0 and `allowCascade`
+follows the existing trigger rules, so a scheduled write fires triggers normally.
+
+**Why there is no durable run log.** Delivery is deliberately **at-most-once per due instant**: a node taking
+a schedule over computes the *next future* occurrence, so a past instant is never replayed, and a membership
+change during a tick can drop that tick rather than run it on two nodes. That falls out of the design at no
+cost — the registry (`bckg_ops/ScheduleRegistry`) keeps `nextRunAt` in memory and never persists it, because
+a persisted `lastRunAt` would mean a DDL write per run and would churn the admin epoch. Exactly-once would
+need the `TriggerRunLog` machinery (a pending record consumed inside the run's own transaction) and is
+explicitly not built here; missed runs while a node was down are skipped, not caught up, so a job that must
+not miss an occurrence should be idempotent and driven off data rather than off the clock.
+
+`bckg_ops/ScheduleExecutor` owns the clock — one ticker thread plus its own bounded queue and workers,
+deliberately not `TriggerExecutor`'s and not the background index queue, for the reason already documented
+for triggers. A run still executing when the next occurrence is due is skipped and counted rather than queued
+twice (the in-flight set lives on the executor, not the registry, because the periodic refresh rebuilds the
+registry). Outcomes go to the log and to `GET_DATABASE_STATS` (`schedules.registered`/`fired`/`failed`/
+`skipped`/`dropped`/`queued`), which is the operator's only window into an execution path no client is
+waiting on.
+
+### EJson custom types
+
+The four custom types the database stores cross the boundary as real value types rather than
+vanishing as `undefined`, so a `geo`/`vector` field is readable, mutable and constructable from a
+script. Each is installed as a non-enumerable global constructor with a realm-scoped prototype.
+
+| Global | Wraps | Accessors | Methods | Statics |
+|---|---|---|---|---|
+| `Geo` | `#geo(lat,lng)` | `lat`, `lng`, `geoHash` | `toString`, `toJSON` | `Geo.from(value)` |
+| `Vector` | `#vector(v0,…,vn)` | `length`, `simHash` | `at`, `toArray`, `toString`, `toJSON` | `Vector.from(value)` |
+| `DbDateTime` | `#datetime(…)` | `year`, `month`, `day`, `hour`, `minute`, `second` | `toString`, `toJSON`, `toTemporal` | `DbDateTime.from(value)` |
+| `DbTime` | `#time(…)` | `hour`, `minute`, `second` | `toString`, `toJSON`, `toTemporal` | `DbTime.from(value)` |
+
+`DateTime`/`Time` carry the `Db` prefix because the bare names are generic enough to collide with
+library code and future proposals; `Geo`/`Vector` are not. `toTemporal()` bridges to the existing
+`Temporal.PlainDateTime`/`Temporal.PlainTime`, so the calendar arithmetic already shipped is reachable
+from a stored `datetime` field without a second implementation. `from(value)` accepts an instance of
+its own type, the wire string, a bare ISO string (the two date/time types), a property bag, or — for
+`Vector` — an array; `new Vector([1, 2, 3])` and `new Vector(1, 2, 3)` are equivalent.
+
+`EJsonInterop.toEjson` emits a real `JsonGeo`/`JsonVector`/`JsonDateTime`/`JsonTime`, so a document
+saved from a script keeps the type the storage and index layers already understand, and `fromEjson`
+maps each back. A custom type registered later, with no value type here, degrades to its wire text as
+a string rather than silently vanishing — that fallback is the actual bug this closes. (Note that
+`JsonCustom extends JsonString`, so `getJsonType()` answers `STRING` for a custom value and
+`fromEjson` recognises them by their Java type instead.)
+
+### `db.transaction` and `db.bulkSave`
+
+`db.bulkSave(database, collection, documents)` saves a batch in one dispatch and returns
+`{inserted, updated}` (mirroring `BulkSaveResponse`) rather than the saved documents — re-reading N
+documents the way single `save` does would defeat the point of the batch. Unlike single `save`, a
+batch refused wholesale throws into the script rather than reading as "nothing changed".
+
+`db.transaction(fn)` runs `fn` inside a database transaction, committing when it returns and rolling
+back when it throws. The scoped-callback form is what makes it safe: a transaction holds each written
+collection's exclusive write lock across calls, and `ResourceLocking.releaseWrite` is thread-owned
+(releasing from another thread silently does nothing and strands the lock for the process's
+lifetime). So the callback **may not suspend** — an `async` function, a generator and a callback that
+returns a promise are all rejected with a `TypeError`, and a non-async body cannot contain `await`.
+`EnforcingDatabaseAccess` additionally pins the session to the thread that opened it and throws on a
+cross-thread touch. Because the rollback lives in Java, outside the interpreter, a sandbox abort
+(`ScriptAbortException` — not catchable by user `try/catch`, skips `finally`) still rolls back and
+releases the locks.
+
+Three documented limitations:
+
+- **No `list*` inside a transaction.** `TransactionOperationHelper.isAllowedDuringTransaction` is a
+  whitelist that rejects `LIST_COLLECTIONS`/`LIST_DATABASES` with `409-6`; `db.listCollections`/
+  `listDatabases` keep the pre-existing swallow-the-error shape, so a script observes an **empty
+  list**, not a throw.
+- **A script transaction blocks on its 2PC round trips.** Under clustering the callback still may
+  not suspend (see above), so the `PREPARE_TX`/`COMMIT_TX` exchanges with remote participants run
+  synchronously on the thread that owns the transaction's locks. A slow or unreachable participant
+  therefore stalls the script until `replicationAckTimeoutMs` elapses.
+- **The transaction control ops skip `AuthorizationChecker`.** `START`/`COMMIT`/`ROLLBACK` carry no
+  database or collection to authorize and are absent from `ALWAYS_ALLOWED_OPERATIONS`, so checking
+  them would deny every non-admin. Each buffered write inside the transaction is still authorized on
+  its own request. Wire behaviour for socket clients is unchanged.
+
+### `db.cursor`
+
+`db.cursor(database, collection, pipeline, options)` returns a built-in iterator that walks a
+pipeline one page at a time, so a script can read a collection larger than `scriptMaxMemoryBytes`
+without ever holding it. Each batch is an ordinary `AGGREGATE` with `{"type":"SKIP"}` and
+`{"type":"LIMIT"}` appended to a **copy** of the caller's pipeline — so it is authorized per request,
+schema-checked where applicable and routed by `ClusterRouter` exactly like a hand-written
+`db.aggregate`, and the cursor adds no cluster surface at all. A batch shorter than `batchSize` ends
+the walk. `options.batchSize` defaults to `scriptCursorBatchSize` and is clamped to
+`scriptCursorMaxBatchSize` (both from `ResourceLimits`, never from the request); a value below 1 or
+one that does not coerce to a number is a `RangeError`. The iterator is a `JsIterators.of` instance
+linked to a realm prototype (`Intrinsics.dbCursorProto`) that inherits `%IteratorPrototype%`, so
+`for-of`, spread and the iterator helpers (`.map`/`.take`/…) all work.
+
+Three things it is deliberately not:
+
+- **Not a snapshot.** Paging is `SKIP`/`LIMIT` over a live collection, so a concurrent insert or
+  delete between two batches can make a document be seen twice or not at all.
+- **Not self-ordering.** Without a `SORT` step the pipeline's order is unspecified and the paging is
+  meaningless, but `db.cursor` does not inject one: silently changing the pipeline would change the
+  results of one already ending in `GROUP_BY`/`COUNT`. Such a pipeline still works — it pages the
+  *step output*, which is rarely what the author means.
+- **Not stateful server-side.** Abandoning a cursor mid-walk (a `break` out of the `for-of`) holds
+  nothing to release; there is no cursor handle, no open read, and nothing to time out.
+
+### Pipeline scripts
+
+The three `SCRIPT` surfaces inside an aggregation (a `FILTER` operator, a `MAP` `ADD_FIELD`
+mid-operator and the `REDUCE` step) run on a different seam from every other entry point:
+`SimpleJs.openCallable(compiled, host)` -> `Interpreter.open(program, host)` -> a
+`ScriptCallable` invoked once per document, closed when the pipeline ends. `SimpleJs.run` is now
+that same lifecycle plus the result contract, so the drain-and-cancel logic exists once.
+
+**One interpreter per pipeline, not per document.** `Intrinsics` builds a realm's prototype objects
+per `Interpreter`, so a fresh one per document would dominate the cost - but the load-bearing reason
+is the budget: one interpreter means one instruction budget, one deadline and one memory budget for
+the whole query. A runaway predicate aborts the query instead of getting a fresh budget on every row,
+which is exactly what `SimpleJs.run` could not provide (it evaluates a program and discards the
+interpreter). `ops/PipelineScriptContext` is that lifetime: one callable per distinct source, opened
+lazily on first use, closed in the try-with-resources that wraps `applySteps`. Because a `Stream` is
+lazy, that block has to enclose the terminal `toList()` and not just the step loop.
+
+**The callable comes from the module contract**, not a magic name: it is the module's
+`export default`, else its top-level `return` value. An async or generator function is rejected up
+front with a `TypeError` - the same rule `DbModule.transaction` applies, and for the same reason: the
+call must not hop off the thread holding the collection read locks.
+
+**There is no `db`.** `host/PipelineHostBindings` returns null for `database()`, `network()`,
+`moduleResolver()` and `args()`, and discards console output (the operator is invoked once per
+document, so a `console.log` over a large collection is a log-flood risk; the window into a pipeline
+script is `analyze`). That is what makes the feature safe rather than merely bounded: the aggregation
+already holds collection read locks on the calling thread, so a re-entrant `db` call would invite
+lock-ordering trouble, and with no `db` a pipeline script cannot issue an `AGGREGATE` - there is no
+recursion to bound. Time zone and locale still come from `scriptTimeZone`/`scriptLocale`, so a
+computed date field answers identically on every node. Both absences are settled decisions rather
+than pending work: the two supported windows into a misbehaving pipeline script are `analyze` and the
+error itself, which since the call-stack work names the failing function and line on the
+`ScriptCallableException` the wire codes below are built from.
+
+**Memory is charged and released per document.** `SessionCallable.invoke` charges
+`EJsonInterop.estimatedBytes(document)` (plus the accumulator, for a fold) before the call and
+releases it after, reusing the `InterpreterOps.charge`/`release` pair whose deterministic release
+point is the `db.cursor` precedent. Without the release a million-document scan would exhaust the
+budget on document count alone. A `REDUCE`'s *final* accumulator is measured against
+`scriptMaxResultBytes` before it is emitted, so a fold that accumulates every document into an array
+fails cleanly with `400-15` rather than by `OutOfMemoryError`.
+
+The sandbox comes from `aggregationScriptInstructionBudget`/`aggregationScriptTimeoutMs`
+(`scriptMaxDepth` and `scriptMaxMemoryBytes` are reused rather than twinned) and is deliberately an
+order below the `RUN_SCRIPT` budget. The deadline is the *pipeline's*: `PipelineScriptContext` records
+it once and passes each later callable only the time left, so a query carrying several different
+scripts cannot outlive the timeout by opening more of them. The instruction budget is per callable,
+which means N distinct sources in one pipeline get N budgets - the wall clock, not the budget, is what
+bounds that case.
+
+**Errors.** Every failure surfaces as a single `ScriptCallableException` carrying the same error name
+a `ScriptResult` would have reported, mapped to a wire code by the `ScriptOperationHelper.errorCodeFor`
+the other script paths use: `400-9` thrown or unparseable, `400-11` budget/depth, `400-12` memory,
+`400-15` an oversized reduced value, `408-1` the deadline.
+
+A document a script mutates is never written through: the argument is an `EJsonInterop.fromEjson`
+conversion, so the host document the pipeline carries is a separate object.
+
+### Script operations under clustering
+
+`host/EnforcingDatabaseAccess.dispatch` consults `cluster/ClusterRouter` before running an operation
+locally, so a script sees the same routing a socket client does. `ClusterRouter.forward` returns
+`null` when clustering is off, which keeps the standalone path exactly as it was.
+
+- **Non-transactional reads and writes** to a collection this node does not own are forwarded to the
+  owner (`FORWARD_REQUEST`) and the owner's response is used. Before this, a write was rejected by
+  `ClusterWriteHelper.guard` with `421-1 NOT_COLLECTION_OWNER`; a read now also concentrates on the
+  owner's cache, falling back to the local replica when the owner is unreachable
+  (`readFallbackToLocal`).
+- **Transactional writes** register each foreign collection's owner as a participant
+  (`FORWARD_TX_REQUEST`), so `db.transaction` spans owners and commits through
+  `cluster/Tx2pcCoordinator` — the same 2PC the wire protocol uses. A single remote owner keeps the
+  5a fast path. Reads inside a transaction are forwarded only to an owner already holding a slice
+  (read-your-writes) and otherwise run locally.
+- **`ops/resp/ResponseParser`** rebuilds a typed `OperationResponse` from the owner's response JSON,
+  mirroring `ops/req/RequestParser`. It constructs each subclass through its public constructor
+  rather than reflectively: the four fields inherited from `OperationResponse` are final with no
+  matching constructor arity, so the reflective path would fall through to unsafe allocation. An
+  unreadable response becomes a catchable script `Error`.
+- **`aggregate` forwards the caller's own pipeline JSON**, not a re-serialization of the parsed
+  operator tree — the aggregation operator hierarchy is polymorphic and `RequestParser` hand-parses
+  it, so a round trip through `eJson.toJson` would mangle a `CUSTOM` (geo/vector) operator.
+- Thread affinity is unchanged: the 2PC round trips block on the thread that owns the transaction's
+  locks, which is what `assertSessionThread` and `ResourceLocking`'s thread-owned release require.
+
+### Captured console output
+
+`SimpleJs.run` wraps the host's console sink in a `host/ConsoleCapture` and attaches the collected
+lines to the `ScriptResult` on **every** exit path — value, thrown error, syntax error and sandbox
+abort alike — reachable as `getLogs()` and `isLogsTruncated()`.
+
+- The capture is a **ring buffer keeping the most recent lines**: over `ResourceLimits.maxLogLines`
+  (default 1000) the oldest line is evicted and `logsTruncated` is set. A single line longer than
+  `maxLogLineChars` (default 4096) is clipped, which also sets the flag. `ResourceLimits.unlimited()`
+  still applies both caps — an unbounded compute budget is about compute, and an unbounded log buffer
+  is a heap risk regardless.
+- Output is **teed**: the capture always receives the line, and `host.console()` additionally
+  receives it when the host supplied a sink. Because `SimpleJs.run` now always passes a non-null
+  `console()`, `GlobalScope` never falls back to `ConsoleBuiltins`' static `System.out::println`, so
+  a script embedded through `SimpleJs.run` no longer writes to the server's stdout by default.
+- `ConsoleCapture.accept` is synchronized: a `fetch` settlement and a coroutine body reach it from
+  different virtual threads, and it is the one piece of interpreter-adjacent state the coroutine lock
+  does not cover.
+- Under `RUN_SCRIPT` the two caps come from `scriptMaxLogLines`/`scriptMaxLogLineChars`, and the
+  lines travel back to the client on the response (`logs`/`logsTruncated`).
+
+### Run history
+
+Unless `scriptRunHistoryEnabled` is off, a finished run is recorded as a document in the reserved
+`script_runs` collection of the database it ran against, so an operator can ask what ran, what it cost
+and why it failed with an ordinary `AGGREGATE` instead of grepping the server log.
+
+- **Per-database, not admin.** A database owner can query their own job history with the permissions
+  they already have, and the rows replicate like any other data. The cost is a reserved collection
+  name in every user database.
+- **Created lazily, on the first row.** Creating it with the database would change what
+  `LIST_COLLECTIONS` answers for every database that never runs a script. A consequence worth
+  knowing: an `AGGREGATE` over `script_runs` finds nothing until the first run lands.
+- **Asynchronous and best-effort.** `ops/ScriptRunHistory.record` submits a `ScriptRunHistoryEvent` to
+  the existing background queue and returns; the worker writes the row through the ordinary request
+  path (`ClusterRouter` then `OperationProcessor`), so ownership, quorum, replication and page
+  metadata are the ones every other write gets rather than a second implementation. A write that
+  fails is counted and dropped — the run it describes has already committed its effects, and history
+  is diagnostics, not a durability guarantee.
+- **It cannot cascade.** `TriggerHelper.afterWrite` and `BeforeHookContext` both skip the reserved
+  collection, so an audit trigger cannot fire on the record of itself, and `RequestValidator` refuses
+  every client mutation of it (`400-1`) while leaving reads, `CREATE_INDEX` and `REINDEX` open.
+- **What is recorded** is `scriptRunHistoryKinds` — `CALL_PROCEDURE,TRIGGER,SCHEDULE` by default. Ad-hoc
+  `RUN_SCRIPT` is opt-in because an exploratory client would otherwise write a row per keystroke, and
+  `BEFORE_HOOK` records refusals only, since a hook runs once per document on the write path.
+- A row carries the run's identity (`runId`, `kind`, `name`, `procedure`, `collection`, `event`,
+  `username`, `actingUser`, `node`), its outcome (`outcome` of `ok`/`error`/`skipped`/`dead_letter`,
+  `errorName`, `errorMessage` clipped to `scriptRunHistoryMaxErrorChars`, `stack`), its `attempt`
+  number, and its `metrics`. `skipped` is the outcome no other surface reports: a trigger whose
+  definer was deleted, or a schedule whose procedure is gone, never runs *and* never fails.
+- An hourly sweep deletes rows past `scriptRunHistoryRetentionMs`, and only on the node that owns the
+  collection, so N nodes do not each issue the same deletes.
+
+### Retry and dead letters
+
+A failed after-trigger used to be lost with a `WARN`. It is now retried and, if it keeps failing,
+kept as a dead letter for an operator.
+
+The state machine lives on the **pending-run record** rather than in a second store, which is what
+keeps the exactly-once property intact: a record still present is still un-applied.
+
+```
+dispatch outcome
+├─ ok                     -> record consumed by the applying transaction   (unchanged)
+├─ non-retryable terminal -> record consumed                               (unchanged)
+│   (trigger/procedure gone, definer gone, depth exceeded, cancelled, queue-dropped)
+└─ retryable failure      -> attempts+1
+     ├─ attempts < triggerMaxAttempts -> record stays PENDING, re-queued after the backoff
+     └─ otherwise                     -> status=DEAD, lastError kept, payload kept
+```
+
+- **Retryable** means a script error or a commit failure — a transient lock, a peer that was briefly
+  unreachable, a bug being fixed. Everything else was already terminal by construction and stays so.
+  A **cancellation** is deliberately not retryable: an operator cancelling a runaway trigger wants it
+  stopped, which is the one place the exactly-once guarantee is waived.
+- The backoff doubles from `triggerRetryBackoffMs`, clamped at `triggerRetryMaxBackoffMs`, delivered by
+  a scheduler on `TriggerExecutor`. A retry still waiting when the node stops is not lost: its record
+  is `PENDING`, so startup recovery replays it.
+- `TriggerRunRecovery` replays `PENDING` records only — replaying a dead letter would re-run exactly
+  what was given up on — and a dead letter keeps its own, longer `triggerDeadLetterRetentionMs`,
+  because it is waiting for a human and the pending clock would discard the evidence first.
+- `LIST_TRIGGER_RUNS` and `RESOLVE_TRIGGER_RUN` (both admin-only) are the operator surface, fanned out
+  cluster-wide by `cluster/TriggerRunDirectory` because `admin/trigger_runs` is not replicated and a
+  run's record lives on exactly one node. `replay` **resets the attempt count**, so a run whose cause
+  has been fixed gets a full budget rather than dead-lettering on its first failure.
+
+### Cancellation
+
+A run can be stopped from outside through `host/CancellationToken`, a one-method seam
+(`boolean isCancelled()`) reached via `HostBindings.cancellation()`. A **null token means "never
+cancelled"**, which is the default and is what leaves `SimpleHostBindings` and the test262 worker on
+their previous behaviour; `host/DatabaseHostBindings` carries a real one, backed by the
+`AtomicBoolean` on the `ops/ScriptRun` that the node's `ops/ScriptRunRegistry` hands out.
+
+- The token is polled exactly where the other sandbox aborts are checked: in `Interpreter.tick()`
+  (loop back-edges and call entries), beside the instruction budget and the wall clock, and in the
+  `EventLoop`'s two park loops (`awaitAsyncCompletion` and `awaitUntil`). Both parks are capped at a
+  50 ms `CANCEL_POLL_NANOS` slice for that reason — a script parked on a 30-second timer must notice
+  its cancellation now, not when the timer comes due — and the run's registration also unparks the
+  drain thread directly, so the poll interval is the fallback rather than the mechanism.
+- Cancellation therefore is **cooperative**. A run blocked inside a host call (a `db` operation, a
+  `fetch`) ends at the next tick or poll after that call returns, not instantly. A straight-line
+  program with no loop and no call reaches no tick at all and simply finishes.
+- `ScriptCancelledException` extends `ScriptAbortException`, which is the whole point: `evalTry`
+  neither lets user `try`/`catch` catch it nor runs `finally`, and `disposeScope` skips `using`
+  disposal — so a script cannot trap its own cancellation in a `finally { while (true) {} }`.
+- `SimpleJs.run` reports it as its own outcome, `ScriptCancelledError`, in a catch arm **before** the
+  `ScriptAbortException` one; `ops/ScriptOperationHelper.errorCodeFor` maps that to `408-2`, so
+  `RUN_SCRIPT`, `CALL_PROCEDURE` and the trigger/schedule log lines all name it identically. Console
+  output produced before the cancellation still travels back on the response.
+- **A cancelled trigger run is dropped rather than replayed.** `ops/TriggerDispatcher` treats every
+  terminal non-applying outcome as consuming the run's pending `ops/TriggerRunLog` record, and a
+  cancellation is one of them — so a cancelled trigger will not be re-queued by
+  `TriggerRunRecovery.recoverLocal()` at the next startup. This is the one place the exactly-once
+  guarantee is intentionally waived: an operator cancelling a runaway trigger wants it stopped, not
+  retried.
+
+The wire side — the admin-only `LIST_SCRIPTS`/`CANCEL_SCRIPT` operations and their cluster-wide
+fan-out — lives in `cluster/ScriptRunDirectory`; see README and `docs/clustering.md`.
+
+### `crypto`
+
+A namespace object like `Math`/`JSON`/`Reflect`, so a stored procedure can mint ids and hash content
+without reaching for `Math.random()`.
+
+| Member | Behaviour |
+|---|---|
+| `crypto.randomUUID()` | a `SecureRandom`-backed version 4 UUID string |
+| `crypto.getRandomValues(typedArray)` | fills an integer typed array in place and returns it |
+| `crypto.hash(algorithm, data[, encoding])` | `"sha-1"`/`"sha-256"`/`"sha-512"` over a string or `Uint8Array`; `"hex"` (default) or `"base64"` |
+
+Two deliberate divergences from WHATWG: `hash` is **synchronous** and Node-shaped rather than the
+promise-returning `crypto.subtle.digest` (the digest is CPU-bound and in-process, and a stored
+procedure computing a content hash wants a value, not a microtask), and a request over 65,536 bytes
+is a `RangeError` rather than a `QuotaExceededError` (which would need a `DOMException` the engine
+does not have). A non-integer typed array and an unknown algorithm/encoding are `TypeError`s.
+
+### Numbers
+
+`ToString(Number)` is spec-exact (ECMA-262 6.1.6.1.20) and **shared with EJson**: one
+`ejson/internal/NumberFormatter` backs both `NumberTypeAdapter` (document text and wire responses)
+and `JsCoercion` (`String(x)`, templates, `+`). So `String(1e21)` is `"1e+21"`, `String(1e20)` is the
+full decimal expansion, and a document field of `1e20` is persisted exactly instead of saturating at
+`Long.MAX_VALUE`. Integer conversions (`|`, `>>>`, `Math.imul`/`clz32`, typed-array and `DataView`
+integer writes) use the spec's modulo-2³² `ToInt32`/`ToUint32` rather than a saturating `(long)` cast.
+On the read side the EJson lexer accepts exponent notation and `JsonNumber` keeps an out-of-`int`-range
+integral value as a `double`.
+
+### Intrinsic prototypes
+
+Builtin methods live on **realm-scoped prototype objects** built by `builtins/Intrinsics`, one
+`Intrinsics` instance per `Interpreter` (i.e. per `SimpleJs.run`). They are deliberately **not**
+static: a shared `Array.prototype` would let one tenant's monkey-patch poison every later script in
+the JVM. `PrototypeProgramTest.test_realm_isolation` asserts the isolation.
+
+Each prototype's own properties are **delegating wrappers** — one `JsNativeFunction` per method name
+that coerces the receiver at call time and re-dispatches into the untouched family class
+(`ArrayBuiltins`, `StringBuiltins`, …). Entries are installed non-enumerable but writable and
+configurable, so `Object.keys([])`, `for-in` and `JSON.stringify` are unaffected while
+`Array.prototype.join = f` and `delete Array.prototype.push` both work.
+
+`MemberEvaluator` keeps each value type's own state handling first (array/string/typed-array index,
+`length`, `Map`/`Set` `size`, the regex flag accessors, …) and then walks
+`Intrinsics.protoFor(target)` and its `getProto()` chain, which roots at `Object.prototype`. A user
+object's own `proto` chain is still walked before the intrinsic chain.
+
+`Promise.prototype` and the generator/async-generator prototypes are real prototypes on the same
+model: `PromiseBuiltins.PROTO_NAMES` (`then`/`catch`/`finally`) and `GeneratorBuiltins.PROTO_NAMES`
+(`next`/`return`/`throw`) are installed as delegating wrappers, so patching them takes effect. They
+are reachable from script through `Promise.prototype` and, for generators, through
+`Object.getPrototypeOf(gen)` — `Object.getPrototypeOf` on a value that is not a `JsObject` returns
+its intrinsic prototype, as the spec requires.
+
+**User classes have real prototypes too.** `JsClass` owns a `prototype` `JsObject` whose entries are
+non-enumerable (so instances still serialize as their own state), carrying a `constructor`
+back-reference and `proto`-linked to the superclass's prototype (or, for builtin heritage, the native
+prototype). Instances are linked to it at construction, keeping the `klass` link for private members,
+brand checks and field initialisation. Only *static* members remain in `JsClass` tables.
+
+What this reaches and what it does not:
+
+- `Array.prototype` is **fully generic**, in the spec's own shape: `O = ToObject(this value)` (a
+  primitive receiver is boxed, only `null`/`undefined` are refused), `len = ToLength(Get(O, "length"))`,
+  then a lazy `HasProperty`/`Get`/`Set`/`Delete` per index through the member seam. So getters,
+  proxy traps and inherited index properties are honoured; the callback's third argument is the
+  receiver itself; a mutating method (`Array.prototype.push.call(arguments, x)`) writes through; a
+  rejected write is a `TypeError` rather than a dropped one; and a `length` past the int range is
+  walked, not materialised (`lastIndexOf.call({length: 2**53-1, …}, x)` works). A plain dense
+  `JsArray` without index accessors short-circuits to its backing list, which is observationally
+  identical.
+- A wrong-type receiver throws a `TypeError` naming the method
+  (`Array.prototype.push called on an incompatible receiver 1`).
+- **Primitive wrappers are real objects.** `Intrinsics.wrapPrimitive` is the one construction path —
+  `Object(x)`, `new Object(x)`, `new String/Number/Boolean` and the `ToObject` behind every generic
+  builtin all land there — producing a `JsObject` that carries the primitive in its `primitive` slot
+  and is proto-linked to the matching intrinsic prototype. So `typeof` is `"object"`, each boxing is a
+  fresh object, and every family's prototype methods unwrap the receiver
+  (`Object(Symbol('x')).description`, `Object(1n).toString()`, `new Number(5).toFixed(2)`). A String
+  wrapper additionally owns one non-writable enumerable data property per **code unit** plus a
+  non-writable non-enumerable `length`, so `Object.keys`, `for-in`, `in`, `getOwnPropertyNames`,
+  descriptors and `freeze`/`seal` all see them. `ToPrimitive` deliberately does **not** short-circuit
+  to the slot: `OrdinaryToPrimitive` runs, so a script that redefines `valueOf`/`toString` on the
+  wrapper or its prototype wins. At the host boundary `EJsonInterop` serialises a wrapper as its
+  primitive, so a `db.save` of `new String('ab')` stores `"ab"`, not `{"0":"a","1":"b"}`.
+- **Builtin subclassing** works via `JsClass.nativeSuperClass`: heritage that resolves to a
+  `JsNativeFunction` carrying a prototype is accepted, `super(...)` runs the native constructor, and
+  the instance is linked to the native prototype so both `instanceof E` and `instanceof Error` hold.
+  A builtin with internal state (`Map`/`Set`/`Date`/`Array`/typed arrays) cannot be copied onto a
+  plain instance, so the produced value is kept as the instance's wrapped primitive and the intrinsic
+  wrappers unwrap it from their receiver — `class M extends Map {}` gets working `set`/`get`/`size`.
+- `super.m()` against a native super is an explicit `TypeError` (there are no native method tables to
+  chain into), not a silent wrong answer.
+- `Function` is installed so `Function.prototype` resolves and `f instanceof Function` holds, but
+  calling or `new`-ing it throws `TypeError("Function constructor is disabled")` — runtime code
+  generation stays outside the sandbox.
+- A **caught runtime error is a real error object** proto-linked to the matching intrinsic prototype,
+  so `try { null.x } catch (e) { e instanceof TypeError }` is `true` and `e.toString()` is
+  `"TypeError: …"`.
+- `e.stack` is a **single synthetic frame** (`"<name>: <message>\n    at <script>"`); no interpreter
+  call stack is retained.
+
+### Function source text
+
+`Function.prototype.toString` (and every string coercion of a callable) hands back the construct's
+**verbatim source text**, comments and original spelling included — `[[SourceText]]`, not a
+synthesised shape. The parser records a span for each function-like production and slices the
+original source once the production is complete: `spanStart`/`spanFrom` in `internal/Parser`, stored
+on the AST node (`JsNode.sourceText`) and threaded into `JsFunction`/`JsClass` when the interpreter
+creates the value. The span boundaries follow the spec's productions rather than the surrounding
+statement:
+
+- a function declaration/expression opens at `function`, or at the `async` preceding it;
+- an arrow opens at its `async`, its single binding identifier, or the `(` of its parameter list, and
+  a concise body ends at the expression's last token;
+- a **method** (object literal or class body, accessors and generators included) opens at its first
+  modifier (`async`, `*`, `get`, `set`) or at its key — a computed key is part of the text, so
+  `{ a(){} }.a.toString()` is exactly `"a(){}"` and can be used as a property key. `static` belongs
+  to the enclosing `ClassElement`, so it stays *outside* the method's span;
+- a class constructor reports the whole `class … { … }`, whether the constructor is explicit or
+  implicit.
+
+Everything with no source of its own keeps the spec's `NativeFunction` form
+(`"function <name>() { [native code] }"`): builtins, a function returned by `bind`, a `Proxy`
+wrapping a callable (a proxy has no `[[SourceText]]`, so the target's text must not leak through it),
+and a function parsed through the token-list-only entry point or from a template substitution.
+
+### Regex engine
+
+`internal/regex/` implements ECMA-262 Pattern Semantics directly rather than translating a JS
+pattern to `java.util.regex` syntax and delegating matching to it — `java.util.regex` cannot express
+per-quantifier-iteration capture reset, an unbounded lookbehind, or code-unit-vs-code-point stepping
+without `/u`/`/v`, which is exactly what blocked the four limitations closed together in one pass
+(see the note at the end of *Remaining limitations* above). `RegexParser` is a recursive-descent
+parser/compiler (structurally the same validator `RegexTranslator` always was — Annex B leniency,
+`u`/`v` strictness, modifier groups, `v`-mode set notation are all early errors raised here) that
+builds an `RxNode` AST instead of emitting translated text; `RegexMatcher` executes that AST directly
+via continuation-passing backtracking (`Cont`, a `boolean run(int pos)` closure representing "the
+rest of the pattern"), matching the spec's own Matcher/Continuation model. Three things fall out of
+matching the AST directly instead of asking `java.util.regex` to do it:
+
+- **Capture reset per iteration**: `RegexMatcher.matchIteration` resets every capture nested inside a
+  quantified atom to unset before each new iteration attempt (spec's `RepeatMatcher`), restoring the
+  prior value only if the whole attempt is later abandoned; `matchGroup` does the analogous
+  save/restore for a single group's own attempt (covers a losing branch of a negative lookaround too).
+- **Unbounded lookbehind**: a lookaround just matches its body with `direction` flipped to -1
+  (`matchLookaround`), walking the pattern backward the same way it walks forward — no
+  statically-computable-maximum-length restriction, so a lookbehind body may contain a backreference
+  or be otherwise unbounded.
+- **Code-unit vs code-point stepping**: `consumeCharClass` is the one place this is decided — with
+  `/u`/`/v` it combines a well-formed surrogate pair into one code point before testing set
+  membership (and advances by 2), without them it tests exactly one UTF-16 code unit (and advances by
+  1). Every class already carries the right `CodePointSet` regardless of mode; only the stepping
+  differs. A literal astral `PatternCharacter` in the source compiles to a `Literal` node (raw UTF-16
+  comparison, never combining surrogates) rather than a `CharClass`, so it matches correctly in either
+  mode without needing this distinction itself.
+
+Case-insensitivity is resolved once, at compile time, not per candidate at match time: `CaseFold`
+precomputes a case-equivalence closure via union-find over `Character.toUpperCase`/`toLowerCase`/
+`toTitleCase` (plus a handful of true CaseFolding.txt-only pairs with no ordinary casing relationship,
+e.g. U+0390/U+1FD3), gated so a non-ASCII code point never folds into ASCII without `/u`/`/v` (this
+is what keeps `ſ`/`K` out of `\w` without the flag but in it with the flag — no special
+case for `\w` is needed, the general rule already produces it). `RegexParser.foldedSet` widens a
+class to every equivalence partner of a member it already has; the one place matching still folds at
+runtime is a backreference (`consumeBackreference`/`charEquals`), since it compares two runtime
+substrings rather than a fixed compiled set. Order matters for negation: a Unicode property escape
+(`\P{X}`) negates the raw property set *before* widening (matches spec's `CharacterSetMatcher`
+folding the *candidate*, not the compiled set), while a `[^...]` class or `\W`/`\D`/`\S` widens its
+*positive* content first and negates last (spec defines these via a separate `invert` flag applied
+after Canonicalize, not by negating the CharSet itself) — getting this backwards was the exact bug
+`[^o]` under `/i` needed fixed: `/i` must exclude `"O"` too, not just `"o"`.
+
+Two focused performance safeguards exist because a real backtracking engine is otherwise exposed to
+patterns java.util.regex's own optimizations hide: `matchAlternation` is a plain loop over branches,
+not one Java stack frame per branch (a Unicode property-of-strings class like `\p{RGI_Emoji}` can
+compile to thousands of literal alternatives); and `repeatMatcher` memoizes *failed* `(position, min,
+max)` attempts (never successes, which can carry capture side effects a cached boolean can't replay)
+to avoid re-exploring the same dead end once per distinct prior-iteration count — the classic
+ambiguous-tokenization blowup (`(a|aa)+` against an ambiguously-decomposable string), which real
+Unicode ZWJ emoji sequences with overlapping prefixes trigger in practice.
+
+## Deliberately unimplemented ES2026 features (out of scope for a database interpreter)
+
+The engine targets ES2026 semantics for code that runs inside the database. The following
+standard features are intentionally **not** implemented — each is either a sandbox/security
+boundary or unobservable in a single-threaded, per-request interpreter, so omitting them is a
+design decision, not a bug. This list is the **specification of the conformance filter**:
+`config/test262-exclusions.txt` is its machine-readable form (one
+`feature:`/`dir:`/`include:`/`pattern:` line per decision, each carrying its reason), so the two must
+be kept in step — an exclusion with no entry here is a number being flattered.
+
+- **`eval` / the `Function` constructor** — no runtime code generation from strings. Allowing it
+  would defeat the instruction-budget/deadline sandbox and open an injection surface. The `"script"`
+  module's `importText` runs a string as a *module*, which does not reopen the first half of that
+  reasoning — the imported module shares the caller's realm, event loop, instruction budget and
+  deadline, so it can never buy extra compute — but it does share the second half, which is why it is
+  gated off by default behind `ResourceLimits.textImportEnabled`. The `Function`
+  constructor is filtered by source pattern in both spellings (`Function(…)` and `new Function(…)`);
+  the deliberately narrower `\bnew\s+Function\s*;` line exists so that `new Function.prototype.apply()`
+  and friends — which test `[[Construct]]`, not the constructor — stay measured.
+- **The derived function constructors** — `GeneratorFunction(…)`, `AsyncFunction(…)` and
+  `AsyncGeneratorFunction(…)` are the `Function` constructor reached through
+  `Object.getPrototypeOf(function*(){}).constructor`, so the call form is filtered by the same kind of
+  source pattern. Only the call is excluded: the tests that merely inspect those intrinsics — their
+  `name`, `length`, prototype chain — stay measured and pass.
+- **The `Function` constructor reached without naming it** — three more spellings of the same
+  restriction, each pinned to the exact form the corpus uses rather than a broad `Function` scan:
+  `Function.call(this, "…body…")` (`built-ins/Function/S15.3_A2*`/`S15.3_A3*`,
+  `language/statements/function/S13.2.2_A8_T3.js` — the body has to be *parsed*, so the disabled
+  constructor is the only reachable outcome, whether the test expects a new function or a
+  `SyntaxError` from a malformed body); the derived constructor of a *live* function object
+  (`Object.seal(new (Object.getPrototypeOf(async () => {}).constructor)())` in
+  `built-ins/Object/seal/seal-*function.js`); and an alias of the generator constructors
+  (`var Generator = function*(){}.constructor; Generator("…")` in
+  `built-ins/Function/prototype/toString/AsyncGenerator.js` and the two
+  `language/expressions/import.meta/syntax/goal-*-params-or-body.js` tests, which can only observe
+  their expected `SyntaxError` if the alias compiles source).
+- **Subclassing the function constructors** —
+  `language/statements/class/subclass/builtin-objects/{Function,GeneratorFunction}/` derive a class
+  from a constructor that deliberately throws, so `super()` can never return an instance. Excluded as
+  two directories; the sibling `builtin-objects/` subtrees stay measured.
+- **Harness helpers that need code generation** — `resizableArrayBufferUtils.js` builds every
+  subclass fixture with `new Function('return class My… extends … {}')()` and swallows the failure,
+  so its `ctors` array is full of `undefined` before an assertion ever runs. The `include:` exclusion
+  kind exists for exactly this: a test that never mentions `Function` itself but cannot survive its
+  own helper. This is a measurement decision (the tests are unrunnable here), not a claim that
+  resizable buffers are unimplemented — they are, including length-tracking views.
+  `fnGlobalObject.js` is the second such helper: it returns `Function("return this;")()`, so its own
+  `harness/` self-test cannot run. `wellKnownIntrinsicObjects.js` is a third: it populates every
+  `WellKnownIntrinsicObjects` entry via `new Function("return " + source)()`, silently leaving each
+  `value` `undefined` here. Most tests that `includes` it only consult an optional/secondary entry
+  behind a guard and still pass in full, so — unlike the other two helpers — this one is **not**
+  `include:`-excluded wholesale; only the two tests with no such fallback are excluded by exact path:
+  `harness/wellKnownIntrinsicObjects.js` itself (its own self-test hard-asserts `%Array%`) and
+  `language/expressions/async-arrow-function/prototype.js` (hard-asserts `%AsyncFunction%`).
+  `language/comments/hashbang/function-constructor.js` is excluded for the same underlying reason from
+  a different angle: it asserts that `Function`/`GeneratorFunction`/`AsyncFunction`/
+  `AsyncGeneratorFunction` throw a `SyntaxError` specifically about a hashbang in a constructed body —
+  which needs the body to actually be parsed — but those constructors here throw `TypeError`
+  unconditionally (no codegen at all), so the expected `SyntaxError` is unreachable regardless of
+  hashbang handling.
+- **Indirect `eval`** — `(0, eval)("…")` and `var e = eval; e("…")` are the same code generation by
+  another spelling, so `language/eval-code/indirect/` is excluded as a directory: no source pattern
+  can recognise an alias, and the direct form's pattern does not fire on it.
+- **`eval` referenced as a value** — outside that directory, 18 tests never call `eval`: they alias
+  it (`var s = eval;`), compare against it (`this === eval`), pass it as a convenient built-in
+  function (`[11].every(cb, eval)`, `new Proxy(eval, {})`) or use the comma form. All of them fail on
+  the missing *global*, not on anything the test is about, so four narrow `pattern:` lines cover the
+  exact spellings. A bare `\beval\b` is deliberately **not** used: it would also swallow the several
+  dozen *passing* tests that use `eval` as a binding name in a strict-mode early error.
+- **The `eval` global's own descriptor surface** — `built-ins/eval/` asserts the attributes,
+  `length` and `name` of a global function that deliberately does not exist.
+- **`ShadowRealm`** — `ShadowRealm.prototype.evaluate(sourceText)` is runtime code generation from a
+  string, ruled out for the same reason as `eval`; a second realm would also need a second set of
+  intrinsics per script, which the per-`Interpreter` `Intrinsics` model does not provide.
+- **`Intl`** — the internationalization API is enormous; only ad-hoc `toLocaleString`/
+  `localeCompare` defaults (backed by `java.text`) are provided.
+- **`Temporal`** — implemented (see *Temporal API* below) for the ISO 8601 calendar only. Not
+  supported: non-ISO calendars (`gregory`/`hebrew`/`japanese`/etc. — delegated to the `Intl`
+  exclusion above, since every non-ISO-calendar test262 case lives under the already-excluded
+  `intl402/Temporal/` tree), leap seconds (parsing a `:60` seconds component is rejected, per spec)
+  and fixed offsets beyond ±18:00 (the `java.time.ZoneOffset` cap — see *Temporal API* below).
+  `relativeTo`-anchored calendar-unit (year/month/week) arithmetic **is** implemented, in
+  `internal/temporal/RelativeDurationMath`: it backs `Temporal.Duration`'s `round`/`total`/`compare`/
+  `add`/`subtract` and the `until`/`since` of `PlainDate`/`PlainDateTime`/`PlainYearMonth`/
+  `ZonedDateTime`. A `RangeError` is raised only when a calendar unit is requested with **no**
+  `relativeTo` anchor, which is what the spec requires rather than a gap.
+- **`SharedArrayBuffer` + `Atomics`** (including `Atomics.pause`) — shared-memory multithreading is
+  meaningless in a single-threaded per-connection VM.
+- **Immutable `ArrayBuffer`** (`transferToImmutable`/`sliceToImmutable`) — the proposal is not in the
+  ES2026 snapshot; buffers are mutable or detached, with no third state.
+- **`WeakRef` / `FinalizationRegistry`** — GC-observable behavior cannot be exposed safely or
+  deterministically; `WeakMap`/`WeakSet` exist but are strong (weakness is unobservable in-sandbox).
+- **Arbitrary module resolution** — the engine itself performs no filesystem or URL loading; a
+  specifier beyond the `args`/`db`/`script` built-ins resolves only if the host's `ModuleResolver`
+  claims it, so what is importable is entirely the host's decision. Under the database host that
+  means `procedures/<name>` (see *Module loading*) and nothing else. Loading an npm package through
+  that seam additionally needs work that is not built: CommonJS/`require`, node core-module shims,
+  `package.json` `exports` resolution, and ESM live-binding cycles (a cycle currently throws).
+- **`Symbol.species`** — `JsArray`/`JsTypedArray` are not subclassable, so species is unobservable;
+  by-copy methods always allocate the default type. The same gap means a derived-construction builtin
+  method (e.g. `ArrayBuffer.prototype.slice`) always returns a base-type instance even on a subclass
+  receiver (`class AB extends ArrayBuffer {}`), excluded as
+  `language/statements/class/subclass/builtin-objects/ArrayBuffer/regular-subclassing.js` in
+  `config/test262-exclusions.txt`.
+- **The `with` statement** — forbidden in strict mode, so it is a `SyntaxError` here.
+  `language/comments/hashbang/use-strict.js` (`flags: [raw]`) is excluded for the same reason from an
+  unusual angle: it is a *positive* test that a leading hashbang is not mistaken for a real `"use
+  strict"` Directive Prologue, proven by then running `with ({}) {}` — legal only in sloppy mode. This
+  engine has no sloppy mode at all (always-strict), so `with` always throws regardless of the
+  hashbang; there is no sloppy-mode code path left to make the point with.
+- **Proper tail calls** — no TCO (observable only via deep-recursion stack behavior).
+- **Proposals outside the ES2026 snapshot** — `joint-iteration` (`Iterator.zip`/`zipKeyed`),
+  `iterator-sequencing` (`Iterator.concat`), `json-parse-with-source` (`JSON.rawJSON`/`isRawJSON`),
+  `await-dictionary` and `decorators`. Same rule as immutable `ArrayBuffer` above: the engine targets
+  the ES2026 snapshot, and a proposal that missed it is not a gap.
+
+One `dir:` exclusion is not a feature decision but a measurement one:
+`built-ins/RegExp/property-escapes/generated/` asserts, code point by code point, the contents of a
+single Unicode version. Property escapes are implemented (see *Unicode property escapes* above), but
+their data is the build JDK's — Unicode 16.0 on JDK 25, 17.0 on JDK 26 — so those files answer
+differently on the two supported build JDKs and no single baseline can be green on both. The
+hand-written property-escapes tests next to them stay measured.
+
+### ES2026 conformance follow-up (2026-08-11)
+
+A probing pass run *after* the closeout below found ten further defects, all closed in four phases:
+
+- **The iteration protocol accepts any object-like iterator.** `Iteration.openIterator` demanded a
+  `JsObject`, so an object whose `[Symbol.iterator]` is a generator method
+  (`class C { *[Symbol.iterator]() {…} }`) was rejected — a generator is a sibling `JsValue`, not a
+  `JsObject`. The iterator is now typed `JsValue` and checked with a deny-list `isObjectLike` (every
+  non-primitive is an object to the spec), which restores `for-of`, spread, `Array.from`, `yield*`
+  and `new Set(obj)` over such an iterable, and also accepts a returned `Map`/`Set`/proxy iterator.
+  Array destructuring was moved onto the same `Iteration` choke point — it drove `iterableElements`
+  directly, so it never honoured the iterator protocol at all — and now pulls lazily and `close()`s
+  the iterator when the pattern ends early. The returned generator is driven through the member path
+  (not the coroutine fast path), so a patched `Generator.prototype.next` is honoured.
+- **Accessor properties participate in own-key enumeration.** Data properties and accessors live in
+  separate maps, so their relative insertion order was unrecoverable; `JsObject` now keeps one
+  insertion-ordered `keyOrder` set as the single source of truth for own string keys, maintained by
+  `set`/`defineValue`/`defineAccessor`/`delete`, and `keys()` orders that (the private `ownKeys()`
+  collapsed into it). `delete o.x` now also drops the accessor entries, which it previously left
+  live. Because `JsObject` cannot call a getter by design, the value-reading consumers route through
+  a shared `InterpreterUtils.ownValue(object, key, ops)` — `Object.values`/`entries`/`assign`,
+  object spread, rest destructuring, `JSON.stringify`, `structuredClone`, `Object.create`/
+  `defineProperties` and `Array.prototype.concat` on a spreadable object. `EJsonInterop` deliberately
+  does **not** (see *Remaining limitations* #7).
+- **Small conformance fixes.** `Array.prototype.includes` and the typed-array `includes` use
+  SameValueZero (`SameValueZero.equal`) instead of delegating to `indexOf`, so `[NaN].includes(NaN)`
+  is `true`, `[-0].includes(0)` is `true` and a hole reads as `undefined`; `indexOf` keeps strict
+  equality. Every `Object.prototype` method accepts any receiver: `toString` uses the spec brand
+  table (`[object Array]`/`Number`/`Date`/`Null`/`Arguments`/…, with a string `Symbol.toStringTag`
+  still winning), `hasOwnProperty`/`propertyIsEnumerable` share `ObjectBuiltins.hasOwnKey` (extended
+  to string and typed-array indices) and throw a `TypeError` on `null`/`undefined`, and
+  `isPrototypeOf` walks `Intrinsics.protoFor` and the implicit terminal `Object.prototype` link, so
+  `Array.prototype.isPrototypeOf([])` is `true`. `JSON.parse` implements the `InternalizeJSONProperty`
+  reviver walk (bottom-up, mutating in place, an `undefined` result deleting the key).
+  `Object.getOwnPropertyDescriptors` was added, and `getOwnPropertyDescriptor` learned symbol keys.
+  `\p{ASCII}` and `\p{Any}` are translated (`ASCII`/`all`); every other name that `java.util.regex`
+  cannot express still throws an honest `SyntaxError`.
+- **Missing ES2026 library surface.** `Math.sumPrecise` (exact `BigDecimal` accumulation rounded
+  once; empty → `-0`, mixed infinities → `NaN`, a non-Number element → `TypeError`);
+  `DisposableStack`/`AsyncDisposableStack` (`use`/`defer`/`adopt`/`dispose`/`disposeAsync`/`move`,
+  the `disposed` getter and `[Symbol.dispose]`/`[Symbol.asyncDispose]`, reverse-order disposal with
+  `SuppressedError` aggregation, entries held under a module-private symbol key so the backing array
+  never leaks onto the stack); and the `Uint8Array` base64/hex family (`toBase64`/`toHex`/
+  `setFromBase64`/`setFromHex` on the `Uint8Array` prototype only, plus `Uint8Array.fromBase64`/
+  `fromHex`). Symbol lookup now walks the prototype chain, so a prototype-installed well-known symbol
+  such as `[Symbol.dispose]` resolves on an instance and answers `in`.
+
+### ES2026 conformance closeout (2026-08-11)
+
+The final conformance pass, in five phases:
+
+- **Numeric correctness** — one `ejson/internal/NumberFormatter` implements the spec
+  `Number::toString` and `ToInt32`/`ToUint32` and is shared by EJson and SimpleJS (see *Numbers*
+  above). It also fixes a database-wide defect: an integral double past `Long.MAX_VALUE` used to be
+  persisted as `9223372036854775807`. On the read side the EJson lexer learned exponent notation and
+  `JsonNumber` keeps an out-of-`int`-range integral value as a `double` instead of clamping it.
+  `Math.imul` was added and `Math.trunc`/`clz32`, `toFixed` above 1e21, a large radix conversion and
+  the integer typed-array/`DataView` writes stopped saturating.
+- **Object-model conformance** — `JsObject.keys()` reports `OrdinaryOwnPropertyKeys` order (canonical
+  array-index keys ascending, then insertion order), and every enumeration site routes through it, so
+  `Object.keys`/`values`/`entries`, `for-in`, `Reflect.ownKeys`, `Object.assign`, object spread/rest,
+  `structuredClone` and `JSON.stringify` all agree. A rejected write or `delete` now throws a
+  `TypeError` (the engine is always strict) while `Reflect.set`/`Reflect.deleteProperty` keep
+  returning `false`; `Object.freeze`/`seal`/`preventExtensions` and their predicates reach `JsArray`.
+- **String iteration by code point** — the iterator-protocol paths (`for-of`, spread, array
+  destructuring, `String`'s `Symbol.iterator`, `Array.from`) walk a string by code point, so
+  `[..."ab😀"].length` is 3. Indexed access, `length`, `split("")`, object spread of a string and the
+  generic array-like receiver paths stay code-unit based, as the spec's string exotic object requires.
+- **Class prototypes, `new.target`, object-literal `super`, patchable `Promise`/generator prototypes** —
+  `JsClass` now owns a real `prototype` `JsObject` (non-enumerable entries, `constructor`
+  back-reference, `proto`-linked to the superclass prototype), instances are linked to it, and member
+  resolution/`super` go through the proto chain, so `E.prototype.m = f`, `delete E.prototype.m` and
+  `Object.getPrototypeOf(new E())` all behave. `new.target` is parsed as a `MetaProperty` and bound at
+  construction (arrows inherit it lexically). Object-literal shorthand methods and accessors get a home
+  object, so they may call `super`. `Promise.prototype` and the generator/async-generator prototypes
+  carry real delegating wrappers (`PromiseBuiltins.PROTO_NAMES`, `GeneratorBuiltins.PROTO_NAMES`), and
+  `Object.getPrototypeOf` on a non-object value returns its intrinsic prototype, so those are reachable
+  and patchable. `Symbol.unscopables` exists as a stable well-known symbol.
+- **Regex duplicate named groups + host contract** — `RegexTranslator` renames a repeated `(?<name>)`
+  and keeps an alias table on `JsRegExp`, so ES2025 duplicate names in different alternatives compile
+  and `groups.name`/`indices.groups.name`/`$<name>` resolve to whichever alias participated. A promise
+  returned (or default-exported) at top level is awaited by `SimpleJs.contractResult`.
+
+### ES2026 conformance closers (previously completed)
+
+The following were previously listed as gaps and are now implemented:
+
+- **Strict early errors** — future-reserved words (`implements`/`interface`/`package`/`private`/
+  `protected`/`public`) as binding identifiers, `eval`/`arguments` as binding or assignment/update
+  targets, and the poisoned `arguments.callee` accessor are all rejected (parse-time for
+  the binding/assignment errors, a `TypeError` at runtime for `callee`). Reserved words
+  remain valid as property keys.
+- **Regex `v` (unicodeSets) set notation** — `RegexTranslator` now parses `v`-mode character classes
+  and rewrites the set notation to `java.util.regex` form: subtraction `A--B` → `[A&&[^B]]`,
+  intersection `A&&B`, nested-class union, and single-code-point `\q{…}` string alternatives (a
+  multi-code-point `\q{}` member throws a `SyntaxError` — documented limitation). Property escapes
+  are still translated inside `v`-mode classes.
+- **Length-tracking typed-array views** — a typed array (or `DataView`) constructed over a resizable
+  `ArrayBuffer` with **no** explicit length now recomputes its element `length`/`byteLength` from the
+  buffer's current byte length on every access, so it grows and shrinks with `resize`. An
+  explicit-length view or a view over a non-resizable buffer keeps its construction-time length. A
+  `DataView` read past the current length throws a `RangeError`.
+- **`globalThis` enumeration** — `Object.keys`/`values`/`entries`/`getOwnPropertyNames` and `for-in`
+  enumerate user-declared global bindings (`var`/function declarations and `globalThis.x = …`
+  assignments). Host builtins are installed as non-enumerable, so they are not reported. Lexical
+  top-level `let`/`const` are not properties of the global object.
+- **Async iterator helpers** — `AsyncIterator.prototype` supplies `map`/`filter`/`take`/`drop`/
+  `flatMap`/`reduce`/`toArray`/`forEach`/`some`/`every`/`find` plus `AsyncIterator.from`; the first
+  five are lazy. They are routed onto async generators and async-iterator-like objects and drive the
+  receiver through promises on the event loop (awaiting both a promise-returning `next()` and a
+  promise-returning callback result). `for await` also consumes a plain async iterator via
+  `Symbol.asyncIterator`.
+- **`[[DefineOwnProperty]]` completeness** — `Object.defineProperty` now rejects a non-configurable
+  property's data↔accessor kind change, an accessor `get`/`set` identity change, and a non-writable
+  data-property value change under **SameValue** (so `+0`→`-0` throws while `NaN`→`NaN` is allowed).
+- **`Proxy` `get`/`set` receiver + `ownKeys` enumerability** — a trap-less proxy's accessor fallback
+  now threads the proxy as the `this`/receiver (and `Reflect.get`/`Reflect.set` honour an explicit
+  receiver), and `Object.keys`/`values`/`entries` + `for-in` re-filter an `ownKeys` trap's result
+  down to enumerable string keys.
+- **Intrinsic prototypes and builtin subclassing** — `Object.prototype`/`Array.prototype`/
+  `String.prototype`/`Number.prototype`/… and a `Function` global are real objects, prototype
+  monkey-patching works, and `class E extends Error {}` (or `Map`/`Set`/`Array`/…) produces a usable
+  instance. See *Intrinsic prototypes* above for the model and its limits.
+- **Static private class members** — `static #x = 1`, `static #m()` and static private accessors are
+  declared into their own tables, so `A.#x`, `A.#m()`, `this.#m()` inside a `static` method and the
+  `#x in A` brand check all work; another class's static private name is still a `TypeError`.
+- **`UnsupportedNodeException` no longer escapes `SimpleJs.run`** — the entrypoint ends in a terminal
+  `catch (SimpleJsRuntimeException)`, mapping an unsupported node to a `SyntaxError` result and any
+  other sibling to `InternalError`.
+- **Sequence (comma) operator** — `nodes/SequenceExpression`; `parseExpression` collects a comma list
+  (a single operand is returned unwrapped), so `(a, b)`, `return (1, 2)` and `for (…; …; i++, j++)`
+  all work. Call arguments and array/object literals still parse with `parseAssignment`.
+- **`array.length` assignment** — truncates or pads with holes, and rejects a negative, fractional or
+  `NaN` length with a `RangeError`.
+- **`JSON.stringify` `replacer` / `space`** — a function replacer (called with `(key, value)` and the
+  holder as `this`), an array key allowlist, `toJSON`, cycle detection (`TypeError`) and
+  non-enumerable-key skipping happen while building the EJson tree; rendering delegates to the new
+  `EJson.toJson(element, indent)` so escaping and number formatting stay in one place. `space` is a
+  number (capped at 10) or a string (first 10 chars).
+- **Array holes** — `JsArray` marks an elision with a distinct `JsUndefined` instance, so every reader
+  that does not opt in still sees `undefined`. `forEach`/`map`/`filter`/`some`/`every`/`find*`/
+  `reduce*`/`indexOf`/`lastIndexOf` skip holes (`map` preserves them), `join`/`toString` render them
+  empty, `sort` moves them last, `in` reports them absent, `JSON.stringify` emits `null`, and spread
+  materialises them as real `undefined`.
+- **Object-literal `__proto__`** — a non-computed `__proto__` key sets the prototype; a computed
+  `['__proto__']` key still creates an own property and a non-object, non-null value is ignored.
+- **Symbol keys in copy operations** — `Object.assign`, object spread and object rest-destructuring
+  copy symbol-keyed properties after the string keys.
+- **`matchAll` without `g`**, **`$$` in a replacement**, **`split` `limit`**, **`toFixed` rounding**
+  (exact-binary `BigDecimal`, so `(1.005).toFixed(2)` is `"1.00"`) and the **Annex-B string methods**
+  (`substr`, `toLocale{Upper,Lower}Case`, `trimLeft`/`trimRight`).
+- **Library surface** — global `NaN`/`Infinity`/`undefined`; the full `Math` namespace bar `imul`;
+  `Object.is`/`getOwnPropertySymbols`, `Number.isSafeInteger`; `Function` `name`/`length`/`toString`;
+  `Error` `cause`/`stack`/`toString`; BigInt `toString([radix])`/`valueOf`/`toLocaleString` +
+  `BigInt.asIntN`/`asUintN`; typed-array `sort`/`toSorted`/`toReversed`/`with`/`findLast`/
+  `findLastIndex`/`copyWithin`; `Array.prototype.toString` and `Array.fromAsync`; `Symbol`
+  `description`/`toString` and the `Symbol.matchAll`/`isConcatSpreadable` hooks; regex `d`-flag
+  `indices` (numbered and named groups, `undefined` for a non-participating group); and primitive
+  wrapper objects (`new String/Number/Boolean`) plus `new Object()`.
+
+### test262 conformance pass (2026-08-12)
+
+A failure-message clustering pass over a fresh full-corpus run found four independent, high-leverage
+defects, plus two more that a correct fix immediately unmasked:
+
+- **Top-level `this` was `undefined` instead of the global object.** `Environment.global()` never
+  called `defineThis`, so a classic Script's top-level `this` fell through to `JsUndefined` — wrong
+  per spec (only a strict *function* call gets `this === undefined`; Script code gets the realm's
+  global object regardless of strict mode). `GlobalScope.install` now returns the `JsGlobalObject` it
+  builds, and `Interpreter.runModule` binds it as the top environment's `this`.
+- **A computed accessor key that evaluates to a `Symbol` threw instead of installing a symbol
+  accessor.** `{ get [Symbol.iterator]() {…} }` called `JsCoercion.toStr` unconditionally on the
+  computed key in `ExpressionEvaluator.evalObject`'s accessor branch, throwing `TypeError: Cannot
+  convert value to string` even though the sibling non-accessor branch already special-cased a
+  `JsSymbol` key correctly. `JsObject` gained symbol-keyed accessor tables
+  (`defineSymbolAccessor`/`getSymbolAccessorGetter`/`getSymbolAccessorSetter`/`hasSymbolAccessor`),
+  consulted by `MemberEvaluator.objectSymbolMember` (get) and `Interpreter.setMemberByKey` (set)
+  ahead of the plain symbol-property path — mirroring the string-keyed accessor precedence and the
+  symbol-accessor support `JsClass` already has for class instances.
+- **Array/typed-array callback validation skipped `IsCallable`.** `ArrayBuiltins.callback`/
+  `TypedArrayBuiltins.callback` only checked `args.isEmpty()`, so e.g. `[].find(null)` on an *empty*
+  array silently returned `undefined` instead of throwing — the callback is never invoked when there
+  is nothing to iterate, so the missing check went unnoticed. Both now validate
+  `InterpreterUtils.isCallable` unconditionally.
+- **`Array.from`/`%TypedArray%` didn't fall back to array-like semantics for a non-iterable
+  source.** Per spec, `Array.from(object)` and `new %TypedArray%(object)` first check for a callable
+  `@@iterator`; only when it is absent do they treat `object` as array-like (`length` + indexed
+  `Get`). Both builtins instead called the throwing `iterableToList.drain` unconditionally, so a
+  plain `{length: n, 0: …}` object was rejected as "not iterable". A shared
+  `InterpreterUtils.arrayLikeOrIterableToList` now checks for a callable `@@iterator` first (treating
+  a generator or an `arguments` object as always iterable, since `Iteration` drives those
+  structurally rather than through a real `@@iterator` member) and only then falls back to
+  `arrayLikeElements`. Map/Set/`Promise.all`-family/`Object.fromEntries` are untouched — those
+  require a true iterable, no array-like fallback.
+- **Unmasked by the array-like fix: `Array.from` ignored its receiver and the `CreateDataProperty`
+  failure path.** A plain array-like source used to always throw "not iterable" before reaching
+  construction, which accidentally satisfied tests expecting `Array.from.call(CustomCtor, items)` to
+  throw — for the wrong reason. `Array.from` now honours `IsConstructor(C)` on its `this`
+  (`InterpreterUtils.isConstructor`, mirroring `Interpreter.constructValue`'s own type switch),
+  constructing via the receiver when it is a constructor, and defines each index through
+  `CreateDataPropertyOrThrow` semantics (`JsArray.set` for a plain array, `ops.defineProperty` with a
+  full descriptor otherwise), so a non-extensible or non-configurable target throws instead of
+  silently succeeding. The mapfn's `thisArg` (`Array.from`'s third argument) is now threaded through
+  too, closing the same class of bug.
+- **Unmasked by the `this`-binding fix:** `Array.prototype.every`/`some`/`map`/`filter`/`forEach`
+  ignored their optional `thisArg` argument (hardcoding `JsUndefined`), and `NaN`/`Infinity`/
+  `undefined` were plain writable global bindings. Both were previously invisible because top-level
+  `this` was itself `undefined`, so a test comparing a passed-in `this` against `undefined` passed
+  for the wrong reason. `Environment` gained a `writable` flag on bindings (`declareNonWritableBuiltin`,
+  enforced in `assign`), and the five array methods now thread an actual `thisArg`.
+
+### Temporal API (2026-08-20)
+
+`Temporal` was the largest single gap in test262 conformance before this work (`built-ins/Temporal/`
+alone is around 4,600 tests) and shipped in nine sub-phases (T0 shared infrastructure through T8
+`Temporal.Now` + this closeout), following the exact "new value type → prototype → builtins →
+wiring" pattern every prior `simplejs/` addition uses (`JsDate`/`DateBuiltins`, `JsMap`/
+`MapBuiltins`, etc.) — additive to `simplejs/` only, no changes anywhere outside it. Scope is the
+`"iso8601"` calendar exclusively: every `built-ins/Temporal/**` test262 case only ever exercises
+`iso8601` (asserting `calendarId === "iso8601"`), while all non-ISO calendar arithmetic lives under
+the already-excluded `intl402/Temporal/` tree, so this mirrors the existing `Intl` exclusion
+rationale rather than fighting it.
+
+- **Shared infrastructure** (`internal/temporal/`, no `JsValue` involvement, unit-tested
+  standalone): `IsoCalendar` (leap years, days-in-month, `RegulateOverflow` reject/constrain,
+  year/month/day balancing), `TemporalParser` (a hand-written recursive-descent scanner for the
+  Temporal grammar — RFC 9557 / ISO 8601 extended with `[u-ca=iso8601]`/`[+01:00]` annotations —
+  covering `PlainDate`/`PlainTime`/`PlainDateTime`/`Duration`/`Instant`/`ZonedDateTime`/time-zone
+  identifier strings; malformed input is a `RangeError`, per spec, not a `SyntaxError`),
+  `TemporalFormatter` (the inverse canonical-string serializers, parameterized by
+  `fractionalSecondDigits`/`smallestUnit`/`roundingMode`/`calendarName`/`timeZoneName`/`offset`),
+  `DurationMath` (sign determination, balancing, and rounding against a `RoundingMode`/`Unit` pair
+  shared by every type's `round`/`since`/`until`), and the `Iso8601Fields`/`IsoTimeFields` plain
+  data records every type wraps.
+- **Eight new `values/` classes** (`JsTemporalPlainDate`, `PlainTime`, `PlainDateTime`,
+  `PlainYearMonth`, `PlainMonthDay`, `Duration`, `Instant`, `ZonedDateTime`), each a bare data
+  carrier mirroring `JsDate`'s shape — all arithmetic/option handling lives in the matching
+  `builtins/TemporalXBuiltins` class instead. `JsTemporalInstant`/`JsTemporalZonedDateTime` hold
+  exact time as a `(long epochSeconds, int nanoAdjustment)` pair rather than a `double` millis field
+  like `JsDate`, since a double's 53-bit mantissa cannot hold the nanosecond precision Temporal
+  requires; `epochNanoseconds()` materializes the spec's signed-nanoseconds representation as a
+  `BigInteger`/`JsBigInt` only at the API boundary. `JsTemporalZonedDateTime` additionally composes a
+  `java.time.ZoneId` (the JDK's bundled IANA tzdb, the same one `JsDate`/`DateBuiltins` already
+  reach into) plus the original time-zone identifier text, since `ZoneId` normalizes an offset
+  identifier's spelling and a `toString()` round trip needs the source text.
+- **Eight new `builtins/` classes**, each shaped like `DateBuiltins`: a `NAMES` list re-exported
+  through `Intrinsics.prototypeOf` (the same delegating-wrapper mechanism `Date.prototype`/
+  `Map.prototype` use, so e.g. `Temporal.PlainDate.prototype.toString = f` works normally); a
+  `create(ops)` constructor that throws `TypeError` when called without `new` (every Temporal
+  constructor is deliberately not callable as a plain function, unlike `Date`); a `getMethod`
+  dispatcher for prototype methods; and per-instance field accessors (`year`, `hour`,
+  `calendarId`, …) installed once on the shared prototype as real getter accessor properties
+  (`JsObject.defineAccessor`), each brand-checking its receiver before reading internal state.
+  `valueOf` throws `TypeError` unconditionally on every type (intentional upstream spec design to
+  stop silent cross-calendar `<`/`+` comparisons), which makes the ops-aware `toNumber` path throw
+  for free through the existing `OrdinaryToPrimitive` machinery. Each prototype carries a real
+  `[Symbol.toStringTag]` (e.g. `"Temporal.PlainDate"`), consulted by `Object.prototype.toString`
+  ahead of the brand-table fallback, mirroring `Map`/`Set`/`Promise`.
+- **`Temporal` is a namespace object whose own properties are themselves constructors**
+  (`builtins/TemporalBuiltins`) — a pattern not used anywhere else in the engine (`Math`/`JSON`/
+  `Reflect` are namespaces of functions only; `Number`/`Date`/etc. are constructors that are also
+  namespaces of statics, but never a namespace *containing other constructors*). `installCtor`
+  retargets `GlobalScope.constructor()`'s usual logic (`setPrototype`/`markConstructor`/
+  `proto.constructor` back-link) onto a `JsObject` property instead of an `Environment` binding.
+  `Temporal.Now` (T8, this phase) is installed differently, as a plain object of functions —
+  structurally the same as `Math`/`JSON`/`Reflect` — via `builtins/TemporalNowBuiltins.install`:
+  `instant()`, `plainDateISO`/`plainTimeISO`/`plainDateTimeISO`/`zonedDateTimeISO([temporalTimeZoneLike])`,
+  and `timeZoneId()`, all reading `System.currentTimeMillis()`/`ZoneId.systemDefault()` — the same
+  wall-clock source `Date.now()` already uses, deliberately not `java.time.Instant.now()`'s finer
+  platform-dependent precision, since consistency with the engine's one time source matters more
+  than sub-millisecond precision the JVM is not guaranteed to reliably provide. An omitted
+  `temporalTimeZoneLike` argument defaults to `ZoneId.systemDefault()`; a `Temporal.ZonedDateTime`
+  argument reuses its own time zone (`ToTemporalTimeZoneIdentifier`); anything else is coerced to a
+  string and parsed as a time-zone identifier. Both `Temporal` and `Temporal.Now` carry their own
+  `[Symbol.toStringTag]` (`"Temporal"` / `"Temporal.Now"`) via the same `defineNamespaceTag` helper
+  `Math`/`JSON`/`Reflect` use, closing the corpus's two-test `toStringTag` area.
+- **Real cross-type upgrades landed as later phases unblocked earlier ones**: `Temporal.Instant.
+  prototype.toZonedDateTimeISO` and `Temporal.PlainDateTime.prototype.toZonedDateTime` return a real
+  `Temporal.ZonedDateTime` instance once T7 merged (both were built before `ZonedDateTime` existed
+  and started out returning a plain descriptive object); `Temporal.PlainDateTime.prototype.
+  toPlainYearMonth`/`toPlainMonthDay` return real instances once T4 merged; and
+  `Temporal.PlainDate.prototype.toZonedDateTime` (built in T3, before `Instant`/`ZonedDateTime`
+  existed, so it originally returned a plain descriptive object too) resolves through
+  `TemporalZonedDateTimeBuiltins.resolveToZoned` and returns a real instance as well. No cross-type
+  conversion is left returning a stand-in object.
+- **One narrow divergence, forced by `java.time`**: `Temporal.ZonedDateTime`'s constructor, string
+  grammar and property-bag `offset` field all accept a UTC offset up to ±23:59:59.999999999 as a
+  fixed-offset "time zone" (an offset-only identifier with no IANA name), but `java.time.ZoneOffset`
+  hard-caps at ±18:00 and `java.time.zone.ZoneRules` is `final` with no public factory accepting a
+  raw offset outside that range — so no `ZoneId` can be obtained for such an offset at all.
+  Supporting it would mean reimplementing every zone computation this area performs through
+  `java.time` (`resolveLocal`, `epochNanosOf`, `hoursInDay`, `round`, `add`/`subtract`, `toString`, …)
+  against a hand-rolled fixed-offset abstraction, for an offset magnitude no real IANA zone uses.
+  The ten test262 cases that exercise it (seven under `ZonedDateTime`, three under `Duration`'s
+  `relativeTo` string, which reaches the same cap through the `[+23:59]` bracket annotation) are
+  excluded by exact path in `config/test262-exclusions.txt` rather than baselined, so
+  `built-ins/Temporal` measures 4,593 of the corpus's 4,603 cases.
+- **Wiring touch points**, one arm each per type, mirroring the existing `JsDate` entries:
+  `MemberEvaluator.getMember` (a thin `intrinsicMember` passthrough per type, since state access
+  goes through the shared-prototype accessor mechanism above), `Intrinsics` (a proto field +
+  `prototypeOf` call + `protoFor` switch arm + `[Symbol.toStringTag]` per type), `EJsonInterop.
+  toEjson` (each type serializes to a plain `JsonString` of its `toString()`, exactly like `JsDate` —
+  no new custom EJson type, so a Temporal value saved via `db.save(...)` becomes a plain string
+  field), and `JsCoercion.toStrDataOnly` (one string-conversion arm per type; `toNumberDataOnly`
+  needs none, since every type's `valueOf` already throws).
+
+## Testing conventions
+
+Tests use **JUnit 5**, live under `src/test/java/org/techhouse/unit/simplejs/`
+mirroring the main package structure, and follow the existing `LexerTest` style
+(`assertInstanceOf`/`assertEquals`, one-line intent comments):
+
+- **Node tests** (`nodes/JsNodeTest`) — assert `getType()` for every concrete node,
+  driving the `internalGetType` switch. Element tokens are covered the same way in
+  `elements/JsBaseElementTest`.
+- **Lexer tests** (`internal/LexerTest`) — token-level behaviour and lexer errors.
+- **Parser unit tests** (`internal/ParserTest`) — AST shape per construct, plus
+  negative tests (`assertThrows`) and boundary cases.
+- **Program tests** (`internal/LexerProgramTest`, `internal/ParserProgramTest`) —
+  full `source → Lexer.lex → Parser.parse` on realistic snippets, the end-to-end
+  coverage.
+- **Interpreter tests** (`internal/Interpreter*Test` — expressions/statements,
+  `Object`, `Class`, `Generator`, `Async`, `AsyncGenerator`, `Iteration`, `Using`,
+  `Module`, `Timer`, `Sandbox` — plus `EnvironmentTest`, `CoroutineTest`,
+  `EventLoopTest`, `JsCoercionTest`, `JsOperatorsTest`) and the feature program tests
+  (`AsiProgramTest`, `StrictModeProgramTest`, `ProxyProgramTest`,
+  `TypedArrayProgramTest`, `DynamicImportProgramTest`, `GlobalProgramTest`,
+  `FunctionProgramTest`, `AsyncIteratorHelperTest`, `RegexTranslatorVFlagTest`) —
+  behaviour asserted through `Interpreter.run`/`SimpleJs.run`.
+- **Value / builtin / host tests** (`values/`, `builtins/`, `host/`) — per-type and
+  per-library-family units, `EJsonInterop` both directions, and the host seam
+  (`EnforcingDatabaseAccess` against a real `Cache`/`OperationProcessor`: an allowed
+  save, a denied save, a schema-violating save).

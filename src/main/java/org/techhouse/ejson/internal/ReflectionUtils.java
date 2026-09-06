@@ -121,10 +121,10 @@ public class ReflectionUtils {
             case ARRAY -> fieldValue.asJsonArray();
             case OBJECT -> fieldValue.asJsonObject();
             case BOOLEAN -> fieldValue.asJsonBoolean().getValue();
-            case NULL -> null;
             case STRING, CUSTOM -> fieldValue.asJsonString().getValue();
             case NUMBER -> fieldValue.asJsonNumber().getValue();
             case SYNTAX -> null; // should never come here
+            default -> throw new IllegalStateException("Unexpected value: " + jsonType);
         };
         if (parameterType.isEnum() && jsonValue instanceof String) {
             Method valueOf = parameterType.getMethod("valueOf", String.class);
@@ -157,11 +157,28 @@ public class ReflectionUtils {
             }
         } else if (parameterType.isPrimitive()) {
             //noinspection unchecked
-            return (T) jsonValue;
+            return (T) toPrimitiveValue(parameterType, jsonValue);
         } else if (jsonValue != null && fieldValue.isJsonObject()) {
             final var adapter = TypeAdapterFactory.getAdapter(parameterType);
             return adapter.fromJson(fieldValue);
         }
         return parameterType.cast(jsonValue);
+    }
+
+    // A primitive field is set reflectively, which only unboxes — the box has to already match the
+    // field's type, so a double-valued number reaching a long field must be narrowed here.
+    private static Object toPrimitiveValue(Class<?> parameterType, Object jsonValue) {
+        if (!(jsonValue instanceof Number number)) {
+            return jsonValue;
+        }
+        return switch (parameterType.getName()) {
+            case "int" -> number.intValue();
+            case "long" -> number.longValue();
+            case "double" -> number.doubleValue();
+            case "float" -> number.floatValue();
+            case "short" -> number.shortValue();
+            case "byte" -> number.byteValue();
+            default -> jsonValue;
+        };
     }
 }

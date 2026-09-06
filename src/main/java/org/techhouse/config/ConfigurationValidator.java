@@ -4,8 +4,11 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.DateTimeException;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntPredicate;
 import java.util.function.LongPredicate;
@@ -31,28 +34,112 @@ public final class ConfigurationValidator {
         validateAdminUsername(configs, errors);
         validateAdminPassword(configs, errors);
         validateMaxMemory(configs, errors);
-        validateLong(configs, "transactionLockTimeoutMs", 1, errors);
+        validatePositiveLong(configs, "transactionLockTimeoutMs", errors);
+        validatePositiveLong(configs, "shutdownTimeoutMs", errors);
         validateTls(configs, errors);
         validateCluster(configs, errors);
+        validateScript(configs, errors);
         return errors;
+    }
+
+    private static void validateScript(Map<String, String> configs, List<String> errors) {
+        final var zone = configs.get("scriptTimeZone");
+        if (isBlank(zone)) {
+            errors.add("scriptTimeZone must be a non-blank IANA time zone id (e.g. UTC)");
+        } else {
+            try {
+                // Parsing is the validation: ZoneId.of rejects an unknown id by throwing.
+                var _ = ZoneId.of(zone.trim());
+            } catch (DateTimeException e) {
+                errors.add("scriptTimeZone must be a valid time zone id, but was: " + zone);
+            }
+        }
+        final var locale = configs.get("scriptLocale");
+        // Locale.forLanguageTag never throws — it answers the undetermined locale for a malformed tag,
+        // so the round-trip is what actually rejects one.
+        if (isBlank(locale) || !Locale.forLanguageTag(locale.trim()).toLanguageTag().equals(locale.trim())) {
+            errors.add("scriptLocale must be a valid BCP 47 language tag (e.g. en-US), but was: " + locale);
+        }
+        validateBoolean(configs, "scriptsEnabled", errors);
+        validateBoolean(configs, "scriptTextImportEnabled", errors);
+        validateBoolean(configs, "scriptProcedureImportEnabled", errors);
+        validatePositiveLong(configs, "scriptInstructionBudget", errors);
+        validatePositiveLong(configs, "scriptTimeoutMs", errors);
+        validateInt(configs, "scriptMaxDepth", 1, errors);
+        validatePositiveSize(configs, "scriptMaxSourceBytes", errors);
+        validatePositiveSize(configs, "scriptMaxMemoryBytes", errors);
+        validatePositiveSize(configs, "scriptMaxResultBytes", errors);
+        validateInt(configs, "scriptCursorBatchSize", 1, errors);
+        validateInt(configs, "scriptCursorMaxBatchSize", 1, errors);
+        validateCursorBatchSizes(configs, errors);
+        validatePositiveLong(configs, "aggregationScriptInstructionBudget", errors);
+        validatePositiveLong(configs, "aggregationScriptTimeoutMs", errors);
+        validatePositiveSize(configs, "aggregationScriptMaxSourceBytes", errors);
+        validateInt(configs, "maxConcurrentScripts", 0, errors);
+        validateQueueWait(configs, errors);
+        validateInt(configs, "scriptMaxLogLines", 1, errors);
+        validateInt(configs, "scriptMaxLogLineChars", 1, errors);
+        validateInt(configs, "procedureCacheSize", 0, errors);
+        validatePositiveSize(configs, "procedureCacheMaxBytes", errors);
+        validatePositiveSize(configs, "schemaCacheMaxBytes", errors);
+        validateInt(configs, "triggerCacheMaxEntries", 0, errors);
+        validateInt(configs, "metadataMissCacheMaxEntries", 0, errors);
+        validateBoolean(configs, "triggersEnabled", errors);
+        validateInt(configs, "triggerThreads", 1, errors);
+        validateInt(configs, "triggerQueueSize", 1, errors);
+        validateInt(configs, "triggerMaxDepth", 0, errors);
+        validatePositiveLong(configs, "triggerTimeoutMs", errors);
+        validateBoolean(configs, "triggerRunLogEnabled", errors);
+        validatePositiveLong(configs, "triggerRunRetentionMs", errors);
+        validatePositiveLong(configs, "beforeHookInstructionBudget", errors);
+        validatePositiveLong(configs, "beforeHookTimeoutMs", errors);
+        validateBoolean(configs, "schedulesEnabled", errors);
+        validateInt(configs, "scheduleThreads", 1, errors);
+        validateInt(configs, "scheduleQueueSize", 1, errors);
+        validatePositiveLong(configs, "scheduleTickMs", errors);
+        validatePositiveLong(configs, "scheduleRefreshMs", errors);
+        validatePositiveLong(configs, "scheduleTimeoutMs", errors);
+        validateInt(configs, "scheduleMaxPerDatabase", 1, errors);
+        validatePositiveSize(configs, "scheduleCacheMaxBytes", errors);
+    }
+
+    private static void validateCursorBatchSizes(Map<String, String> configs, List<String> errors) {
+        final var batchSize = configs.get("scriptCursorBatchSize");
+        final var maxBatchSize = configs.get("scriptCursorMaxBatchSize");
+        if (notAnInt(batchSize, parsed -> parsed >= 1) || notAnInt(maxBatchSize, parsed -> parsed >= 1)) {
+            return;
+        }
+        if (Integer.parseInt(batchSize.trim()) > Integer.parseInt(maxBatchSize.trim())) {
+            errors.add("scriptCursorBatchSize (" + batchSize + ") must not be greater than scriptCursorMaxBatchSize ("
+                    + maxBatchSize + ")");
+        }
+    }
+
+    // 0 is legal and means reject the caller immediately, so this cannot use validatePositiveLong.
+    private static void validateQueueWait(Map<String, String> configs, List<String> errors) {
+        final var value = configs.get("scriptQueueWaitMs");
+        if (notALong(value, parsed -> parsed >= 0)) {
+            errors.add("scriptQueueWaitMs must be a valid number greater than or equal to 0, but was: " + value);
+        }
     }
 
     private static void validateCluster(Map<String, String> configs, List<String> errors) {
         validateBoolean(configs, "clusterEnabled", errors);
         validateBoolean(configs, "clusterTlsEnabled", errors);
         validateBoolean(configs, "readFallbackToLocal", errors);
+        validateBoolean(configs, "scriptRoutingEnabled", errors);
         if (notAnInt(configs.get("clusterPort"), port -> port >= 1 && port <= 65535)) {
             errors.add(
                     "clusterPort must be a valid number between 1 and 65535, but was: " + configs.get("clusterPort"));
         }
         validateInt(configs, "clusterExpectedSize", 1, errors);
         validateInt(configs, "virtualNodesPerNode", 1, errors);
-        validateLong(configs, "gossipIntervalMs", 1, errors);
-        validateLong(configs, "suspectTimeoutMs", 1, errors);
-        validateLong(configs, "deadTimeoutMs", 1, errors);
-        validateLong(configs, "replicationAckTimeoutMs", 1, errors);
-        validateLong(configs, "antiEntropyIntervalMs", 1, errors);
-        validateLong(configs, "tombstoneRetentionMs", 1, errors);
+        validatePositiveLong(configs, "gossipIntervalMs", errors);
+        validatePositiveLong(configs, "suspectTimeoutMs", errors);
+        validatePositiveLong(configs, "deadTimeoutMs", errors);
+        validatePositiveLong(configs, "replicationAckTimeoutMs", errors);
+        validatePositiveLong(configs, "antiEntropyIntervalMs", errors);
+        validatePositiveLong(configs, "tombstoneRetentionMs", errors);
         final var enabledValue = configs.get("clusterEnabled");
         if (enabledValue == null || isNotBoolean(enabledValue) || !Boolean.parseBoolean(enabledValue.trim())) {
             return;
@@ -197,10 +284,12 @@ public final class ConfigurationValidator {
         }
     }
 
-    private static void validateLong(Map<String, String> configs, String key, long min, List<String> errors) {
+    // Every long-valued key is a duration or a count with the same lower bound, so the bound is not a
+    // parameter; a key needing a different one would want its own message anyway.
+    private static void validatePositiveLong(Map<String, String> configs, String key, List<String> errors) {
         final var value = configs.get(key);
-        if (notALong(value, parsed -> parsed >= min)) {
-            errors.add(key + " must be a valid number greater than or equal to " + min + ", but was: " + value);
+        if (notALong(value, parsed -> parsed >= 1)) {
+            errors.add(key + " must be a valid number greater than or equal to 1, but was: " + value);
         }
     }
 

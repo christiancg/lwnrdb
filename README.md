@@ -36,9 +36,14 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 ## Pending tasks
 
 - [ ] Javascript engine to support additional features 
-  - [ ] Stored procedures
-  - [ ] Jobs
-  - [ ] Triggers
+  - [x] Stored procedures (the [`SAVE_PROCEDURE`](#save_procedure) / [`CALL_PROCEDURE`](#call_procedure) operations)
+  - [x] Triggers, after and before the write (the [`SAVE_TRIGGER`](#save_trigger) and [`TEST_TRIGGER`](#test_trigger) operations)
+  - [x] Scheduled procedures (the [`SAVE_SCHEDULE`](#save_schedule) operation)
+  - [x] Run script (the [`RUN_SCRIPT`](#run_script) operation)
+  - [x] Shared code between procedures: a script, procedure, trigger or schedule can `import … from "procedures/<name>"` to reuse a stored procedure as a module (`scriptProcedureImportEnabled`, on by default) — see [docs/simplejs.md](docs/simplejs.md) → *Module loading*
+  - [x] Scripting inside the query pipeline: `SCRIPT` filter and `MAP` operators plus a `REDUCE` step — see [Script operators](#script-operators-simplejs-in-the-pipeline)
+  - [x] Script node selection under clustering: [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) are forwarded to a live node chosen by current script load (`scriptRoutingEnabled`, on by default), skipping any node not yet caught up on admin metadata — see [docs/clustering.md](docs/clustering.md) → *Scripts*
+    - [ ] Locality-aware placement: selection is by load only, so the chosen node is usually not the owner of the collections the script touches and every operation the script issues still costs a round trip
 - [x] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant (per-collection JSON Schema — see [Schema validation](#schema-validation)) 
 - [x] Replication between nodes (no master-slave arch; all nodes are equal; no sharding) — see [docs/clustering.md](docs/clustering.md)
 - [x] Move pages admin collections to a separate folder called "pages" to make things more organized
@@ -185,6 +190,7 @@ Also accepts an optional top-level `"analyze": true` (default `false`); see [Exp
 | `LIMIT` | `limit` (> 0) | |
 | `SKIP` | `skip` (>= 0) | |
 | `SORT` | `fieldName`, `ascending` | |
+| `REDUCE` | `script` | Folds the whole stream into one document; optional `initialValue` (default JSON null) and `resultField` (default `value`) |
 
 `GROUP_BY`, `JOIN`, `SORT`, and `DISTINCT` use a single-field index when one exists on the step's field and the step is the first step in the pipeline; otherwise they fall back to a full scan. These steps use only the scalar/custom/null indexes, so documents whose indexed field holds a JSON object or array are not represented in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results (see [Memory management → Streaming reads](#memory-management)). 
 Object- and array-valued fields are instead indexed for **element-match** (whole-value equality): a `FILTER` with `EQUALS`, `NOT_EQUALS`, `IN`, or `NOT_IN` hashes the object/array and resolves it through a dedicated per-kind hash index (`…-Object.idx` / `…-Array.idx`).
@@ -194,6 +200,34 @@ A collection may also carry a single JSON Schema stored alongside its data files
 **Field operator types:** `EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`
 
 **Conjunction operator types:** `AND`, `OR`, `NOR`, `XOR`, `NAND`
+
+#### Script operators (SimpleJS in the pipeline)
+
+A pipeline may run SimpleJS in three places. All three are gated by `scriptsEnabled` (the same master switch `RUN_SCRIPT`, procedures, triggers and schedules sit behind) **and** by the caller's per-database script grant: admin, database owner, or `scriptPermissions` for the database — a `READ` grant alone is not enough, because executing code is a strictly wider capability than reading. A pipeline script is refused inside a `LISTEN` (`400-19`): that pipeline re-runs on every matching write, with no client-visible budget.
+
+- A **`SCRIPT` filter operator** — a predicate, `(doc) => boolean`. Recognised by a `script` key (instead of `fieldOperatorType`/`customOperatorName`/`conjunctionType`) and usable anywhere a field operator can appear, nested conjunctions included.
+
+```json
+{"type":"FILTER","operator":{"script":"export default (doc) => doc.price * doc.qty > 100;"}}
+```
+
+- A **`SCRIPT` mid-operator** in a `MAP` `ADD_FIELD` — a computed field, `(doc) => value`. An `undefined` result leaves the field unset.
+
+```json
+{"type":"MAP","operators":[
+  {"fieldName":"total","operator":{"type":"SCRIPT","script":"export default (doc) => doc.price * doc.qty;"}}]}
+```
+
+- A **`REDUCE` step** — a fold, `(accumulator, doc) => accumulator`, collapsing the stream to one document exactly as `COUNT` does. A step after it is legal and operates on that single document.
+
+```json
+{"type":"REDUCE","resultField":"total","initialValue":0,
+ "script":"export default (acc, doc) => acc + doc.price * doc.qty;"}
+```
+
+The callable is the module's `export default`, else its top-level `return` value; an async or generator function is refused. **A pipeline script has no `db` module, no `fetch`, no procedure imports and no `importText`** — it is a pure function from a document to a value. That is what makes it safe: the pipeline already holds collection read locks on the calling thread, and with no `db` a pipeline script cannot issue an `AGGREGATE`, so there is no recursion to bound.
+
+The sandbox is **per pipeline, not per document**: one interpreter serves the whole query, so `aggregationScriptInstructionBudget` (`400-11`) and `aggregationScriptTimeoutMs` (`408-1`) bound the query as a whole rather than resetting on every row — a runaway predicate aborts the query instead of getting a fresh budget on each document. `aggregationScriptMaxSourceBytes` caps one operator's source (`400-10`), and a script that throws surfaces as `400-9`. A `SCRIPT` predicate **can never use an index**, so put it after an index-backed `FILTER`; inside a conjunction the other operands still resolve via index and the script then sees only what they produce. `analyze` reports `scriptInvocations`/`scriptMillis` and suggests exactly this.
 
 #### Custom operators (type-specific)
 
@@ -463,6 +497,372 @@ Manually forces the outcome of an in-doubt distributed transaction identified by
 ```
 Returns `400-1` if `dtxId` is missing or `decision` is not `commit`/`abort`.
 
+#### `RUN_SCRIPT`
+Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simplejs.md) for the engine). The script is **scoped to one database** — the `databaseName` of the request — and may use any collection in it. Enabled by default; set `scriptsEnabled=false` to refuse the operation with `403-2`. Being allowed to run one still requires admin privileges, database ownership, or `scriptPermissions` on that database.
+
+```json
+{
+  "type": "RUN_SCRIPT",
+  "databaseName": "mydb",
+  "script": "import db from \"db\";\nimport args from \"args\";\nconst u = db.findById(db.name, \"users\", args.userId);\nconsole.log(`found ${u._id}`);\nreturn { name: u.name };",
+  "args": { "userId": "u1" }
+}
+```
+```json
+{
+  "type": "RUN_SCRIPT",
+  "status": "OK",
+  "message": "Script executed successfully",
+  "result": {"name": "Alice"},
+  "logs": ["found u1"],
+  "logsTruncated": false,
+  "runId": "3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83",
+  "metrics": {
+    "instructions": 4211, "instructionBudget": 10000000,
+    "peakMemoryBytes": 18240, "memoryBudget": 67108864,
+    "dbOperations": 3, "durationMs": 12
+  }
+}
+```
+
+- `script` (required) is the program source, `args` (optional) is an arbitrary object the script reads through `import args from "args"`, and `db.name` is the scoped database name — so one script can run against any database without hardcoding it.
+- `result` is the script's value: a top-level `return`, else `export default`, else an object of the named exports, else JSON `null`. A promise returned at top level is awaited (a rejection becomes the error); one that never settles fails the run with `400-20`, since the event loop has already drained and it can never settle. An accessor-valued property is read through its getter on the way out, so a computed field reaches the caller like any other.
+- `stack`, on a failed run, lists the frames the error came from, innermost first — `"applyRule (procedures/rules:12:7)"`, `"main:4:1"`. A frame names the function, the module it was written in (`main`, or `procedures/<name>` for imported code) and its line and column; the list is capped at 32 frames with a trailing `"... N more frames"`. A sandbox abort — a timeout, a cancellation, a budget or depth limit — carries no frames, because it is not a program error. The same frames appear in the run's server-side log line as `stack=[…]`, which is how an unattended trigger or scheduled procedure failure is diagnosed.
+- `logs` holds the script's `console` output — the newest `scriptMaxLogLines` lines, each clipped to `scriptMaxLogLineChars` — and `logsTruncated` reports whether anything was dropped. Output is returned on **every** outcome, including a failure, so a failed run is still debuggable.
+- `metrics` reports what the run cost: instructions executed, the peak bytes it held (a high-water mark, so a drained `db.cursor` batch does not erase it), how many `db` operations it issued, and its wall-clock duration — each beside the budget it was measured against, so a run can be read as a fraction of its sandbox without knowing the server's configuration. Reported on **every** outcome, including a timeout or a budget abort, which is when the numbers matter most. A straight-line script with no loop and no call legitimately reports `instructions: 0` — the counter ticks at loop back-edges and call entries.
+- `runId` names this run for the whole time it executes, so a slow run can be found with [`LIST_SCRIPTS`](#list_scripts-admin-only) and stopped with [`CANCEL_SCRIPT`](#cancel_script-admin-only) without listing first. It is returned on every outcome and also appears in the run's log line.
+- **Permissions**: admins may run scripts on any database and database owners on the databases they own; any other user needs a **per-database** script grant — `scriptPermissions: {"mydb": "RUN"}` on their user record (the older boolean form is still accepted and reads as `RUN`). Every operation the script itself issues is authorized again on its own request, so the grant never widens what the caller can read or write, and the collection schema still applies to a script's writes. A script cannot leave its database (`admin` included) — an attempt throws a catchable error inside the script.
+- The exposed surface is read+write only (`findById`, `aggregate`, `save`, `bulkSave`, `delete`, `cursor`, `listCollections`, `listDatabases`, `transaction`); DDL and user management are not reachable from a script. **Outbound HTTP** is available: `scriptFetchEnabled` is on by default so the capability is discoverable rather than hidden, and `scriptFetchAllowlist` decides which hosts a script may reach (`api.example.com`, `*.example.com` for sub-domains, `*` for every host; an empty list denies everything). **It ships as `*` and the server warns about that at every startup — narrow it.** The request leaves from inside your network, so `*` reaches internal services and the cloud instance-metadata endpoint (`169.254.169.254`), not just the public internet; anyone you let run a script can therefore use the server's network position. `fetch` stays unavailable to pipeline scripts and before-write hooks, which run holding collection locks.
+- **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded as a document in the reserved `script_runs` collection of the database it ran against, so what ran, what it cost and why it failed is queryable with an ordinary `AGGREGATE`. `scriptRunHistoryKinds` selects which kinds are recorded (`CALL_PROCEDURE,TRIGGER,SCHEDULE` by default — ad-hoc `RUN_SCRIPT` is opt-in so an exploratory client cannot flood it). The collection is created lazily on the first row, is refused to client writes (`400-1`) while staying open to reads, and never fires a trigger of its own.
+- **Importing shared code**: besides `args`, `db` and `script`, a script may import any stored procedure of its own database as a module with `import … from "procedures/<name>"`. A library is just a procedure that exports instead of returning:
+
+  ```json
+  {"type":"SAVE_PROCEDURE","databaseName":"mydb","name":"money",
+   "script":"export function cents(n) { return Math.round(n * 100); }"}
+  ```
+  ```js
+  import { cents } from "procedures/money";
+  import db from "db";
+  const o = db.findById(db.name, "orders", "o1");
+  return cents(o.amount);
+  ```
+
+  Only the script's own database is searched, a missing **or disabled** procedure throws a catchable `Cannot find module 'procedures/…'`, and a cycle throws `Circular import of module '…'`. `SAVE_PROCEDURE` **refuses** a procedure whose `procedures/…` import does not resolve (`400-18`), so a typo is reported to whoever installs it rather than to whoever calls it next — which means libraries must be installed before the procedures that import them. The imported module shares the importing run's budget, deadline and authority — so a trigger importing a helper keeps its definer rights, and importing never widens what the caller may do. **Only `export`ed bindings are visible**: a procedure written with a top-level `return` (the `CALL_PROCEDURE` style) imports as `undefined`, so a module meant to be imported must `export`. Set `scriptProcedureImportEnabled=false` to refuse the whole `procedures/` prefix.
+- **`db.cursor(database, collection, pipeline, options)`** is the memory-safe way to read more than fits in one result: it returns an iterator that runs the pipeline one page at a time (`SKIP`/`LIMIT` appended per batch), so only one batch is ever in memory and only that batch counts against `scriptMaxMemoryBytes`. `options.batchSize` defaults to `scriptCursorBatchSize` and is clamped to `scriptCursorMaxBatchSize`; a non-positive value is a `RangeError`. It works with `for-of`, spread and the iterator helpers (`.map`/`.take`/…).
+
+  ```js
+  import db from "db";
+  let total = 0;
+  for (const order of db.cursor(db.name, "orders",
+          [{ type: "SORT", fieldName: "_id", ascending: true }], { batchSize: 500 })) {
+      total += order.amount;
+  }
+  return total;
+  ```
+
+  It is a **paged read, not a snapshot**: each batch is an ordinary `AGGREGATE` against the live collection (authorized, schema-checked and cluster-routed like any other), so a concurrent insert or delete between two batches can make a document be seen twice or not at all. Paging is only meaningful with a `SORT` step — without one the pipeline's order is unspecified — and `db.cursor` does not inject one, because that would change the results of a pipeline ending in `GROUP_BY`/`COUNT`. Such a pipeline still works, but it pages the *step output*, which is rarely what is meant.
+- **Every failed `db` operation throws a catchable `Error` inside the script** — a permission denial, a schema violation, an oversized entry, a cluster rejection or an internal error alike; a failure is never silently swallowed. The two exceptions are ordinary absence rather than failure: a missing document reads as `null` from `findById`, an empty pipeline as `[]` from `aggregate`, and deleting a document that is not there is a no-op.
+- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `400-20` when its result is a promise that never settled, `408-1` when it exceeds `scriptTimeoutMs`, `408-2` when an operator cancelled it with `CANCEL_SCRIPT`, `503-6` when a concurrency ceiling refused the run — the node-wide `maxConcurrentScripts` with no permit free within `scriptQueueWaitMs`, or this caller's `maxConcurrentScriptsPerUser` / this database's `maxConcurrentScriptsPerDatabase` slice, which do not wait; the `message` names which of the three (`node`, `user`, `database`) and nothing ran, so it is retryable, and `409-6` if sent while a transaction is open on the connection.
+- Under clustering the script runs on the node that received it; each operation it issues is routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
+
+#### `SAVE_PROCEDURE`
+Stores a named script in a database so it can be called by name instead of being sent on every request. Requires admin privileges, ownership of the database, or `scriptPermissions: {"mydb": "MANAGE"}`. The source is **parsed at save time**, so a broken procedure is refused here rather than on somebody else's first call. Idempotent upsert: saving an existing name replaces it and bumps its `version`.
+
+```json
+{
+  "type": "SAVE_PROCEDURE",
+  "databaseName": "mydb",
+  "name": "recalcTotals",
+  "script": "import db from \"db\";\nimport args from \"args\";\nconst o = db.findById(db.name, \"orders\", args.id);\nreturn o.qty * o.price;",
+  "description": "optional",
+  "enabled": true,
+  "ifVersion": 3
+}
+```
+```json
+{"type":"SAVE_PROCEDURE","status":"OK","message":"Procedure saved successfully","version":4}
+```
+
+- `enabled` defaults to `true`; a disabled procedure is not callable (`404-8`).
+- `ifVersion` is optional optimistic concurrency: present and not equal to the stored version → `409-8`. Absent means an unconditional upsert. Use `0` to require that the procedure does not exist yet.
+- A procedure is stored **with its database**, in `{filePath}/{database}/.procedures/{name}.json`, so dropping the database removes it.
+- **Errors**: `403-2` scripting disabled, `403-1` not permitted, `404-4` unknown database, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`, the same rule as a collection) or a blank script, `400-10` source over `scriptMaxSourceBytes`, `400-13` source that does not parse (the message carries the line and column), `400-18` a `procedures/<name>` import that does not resolve (so install a library before its importers), `409-8` version conflict.
+
+#### `DELETE_PROCEDURE`
+```json
+{"type":"DELETE_PROCEDURE","databaseName":"mydb","name":"recalcTotals"}
+```
+Idempotent — succeeds whether or not the procedure existed. Refused with `400-14` while a trigger still references it (the message names the trigger).
+
+#### `LIST_PROCEDURES`
+```json
+{"type":"LIST_PROCEDURES","databaseName":"mydb","includeSource":false}
+```
+```json
+{
+  "type": "LIST_PROCEDURES",
+  "status": "OK",
+  "procedures": [
+    {"name":"recalcTotals","sourceHash":"9f2…","version":4,"enabled":true,
+     "createdAt":1756100000000,"updatedAt":1756100500000,"updatedBy":"alice"}
+  ]
+}
+```
+`includeSource: true` adds the `source` field. Requires `READ` on the database.
+
+#### `CALL_PROCEDURE`
+Runs a stored procedure. The permission is the same as [`RUN_SCRIPT`](#run_script)'s (`scriptPermissions` of at least `RUN`), the sandbox is the same, and the response shape matches — `result`, `logs`, `logsTruncated`, and `stack` on a failure, with the same error codes.
+
+```json
+{"type":"CALL_PROCEDURE","databaseName":"mydb","procedureName":"recalcTotals","args":{"id":"o1"}}
+```
+```json
+{"type":"CALL_PROCEDURE","status":"OK","message":"Procedure executed successfully","result":42,"logs":[],"logsTruncated":false,"runId":"3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83"}
+```
+
+- The procedure runs with the **caller's** authority, so calling one never grants more than the caller already had.
+- The parsed program is cached per node keyed by `(database, name, version)`, so a repeated call does not re-parse. `procedureCacheSize` bounds it.
+- **Errors**: as `RUN_SCRIPT` — including `503-6` when the node is at `maxConcurrentScripts` and no permit came free within `scriptQueueWaitMs`, which is retryable because nothing ran — plus `404-8` when the procedure is absent or disabled.
+
+#### `LIST_SCRIPTS` (admin only)
+Lists every script run executing **anywhere in the cluster** right now — ad-hoc `RUN_SCRIPT`s, `CALL_PROCEDURE`s, trigger runs and scheduled runs alike. It runs on the node that receives it and queries every live member, so an operator sees a run wherever [script placement](docs/clustering.md) put it, not only on the node they connected to. An unreachable peer costs its rows a warning in the log rather than failing the listing.
+```json
+{"type":"LIST_SCRIPTS"}
+```
+```json
+{
+  "type": "LIST_SCRIPTS",
+  "status": "OK",
+  "message": "Ok",
+  "scripts": [
+    {
+      "runId": "3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83",
+      "node": "10.0.0.2:8990",
+      "kind": "CALL_PROCEDURE",
+      "database": "shop",
+      "name": "reprice",
+      "username": "alice",
+      "ageMs": 18244
+    }
+  ]
+}
+```
+- `kind` is `RUN_SCRIPT`, `CALL_PROCEDURE`, `TRIGGER` or `SCHEDULE`; `name` is the procedure, trigger or schedule name and is `null` for an ad-hoc `RUN_SCRIPT`.
+- `username` is the authority the run has — the caller for `RUN_SCRIPT`/`CALL_PROCEDURE`, the definer for a trigger or schedule.
+- `node` is the node **executing** the run, and `ageMs` is measured against a single instant so two rows that started together report the same age.
+
+#### `CANCEL_SCRIPT` (admin only)
+Stops the run named by `runId` (from `LIST_SCRIPTS`, or from the `runId` on a `RUN_SCRIPT`/`CALL_PROCEDURE` response) wherever it is executing. Cancels locally if the run is here, otherwise broadcasts to every live member.
+```json
+{"type":"CANCEL_SCRIPT","runId":"3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83"}
+```
+```json
+{"type":"CANCEL_SCRIPT","status":"OK","message":"Ok","cancelled":true}
+```
+- A `runId` that matches nothing anywhere answers `cancelled:false` with status `OK` — the request was well-formed and the run is not running, which is the state the caller asked for. Returns `400-1` if `runId` is missing or is not a UUID.
+- Cancellation is **cooperative and not catchable**: the run stops at its next instruction check or event-loop poll, its `try`/`catch` cannot intercept it and its `finally` blocks do not run — the same treatment the timeout and budget aborts get. A run blocked inside a host call therefore ends when that call returns, not instantly.
+- The cancelled caller receives `408-2`; the operator issuing `CANCEL_SCRIPT` gets `OK`. An open `db.transaction` is rolled back.
+- **A cancelled trigger run is dropped, not retried.** Trigger execution is otherwise exactly-once and a failed run is retried up to `triggerMaxAttempts`, but a cancellation consumes the run's pending record — cancelling a runaway trigger stops it rather than queueing it up again. See [docs/simplejs.md](docs/simplejs.md).
+
+#### `LIST_TRIGGER_RUNS` (admin only)
+Lists the trigger runs still recorded across the cluster: those pending a run, and those dead-lettered after exhausting their attempts. `admin/trigger_runs` is deliberately not replicated, so a run's record lives on exactly one node — the listing fans out to every live member and aggregates, the way `LIST_SCRIPTS` does.
+```json
+{"type":"LIST_TRIGGER_RUNS","status":"DEAD"}
+```
+```json
+{
+  "type": "LIST_TRIGGER_RUNS",
+  "status": "OK",
+  "message": "Ok",
+  "runs": [
+    {
+      "runId": "8f0e…", "node": "10.0.0.4:8990", "status": "DEAD",
+      "database": "shop", "collection": "orders", "trigger": "auditOrders",
+      "procedure": "audit", "event": "UPDATED", "attempts": 3,
+      "lastError": "TypeError: Cannot read properties of null",
+      "ageMs": 91234, "nextAttemptAt": 0
+    }
+  ]
+}
+```
+- `status` (optional) narrows the listing to `PENDING` or `DEAD`; omitting it reports both. An unrecognised value is `400-1`.
+- A `PENDING` row is a run queued but not yet applied — normally transient, and replayed automatically when its node restarts. A `DEAD` row has exhausted `triggerMaxAttempts` and waits for an operator.
+- An unreachable peer costs the operator that node's rows, not the whole listing.
+
+#### `RESOLVE_TRIGGER_RUN` (admin only)
+Replays or discards one recorded trigger run, wherever its record lives.
+```json
+{"type":"RESOLVE_TRIGGER_RUN","runId":"8f0e…","decision":"replay"}
+```
+```json
+{"type":"RESOLVE_TRIGGER_RUN","status":"OK","message":"Ok","resolved":true}
+```
+- `decision` is `replay` or `discard`; anything else is `400-1`, as is a missing `runId`. **`replay` resets the attempt count**, so a run whose cause has been fixed gets a full budget again rather than dead-lettering on its first failure. `discard` consumes the record, giving up on the run for good.
+- A `runId` no live node holds answers `resolved:false` with status `OK` — the same treatment `CANCEL_SCRIPT` gives an already-finished run.
+- A run whose documents no longer exist cannot be replayed and is discarded instead, so it does not sit in the listing forever.
+
+#### `SAVE_TRIGGER`
+Runs a stored procedure around a write to a collection — **after** it commits (the default) or **before**, where it can veto or rewrite the document. Requires admin privileges, ownership, or `MANAGE`. Off by default: set `triggersEnabled=true` for triggers to fire (the DDL works either way).
+
+```json
+{
+  "type": "SAVE_TRIGGER",
+  "databaseName": "mydb",
+  "collectionName": "orders",
+  "name": "auditWrites",
+  "events": ["CREATED", "UPDATED", "DELETED"],
+  "procedureName": "recalcTotals",
+  "timing": "after",
+  "mode": "document",
+  "allowCascade": false,
+  "enabled": true,
+  "ifVersion": 1
+}
+```
+```json
+{"type":"SAVE_TRIGGER","status":"OK","message":"Trigger saved successfully","version":2,"definer":"alice"}
+```
+
+- `timing` is `after` (the default) or `before`. The two differ in almost every respect, so they are described separately below. An omitted `timing` reads as `after`, so every trigger written before this existed keeps its meaning.
+- **An `after` trigger fires once the write has committed**, asynchronously, on its own worker pool. It therefore cannot reject or modify the write — use a `before` trigger or a [collection schema](#schema-validation) for that — and its failure never reaches the writer; it is logged and counted in [`GET_DATABASE_STATS`](#get_database_stats-admin-only).
+- **Runs with the installer's authority** (`definer`), not the writer's, so it behaves identically no matter who wrote — which is what lets an audit trigger record a write by a user who has no access to the audit collection. Re-saving re-stamps the definer to the saving user. If the definer is deleted the trigger stops firing (it never falls back to the writer or to an admin).
+- **A write inside a transaction fires when the transaction commits**, never before, so a rolled-back write fires nothing. The event is the one the write actually performed: a new document fires `CREATED`, an overwrite `UPDATED`, and a delete fires `DELETED` carrying the document as it stood when the delete was buffered.
+- `mode` is `document` (one run per document, the default) or `batch` (one run for a whole `BULK_SAVE`).
+- `allowCascade` defaults to `false`, so writes a trigger itself performs fire nothing. With it on, a chain terminates at `triggerMaxDepth`.
+- The procedure receives `{event, database, collection, id, document, trigger, actingUser, definer, firedAt, depth}` as its `args` — `actingUser` is who wrote, `definer` is whose authority the run has. In `batch` mode `documents` replaces `id`/`document`.
+- Triggers are stored **with their collection**, in `{filePath}/{database}/{collection}/{collection}-triggers.json`, so dropping the collection removes them.
+- **Errors**: `403-1` not permitted, `404-4` unknown collection, `404-8` unknown or disabled procedure, `400-14` no events / an unknown event / an unknown mode, `409-8` version conflict.
+- **A failing trigger names where it failed.** Nobody is waiting on a response, so the run's warning line in the server log carries `stack=[…]` — the frames the error came from, innermost first, naming the procedure and line.
+- **Testing an `after` trigger before installing it.** There is no dry run for one (`TEST_TRIGGER` covers `before` triggers only, because only those are directly callable). Put the logic in a stored procedure, exercise it with [`CALL_PROCEDURE`](#call_procedure) against a representative document, and make the trigger a thin wrapper that imports and delegates to it. That exercises the body, not dispatch — cascade depth, definer rights and the pending-run record still need a real write to observe.
+
+##### `timing: "before"` — validating and mutating hooks
+
+A `before` trigger runs **synchronously, on the writing thread, inside the collection write lock, before the document is written**. It is the hook to reach for when a write has to be rejected or a field computed server-side.
+
+```js
+// procedures/normalizeOrder
+export default function (document, context) {
+    if (!document.customerId) {
+        throw new Error("customerId is required");   // -> the write is refused with 400-21
+    }
+    if (context.event === "DELETED") {
+        return;                                     // -> the delete proceeds
+    }
+    return { ...document, total: document.qty * document.price };
+}
+```
+
+- The procedure is called once per document with `(document, context)`, where `context` is `{event, database, collection, trigger, actingUser, firedAt, id}`. What it returns decides the write:
+
+  | Returned | Outcome |
+  |---|---|
+  | `undefined` / `null` / `true` | accept — the write proceeds with the original document |
+  | a plain object | **replace** — the write proceeds with the returned document |
+  | anything else (number, string, array, `false`) | refuse the write with `400-21` |
+  | `throw` | refuse the write with `400-21`, the thrown message included |
+  | a sandbox abort | refuse the write with `408-1` / `400-11` / `400-12` |
+  | cancelled via [`CANCEL_SCRIPT`](#cancel_script-admin-only) | refuse the write with `408-2` |
+
+- **Fail-closed.** Every failure stops the write, including a timeout: a hook that could not run must never let a write through.
+- **A replacement may not change `_id`**, and is **re-validated against the collection's schema** — schema validation runs at the edge, before the hook, so without that a hook could manufacture a document the schema forbids. On a `DELETED` event there is nothing to replace, so returning a document is an error rather than a silently ignored value.
+- **There is no `db`.** A hook running under a held write lock must not re-enter the database (nor, under clustering, make a network call while a writer waits), so `import db from "db"` fails inside one — the same posture a [pipeline script](#script-operators-simplejs-in-the-pipeline) has. It may still `import` a stored procedure to share library code. With no `db` a hook writes nothing, which is why `mode: "batch"` and `allowCascade` are **rejected** on a `before` trigger.
+- **The `definer` is recorded but not enforced.** A hook exercises no authority, so — unlike an `after` trigger — deleting the definer does not disable it.
+- **Several hooks on one collection chain in ascending name order**, each one's output feeding the next; the first refusal stops the chain.
+- **Budgets are per request, not per document.** One interpreter serves the whole request, so a `BULK_SAVE` of 10,000 documents evaluates the module body once and shares one `beforeHookInstructionBudget` and one `beforeHookTimeoutMs` across all of them. The first refusal fails the whole `BULK_SAVE`; nothing from the batch is written. (One exception, bounded at 2×: a `BULK_SAVE` that mixes inserts and updates on a collection carrying hooks for **both** `CREATED` and `UPDATED` runs two sets of hooks, each with its own budget and deadline.)
+- **A running hook is visible to [`LIST_SCRIPTS`](#list_scripts-admin-only) and stoppable with [`CANCEL_SCRIPT`](#cancel_script-admin-only)**, as one run per request named for the collection — not one per document, since the whole request shares a budget. Cancelling it refuses the write with `408-2`, like any other way a hook can fail to finish. Hooks are exempt from `maxConcurrentScripts` for the reason triggers are: a write refused for want of a script permit would be a failed write, not a queued one.
+- **Console output is discarded** on the write path (a hook runs once per document, so a `console.log` over a bulk save is a log-flood risk). [`TEST_TRIGGER`](#test_trigger) is the window that replaces it.
+- Under clustering the hook runs on the collection's **owner**, where the write commits, not on the node the client is connected to.
+- **Rolling upgrade:** an older node re-executing a `SAVE_TRIGGER` does not understand `timing` and would install the hook as an `after` trigger. Roll every node before installing a `before` trigger.
+
+#### `TEST_TRIGGER`
+Runs a `before` trigger against a document you supply and reports what it would do, **without writing anything**. Requires admin privileges, ownership, or `MANAGE` — it executes code. Not routed: it runs on the node you are connected to.
+
+```json
+{
+  "type": "TEST_TRIGGER",
+  "databaseName": "mydb",
+  "collectionName": "orders",
+  "name": "normalizeOrder",
+  "event": "CREATED",
+  "document": {"_id": "o1", "qty": 2, "price": 10}
+}
+```
+```json
+{"type":"TEST_TRIGGER","status":"OK","message":"Trigger tested successfully","decision":"replace",
+ "document":{"_id":"o1","qty":2,"price":10,"total":20},"logs":["checking o1"],"logsTruncated":false}
+```
+
+- `decision` is `accept`, `replace` (with the resulting `document`) or `reject` (with a `reason` and a `stack`). A rejection is an `OK` response: the operation succeeded in telling you the hook says no. A hook that could not *run* — a sandbox abort — is an error response carrying the same code the write itself would have got.
+- **Console output is captured and returned** in `logs`, unlike the live write path. That asymmetry is the point of the operation.
+- **Errors**: `403-2` scripting disabled, `403-1` not permitted, `404-4` unknown collection, `404-9` unknown trigger, `404-8` unknown or disabled procedure, `400-14` an unknown event / an event the trigger does not watch / naming an `after` trigger.
+
+#### `DELETE_TRIGGER`
+```json
+{"type":"DELETE_TRIGGER","databaseName":"mydb","collectionName":"orders","name":"auditWrites"}
+```
+Idempotent — succeeds whether or not the trigger existed.
+
+#### `LIST_TRIGGERS`
+```json
+{"type":"LIST_TRIGGERS","databaseName":"mydb","collectionName":"orders"}
+```
+Omit `collectionName` to list every trigger in the database. Each entry carries its `collectionName` and `definer`. Requires `READ` on the database.
+
+#### `SAVE_SCHEDULE`
+Runs a stored procedure **on a clock**. Requires admin privileges, ownership, or `MANAGE` — the same bar as installing a trigger, and for the same reason: a scheduled run executes with its installer's authority. On by default; set `schedulesEnabled=false` to refuse the three schedule operations (`403-2`) and stop anything already installed from firing. Installing one still requires `scriptsEnabled`, since a schedule can only name a stored procedure. Idempotent upsert: saving an existing name replaces it and bumps its `version`.
+
+```json
+{
+  "type": "SAVE_SCHEDULE",
+  "databaseName": "mydb",
+  "name": "nightlyRollup",
+  "procedureName": "rollup",
+  "cron": "0 3 * * *",
+  "args": {"days": 1},
+  "timeoutMs": 60000,
+  "description": "optional",
+  "enabled": true,
+  "ifVersion": 2
+}
+```
+```json
+{"type":"SAVE_SCHEDULE","status":"OK","message":"Schedule saved successfully","version":3}
+```
+
+- **Exactly one of `cron` and `intervalMs`.** `intervalMs` fires every so many milliseconds; `cron` fires on the standard five-field expression `minute hour day-of-month month day-of-week`, supporting the wildcard, a single value, `a-b` ranges, `*/n` and `a-b/n` steps, comma lists, and three-letter month/day names (`JAN`, `MON`; `7` is Sunday). When both day fields are restricted they are OR-ed, the conventional cron rule. The expression is evaluated in the configured `scriptTimeZone`, not the JVM default, so `0 3 * * *` means the same instant on every node.
+- **Runs with the installer's authority** (`definer`), like a trigger and for the same reason: a scheduled run has no caller, so running it as the installer makes it behave identically regardless of who happens to be connected. Re-saving re-stamps the definer to the saving user. If the definer is deleted the schedule stops firing (it never falls back to an admin).
+- **Not transactional.** A trigger runs inside a transaction because its pending-run record must be consumed atomically with its effects; a schedule has no run record, so a scheduled procedure that wants atomicity opens its own `db.transaction(...)` — which, unlike inside a trigger, is permitted.
+- `args` is the object handed to the procedure as its `args` module, exactly as with [`CALL_PROCEDURE`](#call_procedure). Because a schedule is a separate record from the procedure, one procedure can carry several schedules with different arguments.
+- `timeoutMs` bounds one run's wall clock; omit it (or `0`) to use `scheduleTimeoutMs`. Everything else — instruction budget, depth, memory, log caps — comes from the `script*` keys.
+- `enabled` defaults to `true`. `ifVersion` is optional optimistic concurrency: present and not equal to the stored version → `409-8`. Use `0` to require that the schedule does not exist yet.
+- **Delivery is at-most-once per due instant.** Firing is never finer-grained than `scheduleTickMs`, a run still executing when the next occurrence is due is skipped rather than queued twice, and **missed runs while a node was down are skipped, not caught up** — a job that must not miss an occurrence should be idempotent and driven off data, not off the clock. Under clustering each schedule is owned by exactly one node through the consistent-hash ring, so a schedule fires once per due instant across the cluster and fails over automatically; a membership change during a tick may drop that tick rather than run it twice (see [docs/clustering.md](docs/clustering.md) → *Scheduled procedures*).
+- A schedule is stored **with its database**, in `{filePath}/{database}/.schedules/{name}.json`, so dropping the database removes it.
+- **Errors**: `403-2` schedules disabled, `403-1` not permitted, `404-4` unknown database, `404-8` unknown procedure, `400-1` an invalid name (3–64 alphanumerics plus `_` and `-`), `400-16` neither or both of `cron`/`intervalMs`, a malformed cron, or a negative `timeoutMs`, `400-17` past `scheduleMaxPerDatabase`, `409-8` version conflict.
+
+#### `DELETE_SCHEDULE`
+```json
+{"type":"DELETE_SCHEDULE","databaseName":"mydb","name":"nightlyRollup"}
+```
+Idempotent — succeeds whether or not the schedule existed. A [`DELETE_PROCEDURE`](#delete_procedure) is refused with `400-16` while a schedule still references it (the message names the schedule).
+
+#### `LIST_SCHEDULES`
+```json
+{"type":"LIST_SCHEDULES","databaseName":"mydb"}
+```
+```json
+{
+  "type": "LIST_SCHEDULES",
+  "status": "OK",
+  "schedules": [
+    {"name":"nightlyRollup","procedureName":"rollup","cron":"0 3 * * *","intervalMs":0,
+     "timeoutMs":60000,"enabled":true,"definer":"ops","version":3,
+     "createdAt":1756000000000,"updatedAt":1756600000000,"updatedBy":"ops",
+     "nextRunAt":1756699200000,"owner":"node-2"}
+  ]
+}
+```
+`args` is omitted from a listing. `nextRunAt` and `owner` are computed by the answering node — the schedule registry is in-memory and per-node, so both describe that node's view rather than a cluster-wide fact (`owner` is absent when clustering is off). Requires `READ` on the database.
+
 #### `CLOSE_CONNECTION`
 ```json
 {"type":"CLOSE_CONNECTION"}
@@ -494,7 +894,7 @@ Every connection must authenticate before sending any protected operation. `LIST
 ```
 
 #### `CREATE_USER` (admin only)
-`globalPermissions`, `databasePermissions`, and `collectionPermissions` are all optional (default to empty). Collection permission keys must be in `database|collection` format.
+`globalPermissions`, `databasePermissions`, `collectionPermissions`, and `scriptPermissions` are all optional (default to empty). Collection permission keys must be in `database|collection` format; `scriptPermissions` keys are database names and its values are the levels `NONE`, `RUN` or `MANAGE` (the boolean form older clients send is still accepted — `true` reads as `RUN`). See [Permission model](#permission-model).
 ```json
 {
   "type": "CREATE_USER",
@@ -503,7 +903,8 @@ Every connection must authenticate before sending any protected operation. `LIST
   "admin": false,
   "globalPermissions": ["CREATE_DATABASE"],
   "databasePermissions": {"ordersDb": "READ_WRITE"},
-  "collectionPermissions": {"analyticsDb|events": "READ"}
+  "collectionPermissions": {"analyticsDb|events": "READ"},
+  "scriptPermissions": {"ordersDb": "MANAGE"}
 }
 ```
 
@@ -521,7 +922,8 @@ Replaces all permissions for the user in full.
   "admin": false,
   "globalPermissions": [],
   "databasePermissions": {"ordersDb": "READ"},
-  "collectionPermissions": {}
+  "collectionPermissions": {},
+  "scriptPermissions": {"ordersDb": "RUN"}
 }
 ```
 
@@ -572,6 +974,24 @@ Response shape:
       "cachingDisabled": false,
       "cacheUnlimited": false
     },
+    "triggers": {
+      "enabled": true,
+      "fired": 128,
+      "failed": 0,
+      "dropped": 0,
+      "queued": 0
+    },
+    "scripts": {
+      "routingEnabled": true,
+      "running": 2,
+      "capacity": 16,
+      "available": 14,
+      "rejected": 0,
+      "waited": 7,
+      "forwarded": 118,
+      "forwardFallbacks": 3,
+      "cancelled": 1
+    },
     "totals": {
       "userCount": 3,
       "databaseCount": 1,
@@ -617,6 +1037,7 @@ Each user object in the response contains:
 | `globalPermissions` | array | e.g. `["CREATE_DATABASE"]` |
 | `databasePermissions` | object | e.g. `{"mydb": "READ_WRITE"}` |
 | `collectionPermissions` | object | e.g. `{"mydb&#124;coll": "READ"}` |
+| `scriptPermissions` | object | Per-database script level, e.g. `{"mydb": "MANAGE"}` |
 | `ownedDatabases` | array | Databases where this user is an owner |
 
 ```json
@@ -650,6 +1071,7 @@ Example filters:
 | `admin` flag            | Superadmin — bypasses all permission checks                                           |
 | Database ownership      | Full access to the database and all its collections, including the ability to drop it |
 | `globalPermissions`     | `CREATE_DATABASE` — required to create new databases                                  |
+| `scriptPermissions`     | Per database: `NONE` / `RUN` / `MANAGE` — see below                                   |
 | `databasePermissions`   | Grants `READ` or `READ_WRITE` to all collections in a database                        |
 | `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection`                    |
 
@@ -657,7 +1079,23 @@ Ownership takes precedence over `databasePermissions` and `collectionPermissions
 
 `DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
 
-Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`.  
+`scriptPermissions` is a **per-database level**, `{"mydb": "MANAGE"}`:
+
+| Level | Allows |
+|---|---|
+| `NONE` (or absent) | nothing |
+| `RUN` | [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) |
+| `MANAGE` | everything `RUN` allows, plus installing procedures, triggers and schedules ([`SAVE_PROCEDURE`](#save_procedure), [`DELETE_PROCEDURE`](#delete_procedure), [`SAVE_TRIGGER`](#save_trigger), [`DELETE_TRIGGER`](#delete_trigger), [`TEST_TRIGGER`](#test_trigger), [`SAVE_SCHEDULE`](#save_schedule), [`DELETE_SCHEDULE`](#delete_schedule)) |
+
+Admins and database owners have an implicit `MANAGE` on the databases they reach. A grant on one database says nothing about another. The boolean form written by older clients (`{"mydb": true}`) is still accepted and reads as `RUN`; `false` reads as `NONE`. A value that is neither a boolean nor a level name is rejected with `400-1` rather than read as a denial.
+
+Installing is deliberately its own level rather than something a `READ_WRITE` grant confers. A procedure called through `CALL_PROCEDURE` runs with the **caller's** authority, so whoever installs one hands every higher-privileged caller code to execute — and a **trigger** or a **schedule** runs with the *installer's* authority, which makes installing strictly more powerful than writing.
+
+Being allowed to start a script is separate from what it may do: every operation a script issues is authorized again on its own request against `databasePermissions`/`collectionPermissions`, so a user granted `RUN` plus `READ` can run a script that reads but not one that writes. The one exception is a trigger, which runs as its `definer` — see [`SAVE_TRIGGER`](#save_trigger).
+
+> **Upgrade note.** Roll every node to this version before granting `MANAGE` or otherwise rewriting a user record in a cluster. User records replicate by shipping the record itself, and a node without `scriptPermissions` levels cannot parse the string form — it would skip the whole user record, not just the grant. Note that any write to a user record converts it (a password change will do), so the ordering matters even if you never touch a script grant.
+
+Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`, `LIST_SCHEDULES`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`. An `AGGREGATE` whose pipeline carries a [script operator](#script-operators-simplejs-in-the-pipeline) additionally requires `RUN`, since running code is wider than reading.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`, `SAVE_SCHEMA`, `DELETE_SCHEMA` (the last two also being available to database owners and admins, like the other DDL operations).
 
 ### Authentication errors
@@ -683,10 +1121,24 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `400-6` | `ERROR` | Current password is incorrect |
 | `400-7` | `ERROR` | Document does not comply with the collection schema |
 | `400-8` | `ERROR` | The provided JSON schema is not valid |
+| `400-9` | `ERROR` | Script execution failed |
+| `400-10` | `ERROR` | Script exceeds the maximum allowed size |
+| `400-11` | `ERROR` | Script exceeded a sandbox limit |
+| `400-12` | `ERROR` | Script exceeded its memory budget |
+| `400-13` | `ERROR` | The procedure source could not be parsed |
+| `400-14` | `ERROR` | The trigger definition is not valid |
+| `400-15` | `ERROR` | Script result exceeds the maximum allowed size |
+| `400-16` | `ERROR` | The schedule definition is not valid |
+| `400-17` | `ERROR` | The database already has the maximum number of schedules |
+| `400-18` | `ERROR` | A saved procedure imports a `procedures/<name>` that does not exist or is disabled |
+| `400-19` | `ERROR` | A `SCRIPT` operator is not allowed in a `LISTEN` pipeline |
+| `400-20` | `ERROR` | The script's result promise never settled |
+| `400-21` | `ERROR` | A before trigger rejected this write |
 | `401-1` | `UNAUTHENTICATED` | Must authenticate first |
 | `401-2` | `UNAUTHENTICATED` | User no longer exists |
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
 | `403-1` | `FORBIDDEN` | Action is forbidden, no permissions |
+| `403-2` | `FORBIDDEN` | Script execution is disabled on this server |
 | `404-1` | `NOT_FOUND` | User not found |
 | `404-2` | `NOT_FOUND` | Entry not found |
 | `404-3` | `NOT_FOUND` | No results |
@@ -694,6 +1146,11 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-5` | `NOT_FOUND` | No users found |
 | `404-6` | `NOT_FOUND` | No index registered for the specified field |
 | `404-7` | `NOT_FOUND` | Listen registration not found |
+| `404-8` | `NOT_FOUND` | Procedure not found |
+| `404-9` | `NOT_FOUND` | Trigger not found |
+| `404-10` | `NOT_FOUND` | Schedule not found |
+| `408-1` | `ERROR` | Script exceeded its time budget |
+| `408-2` | `ERROR` | Script was cancelled |
 | `409-1` | `ERROR` | User already exists |
 | `409-2` | `ERROR` | Database already exists |
 | `409-3` | `ERROR` | A transaction is already in progress for this connection |
@@ -701,6 +1158,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-5` | `ERROR` | Could not acquire the collection lock in time; transaction aborted |
 | `409-6` | `ERROR` | Operation not allowed while a transaction is open |
 | `409-7` | `ERROR` | Transaction aborted: a participant could not prepare |
+| `409-8` | `ERROR` | The procedure, trigger or schedule was modified by someone else |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |
@@ -727,6 +1185,12 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-24` | `ERROR` | Error while processing transaction operation |
 | `500-25` | `ERROR` | Error while saving collection schema |
 | `500-26` | `ERROR` | Error while deleting collection schema |
+| `500-27` | `ERROR` | Error while saving the procedure |
+| `500-28` | `ERROR` | Error while deleting the procedure |
+| `500-29` | `ERROR` | Error while saving the trigger |
+| `500-30` | `ERROR` | Error while deleting the trigger |
+| `500-31` | `ERROR` | Error while saving the schedule |
+| `500-32` | `ERROR` | Error while deleting the schedule |
 | `421-1` | `ERROR` | This node is not the owner of the target collection |
 | `421-2` | `ERROR` | A transaction may only touch collections owned by a single node |
 | `503-1` | `ERROR` | Max number of connections reached |
@@ -734,6 +1198,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-3` | `ERROR` | Timed out waiting for the replication quorum |
 | `503-4` | `ERROR` | The collection's owner node is unreachable |
 | `503-5` | `ERROR` | Admin coordinator is synchronizing, retry shortly |
+| `503-6` | `ERROR` | Too many scripts running, retry shortly *(the message names the scope that refused it: `node`, `user` or `database`)* |
 
 ### Bootstrap
 
@@ -761,6 +1226,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `defaultAdminPassword` | Non-blank string, at least 8 characters |
 | `maxMemory` | Human-readable size; `0` (unlimited) and `-1` (caching disabled) are also valid |
 | `transactionLockTimeoutMs` | Valid number ≥ 1. Milliseconds a write inside a transaction waits to acquire a busy collection's write lock before the transaction is aborted (`409-5`) |
+| `shutdownTimeoutMs` | Valid number ≥ 1 (default `15000`). Total budget for a graceful shutdown — refusing new connections, releasing open transactions, draining the trigger and background-index queues. Work still outstanding when it expires is abandoned with a warning naming what was dropped |
 | `tlsEnabled` | `true` or `false`. When `true`, every connection is encrypted and plaintext clients are rejected |
 | `tlsKeystorePath` | Path to a PKCS12 keystore. Used only when `tlsEnabled=true`; its parent directory must be writable. If the file is absent a self-signed keystore is generated there |
 | `tlsKeystorePassword` | Non-blank string protecting the PKCS12 keystore. Required when `tlsEnabled=true` |
@@ -777,10 +1243,54 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `replicationAckTimeoutMs` | Valid number ≥ 1. Max wait for the replication quorum |
 | `virtualNodesPerNode` | Valid number ≥ 1. Virtual nodes per node on the consistent-hash ring |
 | `readFallbackToLocal` | `true` or `false`. Serve reads from the local replica when the owner is unreachable |
+| `scriptRoutingEnabled` | `true` or `false` (default `true`). Whether a script ([`RUN_SCRIPT`](#run_script), `CALL_PROCEDURE`) may be forwarded to a live node chosen by current script load instead of running on the node that received it. Set `false` to keep every script on the receiving node. Only a node that is alive **and** caught up on admin metadata is chosen, so a script never lands on a node that has not applied the DDL it depends on. Placement spreads interpreter CPU, not data locality: the chosen node is usually not the owner of the collections the script touches, so each operation still costs a round trip. `scriptsEnabled` and the `script*` sandbox keys must be uniform across the cluster, and every node must be rolled before the first script runs on an upgraded cluster |
 | `clusterTlsEnabled` | `true` or `false`. TLS-encrypt the node-to-node channel (reuses the keystore) |
 | `clusterSecret` | Non-blank shared secret authenticating the cluster channel. Required when `clusterEnabled=true` |
 | `antiEntropyIntervalMs` | Valid number ≥ 1. How often each node runs a background anti-entropy sweep reconciling its collections against live peers |
 | `tombstoneRetentionMs` | Valid number ≥ 1. How long delete tombstones are kept before anti-entropy GC; must exceed the longest expected node downtime |
+| `scriptTimeZone` | A valid IANA time zone id (e.g. `UTC`, `Europe/Madrid`) or fixed offset. The zone a stored script's `Date`/`Temporal`/`toLocaleString` answers in, so the same script returns the same answer on every node |
+| `scriptLocale` | A valid BCP 47 language tag (e.g. `en-US`). The locale a stored script's locale-sensitive formatting and collation use |
+| `scriptsEnabled` | `true` or `false` (default `true`). Whether clients may run scripts at all ([`RUN_SCRIPT`](#run_script)), whether stored procedures may be installed or called, and whether an `AGGREGATE` pipeline may carry a [script operator](#script-operators-simplejs-in-the-pipeline). On by default: a script is bounded by the server-fixed sandbox below and by permissions — only an admin, a database owner, or a user holding `scriptPermissions` for that database may start one, and every operation the script issues is authorized again on its own request. When `false` the operations are refused with `403-2` |
+| `scriptInstructionBudget` | Valid number ≥ 1. Max interpreter instructions per script run; exceeding it aborts with `400-11` |
+| `scriptTimeoutMs` | Valid number ≥ 1. Max wall-clock time per script run; exceeding it aborts with `408-1` |
+| `scriptMaxDepth` | Valid number ≥ 1. Max nested call depth per script run; exceeding it aborts with `400-11` |
+| `scriptMaxSourceBytes` | Human-readable size > 0. Max accepted script source; larger is rejected with `400-10` |
+| `scriptMaxMemoryBytes` | Human-readable size > 0. Max bulk memory a script run may allocate; exceeding it aborts with `400-12`. Bounds the allocations that are proportional to a script-supplied length (a huge `repeat`/`padStart`, a dense array, a typed array, a `join`); ordinary small allocations are bounded by `scriptInstructionBudget` instead |
+| `scriptMaxResultBytes` | Human-readable size > 0 (default `16Mb`). Max size of the value a script returns; a larger result fails the run with `400-15` (the `console` output still comes back). Use `db.cursor` to process more data than can be returned |
+| `scriptCursorBatchSize` | Valid number ≥ 1 (default `500`). Default number of documents `db.cursor` fetches per batch |
+| `scriptCursorMaxBatchSize` | Valid number ≥ 1 (default `5000`), and ≥ `scriptCursorBatchSize`. Upper clamp for a caller-supplied `batchSize`, so one call cannot materialise an unbounded batch |
+| `aggregationScriptInstructionBudget` | Valid number ≥ 1 (default `1000000`). Max interpreter instructions **all** the [script operators](#script-operators-simplejs-in-the-pipeline) in one `AGGREGATE` pipeline may execute in total before the query aborts with `400-11`. Deliberately an order below `scriptInstructionBudget`, and deliberately per-pipeline rather than per-document: one interpreter serves the whole query, so a runaway predicate aborts it instead of getting a fresh budget on every row |
+| `aggregationScriptTimeoutMs` | Valid number ≥ 1 (default `2000`). Wall clock for the same set of operators, also per pipeline; exceeding it aborts the query with `408-1` |
+| `aggregationScriptMaxSourceBytes` | Human-readable size > 0 (default `16Kb`). Max source size of a single script operator; a larger one is rejected with `400-10` |
+| `maxConcurrentScripts` | Valid number ≥ 0 (default `16`); `0` disables the cap. Max client-initiated script runs ([`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure)) executing on this node at once. Each run gets its own interpreter and its own `scriptMaxMemoryBytes` allocation budget, so this cap × `scriptMaxMemoryBytes` is the worst-case heap the script surface can hold — **additive** with `maxMemory` and the metadata cache budgets, exactly as those are additive with each other. Triggers and scheduled procedures are bounded separately by `triggerThreads` and `scheduleThreads` and are deliberately **not** subject to this cap, so the node-wide ceiling on concurrent interpreters is `maxConcurrentScripts + triggerThreads + scheduleThreads`. A caller refused after waiting `scriptQueueWaitMs` receives `503-6` |
+| `scriptQueueWaitMs` | Valid number ≥ 0 (default `250`); `0` rejects immediately. How long a client-initiated script run waits for a permit before it is rejected with `503-6`. The wait absorbs bursts so a short spike queues instead of erroring, while the cap still bounds the heap. May legally exceed `scriptTimeoutMs` — a caller can wait longer than a run takes |
+| `scriptMaxLogLines` | Valid number ≥ 1. Max `console` lines returned with the response (newest kept) |
+| `scriptMaxLogLineChars` | Valid number ≥ 1. Max characters kept per returned `console` line |
+| `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
+| `scriptProcedureImportEnabled` | `true` or `false` (default `true`). Whether a script may import a stored procedure of its own database as a module with `import … from "procedures/<name>"`. On by default, unlike `scriptTextImportEnabled`: `importText` evaluates a caller-supplied string, whereas a procedure import evaluates code only `SAVE_PROCEDURE` could have installed |
+| `procedureCacheSize` | Compiled stored procedures retained per node (>= 0, default `128`); keyed by procedure version, so a save can never serve a stale entry. `0` compiles on every call |
+| `scriptCompiledCacheSize` | Parsed ad-hoc `RUN_SCRIPT` programs retained per node (>= 0, default `128`); keyed by a hash of the source, so an entry can never go stale. A syntax error is cached too and replayed as the same `400-9`. `0` parses on every call |
+| `procedureCacheMaxBytes` | Human-readable size > 0 (default `32Mb`). Memory bound on cached procedure **source**. Separate from `maxMemory`, which bounds the user document/index cache only |
+| `schemaCacheMaxBytes` | Human-readable size > 0 (default `32Mb`). Same contract, for cached collection schemas |
+| `triggerCacheMaxEntries` | Collections whose trigger list is kept in memory (>= 0, default `4096`). Bounded by count, not bytes — a trigger list is small and read on every committed write. `0` reads from disk every time |
+| `metadataMissCacheMaxEntries` | Remembered “no such procedure/schema” answers (>= 0, default `4096`). Kept apart from the caches above so a caller naming thousands of nonexistent procedures cannot evict the ones in use |
+| `triggersEnabled` | `true` or `false` (default `false`). Whether committed writes fire triggers. Separate from `scriptsEnabled` because a trigger runs code with no client asking for it; trigger DDL works either way |
+| `triggerThreads` | Workers on the trigger executor (>= 1, default `2`). Its own pool, not the background index queue, so a slow trigger cannot stall field-index maintenance |
+| `triggerQueueSize` | Bounded trigger queue (>= 1, default `10000`). On overflow the oldest queued event is dropped with a warning and counted in `GET_DATABASE_STATS` |
+| `triggerMaxDepth` | How deep a chain of trigger-fired writes may go (>= 0, default `3`). A trigger with `allowCascade=false` (the default) already fires nothing above depth 0 |
+| `triggerTimeoutMs` | Max wall-clock ms a single trigger run may take (>= 1, default `1000`). Tighter than `scriptTimeoutMs` because nobody is waiting on the result |
+| `triggerRunLogEnabled` | `true` or `false` (default `true`). Whether a fired trigger is recorded durably before it runs, so a run queued when the process dies is replayed at startup. The run's effects and the consumption of its record commit together, so a replay cannot apply it twice; turning this off trades that for one less admin write per fired trigger. The record is **node-local** — see [docs/clustering.md](docs/clustering.md) → *Pending trigger runs are node-local* |
+| `triggerRunRetentionMs` | Valid number ≥ 1 (default `86400000`). How long a pending trigger-run record is kept before it is garbage-collected as stranded — its collection was dropped, or the node that owned it never came back |
+| `beforeHookInstructionBudget` | Valid number ≥ 1 (default `200000`). Instruction budget for the before triggers of **one request** — a `BULK_SAVE` of N documents shares it rather than getting a fresh one per row. A client write is blocked while a hook runs, so it is deliberately an order below `scriptInstructionBudget`. |
+| `beforeHookTimeoutMs` | Valid number ≥ 1 (default `200`). Wall clock all the before triggers of one request may take together. Exceeding it **refuses the write** (`408-1`): a hook that could not run must never let a write through. |
+| `schedulesEnabled` | `true` or `false` (default `true`). Whether schedules fire. Separate from `scriptsEnabled`/`triggersEnabled`: a scheduled run executes code on a clock, with no client asking for it and with its installer's authority. Leaving it on costs a ticker thread and nothing else until somebody installs a schedule — and installing one requires `scriptsEnabled`, since a schedule can only name a stored procedure. While it is off the three schedule operations answer `403-2` |
+| `scheduleThreads` | Valid number ≥ 1 (default `2`). Workers running scheduled procedures. Its own pool rather than the trigger executor's, because a scheduled job may hold a worker for its whole timeout |
+| `scheduleQueueSize` | Valid number ≥ 1 (default `100`). Bounded queue of due runs; on overflow the oldest is dropped with a warning and counted, since no client is waiting and the schedule fires again at its next occurrence |
+| `scheduleTickMs` | Valid number ≥ 1 (default `1000`). How often the scheduler looks for due schedules. Firing is never finer-grained than this, so a schedule whose `intervalMs` is below the tick fires once per tick |
+| `scheduleRefreshMs` | Valid number ≥ 1 (default `60000`). How often the whole schedule registry is rebuilt from disk. The DDL path updates it directly; this is the safety net for schedules that arrived through cluster replication or admin anti-entropy |
+| `scheduleTimeoutMs` | Valid number ≥ 1 (default `30000`). Default wall clock for one scheduled run; a schedule may override it with its own `timeoutMs` |
+| `scheduleMaxPerDatabase` | Valid number ≥ 1 (default `100`). Cap on schedules per database, so a `SAVE_SCHEDULE` loop cannot make the per-tick scan unbounded |
+| `scheduleCacheMaxBytes` | Human-readable size > 0 (default `8Mb`). Memory bound on the cached schedule definitions. Same contract as `procedureCacheMaxBytes`: derived from disk, LRU-evicted, and budgeted **separately** from `maxMemory` |
 
 ```
 # the port the server listens on
@@ -796,11 +1306,82 @@ defaultAdminPassword=administrator
 maxMemory=512Mb
 # ms a transactional write waits for a busy collection lock before aborting (409-5)
 transactionLockTimeoutMs=5000
+shutdownTimeoutMs=15000
 # TLS: when enabled, plaintext clients are rejected at the handshake
 tlsEnabled=false
 tlsKeystorePath=certs/lwnrdb.p12
 tlsKeystorePassword=change_it
+# scripts (RUN_SCRIPT) are on by default; the sandbox is server-fixed, never client-supplied
+scriptsEnabled=true
+scriptInstructionBudget=10000000
+scriptTimeoutMs=5000
+scriptMaxDepth=200
+scriptMaxSourceBytes=256Kb
+scriptMaxMemoryBytes=64Mb
+scriptMaxResultBytes=16Mb
+scriptCursorBatchSize=500
+scriptCursorMaxBatchSize=5000
+# node-wide script concurrency cap; x scriptMaxMemoryBytes is the worst-case script heap
+maxConcurrentScripts=16
+scriptQueueWaitMs=250
+# per-tenant slices taken inside the node-wide permit; 0 disables. They do not wait: a caller at
+# its own ceiling is refused at once rather than occupying a node-wide permit while it queues
+maxConcurrentScriptsPerUser=0
+maxConcurrentScriptsPerDatabase=0
+# outbound HTTP from scripts. On by default so the capability is discoverable; the allowlist takes
+# exact hosts, *.sub.domain wildcards, or a bare * for every host (an EMPTY list denies everything).
+# Ships as * and warns at startup - NARROW IT: the request leaves from inside your perimeter
+scriptFetchEnabled=true
+scriptFetchAllowlist=*
+scriptFetchTimeoutMs=5000
+scriptFetchMaxResponseBytes=1Mb
+# queryable run history in each database's reserved `script_runs` collection, created lazily
+scriptRunHistoryEnabled=true
+scriptRunHistoryKinds=CALL_PROCEDURE,TRIGGER,SCHEDULE
+scriptRunHistoryRetentionMs=604800000
+scriptRunHistoryIncludeLogs=false
+scriptRunHistoryMaxErrorChars=2000
+# stored procedures and triggers; triggers are off by default and gated separately
+procedureCacheSize=128
+# metadata cache bounds - budgeted SEPARATELY from maxMemory (see below)
+procedureCacheMaxBytes=32Mb
+schemaCacheMaxBytes=32Mb
+triggerCacheMaxEntries=4096
+metadataMissCacheMaxEntries=4096
+triggersEnabled=false
+triggerThreads=2
+triggerQueueSize=10000
+triggerMaxDepth=3
+triggerTimeoutMs=1000
+# durable pending trigger runs, so a run queued when the process dies is replayed at startup
+triggerRunLogEnabled=true
+triggerRunRetentionMs=86400000
+# a failed after-trigger is retried with a doubling backoff and then dead-lettered, where
+# LIST_TRIGGER_RUNS finds it and RESOLVE_TRIGGER_RUN replays or discards it
+triggerMaxAttempts=3
+triggerRetryBackoffMs=1000
+triggerRetryMaxBackoffMs=60000
+triggerDeadLetterRetentionMs=604800000
 ```
+
+**Graceful shutdown.** On SIGTERM the server runs an ordered shutdown within
+`shutdownTimeoutMs`: it stops accepting new connections, stops the background sweeps,
+rolls back open transactions (releasing their collection locks, but leaving PREPARED
+2PC slices for recovery), drains the trigger queue and then the background index queue,
+stops the listen workers, and finally leaves the cluster. Work still outstanding when
+the budget expires is abandoned with a warning naming what was dropped — an abandoned
+index event means the affected collection's field indexes may be stale, so run `REINDEX`
+on it. Set `shutdownTimeoutMs` below whatever SIGKILL grace period supervises the
+process (Docker's default is 10s, so lower it or raise `--stop-timeout`).
+
+**Two cache budgets, not one.** `maxMemory` bounds the *user* document/index cache
+only. The admin metadata caches — stored procedure sources, per-collection JSON
+Schemas and trigger lists — are bounded separately by `procedureCacheMaxBytes`,
+`schemaCacheMaxBytes` and `triggerCacheMaxEntries`, and sit on top of it. All three
+are LRU-evicted and backed by disk, so lowering them only costs a re-read. Size
+`-Xmx` against the sum: the server logs a warning at startup when the budgets total
+more than the heap. `GET_DATABASE_STATS` reports the live footprint under
+`memory.adminMetadataCache`.
 
 ### TLS / secure connections
 
@@ -912,10 +1493,14 @@ To auto-format your changes before committing:
 mvn spotless:apply
 ```
 
-> **Build JDK:** use **JDK 25** (matching the project's compiler target and CI).
-> JDK 26 also works. The Eclipse JDT formatter is used instead of
-> Google/Palantir formatters specifically because the latter rely on `javac`
-> internals that are incompatible with JDK 25/26.
+> **Build JDK: JDK 26 or newer is required** (matching the project's compiler
+> target and CI); `mvn verify` fails on anything older. The floor is not
+> arbitrary: the SimpleJS regex engine resolves `\p{...}` property escapes
+> against the JDK's own Unicode data, so an older JDK ships an older UCD and the
+> same script answers differently — including between two nodes of one cluster.
+> The Eclipse JDT formatter is used instead of Google/Palantir formatters
+> specifically because the latter rely on `javac` internals that are
+> incompatible with recent JDKs.
 
 The linter rulesets are deliberately curated rather than using defaults: they
 target real defects and conventions the formatter does not cover, while

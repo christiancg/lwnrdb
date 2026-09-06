@@ -191,32 +191,48 @@ public class ReflectionUtilsTest {
     @Test
     public void test_cast_number_to_integer() throws Exception {
         JsonNumber num = new JsonNumber(42.7);
-        Integer result = cast(Integer.class, num, null);
-        assertEquals(42, result);
+        assertEquals(Integer.valueOf(42), cast(Integer.class, num, null));
     }
 
     // cast NUMBER to Double performs doubleValue() conversion (L142)
     @Test
     public void test_cast_number_to_double() throws Exception {
         JsonNumber num = new JsonNumber(3.14);
-        Double result = cast(Double.class, num, null);
-        assertEquals(3.14, result, 0.001);
+        assertEquals(Double.valueOf(3.14), cast(Double.class, num, null));
     }
 
     // cast NUMBER to Float performs floatValue() conversion (L144)
     @Test
     public void test_cast_number_to_float() throws Exception {
         JsonNumber num = new JsonNumber(1.5);
-        Float result = cast(Float.class, num, null);
-        assertEquals(1.5f, result, 0.001f);
+        assertEquals(Float.valueOf(1.5f), cast(Float.class, num, null));
     }
 
     // cast NUMBER to Long performs longValue() conversion (L146)
     @Test
     public void test_cast_number_to_long() throws Exception {
         JsonNumber num = new JsonNumber(100.9);
-        Long result = cast(Long.class, num, null);
-        assertEquals(100L, result);
+        assertEquals(Long.valueOf(100L), cast(Long.class, num, null));
+    }
+
+    // cast to a primitive target narrows the parsed number to the field's own box type
+    @Test
+    public void test_cast_number_to_primitive_targets() throws Exception {
+        JsonNumber large = new JsonNumber("10000000000");
+        assertEquals(Long.valueOf(10000000000L), cast(long.class, large, null));
+        assertEquals(Double.valueOf(1e10), cast(double.class, large, null));
+
+        JsonNumber num = new JsonNumber("100.9");
+        assertEquals(Integer.valueOf(100), cast(int.class, num, null));
+        assertEquals(Float.valueOf(100.9f), cast(float.class, num, null));
+        assertEquals(Short.valueOf((short) 100), cast(short.class, num, null));
+        assertEquals(Byte.valueOf((byte) 100), cast(byte.class, num, null));
+    }
+
+    // cast to a primitive target leaves a non-numeric value untouched
+    @Test
+    public void test_cast_non_number_to_primitive_is_unchanged() throws Exception {
+        assertEquals(Boolean.TRUE, cast(boolean.class, new org.techhouse.ejson.elements.JsonBoolean(true), null));
     }
 
     // cast with SYNTAX json type returns null (L118)

@@ -9,8 +9,8 @@
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <maven.compiler.source>25</maven.compiler.source>
-        <maven.compiler.target>25</maven.compiler.target>
+        <maven.compiler.source>26</maven.compiler.source>
+        <maven.compiler.target>26</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <minimumCoverage>0.95</minimumCoverage>
         <spotless.version>3.8.0</spotless.version>
@@ -20,6 +20,7 @@
         <pmd.version>7.26.0</pmd.version>
         <spotbugs.plugin.version>4.10.2.0</spotbugs.plugin.version>
         <spotbugs.version>4.10.2</spotbugs.version>
+        <enforcer.plugin.version>3.5.0</enforcer.plugin.version>
     </properties>
 
     <dependencies>
@@ -38,6 +39,30 @@
     </dependencies>
     <build>
         <plugins>
+            <!-- The regex engine resolves \p{...} against the JDK's own Unicode data, so the build JDK
+                 decides what those escapes match. Pinning the floor at 26 (Unicode 17.0) is what makes a
+                 script answer identically on every node of a cluster. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>${enforcer.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>enforce-java-version</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[26,)</version>
+                                    <message>LWNRDB requires JDK 26 or newer.</message>
+                                </requireJavaVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>

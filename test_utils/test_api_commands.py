@@ -287,6 +287,32 @@ def setup(s, f):
 # Groups
 # ══════════════════════════════════════════════════════════════════════════
 
+def test_reserved_script_runs_collection(s, f):
+    section("Reserved script_runs collection")
+
+    # The history collection is the server's to write. Every mutation is refused by validation, whether or
+    # not the collection exists yet.
+    check_code("SAVE into script_runs -> 400-1",
+               save(s, f, "script_runs", {"_id": "x", "a": 1}), "ERROR", "400-1")
+    check_code("BULK_SAVE into script_runs -> 400-1",
+               bulk_save(s, f, "script_runs", [{"_id": "x"}]), "ERROR", "400-1")
+    check_code("DELETE from script_runs -> 400-1",
+               delete(s, f, "script_runs", "x"), "ERROR", "400-1")
+    check_code("CREATE_COLLECTION script_runs -> 400-1",
+               create_coll(s, f, "script_runs"), "ERROR", "400-1")
+    check_code("DROP_COLLECTION script_runs -> 400-1",
+               drop_coll(s, f, "script_runs"), "ERROR", "400-1")
+
+    # Reads stay open: the collection exists to be queried, and is simply empty until a script has run.
+    # What matters is that a read is never refused for naming a reserved collection.
+    read = aggregate(s, f, "script_runs", [{"type": "COUNT"}])
+    check_true("AGGREGATE over script_runs is not refused as reserved",
+               read.get("errorCode") != "400-1", detail=f"got {read}")
+    check_code("FIND_BY_ID in an unwritten script_runs -> 404-2",
+               find_by_id(s, f, "script_runs", "nope"), "NOT_FOUND", "404-2")
+    check("CREATE_INDEX on script_runs is allowed", create_index(s, f, "script_runs", "outcome"), "OK")
+
+
 def test_database_and_collection_ops(s, f):
     section("Database & collection operations (DDL + metadata)")
 
@@ -575,9 +601,10 @@ def test_analyze(s, f):
     check_true("Scan path suggests indexing the filtered field",
                any("name" in sug for sug in (_dig(r, "analyzeResult.suggestions") or [])),
                detail=f"suggestions={_dig(r, 'analyzeResult.suggestions')}")
+    duration = _dig(r, "analyzeResult.durationMillis")
     check_true("Timing durationMillis is present (non-negative)",
-               (_dig(r, "analyzeResult.durationMillis") or -1) >= 0,
-               detail=f"durationMillis={_dig(r, 'analyzeResult.durationMillis')}")
+               duration is not None and duration >= 0,
+               detail=f"durationMillis={duration}")
     check_true("analyze still returns the matching results", ids_of(r) == ["z1"])
 
     # Index path: once the index exists the diagnostic reports indexUsed=true, names the index,
@@ -748,6 +775,7 @@ def main():
 
     groups = [
         test_database_and_collection_ops,
+        test_reserved_script_runs_collection,
         test_crud,
         test_value_types,
         test_filter_operators,
