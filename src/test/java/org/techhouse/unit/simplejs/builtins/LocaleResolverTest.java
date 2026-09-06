@@ -1,11 +1,11 @@
 package org.techhouse.unit.simplejs.builtins;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.host.ScriptResult;
 import org.techhouse.simplejs.host.SimpleHostBindings;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * The locales/options arguments the toLocaleString / localeCompare family accepts. Exercised through the

@@ -8,7 +8,6 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Objects;
-
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -365,7 +364,8 @@ public class ScriptRunHistoryTest {
         try {
             ScriptRunHistory.write(
                     row("run-node", ScriptRunKind.TRIGGER, System.currentTimeMillis(), ScriptRunRecord.OUTCOME_OK));
-            assertEquals("127.0.0.1:7777", Objects.requireNonNull(readRow("run-node")).get("node").asJsonString().getValue());
+            assertEquals("127.0.0.1:7777",
+                    Objects.requireNonNull(readRow("run-node")).get("node").asJsonString().getValue());
         } finally {
             TestUtils.setPrivateField(membership, "self", null);
         }

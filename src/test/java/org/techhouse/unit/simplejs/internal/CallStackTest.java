@@ -135,15 +135,38 @@ public class CallStackTest {
     }
 
     @Test
-    public void test_install_and_restore_round_trip() {
+    public void test_install_and_uninstall_round_trip() {
         final var stack = new CallStack();
         stack.push("f", "main");
-        final var previous = StackCapture.install(stack);
+        StackCapture.install(stack);
         try {
             assertFalse(StackCapture.current().isEmpty());
         } finally {
-            StackCapture.restore(previous);
+            StackCapture.uninstall(stack);
         }
+        assertTrue(StackCapture.current().isEmpty());
+    }
+
+    // Two stacks live on one thread whenever a pipeline or a before-hook context holds a callable per script,
+    // and they are closed in map order - so uninstalling the outer one first must not leave it behind
+    @Test
+    public void test_uninstalling_out_of_order_leaves_nothing_behind() {
+        final var outer = new CallStack();
+        outer.push("outer", "main");
+        final var inner = new CallStack();
+        inner.push("inner", "main");
+        StackCapture.install(outer);
+        StackCapture.install(inner);
+
+        StackCapture.uninstall(outer);
+        assertEquals("inner (main)", StackCapture.current().getFirst());
+        StackCapture.uninstall(inner);
+        assertTrue(StackCapture.current().isEmpty());
+    }
+
+    @Test
+    public void test_uninstalling_a_stack_that_was_never_installed_is_a_no_op() {
+        StackCapture.uninstall(new CallStack());
         assertTrue(StackCapture.current().isEmpty());
     }
 }

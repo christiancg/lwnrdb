@@ -455,7 +455,7 @@ public final class Interpreter {
     }
 
     private <T> T runModule(Program program, ResultFinisher<T> finisher, RunMetrics metrics) {
-        final var previousStack = StackCapture.install(callStack);
+        StackCapture.install(callStack);
         try {
             final var outcome = evaluateTopLevelModule(program);
             final var finished = finisher.finish(outcome, ops);
@@ -467,7 +467,7 @@ public final class Interpreter {
                 metrics.fill(this);
             }
             cancelPendingCoroutines();
-            StackCapture.restore(previousStack);
+            StackCapture.uninstall(callStack);
         }
     }
 
@@ -512,27 +512,26 @@ public final class Interpreter {
      */
     public static Session open(Program program, HostBindings host) {
         final var interpreter = new Interpreter(host);
-        final var previousStack = StackCapture.install(interpreter.callStack);
+        StackCapture.install(interpreter.callStack);
         try {
-            return new Session(interpreter, interpreter.evaluateTopLevelModule(program), previousStack);
+            return new Session(interpreter, interpreter.evaluateTopLevelModule(program));
         } catch (RuntimeException | Error failure) {
             interpreter.reportUnhandledRejections();
             interpreter.cancelPendingCoroutines();
-            StackCapture.restore(previousStack);
             throw failure;
+        } finally {
+            StackCapture.uninstall(interpreter.callStack);
         }
     }
 
     public static final class Session implements AutoCloseable {
         private final Interpreter interpreter;
         private final ProgramOutcome outcome;
-        private final CallStack previousStack;
         private boolean closed;
 
-        private Session(Interpreter interpreter, ProgramOutcome outcome, CallStack previousStack) {
+        private Session(Interpreter interpreter, ProgramOutcome outcome) {
             this.interpreter = interpreter;
             this.outcome = outcome;
-            this.previousStack = previousStack;
         }
 
         public ProgramOutcome outcome() {
@@ -543,9 +542,17 @@ public final class Interpreter {
             if (closed) {
                 throw new SimpleJsRuntimeException("Script session is closed");
             }
-            final var value = interpreter.callValue(fn, JsUndefined.getInstance(), args);
-            interpreter.eventLoop.drain(interpreter.deadlineNanos);
-            return value;
+            // Installed per call, not for the session's whole lifetime: several sessions are open at once on
+            // one thread (a callable per script in a pipeline or a before-hook context), so only the one
+            // actually running may be the stack an error constructed now reports.
+            StackCapture.install(interpreter.callStack);
+            try {
+                final var value = interpreter.callValue(fn, JsUndefined.getInstance(), args);
+                interpreter.eventLoop.drain(interpreter.deadlineNanos);
+                return value;
+            } finally {
+                StackCapture.uninstall(interpreter.callStack);
+            }
         }
 
         public void charge(long bytes) {
@@ -562,6 +569,7 @@ public final class Interpreter {
                 return;
             }
             closed = true;
+            StackCapture.install(interpreter.callStack);
             try {
                 interpreter.eventLoop.drain(interpreter.deadlineNanos);
                 interpreter.reportUnhandledRejections();
@@ -571,7 +579,7 @@ public final class Interpreter {
                 // cancelled or their virtual threads would park forever.
             } finally {
                 interpreter.cancelPendingCoroutines();
-                StackCapture.restore(previousStack);
+                StackCapture.uninstall(interpreter.callStack);
             }
         }
     }

@@ -129,7 +129,7 @@ public class TriggerRetryTest {
         final var deadRun = recordRun("t5");
         TriggerRunLog.markAttempt(deadRun, TriggerRunStatus.DEAD, 3, "Error: nope", 0L);
 
-        TriggerRunLog.garbageCollect(0L, 3_600_000L);
+        TriggerRunLog.garbageCollect(-1L, 3_600_000L);
 
         assertNull(firstChunk(pendingRun), "a pending run past its retention is swept");
         assertNotNull(firstChunk(deadRun), "a dead letter keeps its own, longer retention");
