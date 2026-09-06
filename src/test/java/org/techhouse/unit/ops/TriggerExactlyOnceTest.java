@@ -24,6 +24,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.data.ProcedureDefinition;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -80,6 +81,9 @@ public class TriggerExactlyOnceTest {
         IocContainer.get(TriggerExecutor.class).stop();
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
         TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
+        TestUtils.setPrivateField(configuration, "triggerMaxAttempts", 1);
+        TestUtils.setPrivateField(configuration, "triggerRetryBackoffMs", 0L);
+        TestUtils.setPrivateField(configuration, "triggerRetryMaxBackoffMs", 0L);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -215,9 +219,12 @@ public class TriggerExactlyOnceTest {
         assertEquals(event.getRunId(), captured.getFirst().getRunId());
     }
 
-    // A deterministically failing script must be terminal, not replayed at every restart forever.
+    // A deterministically failing script must be terminal, not replayed at every restart forever. With
+    // triggerMaxAttempts=1 the first failure is already the last, so the run is dead-lettered: its record is
+    // kept as evidence for an operator but is never replayed, which is the property that matters.
     @Test
-    public void test_script_error_consumes_the_record_without_effects() throws Exception {
+    public void test_script_error_dead_letters_the_record_without_effects() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggerMaxAttempts", 1);
         installProcedure("boom", """
                 import db from "db";
                 db.save(db.name, "counters", { _id: "total", count: 99 });
@@ -230,9 +237,61 @@ public class TriggerExactlyOnceTest {
         assertNotNull(event);
         TriggerDispatcher.dispatch(event);
 
-        assertTrue(TriggerRunLog.recordIdsFor(event.getRunId()).isEmpty(),
-                "a failed run must consume its record rather than replay forever");
+        assertEquals(TriggerRunStatus.DEAD, statusOf(event.getRunId()),
+                "a failed run must be dead-lettered rather than replay forever");
         assertEquals(0L, counterValue(), "a failed run's writes must roll back");
+
+        captured.clear();
+        TriggerRunRecovery.recoverLocal();
+        sleep(50);
+        assertTrue(captured.isEmpty(), "a dead-lettered run must not be replayed by startup recovery");
+    }
+
+    // With attempts left the record survives as PENDING so the retry can replay it; once they are spent it
+    // becomes a dead letter, which is retained for an operator and never replayed by recovery. Bounded
+    // either way - which is the property the terminal-consume rule was protecting.
+    @Test
+    public void test_script_error_retries_then_dead_letters() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggerMaxAttempts", 2);
+        TestUtils.setPrivateField(configuration, "triggerRetryBackoffMs", 0L);
+        installProcedure("boom2", """
+                import db from "db";
+                db.save(db.name, "counters", { _id: "total", count: 99 });
+                throw new Error("nope");
+                """);
+        installTrigger("boom2");
+        save("d4b");
+
+        final var event = settleOne();
+        assertNotNull(event);
+        TriggerDispatcher.dispatch(event);
+
+        assertFalse(TriggerRunLog.recordIdsFor(event.getRunId()).isEmpty(),
+                "a run with an attempt left keeps its record so the retry can replay it");
+        assertEquals(TriggerRunStatus.PENDING, statusOf(event.getRunId()));
+
+        captured.clear();
+        TriggerDispatcher.dispatch(new TriggerEvent(event.getType(), event.getDbName(), event.getCollName(),
+                event.getTriggerName(), event.getProcedureName(), event.isBatchMode(), event.getEntries(),
+                event.getActingUser(), event.getDepth(), event.getRunId(), 2));
+
+        assertEquals(TriggerRunStatus.DEAD, statusOf(event.getRunId()),
+                "the last attempt must dead-letter rather than retry forever");
+        assertEquals(0L, counterValue(), "a failed run's writes must roll back");
+
+        captured.clear();
+        TriggerRunRecovery.recoverLocal();
+        sleep(50);
+        assertTrue(captured.isEmpty(), "a dead-lettered run must not be replayed by startup recovery");
+    }
+
+    private static TriggerRunStatus statusOf(String runId) throws Exception {
+        for (final var entry : TriggerRunLog.pending()) {
+            if (runId.equals(entry.getRunId())) {
+                return entry.getStatus();
+            }
+        }
+        return null;
     }
 
     @Test

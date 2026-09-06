@@ -222,6 +222,20 @@ public class DbCursorTest {
         assertEquals(200, ids(run(database, walk("{ batchSize: 5 }"), limits(65_536, 500, 5000))).size());
     }
 
+    // The reported peak is a high-water mark, not the closing balance: a fully drained walk credits
+    // almost everything back, so a peak derived at the end would read as ~0 for a walk that really did
+    // hold a batch in heap.
+    @Test
+    public void test_peak_memory_survives_the_refund() {
+        final var database = new PagingDatabase(200);
+        database.padding = "x".repeat(512);
+        final var result = run(database, walk("{ batchSize: 5 }"), limits(65_536, 500, 5000));
+        assertFalse(result.isError());
+        assertTrue(result.getMetrics().peakMemoryBytes() > 512,
+                "expected a peak above one document, got " + result.getMetrics().peakMemoryBytes());
+        assertTrue(result.getMetrics().peakMemoryBytes() <= 65_536, "the peak may never exceed the budget");
+    }
+
     // The db failure contract still holds mid-iteration: a dropped collection is a catchable Error
     @Test
     public void test_error_from_aggregate_surfaces_as_a_catchable_error() {

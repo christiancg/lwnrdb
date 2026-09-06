@@ -1,9 +1,11 @@
 package org.techhouse.ops.req.validations;
 
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -25,12 +27,14 @@ import org.techhouse.ops.req.DeleteTriggerRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.ListTriggerRunsRequest;
 import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
+import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.ops.req.RunScriptRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
@@ -60,7 +64,7 @@ public class RequestValidator {
             case AGGREGATE -> validateAggregate((AggregateRequest) request);
             case CREATE_DATABASE, DROP_DATABASE -> validateDbOnly(request, true);
             case LIST_DATABASES, CLOSE_CONNECTION, GET_DATABASE_STATS -> ValidationResult.ok();
-            case CREATE_COLLECTION, DROP_COLLECTION, DELETE_SCHEMA -> validateDbAndColl(request, true);
+            case CREATE_COLLECTION, DROP_COLLECTION, DELETE_SCHEMA -> validateDbAndColl(request, true, true);
             case LIST_COLLECTIONS -> validateDbOnly(request, false);
             case CREATE_INDEX -> validateCreateIndex((CreateIndexRequest) request);
             case DROP_INDEX -> validateDropIndex((DropIndexRequest) request);
@@ -93,6 +97,8 @@ public class RequestValidator {
             case DELETE_SCHEDULE -> validateDeleteSchedule((DeleteScheduleRequest) request);
             case LIST_SCHEDULES -> validateDbNameOnly(request.getDatabaseName());
             case CANCEL_SCRIPT -> validateCancelScript((CancelScriptRequest) request);
+            case LIST_TRIGGER_RUNS -> validateListTriggerRuns((ListTriggerRunsRequest) request);
+            case RESOLVE_TRIGGER_RUN -> validateResolveTriggerRun((ResolveTriggerRunRequest) request);
         };
     }
 
@@ -158,7 +164,7 @@ public class RequestValidator {
     }
 
     private static ValidationResult validateSaveTrigger(SaveTriggerRequest request) {
-        final var namesResult = validateDbAndColl(request, true);
+        final var namesResult = validateDbAndColl(request, true, true);
         if (!namesResult.isValid()) {
             return namesResult;
         }
@@ -239,6 +245,31 @@ public class RequestValidator {
         return ValidationResult.ok();
     }
 
+    private static ValidationResult validateListTriggerRuns(ListTriggerRunsRequest request) {
+        final var status = request.getStatus();
+        if (status == null || status.isBlank()) {
+            return ValidationResult.ok();
+        }
+        try {
+            TriggerRunStatus.valueOf(status.toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            return ValidationResult.fail("status must be 'PENDING' or 'DEAD'");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static ValidationResult validateResolveTriggerRun(ResolveTriggerRunRequest request) {
+        final var runId = request.getRunId();
+        if (runId == null || runId.isBlank()) {
+            return ValidationResult.fail("runId is required");
+        }
+        if (!ResolveTriggerRunRequest.DECISION_REPLAY.equals(request.getDecision())
+                && !ResolveTriggerRunRequest.DECISION_DISCARD.equals(request.getDecision())) {
+            return ValidationResult.fail("decision must be 'replay' or 'discard'");
+        }
+        return ValidationResult.ok();
+    }
+
     private static ValidationResult validateResolveTransaction(ResolveTransactionRequest request) {
         if (request.getDtxId() == null || request.getDtxId().isBlank()) {
             return ValidationResult.fail("dtxId is required");
@@ -255,15 +286,34 @@ public class RequestValidator {
     }
 
     private static ValidationResult validateDbAndColl(OperationRequest request, boolean rejectAdmin) {
+        return validateDbAndColl(request, rejectAdmin, false);
+    }
+
+    // rejectReserved refuses the collections the server owns inside a user database. Reads are deliberately
+    // not refused: the history collection exists to be queried.
+    private static ValidationResult validateDbAndColl(OperationRequest request, boolean rejectAdmin,
+            boolean rejectReserved) {
         final var dbResult = validateDbName(request.getDatabaseName(), rejectAdmin);
         if (!dbResult.isValid()) {
             return dbResult;
         }
-        return validateCollectionName(request.getCollectionName());
+        final var collResult = validateCollectionName(request.getCollectionName());
+        if (!collResult.isValid()) {
+            return collResult;
+        }
+        if (rejectReserved && isReservedCollectionName(request.getCollectionName())) {
+            return ValidationResult
+                    .fail("collectionName '" + request.getCollectionName() + "' is reserved and cannot be modified");
+        }
+        return ValidationResult.ok();
+    }
+
+    private static boolean isReservedCollectionName(String collName) {
+        return Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName);
     }
 
     private static ValidationResult validateSave(SaveRequest request) {
-        final var base = validateDbAndColl(request, true);
+        final var base = validateDbAndColl(request, true, true);
         if (!base.isValid()) {
             return base;
         }
@@ -277,7 +327,7 @@ public class RequestValidator {
     }
 
     private static ValidationResult validateBulkSave(BulkSaveRequest request) {
-        final var base = validateDbAndColl(request, true);
+        final var base = validateDbAndColl(request, true, true);
         if (!base.isValid()) {
             return base;
         }
@@ -310,7 +360,7 @@ public class RequestValidator {
     }
 
     private static ValidationResult validateDelete(DeleteRequest request) {
-        final var base = validateDbAndColl(request, true);
+        final var base = validateDbAndColl(request, true, true);
         if (!base.isValid()) {
             return base;
         }
@@ -363,7 +413,7 @@ public class RequestValidator {
     }
 
     private static ValidationResult validateSaveSchema(SaveSchemaRequest request) {
-        final var base = validateDbAndColl(request, true);
+        final var base = validateDbAndColl(request, true, true);
         if (!base.isValid()) {
             return base;
         }

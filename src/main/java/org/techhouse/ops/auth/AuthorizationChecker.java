@@ -18,7 +18,8 @@ public final class AuthorizationChecker {
     private static final Set<OperationType> ADMIN_ONLY_OPERATIONS = Set.of(OperationType.CREATE_USER,
             OperationType.DELETE_USER, OperationType.CHANGE_PERMISSIONS, OperationType.SET_DATABASE_OWNERS,
             OperationType.LIST_USERS, OperationType.GET_DATABASE_STATS, OperationType.RESOLVE_TRANSACTION,
-            OperationType.LIST_TRANSACTIONS, OperationType.LIST_SCRIPTS, OperationType.CANCEL_SCRIPT);
+            OperationType.LIST_TRANSACTIONS, OperationType.LIST_SCRIPTS, OperationType.CANCEL_SCRIPT,
+            OperationType.LIST_TRIGGER_RUNS, OperationType.RESOLVE_TRIGGER_RUN);
     private static final Set<OperationType> ALWAYS_ALLOWED_OPERATIONS = Set.of(OperationType.LIST_DATABASES,
             OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD, OperationType.STOP_LISTEN);
     private static final Set<OperationType> SCRIPT_MANAGEMENT_OPERATIONS = Set.of(OperationType.SAVE_PROCEDURE,

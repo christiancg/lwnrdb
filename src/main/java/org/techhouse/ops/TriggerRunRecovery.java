@@ -11,6 +11,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -74,8 +75,13 @@ public final class TriggerRunRecovery {
         final var now = System.currentTimeMillis();
         try {
             var stranded = 0;
+            var dead = 0;
             long oldest = 0L;
             for (final var entry : TriggerRunLog.pending()) {
+                if (entry.getStatus() == TriggerRunStatus.DEAD) {
+                    dead++;
+                    continue;
+                }
                 final var age = now - entry.getFiredAt();
                 if (age > threshold) {
                     stranded++;
@@ -87,6 +93,10 @@ public final class TriggerRunRecovery {
                         + "ms. They are replayed when their node restarts, and garbage-collected after"
                         + " triggerRunRetentionMs if it never does.");
             }
+            if (dead > 0) {
+                logger.warning(dead + " trigger run(s) exhausted their attempts and were dead-lettered. List them"
+                        + " with LIST_TRIGGER_RUNS and replay or discard them with RESOLVE_TRIGGER_RUN.");
+            }
         } catch (Exception e) {
             logger.warning("Failed to inspect pending trigger runs: " + e.getMessage());
         }
@@ -97,7 +107,8 @@ public final class TriggerRunRecovery {
             return;
         }
         try {
-            TriggerRunLog.garbageCollect(configuration.getTriggerRunRetentionMs());
+            TriggerRunLog.garbageCollect(configuration.getTriggerRunRetentionMs(), Math
+                    .max(configuration.getTriggerDeadLetterRetentionMs(), configuration.getTriggerRunRetentionMs()));
         } catch (Exception e) {
             logger.warning("Failed to garbage-collect stranded trigger runs: " + e.getMessage());
         }
@@ -107,7 +118,9 @@ public final class TriggerRunRecovery {
             String nodeId) {
         final var byRun = new LinkedHashMap<String, List<AdminTriggerRunEntry>>();
         for (final var entry : pending) {
-            if (!nodeId.equals(entry.getNodeId())) {
+            // A dead letter has exhausted its attempts and is waiting for an operator, so replaying it at
+            // startup would re-run the very thing that was given up on.
+            if (!nodeId.equals(entry.getNodeId()) || entry.getStatus() == TriggerRunStatus.DEAD) {
                 continue;
             }
             byRun.computeIfAbsent(entry.getRunId(), _ -> new ArrayList<>()).add(entry);
@@ -118,7 +131,7 @@ public final class TriggerRunRecovery {
     // Rebuilds the event from its chunks. A CREATED/UPDATED run carries ids and re-reads the committed
     // documents at dispatch time, so it sees what is stored now; a DELETED run carries the documents, which
     // no longer exist to be read.
-    private static TriggerEvent toEvent(List<AdminTriggerRunEntry> chunks) throws Exception {
+    static TriggerEvent toEvent(List<AdminTriggerRunEntry> chunks) throws Exception {
         final var first = chunks.getFirst();
         final var entries = new ArrayList<DbEntry>();
         if (first.getEventType() == EventType.DELETED) {

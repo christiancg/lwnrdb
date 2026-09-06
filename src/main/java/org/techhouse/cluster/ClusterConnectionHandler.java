@@ -13,6 +13,7 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -24,6 +25,7 @@ import org.techhouse.ops.ReplicatedTxApplyHelper;
 import org.techhouse.ops.ReplicatedUserApplyHelper;
 import org.techhouse.ops.ScriptRunRegistry;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TriggerRunResolution;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.resp.OperationResponse;
@@ -38,6 +40,7 @@ public class ClusterConnectionHandler implements Runnable {
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Tx2pcDirectory tx2pcDirectory = IocContainer.get(Tx2pcDirectory.class);
     private final ScriptRunDirectory scriptRunDirectory = IocContainer.get(ScriptRunDirectory.class);
+    private final TriggerRunDirectory triggerRunDirectory = IocContainer.get(TriggerRunDirectory.class);
     private final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
@@ -99,6 +102,8 @@ public class ClusterConnectionHandler implements Runnable {
             case LIST_TX -> handleListTx();
             case LIST_SCRIPTS -> handleListScripts();
             case CANCEL_SCRIPT -> handleCancelScript(request);
+            case LIST_TRIGGER_RUNS -> handleListTriggerRuns(request);
+            case RESOLVE_TRIGGER_RUN -> handleResolveTriggerRun(request);
             case ADMIN_SNAPSHOT -> handleAdminSnapshot();
             case DIGEST -> handleDigest(request);
             case PULL -> handlePull(request);
@@ -294,6 +299,46 @@ public class ClusterConnectionHandler implements Runnable {
             response.setErrorMessage("Failed to cancel the running script: " + e.getMessage());
         }
         return response;
+    }
+
+    // Reports the trigger runs recorded on this node. admin/trigger_runs is not replicated, so a run's
+    // record exists on exactly one node and only that node can answer for it.
+    private ClusterMessage handleListTriggerRuns(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        try {
+            response.setType(ClusterMessageType.LIST_TRIGGER_RUNS_ACK);
+            response.setTriggerRuns(triggerRunDirectory.localRuns(statusFilter(request.getTriggerRunDecision())));
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to list trigger runs: " + e.getMessage());
+        }
+        return response;
+    }
+
+    // Replays or discards a run recorded here. A run this node does not hold is not an error: the operator
+    // asked every member and only the one holding it answers true.
+    private ClusterMessage handleResolveTriggerRun(ClusterMessage request) {
+        final var response = new ClusterMessage();
+        try {
+            response.setType(ClusterMessageType.RESOLVE_TRIGGER_RUN_ACK);
+            response.setTriggerRunResolved(
+                    TriggerRunResolution.resolveLocal(request.getTriggerRunId(), request.getTriggerRunDecision()));
+        } catch (Exception e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Failed to resolve the trigger run: " + e.getMessage());
+        }
+        return response;
+    }
+
+    private static TriggerRunStatus statusFilter(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return TriggerRunStatus.valueOf(value);
+        } catch (IllegalArgumentException unknown) {
+            return null;
+        }
     }
 
     // Reports this node's authoritative admin snapshot (epoch + databases/collections/users) for a rejoining

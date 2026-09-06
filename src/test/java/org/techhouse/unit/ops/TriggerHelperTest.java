@@ -115,6 +115,19 @@ public class TriggerHelperTest {
                 entry("a"), "alice", 0)).isEmpty());
     }
 
+    // A trigger installed on the history collection must never fire: an audit trigger would otherwise
+    // cascade on the record of itself.
+    @Test
+    public void test_fires_nothing_for_the_reserved_history_collection() {
+        cache.putTriggers(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME,
+                List.of(new TriggerDefinition("t", new LinkedHashSet<>(Set.of(EventType.CREATED)), "recalc",
+                        TriggerDefinition.MODE_DOCUMENT, false, true, "owner", 1L, 1L, 1L, "owner")));
+        assertTrue(capture(() -> TriggerHelper.afterWrite(TestGlobals.DB,
+                org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME, EventType.CREATED, entry("a"), "alice", 0))
+                .isEmpty());
+        cache.removeTriggers(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME);
+    }
+
     @Test
     public void test_fires_only_matching_event_type() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);

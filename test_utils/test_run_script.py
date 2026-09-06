@@ -37,6 +37,7 @@ The server lifecycle is managed via a tracked subprocess handle (not pgrep), so 
 it never touches an unrelated LWNRDB process.
 """
 
+import http.server
 import json
 import os
 import re
@@ -44,6 +45,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 HOST = "127.0.0.1"
@@ -197,7 +199,10 @@ def admin_conn() -> Conn:
 
 # ── server lifecycle ─────────────────────────────────────────────────────────
 
-def write_config(work_dir: str, scripts_enabled: bool, procedure_imports_enabled: bool = True):
+def write_config(work_dir: str, scripts_enabled: bool, procedure_imports_enabled: bool = True,
+                 history_kinds: str = "CALL_PROCEDURE,TRIGGER,SCHEDULE", history_enabled: bool = True,
+                 fetch_enabled: bool = False, fetch_allowlist: str = "", fetch_timeout_ms: int = 5000,
+                 fetch_max_response_bytes: str = "1Mb"):
     cfg = (
         f"port={PORT}\n"
         "filePath=db\n"
@@ -219,9 +224,68 @@ def write_config(work_dir: str, scripts_enabled: bool, procedure_imports_enabled
         f"scriptProcedureImportEnabled={'true' if procedure_imports_enabled else 'false'}\n"
         "scriptTimeZone=UTC\n"
         "scriptLocale=en-US\n"
+        f"scriptRunHistoryEnabled={'true' if history_enabled else 'false'}\n"
+        f"scriptRunHistoryKinds={history_kinds}\n"
+        "scriptRunHistoryRetentionMs=604800000\n"
+        "scriptRunHistoryIncludeLogs=false\n"
+        "scriptRunHistoryMaxErrorChars=2000\n"
+        f"scriptFetchEnabled={'true' if fetch_enabled else 'false'}\n"
+        f"scriptFetchAllowlist={fetch_allowlist}\n"
+        f"scriptFetchTimeoutMs={fetch_timeout_ms}\n"
+        f"scriptFetchMaxResponseBytes={fetch_max_response_bytes}\n"
     )
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write(cfg)
+
+
+class FetchFixture:
+    """A stdlib HTTP server the fetch phase points at, so the suite keeps its no-dependency rule."""
+
+    def __init__(self):
+        self.requests = []
+        handler_requests = self.requests
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *_):
+                pass
+
+            def _respond(self, status, body, content_type="text/plain"):
+                payload = body.encode()
+                self.send_response(status)
+                self.send_header("content-type", content_type)
+                self.send_header("content-length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+            def do_GET(self):
+                handler_requests.append(self.path)
+                if self.path == "/hello":
+                    self._respond(200, "hello")
+                elif self.path == "/big":
+                    self._respond(200, "x" * 4096)
+                elif self.path == "/slow":
+                    time.sleep(3.0)
+                    self._respond(200, "late")
+                else:
+                    self._respond(404, "no")
+
+            def do_POST(self):
+                handler_requests.append(self.path)
+                length = int(self.headers.get("content-length") or 0)
+                self._respond(200, self.rfile.read(length).decode(), "application/json")
+
+        self.server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self.server.server_address[1]
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+
+    @property
+    def base_url(self) -> str:
+        return f"http://127.0.0.1:{self.port}"
+
+    def stop(self):
+        self.server.shutdown()
+        self.server.server_close()
 
 
 def port_open() -> bool:
@@ -447,6 +511,156 @@ def test_sandbox_limits(conn: Conn):
     # The result conversion runs inside the sandbox, so a runaway getter aborts rather than hanging
     check_code("a runaway getter hits the instruction budget",
                conn.run("return { get n() { while (true) {} } };"), "ERROR", "400-11")
+
+
+def test_run_metrics(conn: Conn):
+    section("Run metrics")
+    ok = conn.run("let total = 0;\nfor (let i = 0; i < 500; i++) total += i;\nreturn total;")
+    metrics = ok.get("metrics") or {}
+    check("a successful run reports every metric field",
+          set(metrics) == {"instructions", "instructionBudget", "peakMemoryBytes", "memoryBudget",
+                           "dbOperations", "durationMs"},
+          f"metrics={metrics!r}")
+    check("the budgets echo the configured sandbox",
+          metrics.get("instructionBudget") == INSTRUCTION_BUDGET
+          and metrics.get("memoryBudget") == MAX_MEMORY_BYTES,
+          f"metrics={metrics!r}")
+    check("instructions are counted and stay under the budget",
+          0 < metrics.get("instructions", 0) < INSTRUCTION_BUDGET, f"metrics={metrics!r}")
+
+    small = (conn.run("let t = 0;\nfor (let i = 0; i < 10; i++) t += i;\nreturn t;")
+             .get("metrics") or {}).get("instructions", 0)
+    big = (conn.run("let t = 0;\nfor (let i = 0; i < 2000; i++) t += i;\nreturn t;")
+           .get("metrics") or {}).get("instructions", 0)
+    check("a bigger loop costs more instructions", big > small, f"small={small} big={big}")
+
+    # The holder is filled by the interpreter's own finally, so an abort still reports its cost —
+    # which is exactly the run an operator wants the numbers for.
+    exhausted = conn.run("while (true) {}")
+    check_code("the runaway run still fails", exhausted, "ERROR", "400-11")
+    check("a run that exhausted its budget still reports metrics",
+          (exhausted.get("metrics") or {}).get("instructions", 0) > 0,
+          f"metrics={exhausted.get('metrics')!r}")
+
+    timed_out = conn.run("return (async () => { await new Promise(r => setTimeout(r, 60000)); return 1; })();")
+    check_code("the slow run still times out", timed_out, "ERROR", "408-1")
+    check("a timed-out run still reports metrics",
+          (timed_out.get("metrics") or {}).get("instructions", 0) > 0,
+          f"metrics={timed_out.get('metrics')!r}")
+
+    reads = conn.run(f'import db from "db";\n'
+                     f'db.findById(db.name, "{COLL}", "absent-a");\n'
+                     f'db.findById(db.name, "{COLL}", "absent-b");\n'
+                     f'db.aggregate(db.name, "{COLL}", [{{ type: "COUNT" }}]);\n'
+                     f'return "ok";')
+    check("dbOperations counts the host calls the script made",
+          (reads.get("metrics") or {}).get("dbOperations") == 3, f"metrics={reads.get('metrics')!r}")
+
+    # peakMemoryBytes is a high-water mark: a drained cursor batch is credited back, so a figure
+    # taken at the end would read as ~0 for a walk that really did hold a batch in heap.
+    walk = conn.run(f'import db from "db";\n'
+                    f'const cur = db.cursor(db.name, "{COLL}", '
+                    f'[{{ type: "SORT", fieldName: "_id", ascending: true }}], {{ batchSize: 2 }});\n'
+                    f'let seen = 0;\n'
+                    f'for (const doc of cur) seen++;\n'
+                    f'return seen;')
+    check("a cursor walk reports a peak above zero",
+          (walk.get("metrics") or {}).get("peakMemoryBytes", 0) > 0, f"metrics={walk.get('metrics')!r}")
+    check("the peak never exceeds the budget",
+          0 < (walk.get("metrics") or {}).get("peakMemoryBytes", 0) <= MAX_MEMORY_BYTES,
+          f"metrics={walk.get('metrics')!r}")
+
+
+def test_history_kinds(conn: Conn):
+    section("Run history kinds")
+    # RUN_SCRIPT is deliberately absent from the default kinds: an exploratory client would otherwise
+    # fill the collection with one row per keystroke.
+    check_result("an ad-hoc run still works", conn.run("return 'unrecorded';"), "unrecorded")
+    time.sleep(1.0)
+    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
+                          "aggregationSteps": [{"type": "SORT", "fieldName": "startedAt", "ascending": False}]})
+    # The collection may well exist - CALL_PROCEDURE is recorded by default - but no ad-hoc run is in it.
+    ad_hoc = [row for row in (response.get("results") or []) if row.get("kind") == "RUN_SCRIPT"]
+    check("an ad-hoc run is not recorded under the default kinds", not ad_hoc, f"rows={ad_hoc!r}")
+
+
+def test_history_kinds_enabled(conn: Conn):
+    section("Run history with RUN_SCRIPT recorded")
+    check_result("a recorded ad-hoc run", conn.run("let t = 0; for (let i = 0; i < 20; i++) t += i; return t;"), 190)
+    deadline = time.time() + 15.0
+    rows = []
+    while not rows and time.time() < deadline:
+        time.sleep(0.3)
+        response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
+                              "aggregationSteps": [{"type": "SORT", "fieldName": "startedAt", "ascending": False}]})
+        rows = [row for row in (response.get("results") or []) if row.get("kind") == "RUN_SCRIPT"]
+    check("the ad-hoc run is recorded once the kind is configured", bool(rows), f"rows={rows!r}")
+    if rows:
+        check("the row reports the outcome", rows[0].get("outcome") == "ok", f"row={rows[0]!r}")
+        check("the row carries metrics",
+              (rows[0].get("metrics") or {}).get("instructions", 0) > 0, f"row={rows[0]!r}")
+
+
+def test_fetch_unavailable(conn: Conn):
+    section("fetch is unavailable by default")
+    check("fetch exists as a global",
+          conn.run("return typeof fetch;").get("result") == "function", "fetch should still be declared")
+    check_failed_script("calling it is refused when the capability is off",
+                        conn.run("return fetch('http://127.0.0.1:1/x').then(r => r.status);"),
+                        "400-9", "fetch is not available")
+
+
+def test_fetch(conn: Conn, base_url: str, fixture):
+    section("Outbound fetch")
+    fixture.requests.clear()
+
+    got = conn.run(f"const res = await fetch('{base_url}/hello');\n"
+                   "return { ok: res.ok, status: res.status, body: await res.text() };")
+    check("a GET reaches the fixture", (got.get("result") or {}).get("body") == "hello", f"got {got}")
+    check("… and reports its status", (got.get("result") or {}).get("status") == 200, f"got {got}")
+    check("… and ok", (got.get("result") or {}).get("ok") is True, f"got {got}")
+
+    posted = conn.run(f"const res = await fetch('{base_url}/echo', {{ method: 'POST', "
+                      "body: JSON.stringify({ n: 7 }), headers: { 'content-type': 'application/json' } });\n"
+                      "return (await res.json()).n;")
+    check_result("a POST round-trips a JSON body", posted, 7)
+
+    # Refused before any connection is attempted, which is what the fixture's empty log proves.
+    before = len(fixture.requests)
+    denied = conn.run("return fetch('http://elsewhere.invalid/x').then(r => r.status);")
+    check_failed_script("a host outside the allowlist is refused", denied, "400-9", "host not allowed")
+    check("… without reaching the network", len(fixture.requests) == before, f"requests={fixture.requests!r}")
+
+    oversized = conn.run(f"return fetch('{base_url}/big').then(r => r.text());")
+    check_failed_script("a response over the cap fails", oversized, "400-9", "exceeds maximum size")
+
+    slow = conn.run(f"return fetch('{base_url}/slow').then(r => r.text());")
+    check_failed_script("a response past the timeout fails", slow, "400-9", "")
+
+    # The capability reaches stored code too: the trigger and schedule dispatchers rebuild the limits
+    # with their own wall clock, and the fetch grant has to survive that rebuild.
+    check_status("store a fetching procedure",
+                 conn.send({"type": "SAVE_PROCEDURE", "databaseName": DB, "name": "fetcher",
+                            "script": f"const res = await fetch('{base_url}/hello');\nreturn await res.text();"}),
+                 "OK")
+    called = conn.send({"type": "CALL_PROCEDURE", "databaseName": DB, "procedureName": "fetcher"})
+    check("a stored procedure may fetch", called.get("result") == "hello", f"got {called}")
+
+
+def test_locale_arguments(conn: Conn):
+    section("Locale arguments")
+    # Swedish sorts "ä" after "z" and English does not, which is what proves the argument is read
+    # rather than the configured scriptLocale being used regardless.
+    check_result("localeCompare honours an explicit locale",
+                 conn.run("return ['z', 'ä'].sort((a, b) => a.localeCompare(b, 'sv')).join('');"), "zä")
+    check_result("… and differs from the host locale",
+                 conn.run("return ['z', 'ä'].sort((a, b) => a.localeCompare(b, 'en')).join('');"), "äz")
+    check_result("base sensitivity ignores accents",
+                 conn.run("return 'a'.localeCompare('á', 'en', { sensitivity: 'base' });"), 0)
+    check_failed_script("a malformed tag is a RangeError",
+                        conn.run("return 'a'.localeCompare('b', '!');"), "400-9", "RangeError")
+    check_result("toLocaleString honours it too",
+                 conn.run("return (1234.5).toLocaleString('de-DE');"), "1.234,5")
 
 
 def test_request_validation(conn: Conn):
@@ -1265,6 +1479,10 @@ def main():
             test_compiled_script_cache(conn)
             test_console_output(conn)
             test_sandbox_limits(conn)
+            test_run_metrics(conn)
+            test_history_kinds(conn)
+            test_fetch_unavailable(conn)
+            test_locale_arguments(conn)
             test_request_validation(conn)
             test_host_reads(conn)
             test_host_writes(conn)
@@ -1289,6 +1507,22 @@ def main():
         proc = start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_procedure_imports_disabled(conn)
+
+        # A phase of its own: fetch and the RUN_SCRIPT history kind are both server-fixed switches, and
+        # the fetch allowlist has to name the fixture's host, which only exists once it is listening.
+        stop_server(proc)
+        proc = None
+        fixture = FetchFixture()
+        try:
+            write_config(work_dir, scripts_enabled=True, history_kinds="RUN_SCRIPT", fetch_enabled=True,
+                         fetch_allowlist="127.0.0.1", fetch_timeout_ms=1000, fetch_max_response_bytes="1Kb")
+            print(f"\n  Restarting server (fetch enabled) on {HOST}:{PORT} ...")
+            proc = start_server(work_dir, log_path)
+            with admin_conn() as conn:
+                test_history_kinds_enabled(conn)
+                test_fetch(conn, fixture.base_url, fixture)
+        finally:
+            fixture.stop()
 
         stop_server(proc)
         proc = None

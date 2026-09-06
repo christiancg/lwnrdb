@@ -15,6 +15,7 @@ import org.techhouse.conn.SocketServer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
 
 /**
@@ -40,6 +41,7 @@ public class ShutdownCoordinator {
     private final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final ScriptRunHistory scriptRunHistory = IocContainer.get(ScriptRunHistory.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private final AdminAntiEntropyService adminAntiEntropyService = IocContainer.get(AdminAntiEntropyService.class);
@@ -63,6 +65,7 @@ public class ShutdownCoordinator {
         });
         step("stop background sweeps", () -> {
             memoryManagement.stopSweepThread();
+            scriptRunHistory.stopSweep();
             if (clusterConfig.isEnabled()) {
                 antiEntropyService.stop();
                 adminAntiEntropyService.stop();

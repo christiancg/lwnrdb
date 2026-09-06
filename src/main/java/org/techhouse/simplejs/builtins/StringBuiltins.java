@@ -537,13 +537,28 @@ public final class StringBuiltins {
     }
 
     private static int localeCompare(String value, List<JsValue> args, InterpreterOps ops) {
+        final var that = str(args, 0, ops);
         // Spec requirement: strings that are canonically equivalent (per Unicode normalization) must
         // compare as 0. `Collator.getInstance()` defaults to NO_DECOMPOSITION, which treats two
         // differently-ordered combining-mark sequences for the same canonical text as unequal;
         // CANONICAL_DECOMPOSITION is what makes the comparison normalization-aware.
-        final var collator = java.text.Collator.getInstance(InterpreterOps.locale(ops));
+        final var collator = java.text.Collator.getInstance(LocaleResolver.resolve(args, 1, ops));
         collator.setDecomposition(java.text.Collator.CANONICAL_DECOMPOSITION);
-        return Integer.signum(collator.compare(value, str(args, 0, ops)));
+        final var sensitivity = LocaleResolver.sensitivity(args, 2, ops);
+        if (sensitivity != null) {
+            collator.setStrength(strengthFor(sensitivity));
+        }
+        return Integer.signum(collator.compare(value, that));
+    }
+
+    // java.text has three usable strengths, so "case" and "variant" both land on TERTIARY: distinguishing
+    // case from other tertiary differences needs Intl-level collation data this engine does not carry.
+    private static int strengthFor(String sensitivity) {
+        return switch (sensitivity) {
+            case "base" -> java.text.Collator.PRIMARY;
+            case "accent" -> java.text.Collator.SECONDARY;
+            default -> java.text.Collator.TERTIARY;
+        };
     }
 
     private static String concat(String value, List<JsValue> args, InterpreterOps ops) {

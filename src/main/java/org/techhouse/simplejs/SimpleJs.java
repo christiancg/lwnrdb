@@ -31,6 +31,7 @@ import org.techhouse.simplejs.host.ConsoleCapture;
 import org.techhouse.simplejs.host.HostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.ScriptResult;
+import org.techhouse.simplejs.host.ScriptRunMetrics;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.Lexer;
@@ -85,15 +86,17 @@ public final class SimpleJs {
                 limits == null ? ResourceLimits.DEFAULT_MAX_LOG_LINES : limits.maxLogLines(),
                 limits == null ? ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS : limits.maxLogLineChars());
         final var capturing = CapturingHostBindings.wrap(host, capture);
+        final var metrics = new Interpreter.RunMetrics();
         try {
             final var program = Parser.parse(Lexer.lexWithPositions(source), capturing.strictScriptGoal());
-            return resultOf(Interpreter.run(program, capturing, null, this::convertResult), capture, limits);
+            return resultOf(Interpreter.run(program, capturing, null, this::convertResult, metrics), capture, limits)
+                    .withMetrics(measured(metrics));
         } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
             final var error = describe(failure);
             if (error == null) {
                 throw failure;
             }
-            return failed(error.name(), error.message(), error.stack(), capture);
+            return failed(error.name(), error.message(), error.stack(), capture).withMetrics(measured(metrics));
         }
     }
 
@@ -123,20 +126,29 @@ public final class SimpleJs {
                 limits == null ? ResourceLimits.DEFAULT_MAX_LOG_LINES : limits.maxLogLines(),
                 limits == null ? ResourceLimits.DEFAULT_MAX_LOG_LINE_CHARS : limits.maxLogLineChars());
         final var capturing = CapturingHostBindings.wrap(host, capture);
+        final var metrics = new Interpreter.RunMetrics();
         try {
             // The two goals differ in which early errors are raised, so a program parsed under the other
             // one is simply the wrong program - parse again rather than run it.
             final var program = compiled.strictScriptGoal() == capturing.strictScriptGoal()
                     ? compiled.program()
                     : Parser.parse(Lexer.lexWithPositions(compiled.source()), capturing.strictScriptGoal());
-            return resultOf(Interpreter.run(program, capturing, around, this::convertResult), capture, limits);
+            return resultOf(Interpreter.run(program, capturing, around, this::convertResult, metrics), capture, limits)
+                    .withMetrics(measured(metrics));
         } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
             final var error = describe(failure);
             if (error == null) {
                 throw failure;
             }
-            return failed(error.name(), error.message(), error.stack(), capture);
+            return failed(error.name(), error.message(), error.stack(), capture).withMetrics(measured(metrics));
         }
+    }
+
+    // The holder is filled by the interpreter's own finally, so an aborted run reports what it burned
+    // before it aborted rather than nothing at all.
+    private static ScriptRunMetrics measured(Interpreter.RunMetrics metrics) {
+        return new ScriptRunMetrics(metrics.instructions(), metrics.instructionBudget(), metrics.peakMemoryBytes(),
+                metrics.memoryBudget(), 0L, 0L);
     }
 
     /**

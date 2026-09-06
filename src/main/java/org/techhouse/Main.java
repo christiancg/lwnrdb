@@ -35,9 +35,11 @@ import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ScheduleDispatcher;
+import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunRecovery;
+import org.techhouse.simplejs.host.HostAllowlist;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -62,6 +64,7 @@ public class Main {
     private static final TransactionSessionReaper transactionSessionReaper = IocContainer
             .get(TransactionSessionReaper.class);
     private static final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
+    private static final ScriptRunHistory scriptRunHistory = IocContainer.get(ScriptRunHistory.class);
     private static final Logger logger = Logger.logFor(Main.class);
 
     private static int getPort(String[] args) {
@@ -96,9 +99,11 @@ public class Main {
         listenManager.startWorkers();
         memoryManagement.loadProfileFromAdmin();
         memoryManagement.startSweepThread();
+        scriptRunHistory.startSweep();
         warnIfXmxExceedsMaxMemory();
         warnIfCachesExceedHeap();
         warnIfDefaultAdminPassword();
+        warnIfScriptFetchEnabled();
         startClusterIfEnabled();
         // Built eagerly so a self-signed keystore is generated (and its security warning logged) at startup,
         // not lazily on the first client connection.
@@ -178,6 +183,27 @@ public class Main {
             logger.warning("SECURITY WARNING: defaultAdminPassword is still set to the well-known default value. "
                     + "Change it in lwnrdb.cfg and update the admin user's password immediately to avoid "
                     + "unauthorized access.");
+        }
+    }
+
+    // Outbound HTTP from stored code is a capability worth naming at startup rather than leaving in a
+    // config file: an operator reading the log should be able to see what this node may reach.
+    static void warnIfScriptFetchEnabled() {
+        if (!config.isScriptFetchEnabled()) {
+            return;
+        }
+        final var allowlist = config.getScriptFetchAllowlist();
+        if (HostAllowlist.allowsEverything(allowlist)) {
+            logger.warning("SECURITY WARNING: scriptFetchAllowlist is '*', so any script may make this server "
+                    + "issue HTTP requests to any host it can reach - including services inside your network "
+                    + "and the cloud instance-metadata endpoint (169.254.169.254), not just the public "
+                    + "internet. Narrow it in lwnrdb.cfg to the hosts your scripts actually call, or set "
+                    + "scriptFetchEnabled=false to remove the capability.");
+        } else if (allowlist.isEmpty()) {
+            logger.warning("scriptFetchEnabled is true but scriptFetchAllowlist is empty, so every fetch will be "
+                    + "refused. Name the hosts scripts may reach.");
+        } else {
+            logger.info("Script fetch is enabled for: " + String.join(", ", allowlist));
         }
     }
 

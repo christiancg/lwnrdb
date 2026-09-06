@@ -214,6 +214,11 @@ def write_config(work_dir: str, scripts_enabled: bool, schedules_enabled: bool):
         f"scheduleTimeoutMs={SCHEDULE_TIMEOUT_MS}\n"
         f"scheduleMaxPerDatabase={MAX_PER_DATABASE}\n"
         "scheduleCacheMaxBytes=8Mb\n"
+        "scriptRunHistoryEnabled=true\n"
+        "scriptRunHistoryKinds=CALL_PROCEDURE,TRIGGER,SCHEDULE\n"
+        "scriptRunHistoryRetentionMs=604800000\n"
+        "scriptRunHistoryIncludeLogs=false\n"
+        "scriptRunHistoryMaxErrorChars=2000\n"
     )
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write(cfg)
@@ -430,6 +435,65 @@ def test_failure_logs_a_stack(conn: Conn, log_path: str):
     check_status("delete the procedure", conn.delete_procedure("scheduled_explodes"), "OK")
 
 
+def history_rows(conn: Conn, **filters) -> list:
+    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
+                          "aggregationSteps": [{"type": "SORT", "fieldName": "startedAt", "ascending": False}]})
+    rows = response.get("results") or []
+    for field, value in filters.items():
+        rows = [row for row in rows if row.get(field) == value]
+    return rows
+
+
+def await_history(conn: Conn, timeout: float = 20.0, **filters) -> list:
+    deadline = time.time() + timeout
+    rows = history_rows(conn, **filters)
+    while not rows and time.time() < deadline:
+        time.sleep(0.3)
+        rows = history_rows(conn, **filters)
+    return rows
+
+
+def test_run_history(conn: Conn):
+    section("Run history")
+    check_status("install a procedure worth recording",
+                 conn.save_procedure("historied_job",
+                                     "let total = 0;\n"
+                                     "for (let i = 0; i < 20; i++) total += i;\n"
+                                     "return total;"), "OK")
+    check_status("schedule it every 500ms",
+                 conn.save_schedule("historied", "historied_job", intervalMs=500), "OK")
+
+    rows = await_history(conn, kind="SCHEDULE", name="historied")
+    check("a fired schedule is recorded", bool(rows), f"rows={rows!r}")
+    if rows:
+        row = rows[0]
+        check("the row reports the outcome", row.get("outcome") == "ok", f"row={row!r}")
+        check("the row names the procedure behind the schedule",
+              row.get("procedure") == "historied_job", f"row={row!r}")
+        check("the row carries metrics",
+              (row.get("metrics") or {}).get("instructions", 0) > 0, f"row={row!r}")
+        check("the row names the definer", row.get("username") == ADMIN_USERNAME, f"row={row!r}")
+
+    check_status("delete the schedule", conn.delete_schedule("historied"), "OK")
+
+    # A schedule that could not run at all is the outcome no other surface reports. Its procedure cannot
+    # be deleted while a schedule references it, so it is disabled instead - the state the dispatcher
+    # treats the same way.
+    check_status("schedule the procedure again",
+                 conn.save_schedule("orphaned", "historied_job", intervalMs=500), "OK")
+    check_status("then disable the procedure",
+                 conn.save_procedure("historied_job", "return 1;", enabled=False), "OK")
+
+    skipped = await_history(conn, kind="SCHEDULE", name="orphaned", outcome="skipped")
+    check("a schedule that never ran is recorded as skipped", bool(skipped), f"rows={skipped!r}")
+    if skipped:
+        check("with the reason", "missing or disabled" in (skipped[0].get("errorMessage") or ""),
+              f"row={skipped[0]!r}")
+
+    check_status("delete the orphaned schedule", conn.delete_schedule("orphaned"), "OK")
+    check_status("delete its procedure", conn.delete_procedure("historied_job"), "OK")
+
+
 def test_import_failure(conn: Conn):
     section("A scheduled procedure whose import cannot be resolved")
     # Installing the procedure passes the save-time import check, so a schedule ends up broken only
@@ -580,6 +644,7 @@ def main() -> int:
             test_validation(conn)
             test_import_failure(conn)
             test_failure_logs_a_stack(conn, log_path)
+            test_run_history(conn)
             test_referential_integrity(conn)
         test_permissions()
         with admin_conn() as conn:

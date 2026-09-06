@@ -11,9 +11,15 @@ public final class ScriptResult {
     private final List<String> logs;
     private final boolean logsTruncated;
     private final List<String> errorStack;
+    private final ScriptRunMetrics metrics;
 
     private ScriptResult(JsonBaseElement value, String errorName, String errorMessage, boolean error, List<String> logs,
             boolean logsTruncated, List<String> errorStack) {
+        this(value, errorName, errorMessage, error, logs, logsTruncated, errorStack, ScriptRunMetrics.EMPTY);
+    }
+
+    private ScriptResult(JsonBaseElement value, String errorName, String errorMessage, boolean error, List<String> logs,
+            boolean logsTruncated, List<String> errorStack, ScriptRunMetrics metrics) {
         this.value = value;
         this.errorName = errorName;
         this.errorMessage = errorMessage;
@@ -21,6 +27,11 @@ public final class ScriptResult {
         this.logs = logs == null ? List.of() : List.copyOf(logs);
         this.logsTruncated = logsTruncated;
         this.errorStack = errorStack == null ? null : List.copyOf(errorStack);
+        this.metrics = metrics == null ? ScriptRunMetrics.EMPTY : metrics;
+    }
+
+    public ScriptResult withMetrics(ScriptRunMetrics runMetrics) {
+        return new ScriptResult(value, errorName, errorMessage, error, logs, logsTruncated, errorStack, runMetrics);
     }
 
     public static ScriptResult value(JsonBaseElement value) {
@@ -62,6 +73,10 @@ public final class ScriptResult {
 
     public List<String> getErrorStack() {
         return errorStack;
+    }
+
+    public ScriptRunMetrics getMetrics() {
+        return metrics;
     }
 
     public List<String> getLogs() {

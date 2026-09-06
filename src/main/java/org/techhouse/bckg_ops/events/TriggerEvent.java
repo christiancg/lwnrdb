@@ -21,6 +21,9 @@ public class TriggerEvent extends Event {
     private final int depth;
     private final long firedAt;
     private final String runId;
+    // 1 for a first delivery; raised by TriggerDispatcher when a failed run is re-queued, so a retry is
+    // distinguishable from the original in the history and in the log.
+    private final int attempt;
 
     public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
             boolean batchMode, List<DbEntry> entries, String actingUser, int depth) {
@@ -29,6 +32,11 @@ public class TriggerEvent extends Event {
 
     public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
             boolean batchMode, List<DbEntry> entries, String actingUser, int depth, String runId) {
+        this(type, dbName, collName, triggerName, procedureName, batchMode, entries, actingUser, depth, runId, 1);
+    }
+
+    public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
+            boolean batchMode, List<DbEntry> entries, String actingUser, int depth, String runId, int attempt) {
         super(type);
         this.dbName = dbName;
         this.collName = collName;
@@ -40,6 +48,11 @@ public class TriggerEvent extends Event {
         this.depth = depth;
         this.firedAt = System.currentTimeMillis();
         this.runId = runId;
+        this.attempt = attempt;
+    }
+
+    public int getAttempt() {
+        return attempt;
     }
 
     public String getDbName() {

@@ -9,6 +9,7 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ioc.IocContainer;
@@ -41,7 +42,10 @@ public final class TriggerHelper {
 
     public static void afterWrite(String dbName, String collName, EventType type, List<DbEntry> entries,
             String actingUser, int depth) {
-        if (!configuration.isTriggersEnabled() || entries == null || entries.isEmpty()) {
+        // The history collection is written by the server on behalf of runs that have already finished;
+        // letting a trigger fire on it would let an audit trigger cascade on its own record of itself.
+        if (!configuration.isTriggersEnabled() || entries == null || entries.isEmpty()
+                || Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName)) {
             return;
         }
         final var triggers = cache.getTriggersFor(dbName, collName);

@@ -1,5 +1,6 @@
 package org.techhouse.ops;
 
+import java.util.UUID;
 import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
@@ -47,14 +48,17 @@ public final class ScheduleDispatcher {
         final var procedure = cache.getProcedure(dbName, definition.getProcedureName());
         if (procedure == null || !procedure.isEnabled()) {
             scheduleExecutor.countSkip();
-            registry.warnOnce(entry.key(),
-                    "procedure '" + definition.getProcedureName() + "' is missing or disabled; nothing ran");
+            final var reason = "procedure '" + definition.getProcedureName() + "' is missing or disabled; nothing ran";
+            registry.warnOnce(entry.key(), reason);
+            recordSkip(entry, definition, reason);
             return;
         }
         final var definer = definition.getDefiner();
         if (definer == null || cache.getAdminUserEntry(definer) == null) {
             scheduleExecutor.countSkip();
-            registry.warnOnce(entry.key(), "definer '" + definer + "' no longer exists; the schedule is disabled");
+            final var reason = "definer '" + definer + "' no longer exists; the schedule is disabled";
+            registry.warnOnce(entry.key(), reason);
+            recordSkip(entry, definition, reason);
             return;
         }
         run(entry, definition, procedure.getVersion(), procedure.getSource(), definer);
@@ -66,14 +70,31 @@ public final class ScheduleDispatcher {
         final var compiled = compiledProcedures.get(dbName, definition.getProcedureName(), version, source);
         final var logPrefix = "SCHEDULE name=" + definition.getName() + " database=" + dbName + " procedure="
                 + definition.getProcedureName() + " definer=" + definer;
-        final var result = ScriptOperationHelper.runCompiled(compiled, definition.getArgs(), dbName, definer, null,
-                logPrefix, ScriptRunKind.SCHEDULE, definition.getName(), limits(definition), logger::info).result();
+        final var start = System.currentTimeMillis();
+        final var outcome = ScriptOperationHelper.runCompiled(compiled, definition.getArgs(), dbName, definer, null,
+                logPrefix, ScriptRunKind.SCHEDULE, definition.getName(), limits(definition), logger::info);
+        final var result = outcome.result();
+        ScriptRunHistory.record(new ScriptRunRecord(outcome.runId(), ScriptRunKind.SCHEDULE, dbName,
+                definition.getName(), definition.getProcedureName(), null, null, definer, definer, start,
+                System.currentTimeMillis() - start, 1,
+                result.isError() ? ScriptRunRecord.OUTCOME_ERROR : ScriptRunRecord.OUTCOME_OK, result.getErrorName(),
+                result.getErrorMessage(), result.getErrorStack(), result.getMetrics(), result.getLogs(),
+                result.isLogsTruncated()));
         if (result.isError()) {
             scheduleExecutor.countFailure();
             logger.warning(logPrefix + " outcome=" + result.getErrorName() + ": " + result.getErrorMessage()
                     + ScriptOperationHelper.renderStack(result.getErrorStack())
                     + (result.getLogs().isEmpty() ? "" : " logs=" + result.getLogs()));
         }
+    }
+
+    // A schedule that could not run at all is still a fact about the schedule, and the one an operator is
+    // most likely to be looking for: nothing ran and nothing failed, so no other surface reports it.
+    private static void recordSkip(ScheduleRegistry.Entry entry, ScheduleDefinition definition, String reason) {
+        ScriptRunHistory.record(new ScriptRunRecord(UUID.randomUUID().toString(), ScriptRunKind.SCHEDULE,
+                entry.getDbName(), definition.getName(), definition.getProcedureName(), null, null,
+                definition.getDefiner(), definition.getDefiner(), System.currentTimeMillis(), 0L, 1,
+                ScriptRunRecord.OUTCOME_SKIPPED, null, reason, null, null, null, false));
     }
 
     // The configured sandbox with its wall clock replaced by the schedule's own timeoutMs (falling back to

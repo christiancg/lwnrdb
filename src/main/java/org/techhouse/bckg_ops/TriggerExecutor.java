@@ -3,6 +3,7 @@ package org.techhouse.bckg_ops;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
@@ -30,10 +31,17 @@ public class TriggerExecutor {
     private final LongAdder fired = new LongAdder();
     private final LongAdder failed = new LongAdder();
     private final LongAdder dropped = new LongAdder();
+    private final LongAdder retried = new LongAdder();
+    private final LongAdder deadLettered = new LongAdder();
     private final AtomicInteger inFlight = new AtomicInteger();
+    // Retries waiting out their backoff. Counted in pending() so a drain does not declare the queue empty
+    // while a retry is still due; one still waiting when the process stops is left to startup recovery,
+    // which is safe because its durable record is still PENDING.
+    private final AtomicInteger scheduled = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
     private volatile boolean draining;
     private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private ScheduledExecutorService retryScheduler;
     // Set by start(); a null dispatcher means nothing consumes the queue yet, so submit() is a no-op that
     // does not silently accumulate events.
     private Consumer<TriggerEvent> dispatcher;
@@ -61,9 +69,47 @@ public class TriggerExecutor {
         }
     }
 
+    /**
+     * Re-queues a failed run once its backoff has elapsed. A delay of zero submits immediately. A retry
+     * still waiting when the node stops is not lost: its record stays PENDING, so startup recovery replays
+     * it.
+     */
+    public void submitAfter(TriggerEvent event, long delayMillis) {
+        if (dispatcher == null || draining) {
+            return;
+        }
+        retried.increment();
+        if (delayMillis <= 0 || retryScheduler == null) {
+            submit(event);
+            return;
+        }
+        scheduled.incrementAndGet();
+        try {
+            retryScheduler.schedule(() -> {
+                try {
+                    submit(event);
+                } finally {
+                    scheduled.decrementAndGet();
+                }
+            }, delayMillis, TimeUnit.MILLISECONDS);
+        } catch (RuntimeException rejected) {
+            scheduled.decrementAndGet();
+            submit(event);
+        }
+    }
+
+    public void countDeadLetter() {
+        deadLettered.increment();
+    }
+
     public void start(Consumer<TriggerEvent> triggerDispatcher) {
         draining = false;
         this.dispatcher = triggerDispatcher;
+        retryScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
+            final var thread = new Thread(runnable, "trigger-retry-scheduler");
+            thread.setDaemon(true);
+            return thread;
+        });
         final var threadCount = Math.max(1, Configuration.getInstance().getTriggerThreads());
         for (int i = 0; i < threadCount; i++) {
             pool.execute(this::runWorker);
@@ -118,14 +164,20 @@ public class TriggerExecutor {
     }
 
     private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0;
+        return queue.isEmpty() && inFlight.get() == 0 && scheduled.get() == 0;
     }
 
     public int pending() {
-        return queue.size() + inFlight.get();
+        return queue.size() + inFlight.get() + scheduled.get();
     }
 
     public void stop() {
+        final var scheduler = retryScheduler;
+        retryScheduler = null;
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+        }
+        scheduled.set(0);
         pool.shutdownNow();
         try {
             if (!pool.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
@@ -154,6 +206,14 @@ public class TriggerExecutor {
 
     public long getDropped() {
         return dropped.sum();
+    }
+
+    public long getRetried() {
+        return retried.sum();
+    }
+
+    public long getDeadLettered() {
+        return deadLettered.sum();
     }
 
     public int getQueued() {

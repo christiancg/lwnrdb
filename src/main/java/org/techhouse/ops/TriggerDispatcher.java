@@ -1,11 +1,13 @@
 package org.techhouse.ops;
 
 import java.util.List;
+import java.util.UUID;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.TriggerDefinition;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -30,6 +32,7 @@ public final class TriggerDispatcher {
     private static final ScriptRunRegistry runRegistry = IocContainer.get(ScriptRunRegistry.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TriggerDispatcher.class);
+    private static final String CANCELLED_ERROR = "ScriptCancelledError";
 
     private TriggerDispatcher() {
     }
@@ -38,8 +41,9 @@ public final class TriggerDispatcher {
         if (event.getDepth() >= configuration.getTriggerMaxDepth()) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             triggerExecutor.countFailure();
-            logger.warning("Trigger '" + event.getTriggerName() + "' not run: cascade depth " + event.getDepth()
-                    + " reached triggerMaxDepth");
+            final var reason = "cascade depth " + event.getDepth() + " reached triggerMaxDepth";
+            logger.warning("Trigger '" + event.getTriggerName() + "' not run: " + reason);
+            recordSkip(event, reason);
             return;
         }
         // Both may have been dropped while the event was queued - the staleness EventProcessorHelper
@@ -61,8 +65,9 @@ public final class TriggerDispatcher {
         if (definer == null || cache.getAdminUserEntry(definer) == null) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             triggerExecutor.countFailure();
-            logger.warning(
-                    "Trigger '" + event.getTriggerName() + "' not run: definer '" + definer + "' no longer exists");
+            final var reason = "definer '" + definer + "' no longer exists";
+            logger.warning("Trigger '" + event.getTriggerName() + "' not run: " + reason);
+            recordSkip(event, reason);
             return;
         }
         run(event, trigger, procedure.getVersion(), procedure.getSource(), definer);
@@ -99,20 +104,105 @@ public final class TriggerDispatcher {
                 + event.getActingUser() + " runId=" + scriptRun.runId() + " durationMs="
                 + (System.currentTimeMillis() - start);
         if (result.isError()) {
-            consumeQuietly(runId, trigger.getName());
             triggerExecutor.countFailure();
             logger.warning(line + " outcome=" + result.getErrorName() + ": " + result.getErrorMessage()
                     + ScriptOperationHelper.renderStack(result.getErrorStack())
                     + (result.getLogs().isEmpty() ? "" : " logs=" + result.getLogs()));
+            // A cancellation is the operator saying stop, so it is terminal however many attempts remain -
+            // the one place the exactly-once guarantee is deliberately waived.
+            final var retryable = !CANCELLED_ERROR.equals(result.getErrorName());
+            handleFailure(event, trigger, definer, scriptRun.runId(), start, result.getErrorName(),
+                    result.getErrorMessage(), result.getErrorStack(), result, retryable);
             return;
         }
         if (!committed.get()) {
-            consumeQuietly(runId, trigger.getName());
             triggerExecutor.countFailure();
             logger.warning(line + " outcome=commit-failed");
+            handleFailure(event, trigger, definer, scriptRun.runId(), start, "CommitFailed",
+                    "the trigger's effects could not be committed", null, result, true);
             return;
         }
         logger.info(line + " outcome=ok");
+        recordRun(event, trigger, definer, scriptRun.runId(), start, ScriptRunRecord.OUTCOME_OK, null, null, null,
+                result);
+    }
+
+    /**
+     * Decides what a failed run becomes: another attempt after a backoff, or a dead letter.
+     *
+     * <p>
+     * The pending record is the state machine - a retry leaves it PENDING with a raised attempt count, and a
+     * dead letter marks it DEAD with its last error while keeping the payload, which is what lets an operator
+     * replay it later. Only a run that is out of attempts (or was never retryable) consumes its record, so
+     * the exactly-once property is unchanged: a record still present is still un-applied.
+     */
+    private static void handleFailure(TriggerEvent event, TriggerDefinition trigger, String definer, String runId,
+            long start, String errorName, String errorMessage, List<String> stack, ScriptResult result,
+            boolean retryable) {
+        final var attempt = event.getAttempt();
+        final var maxAttempts = Math.max(1, configuration.getTriggerMaxAttempts());
+        final var error = errorName + ": " + errorMessage;
+        if (retryable && event.getRunId() != null && attempt < maxAttempts) {
+            final var delay = backoffFor(attempt);
+            TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
+                    System.currentTimeMillis() + delay);
+            triggerExecutor.submitAfter(retryOf(event), delay);
+            logger.info("Trigger '" + trigger.getName() + "' attempt " + attempt + " of " + maxAttempts
+                    + " failed; retrying in " + delay + "ms");
+            recordRun(event, trigger, definer, runId, start, ScriptRunRecord.OUTCOME_ERROR, errorName, errorMessage,
+                    stack, result);
+            return;
+        }
+        if (retryable && event.getRunId() != null) {
+            TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.DEAD, attempt, error, 0L);
+            triggerExecutor.countDeadLetter();
+            logger.warning("Trigger '" + trigger.getName() + "' failed " + attempt
+                    + " attempt(s) and was dead-lettered; runId=" + event.getRunId()
+                    + " - resolve it with RESOLVE_TRIGGER_RUN");
+            recordRun(event, trigger, definer, runId, start, ScriptRunRecord.OUTCOME_DEAD_LETTER, errorName,
+                    errorMessage, stack, result);
+            return;
+        }
+        consumeQuietly(event.getRunId(), trigger.getName());
+        recordRun(event, trigger, definer, runId, start, ScriptRunRecord.OUTCOME_ERROR, errorName, errorMessage, stack,
+                result);
+    }
+
+    // Doubling from the configured base, clamped: the point is to outlast a transient lock or an unreachable
+    // peer, not to schedule a run beyond the operator's patience.
+    public static long backoffFor(int attempt) {
+        final var base = Math.max(0L, configuration.getTriggerRetryBackoffMs());
+        final var ceiling = Math.max(0L, configuration.getTriggerRetryMaxBackoffMs());
+        if (base == 0L) {
+            return 0L;
+        }
+        final var exponent = Math.min(attempt - 1, 32);
+        final var delay = base << exponent;
+        return delay < 0 || delay > ceiling ? ceiling : delay;
+    }
+
+    private static TriggerEvent retryOf(TriggerEvent event) {
+        return new TriggerEvent(event.getType(), event.getDbName(), event.getCollName(), event.getTriggerName(),
+                event.getProcedureName(), event.isBatchMode(), event.getEntries(), event.getActingUser(),
+                event.getDepth(), event.getRunId(), event.getAttempt() + 1);
+    }
+
+    private static void recordRun(TriggerEvent event, TriggerDefinition trigger, String definer, String runId,
+            long start, String outcome, String errorName, String errorMessage, List<String> stack,
+            ScriptResult result) {
+        ScriptRunHistory.record(new ScriptRunRecord(runId, ScriptRunKind.TRIGGER, event.getDbName(), trigger.getName(),
+                trigger.getProcedureName(), event.getCollName(), event.getType().name(), definer, event.getActingUser(),
+                start, System.currentTimeMillis() - start, event.getAttempt(), outcome, errorName, errorMessage, stack,
+                result.getMetrics(), result.getLogs(), result.isLogsTruncated()));
+    }
+
+    // A trigger that never ran leaves no other trace than a log line, which is exactly the outcome an
+    // operator is most likely to be hunting for.
+    private static void recordSkip(TriggerEvent event, String reason) {
+        ScriptRunHistory.record(new ScriptRunRecord(UUID.randomUUID().toString(), ScriptRunKind.TRIGGER,
+                event.getDbName(), event.getTriggerName(), event.getProcedureName(), event.getCollName(),
+                event.getType().name(), null, event.getActingUser(), System.currentTimeMillis(), 0L, event.getAttempt(),
+                ScriptRunRecord.OUTCOME_SKIPPED, null, reason, null, null, null, false));
     }
 
     // Runs the script body between a begin and a commit that also consumes the pending run. A body failure

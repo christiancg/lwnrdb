@@ -24,6 +24,11 @@ import org.techhouse.test.TestUtils;
 
 public class ScriptOperationHelperTest {
     private static final String ADMIN = "scriptrunner";
+    private static final String SCRIPT_TWO_READS = """
+            import db from "db";
+            db.findById(db.name, "%s", "absent-a");
+            db.findById(db.name, "%s", "absent-b");
+            return "ok";""";
     private static final Configuration configuration = Configuration.getInstance();
 
     @BeforeAll
@@ -366,6 +371,33 @@ public class ScriptOperationHelperTest {
 
         final var uncaught = run("import db from \"db\"; db.save(db.name, \"neverCreated\", { _id: \"y\" });");
         assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), uncaught.getErrorCode());
+    }
+
+    @Test
+    public void test_response_carries_run_metrics() {
+        final var response = run("let t = 0; for (let i = 0; i < 100; i++) { t += i; } return t;");
+        assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
+        final var metrics = response.getMetrics();
+        assertNotNull(metrics);
+        assertTrue(metrics.get("instructions").asJsonNumber().getValue().longValue() > 0);
+        assertEquals(10_000_000L, metrics.get("instructionBudget").asJsonNumber().getValue().longValue());
+        assertEquals(67_108_864L, metrics.get("memoryBudget").asJsonNumber().getValue().longValue());
+        assertEquals(0L, metrics.get("dbOperations").asJsonNumber().getValue().longValue());
+    }
+
+    @Test
+    public void test_metrics_count_the_host_operations_a_script_issued() {
+        final var response = run(SCRIPT_TWO_READS.formatted(TestGlobals.COLL, TestGlobals.COLL));
+        assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
+        assertEquals(2L, response.getMetrics().get("dbOperations").asJsonNumber().getValue().longValue());
+    }
+
+    // A failed run reports what it burned: the metrics are attached on every exit path
+    @Test
+    public void test_a_failed_run_still_reports_metrics() {
+        final var response = run("for (let i = 0; i < 10; i++) {} throw new Error('nope');");
+        assertEquals(ErrorCode.SCRIPT_FAILED.getCode(), response.getErrorCode());
+        assertTrue(response.getMetrics().get("instructions").asJsonNumber().getValue().longValue() > 0);
     }
 
     @Test

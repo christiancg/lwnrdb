@@ -42,27 +42,27 @@ public final class ProcedureCallHelper {
         }
         // The gate is here rather than in runCompiled, which triggers and schedules share: they are bounded
         // by their own worker pools and must never be refused a run.
-        if (!admission.tryAcquire()) {
-            return new OperationResponse(OperationType.CALL_PROCEDURE, ErrorCode.SCRIPT_CONCURRENCY_LIMIT);
+        final var permit = admission.acquire(username, dbName);
+        if (permit == null) {
+            return ScriptOperationHelper.concurrencyRefusal(OperationType.CALL_PROCEDURE);
         }
-        try {
+        try (permit) {
             final var compiled = compiledProcedures.get(dbName, name, definition.getVersion(), definition.getSource());
             final var outcome = ScriptOperationHelper.runCompiled(compiled, request.getArgs(), dbName, username,
                     clientId, "CALL_PROCEDURE user=" + username + " database=" + dbName + " procedure=" + name,
                     ScriptRunKind.CALL_PROCEDURE, name);
             return toResponse(outcome.result(), outcome.runId());
-        } finally {
-            admission.release();
         }
     }
 
     private static OperationResponse toResponse(ScriptResult result, String runId) {
-        if (!result.isError()) {
-            return new CallProcedureResponse("Procedure executed successfully", result.getValue(), result.getLogs(),
-                    result.isLogsTruncated(), runId);
-        }
-        return new CallProcedureResponse(result.getErrorName() + ": " + result.getErrorMessage(),
-                ScriptOperationHelper.errorCodeFor(result.getErrorName()), result.getLogs(), result.isLogsTruncated(),
-                runId, result.getErrorStack());
+        final var response = result.isError()
+                ? new CallProcedureResponse(result.getErrorName() + ": " + result.getErrorMessage(),
+                        ScriptOperationHelper.errorCodeFor(result.getErrorName()), result.getLogs(),
+                        result.isLogsTruncated(), runId, result.getErrorStack())
+                : new CallProcedureResponse("Procedure executed successfully", result.getValue(), result.getLogs(),
+                        result.isLogsTruncated(), runId);
+        response.setMetrics(result.getMetrics().toJson());
+        return response;
     }
 }

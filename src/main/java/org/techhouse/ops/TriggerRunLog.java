@@ -9,6 +9,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -89,17 +90,46 @@ public final class TriggerRunLog {
         return result;
     }
 
+    /**
+     * Rewrites the run's records with the outcome of one attempt. A dead run keeps its payload - that is what
+     * makes it replayable by an operator - so this is an update in place rather than a move to another store.
+     */
+    public static void markAttempt(String runId, TriggerRunStatus status, int attempts, String error,
+            long nextAttemptAt) {
+        if (runId == null || !isEnabled()) {
+            return;
+        }
+        try {
+            for (final var entry : AdminOperationHelper.readTriggerRuns(recordIdsFor(runId))) {
+                entry.markAttempt(status, attempts, error, nextAttemptAt);
+                AdminOperationHelper.saveTriggerRun(entry);
+            }
+        } catch (Exception e) {
+            logger.warning(
+                    "Failed to record attempt " + attempts + " of trigger run '" + runId + "': " + e.getMessage());
+        }
+    }
+
     public static List<AdminTriggerRunEntry> pending() throws Exception {
         return AdminOperationHelper.readTriggerRuns(new ArrayList<>(cache.getTriggerRunPkIndexes().keySet()));
     }
 
     // Drops records left behind by a run that can never complete - its collection was dropped, or the node
-    // that owned it never came back - so the log cannot grow without bound.
+    // that owned it never came back - so the log cannot grow without bound. A dead-lettered run is kept for
+    // its own, longer retention: it is waiting for a human, so sweeping it on the pending clock would
+    // discard the evidence before anybody saw it.
     public static void garbageCollect(long retentionMs) throws Exception {
-        final var cutoff = System.currentTimeMillis() - retentionMs;
+        garbageCollect(retentionMs, retentionMs);
+    }
+
+    public static void garbageCollect(long retentionMs, long deadLetterRetentionMs) throws Exception {
+        final var now = System.currentTimeMillis();
+        final var cutoff = now - retentionMs;
+        final var deadCutoff = now - deadLetterRetentionMs;
         final var stale = new ArrayList<String>();
         for (final var entry : pending()) {
-            if (entry.getFiredAt() < cutoff) {
+            final var limit = entry.getStatus() == TriggerRunStatus.DEAD ? deadCutoff : cutoff;
+            if (entry.getFiredAt() < limit) {
                 stale.add(entry.get_id());
             }
         }

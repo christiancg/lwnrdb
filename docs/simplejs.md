@@ -599,8 +599,10 @@ settlement. `host/ResourceLimits` gains `fetchEnabled`, `fetchHostAllowlist`,
 `maxResponseBytes`, `fetchTimeoutMillis`; `FetchBuiltins` enforces availability, the host
 allowlist (rejected before any call), the response-size cap and a per-call timeout (a
 bounded worker join), all producing a catchable `TypeError`. `host/JdkNetworkAccess`
-(`java.net.http.HttpClient`) is the only place performing real network I/O and is never
-wired by default — a host opts in by supplying it via `network()`. **Deliberate
+(`java.net.http.HttpClient`) is the only place performing real network I/O; a host opts in by
+supplying it via `network()`, which the database host does only when `scriptFetchEnabled` is set (see
+*Host-contract notes*). The allowlist is matched by `host/HostAllowlist` — exact host, `*.example.com`
+sub-domain wildcard, or a bare `*` — and an empty list denies rather than admits. **Deliberate
 limitations**: dynamic import resolves the `args`/`db`/`script` built-ins plus whatever the
 host's `ModuleResolver` claims (import options are ignored), and the `Response` is a plain object
 (no streaming body, single-value headers).
@@ -962,7 +964,7 @@ commands above; the limitations below are the ones that need an explanation rath
 | 5 | **`EJsonInterop.toEjson` reads data properties only; `toHostEjson` no longer does** | Closed for the host boundary. The script result is now converted *inside* the interpreter's lifetime (via `Interpreter.run`'s `ResultFinisher`) and `DbModule` passes its `InterpreterOps` through, so an accessor-valued property is read through its getter on the way to the caller and into the database - and the getter's own work is charged to the run's budgets, so a runaway getter aborts the run instead of hanging the boundary. The no-`ops` overload keeps the data-property-only behaviour for an embedding with no live interpreter. |
 | 6 | **Property escapes do not match the UCD exhaustively** | The build-JDK half is closed: **JDK 26 or newer is now required** (a `maven-enforcer-plugin` rule fails an older build), so the UCD is Unicode 17.0 everywhere - matching the version the corpus is generated against - and `\p{...}` answers identically on every node. Re-measuring `built-ins/RegExp/property-escapes/generated/` on that footing rather than assuming it scores **66.31% (311/469)**, so a genuine per-code-point gap remains between our resolution of a property name and the exhaustive set the corpus asserts; the subtree therefore stays excluded, now for that reason rather than for portability, and closing the gap is what would add those tests to the denominator. `internal/regex/UnicodeProperty` still resolves a property name to a `CodePointSet` by using `java.util.regex.Pattern` as a one-time, per-property *oracle* (compiled once, every code point tested, the truth table cached) - never as the matching engine - so the data is still the JDK's rather than a pinned UCD of our own; a future JDK bumping Unicode will move these escapes with it. **Properties of strings** (`\p{RGI_Emoji}` and its six siblings) remain the exception: they are sets of *strings*, so the JDK has no data for them at all, and `UnicodeProperty.StringProperties` expands each into an alternation of literal sequences from `src/main/resources/simplejs/emoji-sequences.txt` - data that is **ours and pinned to Unicode 17.0** (regenerate with `test_utils/gen_emoji_sequences.py`). Property names are matched **exactly** - loose matching (`\p{ gc = X }`) is an early error - and the `Hex` alias is supported. |
 | 7 | **Allocation that is O(1) per instruction is bounded only by the instruction budget** | `scriptMaxMemoryBytes` charges the allocations proportional to a script-supplied length (see *Host-contract notes*), which is what escapes `tick()`. A script that allocates a small object per instruction is still bounded only by `scriptInstructionBudget`, so a large instruction budget permits substantial retained heap. Sizing the two together is the operator's job. |
-| 8 | **`String.prototype.localeCompare` ignores its `locales`/`options` arguments** | It always collates with the host's locale (`InterpreterOps.locale()`, i.e. `scriptLocale` under the database binding) rather than the requested one. Honouring the argument means deciding how much of `Intl` to take on, which is a separate call — the host-boundary work only made the *default* host-controlled instead of the JVM's. |
+| 8 | **`localeCompare`/`toLocaleString` honour a locale but only part of `options`** | Closed for the argument itself: `builtins/LocaleResolver` resolves the `locales` argument (a tag or an array of tags, first well-formed one wins; a structurally invalid tag is a `RangeError`) and it reaches `String.prototype.localeCompare` and the `Number`/`Date` `toLocaleString`s, defaulting to the host locale (`scriptLocale`) when absent. What remains is the option subset `java.text` cannot express without `Intl`: `sensitivity` maps onto `Collator`'s three strengths, so `case` and `variant` both land on `TERTIARY`, and `usage`, `numeric`, `caseFirst` and `ignorePunctuation` are validated (a bad value is still a `RangeError`) but not honoured. |
 
 Row 8 (a script transaction being local-only under clustering) is gone: `EnforcingDatabaseAccess`
 now routes through `ClusterRouter`, so cross-owner script transactions run the same 2PC the wire
@@ -1049,14 +1051,45 @@ TypeError: Cannot read properties of null (reading 'total')
   becomes an early `SyntaxError`, as the spec requires of a Script. The flag arrives through
   `HostBindings.limits()`; `SimpleJs.run` keeps its signature, and `SimpleHostBindings` /
   `EnforcingDatabaseAccess` leave it off.
+- **A run reports what it consumed.** `ScriptResult.getMetrics()` carries the instructions executed,
+  the peak bytes held, the `db` operations issued and the wall-clock duration, each beside its budget,
+  and reaches the caller as the `metrics` object on the `RUN_SCRIPT`/`CALL_PROCEDURE` responses and as
+  a column of the run's history row. The counters are filled by a holder the caller owns
+  (`Interpreter.RunMetrics`), written in `runModule`'s own `finally`, so an aborted run reports what it
+  burned before it aborted — which is the run the numbers matter most for. `peakMemoryBytes` is a
+  high-water mark rather than the closing balance, because `release()` credits a drained `db.cursor`
+  batch back and would otherwise erase the peak. A straight-line script with no loop and no call
+  reports `instructions: 0`: `tick()` runs at loop back-edges and call entries, and such a program
+  reaches neither.
+- **Outbound `fetch` ships on, and open.** The switch defaults to true and the allowlist to `*`, because a
+  capability behind a default-off flag is one nobody discovers; the cost is that the shipped posture lets
+  any script use the server's network position — internal services and the cloud metadata endpoint
+  included — so `Main.warnIfScriptFetchEnabled` says so at every startup and the operator is expected to
+  narrow it. `DatabaseHostBindings.network()` returns a shared `JdkNetworkAccess` only when
+  `scriptFetchEnabled` is true, and `limitsFromConfiguration`
+  carries `scriptFetchAllowlist`/`scriptFetchTimeoutMs`/`scriptFetchMaxResponseBytes` with it. The
+  allowlist (`host/HostAllowlist`) accepts an exact host, a `*.example.com` wildcard matching
+  sub-domains but not the apex, or a bare `*`; an **empty** list denies everything even with the switch
+  on, inverting the engine's older "empty means unrestricted" rule — enabling egress without naming a
+  host is not a decision to allow every host. The grant reaches `RUN_SCRIPT`, `CALL_PROCEDURE`,
+  triggers and scheduled procedures (whose dispatchers rebuild the limits with their own wall clock and
+  carry the fetch fields through), and deliberately not pipeline scripts or before-write hooks, which
+  run holding collection locks where a blocking egress call is a stall.
 - **`RUN_SCRIPT` exposes all of the above to clients**, with the sandbox's `ResourceLimits` built
   from configuration (`DatabaseHostBindings.limitsFromConfiguration`) rather than supplied by the
   caller. See *The `RUN_SCRIPT` operation* below.
-- **The per-run budgets bound one run; `maxConcurrentScripts` bounds their sum.** Every limit in
+- **The per-run budgets bound one run; the admission caps bound their sum.** Every limit in
   `ResourceLimits` is per run, so N simultaneous callers each get the full instruction budget and the
   full `scriptMaxMemoryBytes` allocation budget. `ops/ScriptAdmission` caps the client-initiated
   operations (`RUN_SCRIPT`, `CALL_PROCEDURE`) at `maxConcurrentScripts` concurrent runs, admitting a
-  caller after a bounded `scriptQueueWaitMs` wait and answering `503-6` if none comes free. Triggers
+  caller after a bounded `scriptQueueWaitMs` wait and answering `503-6` if none comes free. Inside that
+  permit it then takes this caller's `maxConcurrentScriptsPerUser` slice and this database's
+  `maxConcurrentScriptsPerDatabase` slice (0 disables either). The inner two do **not** wait: the
+  bounded wait exists to smooth a node-wide burst, whereas a tenant already at its own ceiling should be
+  told so at once rather than occupy a node-wide permit while it queues. An acquisition returns a
+  `Permit` recording which pools it took, so a refusal at an inner level releases the outer one — a
+  boolean could not express that, and a leak there would let a saturated tenant drain the node by being
+  refused. The `503-6` message names the scope that refused it (`node`, `user` or `database`). Triggers
   and scheduled procedures are deliberately **exempt** — they are already bounded by their own worker
   pools (`triggerThreads`, `scheduleThreads`), and a trigger refused for want of a permit would be a
   *dropped* trigger rather than a retried one, since its pending-run record is consumed by the
@@ -1135,8 +1168,10 @@ exposed to the script as `db.name`, so a script need not hardcode its database.
 `scriptMaxMemoryBytes` (exceeding it aborts with `400-12`), `scriptMaxLogLines`,
 `scriptMaxLogLineChars` and `scriptTextImportEnabled`; the request cannot
 influence any of them. `scriptMaxSourceBytes` caps the accepted source (`400-10`) and
-`scriptsEnabled` (default `true`) gates the operation entirely (`403-2`). `fetch` stays unreachable
-from the wire: no `NetworkAccess` is wired, so `HostBindings.network()` is `null`.
+`scriptsEnabled` (default `true`) gates the operation entirely (`403-2`). `fetch` is reachable from the
+wire whenever `scriptFetchEnabled` is set — it is by default — and reaches the hosts
+`scriptFetchAllowlist` names, which ships as `*`; with the switch off, `HostBindings.network()` stays
+`null` and calling `fetch` is a catchable `TypeError`.
 
 **Failure contract of the `db` surface.** Every method throws a catchable JS `Error` (built with the
 script's own realm `Error.prototype`, so `e instanceof Error` holds) whenever the underlying
@@ -1592,6 +1627,71 @@ abort alike — reachable as `getLogs()` and `isLogsTruncated()`.
   does not cover.
 - Under `RUN_SCRIPT` the two caps come from `scriptMaxLogLines`/`scriptMaxLogLineChars`, and the
   lines travel back to the client on the response (`logs`/`logsTruncated`).
+
+### Run history
+
+Unless `scriptRunHistoryEnabled` is off, a finished run is recorded as a document in the reserved
+`script_runs` collection of the database it ran against, so an operator can ask what ran, what it cost
+and why it failed with an ordinary `AGGREGATE` instead of grepping the server log.
+
+- **Per-database, not admin.** A database owner can query their own job history with the permissions
+  they already have, and the rows replicate like any other data. The cost is a reserved collection
+  name in every user database.
+- **Created lazily, on the first row.** Creating it with the database would change what
+  `LIST_COLLECTIONS` answers for every database that never runs a script. A consequence worth
+  knowing: an `AGGREGATE` over `script_runs` finds nothing until the first run lands.
+- **Asynchronous and best-effort.** `ops/ScriptRunHistory.record` submits a `ScriptRunHistoryEvent` to
+  the existing background queue and returns; the worker writes the row through the ordinary request
+  path (`ClusterRouter` then `OperationProcessor`), so ownership, quorum, replication and page
+  metadata are the ones every other write gets rather than a second implementation. A write that
+  fails is counted and dropped — the run it describes has already committed its effects, and history
+  is diagnostics, not a durability guarantee.
+- **It cannot cascade.** `TriggerHelper.afterWrite` and `BeforeHookContext` both skip the reserved
+  collection, so an audit trigger cannot fire on the record of itself, and `RequestValidator` refuses
+  every client mutation of it (`400-1`) while leaving reads, `CREATE_INDEX` and `REINDEX` open.
+- **What is recorded** is `scriptRunHistoryKinds` — `CALL_PROCEDURE,TRIGGER,SCHEDULE` by default. Ad-hoc
+  `RUN_SCRIPT` is opt-in because an exploratory client would otherwise write a row per keystroke, and
+  `BEFORE_HOOK` records refusals only, since a hook runs once per document on the write path.
+- A row carries the run's identity (`runId`, `kind`, `name`, `procedure`, `collection`, `event`,
+  `username`, `actingUser`, `node`), its outcome (`outcome` of `ok`/`error`/`skipped`/`dead_letter`,
+  `errorName`, `errorMessage` clipped to `scriptRunHistoryMaxErrorChars`, `stack`), its `attempt`
+  number, and its `metrics`. `skipped` is the outcome no other surface reports: a trigger whose
+  definer was deleted, or a schedule whose procedure is gone, never runs *and* never fails.
+- An hourly sweep deletes rows past `scriptRunHistoryRetentionMs`, and only on the node that owns the
+  collection, so N nodes do not each issue the same deletes.
+
+### Retry and dead letters
+
+A failed after-trigger used to be lost with a `WARN`. It is now retried and, if it keeps failing,
+kept as a dead letter for an operator.
+
+The state machine lives on the **pending-run record** rather than in a second store, which is what
+keeps the exactly-once property intact: a record still present is still un-applied.
+
+```
+dispatch outcome
+├─ ok                     -> record consumed by the applying transaction   (unchanged)
+├─ non-retryable terminal -> record consumed                               (unchanged)
+│   (trigger/procedure gone, definer gone, depth exceeded, cancelled, queue-dropped)
+└─ retryable failure      -> attempts+1
+     ├─ attempts < triggerMaxAttempts -> record stays PENDING, re-queued after the backoff
+     └─ otherwise                     -> status=DEAD, lastError kept, payload kept
+```
+
+- **Retryable** means a script error or a commit failure — a transient lock, a peer that was briefly
+  unreachable, a bug being fixed. Everything else was already terminal by construction and stays so.
+  A **cancellation** is deliberately not retryable: an operator cancelling a runaway trigger wants it
+  stopped, which is the one place the exactly-once guarantee is waived.
+- The backoff doubles from `triggerRetryBackoffMs`, clamped at `triggerRetryMaxBackoffMs`, delivered by
+  a scheduler on `TriggerExecutor`. A retry still waiting when the node stops is not lost: its record
+  is `PENDING`, so startup recovery replays it.
+- `TriggerRunRecovery` replays `PENDING` records only — replaying a dead letter would re-run exactly
+  what was given up on — and a dead letter keeps its own, longer `triggerDeadLetterRetentionMs`,
+  because it is waiting for a human and the pending clock would discard the evidence first.
+- `LIST_TRIGGER_RUNS` and `RESOLVE_TRIGGER_RUN` (both admin-only) are the operator surface, fanned out
+  cluster-wide by `cluster/TriggerRunDirectory` because `admin/trigger_runs` is not replicated and a
+  run's record lives on exactly one node. `replay` **resets the attempt count**, so a run whose cause
+  has been fixed gets a full budget rather than dead-lettering on its first failure.
 
 ### Cancellation
 

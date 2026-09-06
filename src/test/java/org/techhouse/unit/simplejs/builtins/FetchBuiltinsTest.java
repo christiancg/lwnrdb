@@ -19,8 +19,10 @@ import org.techhouse.unit.simplejs.host.NetworkHostBindings;
 public class FetchBuiltinsTest {
     private final SimpleJs engine = new SimpleJs();
 
+    // "*" rather than an empty list: an empty allowlist denies every host, so a test that is not about
+    // the allowlist has to say explicitly that it allows one.
     private static ResourceLimits fetchLimits() {
-        return new ResourceLimits(-1, 2000, -1, false, true, List.of(), -1, -1);
+        return new ResourceLimits(-1, 2000, -1, false, true, List.of("*"), -1, -1);
     }
 
     private static ResourceLimits fetchLimits(List<String> allowlist, long maxBytes, long timeout) {
@@ -129,7 +131,7 @@ public class FetchBuiltinsTest {
     @Test
     public void test_fetch_size_violation() {
         final var source = "try { await fetch('http://x/'); return 'no'; } catch (e) { return e.message; }";
-        final var result = run(source, constant(ok("0123456789")), fetchLimits(List.of(), 4, -1));
+        final var result = run(source, constant(ok("0123456789")), fetchLimits(List.of("*"), 4, -1));
         assertEquals("fetch response exceeds maximum size", result.getValue().asJsonString().getValue());
     }
 
@@ -145,7 +147,7 @@ public class FetchBuiltinsTest {
             return ok("{}");
         };
         final var source = "try { await fetch('http://x/'); return 'no'; } catch (e) { return e.message; }";
-        final var result = run(source, slow, fetchLimits(List.of(), -1, 50));
+        final var result = run(source, slow, fetchLimits(List.of("*"), -1, 50));
         assertEquals("fetch timed out", result.getValue().asJsonString().getValue());
     }
 

@@ -65,6 +65,8 @@ public final class DatabaseStatsHelper {
         triggers.addProperty("failed", triggerExecutor.getFailed());
         triggers.addProperty("dropped", triggerExecutor.getDropped());
         triggers.addProperty("queued", (long) triggerExecutor.getQueued());
+        triggers.addProperty("retried", triggerExecutor.getRetried());
+        triggers.addProperty("deadLettered", triggerExecutor.getDeadLettered());
         triggers.addProperty("runLogEnabled", Configuration.getInstance().isTriggerRunLogEnabled());
         triggers.addProperty("beforeApplied", BeforeHookContext.getApplied());
         triggers.addProperty("beforeReplaced", BeforeHookContext.getReplaced());
@@ -100,11 +102,17 @@ public final class DatabaseStatsHelper {
         scripts.addProperty("capacity", (long) scriptAdmission.capacity());
         scripts.addProperty("available", (long) scriptAdmission.available());
         scripts.addProperty("rejected", scriptAdmission.getRejected());
+        scripts.addProperty("capacityPerUser", (long) scriptAdmission.perUserCapacity());
+        scripts.addProperty("capacityPerDatabase", (long) scriptAdmission.perDatabaseCapacity());
+        scripts.addProperty("rejectedPerUser", scriptAdmission.getRejectedPerUser());
+        scripts.addProperty("rejectedPerDatabase", scriptAdmission.getRejectedPerDatabase());
         scripts.addProperty("waited", scriptAdmission.getWaited());
         scripts.addProperty("forwarded", scriptPlacement.getForwarded());
         scripts.addProperty("forwardFallbacks", scriptPlacement.getForwardFallbacks());
         scripts.addProperty("cancelled", scriptRunRegistry.getCancelled());
         scripts.addProperty("compiledCacheEntries", (long) compiledScripts.size());
+        scripts.addProperty("historyRecorded", ScriptRunHistory.getRecorded());
+        scripts.addProperty("historyDropped", ScriptRunHistory.getDropped());
         return scripts;
     }
 

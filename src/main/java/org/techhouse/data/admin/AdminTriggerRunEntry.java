@@ -34,6 +34,11 @@ public class AdminTriggerRunEntry extends DbEntry {
     private static final String FIRED_AT_FIELD = "firedAt";
     private static final String IDS_FIELD = "ids";
     private static final String DOCUMENTS_FIELD = "documents";
+    private static final String STATUS_FIELD = "status";
+    private static final String ATTEMPTS_FIELD = "attempts";
+    private static final String LAST_ERROR_FIELD = "lastError";
+    private static final String LAST_ERROR_AT_FIELD = "lastErrorAt";
+    private static final String NEXT_ATTEMPT_AT_FIELD = "nextAttemptAt";
 
     private String runId;
     private String nodeId;
@@ -48,6 +53,11 @@ public class AdminTriggerRunEntry extends DbEntry {
     private long firedAt;
     private List<String> ids;
     private List<JsonObject> documents;
+    private TriggerRunStatus status = TriggerRunStatus.PENDING;
+    private int attempts;
+    private String lastError;
+    private long lastErrorAt;
+    private long nextAttemptAt;
 
     private AdminTriggerRunEntry() {
         setDatabaseName(Globals.ADMIN_DB_NAME);
@@ -116,7 +126,25 @@ public class AdminTriggerRunEntry extends DbEntry {
                 result.documents.add(element.asJsonObject());
             }
         }
+        // A record written before retries existed carries none of these fields and reads as a first,
+        // still-pending attempt - which is exactly what it is.
+        result.status = statusOf(readString(object, STATUS_FIELD));
+        result.attempts = intOrZero(readString(object, ATTEMPTS_FIELD));
+        result.lastError = readString(object, LAST_ERROR_FIELD);
+        result.lastErrorAt = longOrZero(readString(object, LAST_ERROR_AT_FIELD));
+        result.nextAttemptAt = longOrZero(readString(object, NEXT_ATTEMPT_AT_FIELD));
         return result;
+    }
+
+    private static TriggerRunStatus statusOf(String value) {
+        if (value == null) {
+            return TriggerRunStatus.PENDING;
+        }
+        try {
+            return TriggerRunStatus.valueOf(value);
+        } catch (IllegalArgumentException unknown) {
+            return TriggerRunStatus.PENDING;
+        }
     }
 
     // An unauthenticated write has no acting user, so a field can legitimately round-trip as JSON null.
@@ -163,6 +191,41 @@ public class AdminTriggerRunEntry extends DbEntry {
             documentArray.add(document);
         }
         data.add(DOCUMENTS_FIELD, documentArray);
+        data.addProperty(STATUS_FIELD, status.name());
+        data.addProperty(ATTEMPTS_FIELD, Integer.toString(attempts));
+        data.addProperty(LAST_ERROR_FIELD, lastError);
+        data.addProperty(LAST_ERROR_AT_FIELD, Long.toString(lastErrorAt));
+        data.addProperty(NEXT_ATTEMPT_AT_FIELD, Long.toString(nextAttemptAt));
+    }
+
+    /** Records the outcome of one attempt, leaving the run replayable or marking it dead. */
+    public void markAttempt(TriggerRunStatus newStatus, int attemptCount, String error, long nextAttempt) {
+        this.status = newStatus;
+        this.attempts = attemptCount;
+        this.lastError = error;
+        this.lastErrorAt = error == null ? lastErrorAt : System.currentTimeMillis();
+        this.nextAttemptAt = nextAttempt;
+        syncData();
+    }
+
+    public TriggerRunStatus getStatus() {
+        return status;
+    }
+
+    public int getAttempts() {
+        return attempts;
+    }
+
+    public String getLastError() {
+        return lastError;
+    }
+
+    public long getLastErrorAt() {
+        return lastErrorAt;
+    }
+
+    public long getNextAttemptAt() {
+        return nextAttemptAt;
     }
 
     public String getRunId() {

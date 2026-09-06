@@ -52,30 +52,42 @@ public final class ScriptOperationHelper {
         }
         // Admitted only after the checks above, so a request that was never going to run does not consume
         // one of the node's script permits.
-        if (!admission.tryAcquire()) {
-            return new OperationResponse(OperationType.RUN_SCRIPT, ErrorCode.SCRIPT_CONCURRENCY_LIMIT);
+        final var permit = admission.acquire(username, dbName);
+        if (permit == null) {
+            return concurrencyRefusal(OperationType.RUN_SCRIPT);
         }
-        try {
+        try (permit) {
             final var run = registry.register(ScriptRunKind.RUN_SCRIPT, dbName, null, username, clientId);
             try {
                 // The parse failure is cached and replayed rather than thrown, so a syntax error stays the
                 // 400-9 response this operation has always answered with.
                 final var compilation = compiledScripts.get(source);
-                final var host = hostFor(request.getArgs(), dbName, username, clientId,
-                        DatabaseHostBindings.limitsFromConfiguration(), null, run);
+                final var database = new EnforcingDatabaseAccess(username, clientId, dbName);
+                final var host = hostFor(request.getArgs(), database, DatabaseHostBindings.limitsFromConfiguration(),
+                        null, run);
                 final var start = System.currentTimeMillis();
-                final var result = compilation.failure() == null
+                final var raw = compilation.failure() == null
                         ? simpleJs.run(compilation.compiled(), host)
                         : simpleJs.failure(compilation.failure());
-                logRun("RUN_SCRIPT user=" + username + " database=" + dbName, run.runId(),
-                        System.currentTimeMillis() - start, result);
+                final var elapsed = System.currentTimeMillis() - start;
+                final var result = raw
+                        .withMetrics(raw.getMetrics().withHostCounters(database.operationCount(), elapsed));
+                logRun("RUN_SCRIPT user=" + username + " database=" + dbName, run.runId(), elapsed, result);
+                ScriptRunHistory.record(historyOf(run.runId(), ScriptRunKind.RUN_SCRIPT, dbName, null, username, start,
+                        elapsed, result));
                 return toRunScriptResponse(result, run.runId());
             } finally {
                 registry.unregister(run.runId());
             }
-        } finally {
-            admission.release();
         }
+    }
+
+    /** Names which of the three ceilings refused the run, so an operator can act on the right one. */
+    static OperationResponse concurrencyRefusal(OperationType type) {
+        final var scope = admission.lastRefusalScope();
+        return new OperationResponse(type,
+                ErrorCode.SCRIPT_CONCURRENCY_LIMIT.getDefaultMessage() + " (" + scope + " limit)",
+                ErrorCode.SCRIPT_CONCURRENCY_LIMIT);
     }
 
     /** A finished run and the id it was visible under while it ran, so a caller can report both. */
@@ -99,10 +111,18 @@ public final class ScriptOperationHelper {
             Consumer<String> console) {
         final var run = registry.register(kind, dbName, name, username, clientId);
         try {
-            final var host = hostFor(args, dbName, username, clientId, limits, console, run);
+            final var database = new EnforcingDatabaseAccess(username, clientId, dbName);
+            final var host = hostFor(args, database, limits, console, run);
             final var start = System.currentTimeMillis();
-            final var result = simpleJs.run(compiled, host);
-            logRun(logPrefix, run.runId(), System.currentTimeMillis() - start, result);
+            final var raw = simpleJs.run(compiled, host);
+            final var elapsed = System.currentTimeMillis() - start;
+            final var result = raw.withMetrics(raw.getMetrics().withHostCounters(database.operationCount(), elapsed));
+            logRun(logPrefix, run.runId(), elapsed, result);
+            // A trigger and a schedule record their own rows: each knows context this shared body does not -
+            // the collection, event and attempt for one, the procedure behind the schedule name for the other.
+            if (kind != ScriptRunKind.TRIGGER && kind != ScriptRunKind.SCHEDULE) {
+                ScriptRunHistory.record(historyOf(run.runId(), kind, dbName, name, username, start, elapsed, result));
+            }
             return new RunOutcome(run.runId(), result);
         } finally {
             registry.unregister(run.runId());
@@ -111,16 +131,17 @@ public final class ScriptOperationHelper {
 
     // A null console sink leaves the capture capturing only, so the output travels back on the response
     // instead of into the server log.
-    private static DatabaseHostBindings hostFor(JsonObject args, String dbName, String username, UUID clientId,
+    private static DatabaseHostBindings hostFor(JsonObject args, EnforcingDatabaseAccess database,
             ResourceLimits limits, Consumer<String> console, ScriptRun run) {
-        final var database = new EnforcingDatabaseAccess(username, clientId, dbName);
         return DatabaseHostBindings.of(args, database, console, limits, run::isCancelled);
     }
 
     private static void logRun(String logPrefix, String runId, long durationMs, ScriptResult result) {
         final var outcome = result.isError() ? result.getErrorName() + ": " + result.getErrorMessage() : "ok";
+        final var metrics = result.getMetrics();
         final var line = logPrefix + " runId=" + runId + " durationMs=" + durationMs + " outcome=" + outcome
-                + renderStack(result.getErrorStack());
+                + " instructions=" + metrics.instructions() + " peakMemoryBytes=" + metrics.peakMemoryBytes()
+                + " dbOps=" + metrics.dbOperations() + renderStack(result.getErrorStack());
         // An exhausted heap means the allocation budget failed to bound the script, or that the JVM was
         // already under pressure from the cache rather than from this script. Either needs an operator.
         if (EXHAUSTED_MESSAGE.equals(result.getErrorMessage())) {
@@ -131,13 +152,22 @@ public final class ScriptOperationHelper {
     }
 
     private static OperationResponse toRunScriptResponse(ScriptResult result, String runId) {
-        if (!result.isError()) {
-            return new RunScriptResponse("Script executed successfully", result.getValue(), result.getLogs(),
-                    result.isLogsTruncated(), runId);
-        }
-        return new RunScriptResponse(result.getErrorName() + ": " + result.getErrorMessage(),
-                errorCodeFor(result.getErrorName()), result.getLogs(), result.isLogsTruncated(), runId,
-                result.getErrorStack());
+        final var response = result.isError()
+                ? new RunScriptResponse(result.getErrorName() + ": " + result.getErrorMessage(),
+                        errorCodeFor(result.getErrorName()), result.getLogs(), result.isLogsTruncated(), runId,
+                        result.getErrorStack())
+                : new RunScriptResponse("Script executed successfully", result.getValue(), result.getLogs(),
+                        result.isLogsTruncated(), runId);
+        response.setMetrics(result.getMetrics().toJson());
+        return response;
+    }
+
+    static ScriptRunRecord historyOf(String runId, ScriptRunKind kind, String dbName, String name, String username,
+            long startedAt, long durationMs, ScriptResult result) {
+        return new ScriptRunRecord(runId, kind, dbName, name, name, null, null, username, username, startedAt,
+                durationMs, 1, result.isError() ? ScriptRunRecord.OUTCOME_ERROR : ScriptRunRecord.OUTCOME_OK,
+                result.getErrorName(), result.getErrorMessage(), result.getErrorStack(), result.getMetrics(),
+                result.getLogs(), result.isLogsTruncated());
     }
 
     // One line, so the trace stays greppable in a log a human is tailing.

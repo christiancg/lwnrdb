@@ -2,6 +2,8 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.concurrent.CountDownLatch;
@@ -149,5 +151,113 @@ public class ScriptAdmissionTest {
         assertTrue(flagRestored.get(), "the interrupt flag was swallowed");
         // An interrupted wait never held a permit, so it is not counted as a capacity rejection.
         assertEquals(0, admission.getRejected());
+    }
+
+    private static ScriptAdmission tenantAdmission(int nodeWide, int perUser, int perDatabase) {
+        final var admission = new ScriptAdmission(nodeWide, 0L);
+        admission.reconfigure(nodeWide, 0L, perUser, perDatabase);
+        return admission;
+    }
+
+    @Test
+    public void test_per_user_cap_refuses_the_same_user_but_not_another() {
+        final var admission = tenantAdmission(10, 1, 0);
+        assertNotNull(admission.acquire("alice", "db1"));
+        assertNull(admission.acquire("alice", "db1"), "alice is already at her ceiling");
+        assertEquals(ScriptAdmission.SCOPE_USER, admission.lastRefusalScope());
+        assertNotNull(admission.acquire("bob", "db1"), "bob has his own slice");
+        assertEquals(1L, admission.getRejectedPerUser());
+    }
+
+    @Test
+    public void test_per_database_cap_refuses_the_same_database_but_not_another() {
+        final var admission = tenantAdmission(10, 0, 1);
+        assertNotNull(admission.acquire("alice", "db1"));
+        assertNull(admission.acquire("bob", "db1"), "db1 is already at its ceiling");
+        assertEquals(ScriptAdmission.SCOPE_DATABASE, admission.lastRefusalScope());
+        assertNotNull(admission.acquire("bob", "db2"));
+        assertEquals(1L, admission.getRejectedPerDatabase());
+    }
+
+    // The failure mode the Permit exists to prevent: a refusal at an inner level must give the node-wide
+    // permit back, or a saturated tenant would drain the node's capacity by being refused.
+    @Test
+    public void test_an_inner_refusal_returns_the_node_wide_permit() {
+        final var admission = tenantAdmission(2, 1, 0);
+        final var held = admission.acquire("alice", "db1");
+        assertNotNull(held);
+        assertEquals(1, admission.available());
+
+        assertNull(admission.acquire("alice", "db1"));
+        assertEquals(1, admission.available(), "the refused run must not still hold a node-wide permit");
+
+        held.close();
+        assertEquals(2, admission.available());
+    }
+
+    @Test
+    public void test_closing_a_permit_frees_every_slice_it_took() {
+        final var admission = tenantAdmission(1, 1, 1);
+        final var permit = admission.acquire("alice", "db1");
+        assertNotNull(permit);
+        assertNull(admission.acquire("alice", "db1"));
+
+        permit.close();
+        assertNotNull(admission.acquire("alice", "db1"), "every slice must be released together");
+    }
+
+    @Test
+    public void test_closing_twice_is_a_no_op() {
+        final var admission = tenantAdmission(1, 1, 1);
+        final var permit = admission.acquire("alice", "db1");
+        assertNotNull(permit);
+        permit.close();
+        permit.close();
+        assertEquals(1, admission.available(), "a double close must not inflate the pool");
+    }
+
+    @Test
+    public void test_zero_means_unlimited_at_both_tenant_levels() {
+        final var admission = tenantAdmission(0, 0, 0);
+        for (var i = 0; i < 20; i++) {
+            assertNotNull(admission.acquire("alice", "db1"));
+        }
+        assertEquals(0L, admission.getRejectedPerUser());
+        assertEquals(0L, admission.getRejectedPerDatabase());
+    }
+
+    @Test
+    public void test_a_null_username_or_database_skips_that_slice() {
+        final var admission = tenantAdmission(5, 1, 1);
+        final var first = admission.acquire(null, null);
+        assertNotNull(first);
+        assertNotNull(admission.acquire(null, null), "a run with no principal cannot be sliced by one");
+        first.close();
+        assertNotNull(admission.acquire(null, null));
+    }
+
+    // Idle pools are dropped so a node that sees many one-off users does not accumulate an entry per name.
+    @Test
+    public void test_idle_pools_are_released() {
+        final var admission = tenantAdmission(5, 1, 1);
+        final var permit = admission.acquire("transient-user", "transient-db");
+        assertNotNull(permit);
+        permit.close();
+        assertNotNull(admission.acquire("transient-user", "transient-db"));
+    }
+
+    @Test
+    public void test_node_wide_refusal_reports_the_node_scope() {
+        final var admission = tenantAdmission(1, 0, 0);
+        assertNotNull(admission.acquire("alice", "db1"));
+        assertNull(admission.acquire("bob", "db2"));
+        assertEquals(ScriptAdmission.SCOPE_NODE, admission.lastRefusalScope());
+    }
+
+    // Read before anything was ever refused on this thread, the scope answers for the outermost cap
+    // rather than for nothing at all.
+    @Test
+    public void test_the_refusal_scope_defaults_to_the_node() {
+        assertEquals(ScriptAdmission.SCOPE_NODE, new ScriptAdmission(1, 0L).lastRefusalScope());
     }
 }

@@ -1,5 +1,7 @@
 package org.techhouse.config;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import org.techhouse.ex.InvalidConfigurationException;
 import org.techhouse.log.Logger;
@@ -62,7 +64,18 @@ public final class Configuration {
     private long aggregationScriptMaxSourceBytes;
     private int maxConcurrentScripts;
     private long scriptQueueWaitMs;
+    private int maxConcurrentScriptsPerUser;
+    private int maxConcurrentScriptsPerDatabase;
     private int scriptCompiledCacheSize;
+    private boolean scriptRunHistoryEnabled;
+    private String scriptRunHistoryKinds;
+    private long scriptRunHistoryRetentionMs;
+    private boolean scriptRunHistoryIncludeLogs;
+    private int scriptRunHistoryMaxErrorChars;
+    private boolean scriptFetchEnabled;
+    private String scriptFetchAllowlistRaw;
+    private long scriptFetchTimeoutMs;
+    private long scriptFetchMaxResponseBytes;
     private int procedureCacheSize;
     private long procedureCacheMaxBytes;
     private long schemaCacheMaxBytes;
@@ -75,6 +88,10 @@ public final class Configuration {
     private long triggerTimeoutMs;
     private boolean triggerRunLogEnabled;
     private long triggerRunRetentionMs;
+    private int triggerMaxAttempts;
+    private long triggerRetryBackoffMs;
+    private long triggerRetryMaxBackoffMs;
+    private long triggerDeadLetterRetentionMs;
     private long beforeHookInstructionBudget;
     private long beforeHookTimeoutMs;
     private boolean schedulesEnabled;
@@ -160,7 +177,18 @@ public final class Configuration {
         aggregationScriptMaxSourceBytes = sizeOf(configs, "aggregationScriptMaxSourceBytes");
         maxConcurrentScripts = intOf(configs, "maxConcurrentScripts");
         scriptQueueWaitMs = longOf(configs, "scriptQueueWaitMs");
+        maxConcurrentScriptsPerUser = intOf(configs, "maxConcurrentScriptsPerUser");
+        maxConcurrentScriptsPerDatabase = intOf(configs, "maxConcurrentScriptsPerDatabase");
         scriptCompiledCacheSize = intOf(configs, "scriptCompiledCacheSize");
+        scriptRunHistoryEnabled = booleanOf(configs, "scriptRunHistoryEnabled");
+        scriptRunHistoryKinds = configs.get("scriptRunHistoryKinds");
+        scriptRunHistoryRetentionMs = longOf(configs, "scriptRunHistoryRetentionMs");
+        scriptRunHistoryIncludeLogs = booleanOf(configs, "scriptRunHistoryIncludeLogs");
+        scriptRunHistoryMaxErrorChars = intOf(configs, "scriptRunHistoryMaxErrorChars");
+        scriptFetchEnabled = booleanOf(configs, "scriptFetchEnabled");
+        scriptFetchAllowlistRaw = configs.get("scriptFetchAllowlist");
+        scriptFetchTimeoutMs = longOf(configs, "scriptFetchTimeoutMs");
+        scriptFetchMaxResponseBytes = sizeOf(configs, "scriptFetchMaxResponseBytes");
         procedureCacheSize = intOf(configs, "procedureCacheSize");
         procedureCacheMaxBytes = sizeOf(configs, "procedureCacheMaxBytes");
         schemaCacheMaxBytes = sizeOf(configs, "schemaCacheMaxBytes");
@@ -173,6 +201,10 @@ public final class Configuration {
         triggerTimeoutMs = longOf(configs, "triggerTimeoutMs");
         triggerRunLogEnabled = booleanOf(configs, "triggerRunLogEnabled");
         triggerRunRetentionMs = longOf(configs, "triggerRunRetentionMs");
+        triggerMaxAttempts = intOf(configs, "triggerMaxAttempts");
+        triggerRetryBackoffMs = longOf(configs, "triggerRetryBackoffMs");
+        triggerRetryMaxBackoffMs = longOf(configs, "triggerRetryMaxBackoffMs");
+        triggerDeadLetterRetentionMs = longOf(configs, "triggerDeadLetterRetentionMs");
         beforeHookInstructionBudget = longOf(configs, "beforeHookInstructionBudget");
         beforeHookTimeoutMs = longOf(configs, "beforeHookTimeoutMs");
         schedulesEnabled = booleanOf(configs, "schedulesEnabled");
@@ -435,8 +467,63 @@ public final class Configuration {
         return scriptQueueWaitMs;
     }
 
+    public int getMaxConcurrentScriptsPerUser() {
+        return maxConcurrentScriptsPerUser;
+    }
+
+    public int getMaxConcurrentScriptsPerDatabase() {
+        return maxConcurrentScriptsPerDatabase;
+    }
+
     public int getScriptCompiledCacheSize() {
         return scriptCompiledCacheSize;
+    }
+
+    public boolean isScriptRunHistoryEnabled() {
+        return scriptRunHistoryEnabled;
+    }
+
+    public String getScriptRunHistoryKinds() {
+        return scriptRunHistoryKinds;
+    }
+
+    public long getScriptRunHistoryRetentionMs() {
+        return scriptRunHistoryRetentionMs;
+    }
+
+    public boolean isScriptRunHistoryIncludeLogs() {
+        return scriptRunHistoryIncludeLogs;
+    }
+
+    public int getScriptRunHistoryMaxErrorChars() {
+        return scriptRunHistoryMaxErrorChars;
+    }
+
+    public boolean isScriptFetchEnabled() {
+        return scriptFetchEnabled;
+    }
+
+    /** The configured hosts, parsed. An empty list denies every host - see the key's documentation. */
+    public List<String> getScriptFetchAllowlist() {
+        if (scriptFetchAllowlistRaw == null || scriptFetchAllowlistRaw.isBlank()) {
+            return List.of();
+        }
+        final var hosts = new ArrayList<String>();
+        for (final var entry : scriptFetchAllowlistRaw.split(",")) {
+            final var trimmed = entry.trim();
+            if (!trimmed.isEmpty()) {
+                hosts.add(trimmed);
+            }
+        }
+        return List.copyOf(hosts);
+    }
+
+    public long getScriptFetchTimeoutMs() {
+        return scriptFetchTimeoutMs;
+    }
+
+    public long getScriptFetchMaxResponseBytes() {
+        return scriptFetchMaxResponseBytes;
     }
 
     public int getProcedureCacheSize() {
@@ -481,6 +568,22 @@ public final class Configuration {
 
     public boolean isTriggerRunLogEnabled() {
         return triggerRunLogEnabled;
+    }
+
+    public int getTriggerMaxAttempts() {
+        return triggerMaxAttempts;
+    }
+
+    public long getTriggerRetryBackoffMs() {
+        return triggerRetryBackoffMs;
+    }
+
+    public long getTriggerRetryMaxBackoffMs() {
+        return triggerRetryMaxBackoffMs;
+    }
+
+    public long getTriggerDeadLetterRetentionMs() {
+        return triggerDeadLetterRetentionMs;
     }
 
     public long getTriggerRunRetentionMs() {

@@ -104,7 +104,9 @@ public final class BeforeHookContext implements AutoCloseable {
     // Ascending name order rather than the file's insertion order, so a chain of hooks is stable and
     // predictable from what LIST_TRIGGERS shows regardless of the order the rows were installed in.
     private static List<TriggerDefinition> hooksFor(String dbName, String collName, EventType event) {
-        if (!configuration.isTriggersEnabled()) {
+        // The reserved history collection is written by the server, not by a client, so no hook may veto
+        // or rewrite a row - the same exclusion TriggerHelper applies on the after side.
+        if (!configuration.isTriggersEnabled() || Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName)) {
             return List.of();
         }
         final var matching = new ArrayList<TriggerDefinition>();
@@ -256,9 +258,19 @@ public final class BeforeHookContext implements AutoCloseable {
     }
 
     private BeforeHookOutcome reject(OperationType type, TriggerDefinition hook, String reason) {
+        recordRefusal(hook, "reject", null, reason);
         return BeforeHookOutcome.rejected(
                 new OperationResponse(type, "Before trigger '" + hook.getName() + "' rejected this write: " + reason,
                         ErrorCode.BEFORE_HOOK_REJECTED));
+    }
+
+    // Only a refused write is recorded: a hook runs once per document on the write path, so recording every
+    // acceptance would multiply the write amplification of the collection it guards.
+    private void recordRefusal(TriggerDefinition hook, String outcome, String errorName, String reason) {
+        ScriptRunHistory.record(
+                new ScriptRunRecord(scriptRun == null ? null : scriptRun.runId(), ScriptRunKind.BEFORE_HOOK, dbName,
+                        hook.getName(), hook.getProcedureName(), collName, event.name(), hook.getDefiner(), actingUser,
+                        System.currentTimeMillis(), 0L, 1, outcome, errorName, reason, lastStack, null, null, false));
     }
 
     // A hook that threw decided no, and reads as a rejection (400-21). A sandbox abort keeps its own code
@@ -271,6 +283,7 @@ public final class BeforeHookContext implements AutoCloseable {
             return reject(type, hook, e.getErrorName() + ": " + e.getMessage());
         }
         failed.incrementAndGet();
+        recordRefusal(hook, ScriptRunRecord.OUTCOME_ERROR, e.getErrorName(), e.getMessage());
         return BeforeHookOutcome.rejected(new OperationResponse(type,
                 "Before trigger '" + hook.getName() + "' failed: " + e.getErrorName() + ": " + e.getMessage(), code));
     }

@@ -38,6 +38,14 @@ public class ClusterMessage {
     private List<RunningScript> runningScripts;
     // The run id to cancel on a CANCEL_SCRIPT message.
     private String cancelRunId;
+    // This node's recorded trigger runs on a LIST_TRIGGER_RUNS_ACK, aggregated cluster-wide by the node
+    // handling a LIST_TRIGGER_RUNS request.
+    private List<TriggerRunRow> triggerRuns;
+    // The run id and decision (replay/discard) on a RESOLVE_TRIGGER_RUN message, and whether the receiving
+    // node held that record on the ack.
+    private String triggerRunId;
+    private String triggerRunDecision;
+    private boolean triggerRunResolved;
     // Whether the receiving node was executing that run and has asked it to stop, on a CANCEL_SCRIPT_ACK.
     private boolean cancelledRun;
     // This node's authoritative admin state (epoch + databases/collections/users) on an ADMIN_SNAPSHOT_ACK.
@@ -46,6 +54,38 @@ public class ClusterMessage {
     // advance without pulling a snapshot.
     private long adminEpoch;
     private String errorMessage;
+
+    public List<TriggerRunRow> getTriggerRuns() {
+        return triggerRuns;
+    }
+
+    public void setTriggerRuns(List<TriggerRunRow> triggerRuns) {
+        this.triggerRuns = triggerRuns;
+    }
+
+    public String getTriggerRunId() {
+        return triggerRunId;
+    }
+
+    public void setTriggerRunId(String triggerRunId) {
+        this.triggerRunId = triggerRunId;
+    }
+
+    public String getTriggerRunDecision() {
+        return triggerRunDecision;
+    }
+
+    public void setTriggerRunDecision(String triggerRunDecision) {
+        this.triggerRunDecision = triggerRunDecision;
+    }
+
+    public boolean isTriggerRunResolved() {
+        return triggerRunResolved;
+    }
+
+    public void setTriggerRunResolved(boolean triggerRunResolved) {
+        this.triggerRunResolved = triggerRunResolved;
+    }
 
     public ClusterMessage() {
     }

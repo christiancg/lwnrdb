@@ -67,12 +67,11 @@ public class TestTriggerOperationTest {
         IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(TestGlobals.DB);
     }
 
-    private void install(String procedure, String source, String timing)
-            throws Exception {
+    private void install(String procedure, String source, String timing) throws Exception {
         ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, procedure, source), ACTOR);
         final var existing = new ArrayList<>(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL));
-        existing.add(new TriggerDefinition("v", new LinkedHashSet<>(Set.of(new EventType[]{EventType.CREATED})), procedure,
-                TriggerDefinition.MODE_DOCUMENT, timing, false, true, ACTOR, 1L, 1L, 1L, ACTOR));
+        existing.add(new TriggerDefinition("v", new LinkedHashSet<>(Set.of(new EventType[]{EventType.CREATED})),
+                procedure, TriggerDefinition.MODE_DOCUMENT, timing, false, true, ACTOR, 1L, 1L, 1L, ACTOR));
         cache.putTriggers(TestGlobals.DB, TestGlobals.COLL, existing);
     }
 
@@ -108,8 +107,7 @@ public class TestTriggerOperationTest {
 
     @Test
     public void test_reports_the_replace_decision_with_the_document() throws Exception {
-        install("calc", "export default (d) => ({ ...d, total: d.qty * d.price });",
-                TriggerDefinition.TIMING_BEFORE);
+        install("calc", "export default (d) => ({ ...d, total: d.qty * d.price });", TriggerDefinition.TIMING_BEFORE);
         final var tested = (TestTriggerResponse) test("v", "CREATED", document("x2"));
         assertEquals(TestTriggerResponse.DECISION_REPLACE, tested.getDecision());
         assertEquals(20.0, tested.getDocument().get("total").asJsonNumber().getValue().doubleValue());
@@ -130,8 +128,7 @@ public class TestTriggerOperationTest {
     // A rejecting hook names where it broke, which is the point of a dry run.
     @Test
     public void test_a_rejection_carries_a_stack() throws Exception {
-        install("veto", "export default (d) => { throw new Error('boom'); };", TriggerDefinition.TIMING_BEFORE
-        );
+        install("veto", "export default (d) => { throw new Error('boom'); };", TriggerDefinition.TIMING_BEFORE);
         final var tested = (TestTriggerResponse) test("v", "CREATED", document("x4"));
         assertNotNull(tested.getStack());
         assertFalse(tested.getStack().isEmpty());
@@ -147,8 +144,7 @@ public class TestTriggerOperationTest {
 
     @Test
     public void test_writes_nothing() throws Exception {
-        install("calc", "export default (d) => ({ ...d, total: 1 });", TriggerDefinition.TIMING_BEFORE
-        );
+        install("calc", "export default (d) => ({ ...d, total: 1 });", TriggerDefinition.TIMING_BEFORE);
         assertInstanceOf(TestTriggerResponse.class, test("v", "CREATED", document("x6")));
         assertNull(find());
     }
@@ -157,8 +153,7 @@ public class TestTriggerOperationTest {
     public void test_a_sandbox_abort_is_an_error_not_a_decision() throws Exception {
         TestUtils.setPrivateField(configuration, "beforeHookInstructionBudget", 5_000_000_000L);
         TestUtils.setPrivateField(configuration, "beforeHookTimeoutMs", 50L);
-        install("spin", "export default (d) => { while (true) { } };", TriggerDefinition.TIMING_BEFORE
-        );
+        install("spin", "export default (d) => { while (true) { } };", TriggerDefinition.TIMING_BEFORE);
         final var response = test("v", "CREATED", document("x7"));
         assertEquals(ErrorCode.SCRIPT_TIMEOUT.getCode(), response.getErrorCode());
     }

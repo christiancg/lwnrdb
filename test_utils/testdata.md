@@ -1300,6 +1300,74 @@ Both operations are admin-only: any non-admin — even a database owner holding 
 gets `403-1`. The counters `running` and `cancelled` in `GET_DATABASE_STATS` report the same numbers per
 node.
 
+Recorded trigger runs: listing and resolving (admin only)
+
+A failed after-trigger is retried up to `triggerMaxAttempts` with a doubling backoff, and then
+dead-lettered: its record is kept with the last error instead of being discarded. `LIST_TRIGGER_RUNS`
+finds those, `RESOLVE_TRIGGER_RUN` acts on one. Both fan out to every live member, because
+`admin/trigger_runs` is not replicated and a run's record lives on exactly one node.
+
+Everything still recorded — pending runs and dead letters alike
+
+```json
+{"type": "LIST_TRIGGER_RUNS"}
+```
+
+Only the ones an operator has to act on
+
+```json
+{"type": "LIST_TRIGGER_RUNS", "status": "DEAD"}
+```
+
+An unrecognised status → `400-1`
+
+```json
+{"type": "LIST_TRIGGER_RUNS", "status": "sideways"}
+```
+
+Replay one after fixing its procedure. The attempt count starts over, so the corrected run gets a full
+budget rather than dead-lettering again on its first failure.
+
+```json
+{"type": "RESOLVE_TRIGGER_RUN", "runId": "00000000-0000-0000-0000-000000000000", "decision": "replay"}
+```
+
+Or give up on it for good
+
+```json
+{"type": "RESOLVE_TRIGGER_RUN", "runId": "00000000-0000-0000-0000-000000000000", "decision": "discard"}
+```
+
+A `runId` no live node holds is not an error — `OK` with `resolved: false`, the answer `CANCEL_SCRIPT`
+gives for a run that has already finished. A missing `runId` or an unknown `decision` → `400-1`.
+
+```json
+{"type": "RESOLVE_TRIGGER_RUN", "runId": "abc", "decision": "maybe"}
+```
+
+Run history
+
+Unless `scriptRunHistoryEnabled=false`, a finished run is recorded in the reserved `script_runs`
+collection of the database it ran against. It is an ordinary collection to read — and refused to write.
+
+What ran, newest first
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "script_runs", "aggregationSteps": [{"type": "SORT", "fieldName": "startedAt", "ascending": false}]}
+```
+
+Only the failures
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "script_runs", "aggregationSteps": [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "outcome", "value": "error"}}]}
+```
+
+Writing one by hand is refused — the collection is the server's → `400-1`
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "script_runs", "object": {"_id": "forged", "outcome": "ok"}}
+```
+
 Admin-only: get memory & schema stats (heap usage, cache usage vs cap, OS free RAM, totals across databases/collections, plus per-collection page/index/entry breakdown)
 
 ```json

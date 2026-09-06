@@ -483,4 +483,97 @@ public class RequestValidatorTest {
         assertFalse(RequestValidator.validate(new org.techhouse.ops.req.RunScriptRequest("admin", "return 1;", null))
                 .isValid());
     }
+
+    // The history collection is the server's to write. Reads stay open - it exists to be queried.
+    @Test
+    public void validate_save_toReservedScriptRunsCollection_returnsFail() {
+        final var request = new SaveRequest("myDb", "script_runs");
+        request.setObject(new JsonObject());
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_bulkSave_toReservedScriptRunsCollection_returnsFail() {
+        final var request = new BulkSaveRequest("myDb", "script_runs");
+        request.setObjects(List.of(new JsonObject()));
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_delete_fromReservedScriptRunsCollection_returnsFail() {
+        final var request = new DeleteRequest("myDb", "script_runs");
+        request.set_id("abc");
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_createCollection_withReservedScriptRunsName_returnsFail() {
+        assertFalse(RequestValidator.validate(new CreateCollectionRequest("myDb", "script_runs")).isValid());
+    }
+
+    @Test
+    public void validate_dropCollection_ofReservedScriptRunsCollection_returnsFail() {
+        assertFalse(RequestValidator.validate(new DropCollectionRequest("myDb", "script_runs")).isValid());
+    }
+
+    @Test
+    public void validate_aggregate_overReservedScriptRunsCollection_returnsOk() {
+        final var request = new AggregateRequest("myDb", "script_runs");
+        request.setAggregationSteps(List.of(new CountAggregationStep()));
+        assertTrue(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_findById_inReservedScriptRunsCollection_returnsOk() {
+        final var request = new FindByIdRequest("myDb", "script_runs");
+        request.set_id("abc");
+        assertTrue(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_listTriggerRuns_withoutStatus_returnsOk() {
+        assertTrue(RequestValidator.validate(new org.techhouse.ops.req.ListTriggerRunsRequest()).isValid());
+    }
+
+    @Test
+    public void validate_listTriggerRuns_withKnownStatus_returnsOk() {
+        final var request = new org.techhouse.ops.req.ListTriggerRunsRequest();
+        request.setStatus("dead");
+        assertTrue(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_listTriggerRuns_withUnknownStatus_returnsFail() {
+        final var request = new org.techhouse.ops.req.ListTriggerRunsRequest();
+        request.setStatus("sideways");
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_resolveTriggerRun_withBlankRunId_returnsFail() {
+        final var request = new org.techhouse.ops.req.ResolveTriggerRunRequest();
+        request.setDecision("replay");
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_resolveTriggerRun_withUnknownDecision_returnsFail() {
+        final var request = new org.techhouse.ops.req.ResolveTriggerRunRequest();
+        request.setRunId("abc");
+        request.setDecision("maybe");
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_resolveTriggerRun_withReplayDecision_returnsOk() {
+        final var request = new org.techhouse.ops.req.ResolveTriggerRunRequest();
+        request.setRunId("abc");
+        request.setDecision("discard");
+        assertTrue(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_createIndex_onReservedScriptRunsCollection_returnsOk() {
+        assertTrue(RequestValidator.validate(new CreateIndexRequest("myDb", "script_runs", "outcome")).isValid());
+    }
 }

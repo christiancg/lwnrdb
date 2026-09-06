@@ -94,4 +94,17 @@ public class ScriptResultTest {
     public void test_null_logs_become_empty() {
         assertTrue(ScriptResult.value(new JsonString("x"), null, false).getLogs().isEmpty());
     }
+
+    @Test
+    public void test_metrics_default_to_empty_and_can_be_replaced() {
+        final var result = ScriptResult.value(new JsonString("ok"));
+        assertEquals(org.techhouse.simplejs.host.ScriptRunMetrics.EMPTY, result.getMetrics());
+
+        final var measured = result
+                .withMetrics(new org.techhouse.simplejs.host.ScriptRunMetrics(5L, 10L, 1L, 2L, 3L, 4L));
+        assertEquals(5L, measured.getMetrics().instructions());
+        assertEquals("ok", measured.getValue().asJsonString().getValue());
+
+        assertEquals(org.techhouse.simplejs.host.ScriptRunMetrics.EMPTY, measured.withMetrics(null).getMetrics());
+    }
 }

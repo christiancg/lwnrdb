@@ -15,6 +15,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -42,12 +43,14 @@ import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.req.ListProceduresRequest;
 import org.techhouse.ops.req.ListSchedulesRequest;
+import org.techhouse.ops.req.ListTriggerRunsRequest;
 import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
+import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.ops.req.RunScriptRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
@@ -74,10 +77,12 @@ import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.ListScriptsResponse;
 import org.techhouse.ops.resp.ListTransactionsResponse;
+import org.techhouse.ops.resp.ListTriggerRunsResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ReindexResponse;
+import org.techhouse.ops.resp.ResolveTriggerRunResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.SetDatabaseOwnersResponse;
 import org.techhouse.ops.resp.StopListenResponse;
@@ -97,6 +102,8 @@ public class OperationProcessor {
             .get(org.techhouse.cluster.Tx2pcDirectory.class);
     private final org.techhouse.cluster.ScriptRunDirectory scriptRunDirectory = IocContainer
             .get(org.techhouse.cluster.ScriptRunDirectory.class);
+    private final org.techhouse.cluster.TriggerRunDirectory triggerRunDirectory = IocContainer
+            .get(org.techhouse.cluster.TriggerRunDirectory.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
@@ -168,6 +175,8 @@ public class OperationProcessor {
             case LIST_SCHEDULES -> processListSchedules((ListSchedulesRequest) operationRequest);
             case LIST_SCRIPTS -> processListScripts();
             case CANCEL_SCRIPT -> processCancelScript((CancelScriptRequest) operationRequest);
+            case LIST_TRIGGER_RUNS -> processListTriggerRuns((ListTriggerRunsRequest) operationRequest);
+            case RESOLVE_TRIGGER_RUN -> processResolveTriggerRun((ResolveTriggerRunRequest) operationRequest);
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
     }
@@ -792,6 +801,26 @@ public class OperationProcessor {
             return new CancelScriptResponse("Ok", scriptRunDirectory.cancelClusterWide(request.getRunId()));
         } catch (Exception e) {
             return new OperationResponse(OperationType.CANCEL_SCRIPT, ErrorCode.SCRIPT_FAILED);
+        }
+    }
+
+    private OperationResponse processListTriggerRuns(ListTriggerRunsRequest request) {
+        try {
+            final var filter = request.getStatus() == null || request.getStatus().isBlank()
+                    ? null
+                    : TriggerRunStatus.valueOf(request.getStatus().toUpperCase(java.util.Locale.ROOT));
+            return new ListTriggerRunsResponse("Ok", triggerRunDirectory.listClusterWide(filter));
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.LIST_TRIGGER_RUNS, ErrorCode.SCRIPT_FAILED);
+        }
+    }
+
+    private OperationResponse processResolveTriggerRun(ResolveTriggerRunRequest request) {
+        try {
+            return new ResolveTriggerRunResponse("Ok",
+                    triggerRunDirectory.resolveClusterWide(request.getRunId(), request.getDecision()));
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.RESOLVE_TRIGGER_RUN, ErrorCode.SCRIPT_FAILED);
         }
     }
 

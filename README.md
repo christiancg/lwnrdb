@@ -516,7 +516,12 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
   "result": {"name": "Alice"},
   "logs": ["found u1"],
   "logsTruncated": false,
-  "runId": "3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83"
+  "runId": "3f6c1e2a-8b47-4d90-9a11-5c2e7d0b4f83",
+  "metrics": {
+    "instructions": 4211, "instructionBudget": 10000000,
+    "peakMemoryBytes": 18240, "memoryBudget": 67108864,
+    "dbOperations": 3, "durationMs": 12
+  }
 }
 ```
 
@@ -524,9 +529,11 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 - `result` is the script's value: a top-level `return`, else `export default`, else an object of the named exports, else JSON `null`. A promise returned at top level is awaited (a rejection becomes the error); one that never settles fails the run with `400-20`, since the event loop has already drained and it can never settle. An accessor-valued property is read through its getter on the way out, so a computed field reaches the caller like any other.
 - `stack`, on a failed run, lists the frames the error came from, innermost first — `"applyRule (procedures/rules:12:7)"`, `"main:4:1"`. A frame names the function, the module it was written in (`main`, or `procedures/<name>` for imported code) and its line and column; the list is capped at 32 frames with a trailing `"... N more frames"`. A sandbox abort — a timeout, a cancellation, a budget or depth limit — carries no frames, because it is not a program error. The same frames appear in the run's server-side log line as `stack=[…]`, which is how an unattended trigger or scheduled procedure failure is diagnosed.
 - `logs` holds the script's `console` output — the newest `scriptMaxLogLines` lines, each clipped to `scriptMaxLogLineChars` — and `logsTruncated` reports whether anything was dropped. Output is returned on **every** outcome, including a failure, so a failed run is still debuggable.
+- `metrics` reports what the run cost: instructions executed, the peak bytes it held (a high-water mark, so a drained `db.cursor` batch does not erase it), how many `db` operations it issued, and its wall-clock duration — each beside the budget it was measured against, so a run can be read as a fraction of its sandbox without knowing the server's configuration. Reported on **every** outcome, including a timeout or a budget abort, which is when the numbers matter most. A straight-line script with no loop and no call legitimately reports `instructions: 0` — the counter ticks at loop back-edges and call entries.
 - `runId` names this run for the whole time it executes, so a slow run can be found with [`LIST_SCRIPTS`](#list_scripts-admin-only) and stopped with [`CANCEL_SCRIPT`](#cancel_script-admin-only) without listing first. It is returned on every outcome and also appears in the run's log line.
 - **Permissions**: admins may run scripts on any database and database owners on the databases they own; any other user needs a **per-database** script grant — `scriptPermissions: {"mydb": "RUN"}` on their user record (the older boolean form is still accepted and reads as `RUN`). Every operation the script itself issues is authorized again on its own request, so the grant never widens what the caller can read or write, and the collection schema still applies to a script's writes. A script cannot leave its database (`admin` included) — an attempt throws a catchable error inside the script.
-- The exposed surface is read+write only (`findById`, `aggregate`, `save`, `bulkSave`, `delete`, `cursor`, `listCollections`, `listDatabases`, `transaction`); DDL, user management and outbound network access are not reachable from a script.
+- The exposed surface is read+write only (`findById`, `aggregate`, `save`, `bulkSave`, `delete`, `cursor`, `listCollections`, `listDatabases`, `transaction`); DDL and user management are not reachable from a script. **Outbound HTTP** is available: `scriptFetchEnabled` is on by default so the capability is discoverable rather than hidden, and `scriptFetchAllowlist` decides which hosts a script may reach (`api.example.com`, `*.example.com` for sub-domains, `*` for every host; an empty list denies everything). **It ships as `*` and the server warns about that at every startup — narrow it.** The request leaves from inside your network, so `*` reaches internal services and the cloud instance-metadata endpoint (`169.254.169.254`), not just the public internet; anyone you let run a script can therefore use the server's network position. `fetch` stays unavailable to pipeline scripts and before-write hooks, which run holding collection locks.
+- **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded as a document in the reserved `script_runs` collection of the database it ran against, so what ran, what it cost and why it failed is queryable with an ordinary `AGGREGATE`. `scriptRunHistoryKinds` selects which kinds are recorded (`CALL_PROCEDURE,TRIGGER,SCHEDULE` by default — ad-hoc `RUN_SCRIPT` is opt-in so an exploratory client cannot flood it). The collection is created lazily on the first row, is refused to client writes (`400-1`) while staying open to reads, and never fires a trigger of its own.
 - **Importing shared code**: besides `args`, `db` and `script`, a script may import any stored procedure of its own database as a module with `import … from "procedures/<name>"`. A library is just a procedure that exports instead of returning:
 
   ```json
@@ -555,7 +562,7 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 
   It is a **paged read, not a snapshot**: each batch is an ordinary `AGGREGATE` against the live collection (authorized, schema-checked and cluster-routed like any other), so a concurrent insert or delete between two batches can make a document be seen twice or not at all. Paging is only meaningful with a `SORT` step — without one the pipeline's order is unspecified — and `db.cursor` does not inject one, because that would change the results of a pipeline ending in `GROUP_BY`/`COUNT`. Such a pipeline still works, but it pages the *step output*, which is rarely what is meant.
 - **Every failed `db` operation throws a catchable `Error` inside the script** — a permission denial, a schema violation, an oversized entry, a cluster rejection or an internal error alike; a failure is never silently swallowed. The two exceptions are ordinary absence rather than failure: a missing document reads as `null` from `findById`, an empty pipeline as `[]` from `aggregate`, and deleting a document that is not there is a no-op.
-- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `400-20` when its result is a promise that never settled, `408-1` when it exceeds `scriptTimeoutMs`, `408-2` when an operator cancelled it with `CANCEL_SCRIPT`, `503-6` when the node is already running `maxConcurrentScripts` scripts and none finished within `scriptQueueWaitMs` (nothing ran — retry shortly), and `409-6` if sent while a transaction is open on the connection.
+- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `400-20` when its result is a promise that never settled, `408-1` when it exceeds `scriptTimeoutMs`, `408-2` when an operator cancelled it with `CANCEL_SCRIPT`, `503-6` when a concurrency ceiling refused the run — the node-wide `maxConcurrentScripts` with no permit free within `scriptQueueWaitMs`, or this caller's `maxConcurrentScriptsPerUser` / this database's `maxConcurrentScriptsPerDatabase` slice, which do not wait; the `message` names which of the three (`node`, `user`, `database`) and nothing ran, so it is retryable, and `409-6` if sent while a transaction is open on the connection.
 - Under clustering the script runs on the node that received it; each operation it issues is routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
 #### `SAVE_PROCEDURE`
@@ -655,7 +662,44 @@ Stops the run named by `runId` (from `LIST_SCRIPTS`, or from the `runId` on a `R
 - A `runId` that matches nothing anywhere answers `cancelled:false` with status `OK` — the request was well-formed and the run is not running, which is the state the caller asked for. Returns `400-1` if `runId` is missing or is not a UUID.
 - Cancellation is **cooperative and not catchable**: the run stops at its next instruction check or event-loop poll, its `try`/`catch` cannot intercept it and its `finally` blocks do not run — the same treatment the timeout and budget aborts get. A run blocked inside a host call therefore ends when that call returns, not instantly.
 - The cancelled caller receives `408-2`; the operator issuing `CANCEL_SCRIPT` gets `OK`. An open `db.transaction` is rolled back.
-- **A cancelled trigger run is dropped, not retried.** Trigger execution is otherwise exactly-once, but a cancellation consumes the run's pending record — cancelling a runaway trigger stops it rather than queueing it up again. See [docs/simplejs.md](docs/simplejs.md).
+- **A cancelled trigger run is dropped, not retried.** Trigger execution is otherwise exactly-once and a failed run is retried up to `triggerMaxAttempts`, but a cancellation consumes the run's pending record — cancelling a runaway trigger stops it rather than queueing it up again. See [docs/simplejs.md](docs/simplejs.md).
+
+#### `LIST_TRIGGER_RUNS` (admin only)
+Lists the trigger runs still recorded across the cluster: those pending a run, and those dead-lettered after exhausting their attempts. `admin/trigger_runs` is deliberately not replicated, so a run's record lives on exactly one node — the listing fans out to every live member and aggregates, the way `LIST_SCRIPTS` does.
+```json
+{"type":"LIST_TRIGGER_RUNS","status":"DEAD"}
+```
+```json
+{
+  "type": "LIST_TRIGGER_RUNS",
+  "status": "OK",
+  "message": "Ok",
+  "runs": [
+    {
+      "runId": "8f0e…", "node": "10.0.0.4:8990", "status": "DEAD",
+      "database": "shop", "collection": "orders", "trigger": "auditOrders",
+      "procedure": "audit", "event": "UPDATED", "attempts": 3,
+      "lastError": "TypeError: Cannot read properties of null",
+      "ageMs": 91234, "nextAttemptAt": 0
+    }
+  ]
+}
+```
+- `status` (optional) narrows the listing to `PENDING` or `DEAD`; omitting it reports both. An unrecognised value is `400-1`.
+- A `PENDING` row is a run queued but not yet applied — normally transient, and replayed automatically when its node restarts. A `DEAD` row has exhausted `triggerMaxAttempts` and waits for an operator.
+- An unreachable peer costs the operator that node's rows, not the whole listing.
+
+#### `RESOLVE_TRIGGER_RUN` (admin only)
+Replays or discards one recorded trigger run, wherever its record lives.
+```json
+{"type":"RESOLVE_TRIGGER_RUN","runId":"8f0e…","decision":"replay"}
+```
+```json
+{"type":"RESOLVE_TRIGGER_RUN","status":"OK","message":"Ok","resolved":true}
+```
+- `decision` is `replay` or `discard`; anything else is `400-1`, as is a missing `runId`. **`replay` resets the attempt count**, so a run whose cause has been fixed gets a full budget again rather than dead-lettering on its first failure. `discard` consumes the record, giving up on the run for good.
+- A `runId` no live node holds answers `resolved:false` with status `OK` — the same treatment `CANCEL_SCRIPT` gives an already-finished run.
+- A run whose documents no longer exist cannot be replayed and is discarded instead, so it does not sit in the listing forever.
 
 #### `SAVE_TRIGGER`
 Runs a stored procedure around a write to a collection — **after** it commits (the default) or **before**, where it can veto or rewrite the document. Requires admin privileges, ownership, or `MANAGE`. Off by default: set `triggersEnabled=true` for triggers to fire (the DDL works either way).
@@ -1154,7 +1198,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-3` | `ERROR` | Timed out waiting for the replication quorum |
 | `503-4` | `ERROR` | The collection's owner node is unreachable |
 | `503-5` | `ERROR` | Admin coordinator is synchronizing, retry shortly |
-| `503-6` | `ERROR` | Too many scripts running, retry shortly |
+| `503-6` | `ERROR` | Too many scripts running, retry shortly *(the message names the scope that refused it: `node`, `user` or `database`)* |
 
 ### Bootstrap
 
@@ -1280,6 +1324,23 @@ scriptCursorMaxBatchSize=5000
 # node-wide script concurrency cap; x scriptMaxMemoryBytes is the worst-case script heap
 maxConcurrentScripts=16
 scriptQueueWaitMs=250
+# per-tenant slices taken inside the node-wide permit; 0 disables. They do not wait: a caller at
+# its own ceiling is refused at once rather than occupying a node-wide permit while it queues
+maxConcurrentScriptsPerUser=0
+maxConcurrentScriptsPerDatabase=0
+# outbound HTTP from scripts. On by default so the capability is discoverable; the allowlist takes
+# exact hosts, *.sub.domain wildcards, or a bare * for every host (an EMPTY list denies everything).
+# Ships as * and warns at startup - NARROW IT: the request leaves from inside your perimeter
+scriptFetchEnabled=true
+scriptFetchAllowlist=*
+scriptFetchTimeoutMs=5000
+scriptFetchMaxResponseBytes=1Mb
+# queryable run history in each database's reserved `script_runs` collection, created lazily
+scriptRunHistoryEnabled=true
+scriptRunHistoryKinds=CALL_PROCEDURE,TRIGGER,SCHEDULE
+scriptRunHistoryRetentionMs=604800000
+scriptRunHistoryIncludeLogs=false
+scriptRunHistoryMaxErrorChars=2000
 # stored procedures and triggers; triggers are off by default and gated separately
 procedureCacheSize=128
 # metadata cache bounds - budgeted SEPARATELY from maxMemory (see below)
@@ -1295,6 +1356,12 @@ triggerTimeoutMs=1000
 # durable pending trigger runs, so a run queued when the process dies is replayed at startup
 triggerRunLogEnabled=true
 triggerRunRetentionMs=86400000
+# a failed after-trigger is retried with a doubling backoff and then dead-lettered, where
+# LIST_TRIGGER_RUNS finds it and RESOLVE_TRIGGER_RUN replays or discards it
+triggerMaxAttempts=3
+triggerRetryBackoffMs=1000
+triggerRetryMaxBackoffMs=60000
+triggerDeadLetterRetentionMs=604800000
 ```
 
 **Graceful shutdown.** On SIGTERM the server runs an ordered shutdown within

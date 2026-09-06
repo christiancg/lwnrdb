@@ -2,6 +2,7 @@ package org.techhouse.ops.resp;
 
 import java.util.List;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -14,6 +15,7 @@ public class CallProcedureResponse extends OperationResponse {
     private boolean logsTruncated;
     private String runId;
     private List<String> stack;
+    private JsonObject metrics;
 
     public CallProcedureResponse(String message, JsonBaseElement result, List<String> logs, boolean logsTruncated,
             String runId) {
@@ -64,6 +66,14 @@ public class CallProcedureResponse extends OperationResponse {
 
     public String getRunId() {
         return runId;
+    }
+
+    public JsonObject getMetrics() {
+        return metrics;
+    }
+
+    public void setMetrics(JsonObject metrics) {
+        this.metrics = metrics;
     }
 
     public List<String> getStack() {

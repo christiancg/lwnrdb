@@ -67,6 +67,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # The cap under test. Deliberately tiny so a burst of CALLERS reaches it in one round.
 CAPACITY = 2
 CALLERS = 6
+# Deliberately below CALLERS but under a generous node-wide cap in its own phase, so a refusal there
+# can only have come from the per-user slice.
+PER_USER_CAPACITY = 2
 # Long enough that the whole burst is still queued when the last caller arrives, short enough
 # that phase 1 does not take noticeably longer than the burst itself.
 SLOW_SCRIPT_MS = 600
@@ -220,7 +223,7 @@ class Burst:
         self.other = [r for r in responses if r not in self.ok and r not in self.rejected]
 
 
-def fire_burst(request: dict, callers: int = CALLERS) -> Burst:
+def fire_burst(request: dict, callers: int = CALLERS, credentials: list = None) -> Burst:
     """Authenticate every caller first, then release them together so the burst really overlaps.
 
     Connecting and authenticating inside the timed window would stagger the arrivals enough that
@@ -232,9 +235,12 @@ def fire_burst(request: dict, callers: int = CALLERS) -> Burst:
     stop_sampling = threading.Event()
     peak = [0]
 
-    def caller():
+    def caller(index: int):
+        # Each caller may authenticate as a different principal, which is what a per-user cap is about.
+        username, password = credentials[index % len(credentials)] if credentials \
+            else (ADMIN_USERNAME, ADMIN_PASSWORD)
         with Conn() as conn:
-            conn.authenticate()
+            conn.authenticate(username, password)
             ready.wait()
             response = conn.send(request)
         with responses_lock:
@@ -251,7 +257,7 @@ def fire_burst(request: dict, callers: int = CALLERS) -> Burst:
                 if isinstance(running, int):
                     peak[0] = max(peak[0], running)
 
-    threads = [threading.Thread(target=caller, name=f"caller-{i}") for i in range(callers)]
+    threads = [threading.Thread(target=caller, args=(i,), name=f"caller-{i}") for i in range(callers)]
     sampling = threading.Thread(target=sampler, name="sampler")
     sampling.start()
     for thread in threads:
@@ -288,7 +294,7 @@ def await_doc(conn: Conn, doc_id: str, coll: str, timeout=30.0):
 
 # ── server lifecycle ─────────────────────────────────────────────────────────
 
-def write_config(work_dir: str, capacity: int, queue_wait_ms: int):
+def write_config(work_dir: str, capacity: int, queue_wait_ms: int, per_user: int = 0, per_database: int = 0):
     cfg = (
         f"port={PORT}\n"
         "filePath=db\n"
@@ -297,6 +303,8 @@ def write_config(work_dir: str, capacity: int, queue_wait_ms: int):
         f"defaultAdminPassword={ADMIN_PASSWORD}\n"
         "scriptsEnabled=true\n"
         f"maxConcurrentScripts={capacity}\n"
+        f"maxConcurrentScriptsPerUser={per_user}\n"
+        f"maxConcurrentScriptsPerDatabase={per_database}\n"
         f"scriptQueueWaitMs={queue_wait_ms}\n"
         f"scriptTimeoutMs={TIMEOUT_MS}\n"
         f"scriptMaxMemoryBytes={MAX_MEMORY_BYTES}\n"
@@ -383,6 +391,18 @@ def setup_data(conn: Conn):
         "tick",
         f"import db from 'db'; import args from 'args';"
         f" db.save(db.name, '{TICKS_COLL}', {{ _id: args.id, fired: true }}); return 'ok';"), "OK")
+
+
+TENANTS = [("tenant_a", "password123"), ("tenant_b", "password123")]
+
+
+def create_tenants(conn: Conn):
+    for username, password in TENANTS:
+        conn.send({"type": "DELETE_USER", "username": username})
+        check_status(f"create {username}",
+                     conn.send({"type": "CREATE_USER", "username": username, "password": password,
+                                "admin": True, "globalPermissions": [], "databasePermissions": {},
+                                "collectionPermissions": {}}), "OK")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -620,6 +640,61 @@ def test_wait_may_exceed_the_run_timeout(conn: Conn):
 # Phase 3 — the cap is off (maxConcurrentScripts=0)
 # ══════════════════════════════════════════════════════════════════════════
 
+def test_per_user_cap(conn: Conn):
+    section("A per-user cap under a generous node-wide cap")
+    one_user = fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT},
+                          credentials=[TENANTS[0]])
+
+    check("every caller got a response", len(one_user.responses) == CALLERS, f"got {len(one_user.responses)}")
+    check("one user is held to its own slice", 1 <= len(one_user.ok) <= PER_USER_CAPACITY,
+          f"{len(one_user.ok)} succeeded with a per-user cap of {PER_USER_CAPACITY}")
+    check("the surplus is rejected", len(one_user.rejected) == CALLERS - len(one_user.ok),
+          f"{len(one_user.ok)} ok + {len(one_user.rejected)} rejected != {CALLERS}")
+    check("the rejection names the scope that refused it",
+          "user" in (one_user.rejected[0].get("message") or "") if one_user.rejected else False,
+          f"got {one_user.rejected[0].get('message') if one_user.rejected else None!r}")
+    check(f"no more than {PER_USER_CAPACITY} of that user's runs overlapped",
+          0 < one_user.peak_running <= PER_USER_CAPACITY, f"scripts.running peaked at {one_user.peak_running}")
+
+    # The control: the same burst spread over two users reaches a higher ceiling, which is what proves
+    # the limit above came from the per-user cap and not from a slow runner.
+    two_users = fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT},
+                           credentials=TENANTS)
+    check("two users together exceed one user's ceiling", two_users.peak_running > PER_USER_CAPACITY,
+          f"scripts.running peaked at {two_users.peak_running} with two users")
+    check("and more of them succeed", len(two_users.ok) > len(one_user.ok),
+          f"{len(two_users.ok)} vs {len(one_user.ok)}")
+
+
+def test_a_tenant_refusal_frees_the_node_permit(conn: Conn):
+    section("A per-user refusal does not hold a node-wide permit")
+    fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT}, credentials=[TENANTS[0]])
+    stats = conn.script_stats()
+    check("the node-wide permits are all available again",
+          await_available(conn, stats.get("capacity")) == stats.get("capacity"),
+          f"available={conn.script_stats().get('available')} capacity={stats.get('capacity')}")
+    check("the per-user rejections are counted", (stats.get("rejectedPerUser") or 0) > 0, f"got {stats}")
+    check("the capacities are reported",
+          stats.get("capacityPerUser") == PER_USER_CAPACITY and "capacityPerDatabase" in stats, f"got {stats}")
+
+
+def test_tenant_caps_exempt_triggers_and_schedules(conn: Conn):
+    section("Triggers and schedules are exempt from the tenant caps too")
+    check_status("install a trigger", conn.save_trigger("audit_writes", "audit", ["CREATED", "UPDATED"]), "OK")
+    saturate = threading.Thread(
+        target=lambda: fire_burst({"type": "RUN_SCRIPT", "databaseName": DB, "script": SLOW_SCRIPT},
+                                  credentials=[TENANTS[0]]))
+    saturate.start()
+    check_status("a write still succeeds while the caps are saturated",
+                 conn.save_doc({"_id": "tenant_fired", "n": 1}), "OK")
+    saturate.join(120)
+    check("the trigger ran anyway", await_doc(conn, "tenant_fired", AUDIT_COLL) is not None,
+          "the trigger never wrote its audit row")
+    check_status("remove the trigger",
+                 conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
+                            "name": "audit_writes"}), "OK")
+
+
 def test_cap_disabled(conn: Conn):
     section("The cap disabled (maxConcurrentScripts=0)")
     stats_before = conn.script_stats()
@@ -688,6 +763,19 @@ def main():
         with admin_conn() as conn:
             test_wait_absorbs_the_burst(conn)
             test_wait_may_exceed_the_run_timeout(conn)
+
+        stop_server(proc)
+        proc = None
+
+        # A generous node-wide cap with a small per-user slice: a refusal here can only be the tenant cap.
+        write_config(work_dir, capacity=CALLERS * 2, queue_wait_ms=0, per_user=PER_USER_CAPACITY)
+        print(f"\n  Restarting server (per-user cap {PER_USER_CAPACITY}) on {HOST}:{PORT} ...")
+        proc = start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            create_tenants(conn)
+            test_per_user_cap(conn)
+            test_a_tenant_refusal_frees_the_node_permit(conn)
+            test_tenant_caps_exempt_triggers_and_schedules(conn)
 
         stop_server(proc)
         proc = None

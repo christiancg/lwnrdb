@@ -290,6 +290,38 @@ public class TriggerDispatcherTest {
         assertEquals(failedBefore + 1, triggerExecutor.getFailed());
     }
 
+    // With the run log off there is no record to consume, so the run is not wrapped in a transaction at
+    // all: it applies its effects directly, which is the trade triggerRunLogEnabled=false makes.
+    @Test
+    public void test_runs_without_a_durable_record_when_the_run_log_is_disabled() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", false);
+        try {
+            storeAuditProcedure();
+            installTrigger(OWNER, true, false);
+            TriggerDispatcher.dispatch(event("unlogged", OWNER, 0));
+            assertNotNull(auditRow("unlogged"), "the effects still apply without a run record");
+        } finally {
+            TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
+        }
+    }
+
+    // A retryable failure with no record to mark cannot be retried either: there is nothing to replay.
+    @Test
+    public void test_a_failure_without_a_record_is_terminal() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", false);
+        TestUtils.setPrivateField(configuration, "triggerMaxAttempts", 3);
+        try {
+            ProcedureOperationHelper.executeSave(
+                    new SaveProcedureRequest(TestGlobals.DB, "audit", "throw new Error('no record');"), OWNER);
+            installTrigger(OWNER, true, false);
+            final var retriedBefore = triggerExecutor.getRetried();
+            assertDoesNotThrow(() -> TriggerDispatcher.dispatch(event("unlogged-boom", OWNER, 0)));
+            assertEquals(retriedBefore, triggerExecutor.getRetried(), "nothing to replay means nothing to retry");
+        } finally {
+            TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
+        }
+    }
+
     @Test
     public void test_args_carry_writer_as_acting_user_and_installer_as_definer() throws Exception {
         storeAuditProcedure();

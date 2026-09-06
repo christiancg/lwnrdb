@@ -237,7 +237,7 @@ public final class DateBuiltins {
                 new JsNativeFunction(name, (_, _) -> new JsString(localPart(receiver.getTime(), false, true, ops)));
             case "toUTCString" -> new JsNativeFunction(name, (_, _) -> new JsString(utcString(receiver.getTime())));
             case "toLocaleString", "toLocaleDateString", "toLocaleTimeString" ->
-                new JsNativeFunction(name, (_, _) -> new JsString(toLocaleString(receiver, name, ops)));
+                new JsNativeFunction(name, (_, args) -> new JsString(toLocaleString(receiver, name, args, ops)));
             case "getTimezoneOffset" -> new JsNativeFunction("getTimezoneOffset", (_, _) -> new JsNumber(
                     // 0.0 - x (not unary -x) so a zero offset stays +0, matching SameValue expectations.
                     receiver.isValid() ? (0.0 - localOffset(receiver.getTime(), ops)) / MS_PER_MINUTE : Double.NaN));
@@ -542,7 +542,7 @@ public final class DateBuiltins {
                 (long) msFromTime(t));
     }
 
-    private static String toLocaleString(JsDate receiver, String name, InterpreterOps ops) {
+    private static String toLocaleString(JsDate receiver, String name, List<JsValue> args, InterpreterOps ops) {
         if (!receiver.isValid()) {
             return INVALID;
         }
@@ -553,7 +553,7 @@ public final class DateBuiltins {
             default -> java.time.format.DateTimeFormatter.ofLocalizedDateTime(style);
         };
         final var zoned = Instant.ofEpochMilli((long) receiver.getTime()).atZone(InterpreterOps.timeZone(ops));
-        return zoned.format(formatter.withLocale(InterpreterOps.locale(ops)));
+        return zoned.format(formatter.withLocale(LocaleResolver.resolve(args, 0, ops)));
     }
 
     private static JsValue toJSON(JsValue receiver, InterpreterOps ops) {

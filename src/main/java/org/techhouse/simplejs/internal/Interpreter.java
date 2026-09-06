@@ -282,6 +282,8 @@ public final class Interpreter {
     private final int maxDepth;
     private final int maxModuleDepth;
     private long instructionsRemaining;
+    private long instructionsUsed;
+    private long peakBytesUsed;
     private long bytesRemaining;
     private final long memoryBudget;
     private final long deadlineNanos;
@@ -335,14 +337,55 @@ public final class Interpreter {
      * charged against the run's own budgets, and the loop is drained again afterwards in case it queued work.
      */
     public static <T> T run(Program program, HostBindings host, ModuleBodyWrapper around, ResultFinisher<T> finisher) {
+        return run(program, host, around, finisher, null);
+    }
+
+    /**
+     * The overload that reports what the run consumed. {@code metrics} is filled on every exit path,
+     * including an abort, because a timed-out or cancelled run is exactly when its consumption is worth
+     * knowing - which is why it is a holder the caller owns rather than part of the returned value.
+     */
+    public static <T> T run(Program program, HostBindings host, ModuleBodyWrapper around, ResultFinisher<T> finisher,
+            RunMetrics metrics) {
         final var interpreter = new Interpreter(host);
         interpreter.moduleBodyWrapper = around;
-        return interpreter.runModule(program, finisher);
+        return interpreter.runModule(program, finisher, metrics);
     }
 
     @FunctionalInterface
     public interface ResultFinisher<T> {
         T finish(ProgramOutcome outcome, InterpreterOps ops);
+    }
+
+    /** What one run consumed, written by the interpreter and read by its caller after the run ends. */
+    public static final class RunMetrics {
+        private long instructions;
+        private long instructionBudget = -1;
+        private long peakMemoryBytes;
+        private long memoryBudget = -1;
+
+        void fill(Interpreter interpreter) {
+            instructions = interpreter.instructionsUsed;
+            instructionBudget = interpreter.host.limits().instructionBudget();
+            peakMemoryBytes = interpreter.peakBytesUsed;
+            memoryBudget = interpreter.memoryBudget;
+        }
+
+        public long instructions() {
+            return instructions;
+        }
+
+        public long instructionBudget() {
+            return instructionBudget;
+        }
+
+        public long peakMemoryBytes() {
+            return peakMemoryBytes;
+        }
+
+        public long memoryBudget() {
+            return memoryBudget;
+        }
     }
 
     /**
@@ -371,6 +414,7 @@ public final class Interpreter {
             }
             instructionsRemaining--;
         }
+        instructionsUsed++;
         if (deadlineNanos >= 0 && System.nanoTime() >= deadlineNanos) {
             throw new ScriptTimeoutException("Script exceeded its time limit");
         }
@@ -387,6 +431,9 @@ public final class Interpreter {
             throw new ScriptMemoryException("Script exceeded its memory budget");
         }
         bytesRemaining -= bytes;
+        // A high-water mark rather than the closing balance: release() credits back a drained
+        // db.cursor batch, which would otherwise erase the peak the run actually reached.
+        peakBytesUsed = Math.max(peakBytesUsed, memoryBudget - bytesRemaining);
     }
 
     // The counterpart of charge(), for a host allocation the engine knows is discarded at a fixed
@@ -404,6 +451,10 @@ public final class Interpreter {
     }
 
     private <T> T runModule(Program program, ResultFinisher<T> finisher) {
+        return runModule(program, finisher, null);
+    }
+
+    private <T> T runModule(Program program, ResultFinisher<T> finisher, RunMetrics metrics) {
         final var previousStack = StackCapture.install(callStack);
         try {
             final var outcome = evaluateTopLevelModule(program);
@@ -412,6 +463,9 @@ public final class Interpreter {
             reportUnhandledRejections();
             return finished;
         } finally {
+            if (metrics != null) {
+                metrics.fill(this);
+            }
             cancelPendingCoroutines();
             StackCapture.restore(previousStack);
         }

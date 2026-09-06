@@ -2,6 +2,7 @@ package org.techhouse.simplejs.host;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterRouter;
@@ -49,6 +50,10 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final EJson eJson = IocContainer.get(EJson.class);
 
+    // Incremented from coroutine virtual threads as well as the module thread, so an atomic rather
+    // than a plain field.
+    private final AtomicLong dbOperations = new AtomicLong();
+
     private final String username;
     private final UUID clientId;
     // Null means unrestricted (an in-process embedding); RUN_SCRIPT pins it to the requested database.
@@ -76,6 +81,10 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         this.clientId = clientId;
         this.scopedDatabase = scopedDatabase;
         this.triggerDepth = triggerDepth;
+    }
+
+    public long operationCount() {
+        return dbOperations.get();
     }
 
     @Override
@@ -267,6 +276,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
 
     private OperationResponse dispatch(OperationRequest request, String rawJson) {
         assertSessionThread();
+        dbOperations.incrementAndGet();
         request.setTriggerDepth(triggerDepth);
         if (scopedDatabase != null) {
             final var targetDatabase = request.getDatabaseName();

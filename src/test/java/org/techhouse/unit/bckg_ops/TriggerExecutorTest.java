@@ -128,4 +128,48 @@ public class TriggerExecutorTest {
         executor.submit(event("after-restart"));
         assertTrue(latch.await(5, TimeUnit.SECONDS));
     }
+
+    // A retry is re-queued after its backoff rather than at once, and a zero delay skips the scheduler.
+    @Test
+    public void test_submit_after_requeues_once_the_delay_elapses() throws Exception {
+        executor = new TriggerExecutor();
+        final var seen = new java.util.concurrent.CopyOnWriteArrayList<String>();
+        final var latch = new java.util.concurrent.CountDownLatch(1);
+        executor.start(event -> {
+            seen.add(event.getTriggerName());
+            latch.countDown();
+        });
+
+        executor.submitAfter(event("delayed"), 50L);
+        assertTrue(latch.await(5, java.util.concurrent.TimeUnit.SECONDS), "the retry never arrived");
+        assertEquals(List.of("delayed"), seen);
+        assertEquals(1L, executor.getRetried());
+    }
+
+    @Test
+    public void test_submit_after_with_no_delay_goes_straight_to_the_queue() throws Exception {
+        executor = new TriggerExecutor();
+        final var latch = new java.util.concurrent.CountDownLatch(1);
+        executor.start(_ -> latch.countDown());
+
+        executor.submitAfter(event("immediate"), 0L);
+
+        assertTrue(latch.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        assertEquals(1L, executor.getRetried());
+    }
+
+    @Test
+    public void test_submit_after_is_ignored_when_nothing_consumes_the_queue() {
+        executor = new TriggerExecutor();
+        executor.submitAfter(event("orphan"), 0L);
+        assertEquals(0, executor.pending());
+    }
+
+    @Test
+    public void test_dead_letters_are_counted() {
+        executor = new TriggerExecutor();
+        assertEquals(0L, executor.getDeadLettered());
+        executor.countDeadLetter();
+        assertEquals(1L, executor.getDeadLettered());
+    }
 }

@@ -8,6 +8,7 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.simplejs.host.FetchRequest;
 import org.techhouse.simplejs.host.FetchResponse;
+import org.techhouse.simplejs.host.HostAllowlist;
 import org.techhouse.simplejs.host.NetworkAccess;
 import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.internal.Environment;
@@ -171,10 +172,7 @@ public final class FetchBuiltins {
     }
 
     private static boolean allowed(String url, List<String> allowlist) {
-        if (allowlist == null || allowlist.isEmpty()) {
-            return true;
-        }
-        return allowlist.contains(hostOf(url));
+        return HostAllowlist.allows(allowlist, hostOf(url));
     }
 
     private static String hostOf(String url) {

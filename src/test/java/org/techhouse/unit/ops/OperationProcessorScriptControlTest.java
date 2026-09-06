@@ -128,6 +128,18 @@ public class OperationProcessorScriptControlTest {
         ownership.onMembershipChanged(new MembershipView(List.of(self, other)));
     }
 
+    // The trigger-run operations fan out themselves for the same reason, and for an additional one:
+    // admin/trigger_runs is not replicated, so a run's record exists on exactly one node.
+    @Test
+    public void test_trigger_run_operations_are_not_routed() throws Exception {
+        routableMembership();
+        assertNull(router.forward(new org.techhouse.ops.req.ListTriggerRunsRequest(), "{}", false, "admin", null));
+        final var resolve = new org.techhouse.ops.req.ResolveTriggerRunRequest();
+        resolve.setRunId(UUID.randomUUID().toString());
+        resolve.setDecision("discard");
+        assertNull(router.forward(resolve, "{}", false, "admin", null));
+    }
+
     @Test
     public void test_error_code_is_408_2() {
         assertEquals("408-2", org.techhouse.ops.ErrorCode.SCRIPT_CANCELLED.getCode());
