@@ -33,62 +33,31 @@ As such, this DB is not intended to be the fastest one out there, the most relia
 - No composed indexes (at least for now), but an aggregation pipeline can use many indexes (in fact will use all of them if possible)
 - Each collection is split across pages (one file per page) sized up to `maxPageSize`; admin metadata about a collection's pages lives in a parallel paged collection under `admin/pages/<db>_<collection>`, and the pagination of that admin collection is itself tracked in memory only and rebuilt at startup (no `pages_pages_*` files on disk). New inserts use a first-fit search across existing pages, so space freed by deletions is reused before a new page is allocated.
 
-## Pending tasks
+## Status
 
-- [ ] Javascript engine to support additional features 
-  - [x] Stored procedures (the [`SAVE_PROCEDURE`](#save_procedure) / [`CALL_PROCEDURE`](#call_procedure) operations)
-  - [x] Triggers, after and before the write (the [`SAVE_TRIGGER`](#save_trigger) and [`TEST_TRIGGER`](#test_trigger) operations)
-  - [x] Scheduled procedures (the [`SAVE_SCHEDULE`](#save_schedule) operation)
-  - [x] Run script (the [`RUN_SCRIPT`](#run_script) operation)
-  - [x] Shared code between procedures: a script, procedure, trigger or schedule can `import … from "procedures/<name>"` to reuse a stored procedure as a module (`scriptProcedureImportEnabled`, on by default) — see [docs/simplejs.md](docs/simplejs.md) → *Module loading*
-  - [x] Scripting inside the query pipeline: `SCRIPT` filter and `MAP` operators plus a `REDUCE` step — see [Script operators](#script-operators-simplejs-in-the-pipeline)
-  - [x] Script node selection under clustering: [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) are forwarded to a live node chosen by current script load (`scriptRoutingEnabled`, on by default), skipping any node not yet caught up on admin metadata — see [docs/clustering.md](docs/clustering.md) → *Scripts*
-    - [x] Locality-aware placement: placement blends the share of the scoped database's collections a candidate owns with its load (`scriptLocalityWeight`, 50 by default; 0 restores load-only). Only meaningful for databases with few collections — a wide database spreads across the ring, so every node owns about the same share
-- [x] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant (per-collection JSON Schema — see [Schema validation](#schema-validation)) 
-- [x] Replication between nodes (no master-slave arch; all nodes are equal; no sharding) — see [docs/clustering.md](docs/clustering.md)
-- [x] Move pages admin collections to a separate folder called "pages" to make things more organized
-- [x] Transactions
-- [x] Vector type support
-  - [x] Semantic search
-- [x] Geo type support
-  - [x] Distance operator
-  - [x] Within operator
-- [x] Listenable queries (you create the query and then the DB sends events when there are changes)
-- [x] Explain / Analyze with index and query suggestions
-- [x] Integration tests for all possible API commands, including aggregations
-- [x] Standardized error messages with error code, following HTTP patterns: 4xx → user error, 5xx → server error, ending with a specific number per error. Ie 401-1 "need to authenticate"
-- [x] Admin operation to rebuild indexes
-- [x] Use ZGC as garbage collector in Docker image. Also recommend using that one when running locally in this file
-- [x] Sort operation doesn't seem to be faster with indexes
-- [x] Group by operation isn't meaningfully faster with indexes — it must read every grouped document either way, so an index only helps when the grouped field is sparse (see Memory management → Streaming reads). The fast-path is retained for that sparse case
-- [x] Join operation doesn't seem to be faster with indexes
-- [x] Remove pending consistency issues with cache, fs and index usage
-- [x] Remove the most impactful consistency issues with cache, fs and index usage
-- [x] Issue when concurrently writing to a field index and trying to read from it (might get wrong values because index is not updated)
-- [x] Index usage for object and array fields (element-match via hashed object/array indexes; `FILTER` `EQUALS`/`NOT_EQUALS`/`IN`/`NOT_IN` only)
-- [x] Separated caches for admin entries and user entries (the `Cache` facade composes an `AdminCache` for admin metadata and a `UserCache` for memory-managed user documents/indexes)
-- [x] Date type support
-- [x] Index usage in:
-  - [x] group by
-  - [x] join
-  - [x] sort
-  - [x] distinct
-  - [x] count
-- [x] Better file locks
-- [x] 95% test coverage
-- [x] Request validation
-- [x] Iterative read depending on available memory and document count
-- [x] Collection and index eviction from cache depending on memory usage and query history (using LFU algorithm — see `cache/MemoryManagement` and the `maxMemory` configuration)
-- [x] Numerical values that are integers shouldn't be printed with ".0"
-- [x] Users and permissions
-- [x] Secure connections with TLS or something similar
-- [x] Remove lombok
-- [x] Check that in join aggregations, the user should have permissions to the collection that is being joined
-- [x] Validation of configurations
-- [x] Review and address TODOs
-- [x] Remove all warnings from code
-- [x] Fix tests marked as @Disabled
-- [x] Implement linting and formatting
+LWNRDB is feature-complete for what it set out to be, and experimental in the sense the
+Q&A below means: a learning exercise, not something to put production data in.
+
+**What it does.** Documents are stored as newline-delimited JSON across paged files, queried
+through an [aggregation pipeline](#aggregate) (the one exception is [`FIND_BY_ID`](#find_by_id))
+with single-field indexes the planner combines freely, and reachable over a line-delimited
+JSON socket protocol — optionally [TLS](#tls--secure-connections). On top of that:
+
+| Area | |
+|---|---|
+| Types | documents, arrays, dates/times, [geo](#custom-operators-type-specific) (distance, within) and [vector](#custom-operators-type-specific) (semantic search) |
+| Querying | [explain/analyze](#explain--analyze) with index suggestions, [listenable queries](#listen), [dirty reads](#concurrency--locking), index-only `COUNT` |
+| Integrity | [per-collection JSON Schema](#schema-validation), [transactions](#transactions), [users and permissions](#users--permissions) |
+| Scripting | a built-in JS engine — [ad-hoc scripts](#run_script), [stored procedures](#save_procedure), [triggers](#save_trigger) (after and before the write), [scheduled procedures](#save_schedule), [pipeline operators](#script-operators-simplejs-in-the-pipeline), and shared code via `import … from "procedures/<name>"`. See [docs/simplejs.md](docs/simplejs.md) |
+| Clustering | fully-replicated nodes, no master, per-collection ownership, quorum writes, anti-entropy, cross-node transactions and script placement. See [docs/clustering.md](docs/clustering.md) |
+| Operations | [`GET_DATABASE_STATS`](#get_database_stats-admin-only), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown |
+
+**Known non-goals.** No compound indexes (a pipeline uses as many single-field indexes as
+apply), no sharding (every node holds a complete copy), no compression, and no attempt to
+compete on raw IOPS.
+
+**Still open.** Widening the JS engine's host surface as new database features need it — the
+engine itself is closed (see [docs/simplejs.md](docs/simplejs.md) → *Engine status*).
 
 ## Wire Protocol / Message Reference
 
@@ -525,30 +494,13 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 }
 ```
 
-- `script` (required) is the program source, `args` (optional) is an arbitrary object the script reads through `import args from "args"`, and `db.name` is the scoped database name — so one script can run against any database without hardcoding it.
-- `result` is the script's value: a top-level `return`, else `export default`, else an object of the named exports, else JSON `null`. A promise returned at top level is awaited (a rejection becomes the error); one that never settles fails the run with `400-20`, since the event loop has already drained and it can never settle. An accessor-valued property is read through its getter on the way out, so a computed field reaches the caller like any other.
-- `stack`, on a failed run, lists the frames the error came from, innermost first — `"applyRule (procedures/rules:12:7)"`, `"main:4:1"`. A frame names the function, the module it was written in (`main`, or `procedures/<name>` for imported code) and its line and column; the list is capped at 32 frames with a trailing `"... N more frames"`. A sandbox abort — a timeout, a cancellation, a budget or depth limit — carries no frames, because it is not a program error. The same frames appear in the run's server-side log line as `stack=[…]`, which is how an unattended trigger or scheduled procedure failure is diagnosed.
-- `logs` holds the script's `console` output — the newest `scriptMaxLogLines` lines, each clipped to `scriptMaxLogLineChars` — and `logsTruncated` reports whether anything was dropped. Output is returned on **every** outcome, including a failure, so a failed run is still debuggable.
-- `metrics` reports what the run cost: instructions executed, the peak bytes it held (a high-water mark, so a drained `db.cursor` batch does not erase it), how many `db` operations it issued, and its wall-clock duration — each beside the budget it was measured against, so a run can be read as a fraction of its sandbox without knowing the server's configuration. Reported on **every** outcome, including a timeout or a budget abort, which is when the numbers matter most. A straight-line script with no loop and no call legitimately reports `instructions: 0` — the counter ticks at loop back-edges and call entries.
-- `runId` names this run for the whole time it executes, so a slow run can be found with [`LIST_SCRIPTS`](#list_scripts-admin-only) and stopped with [`CANCEL_SCRIPT`](#cancel_script-admin-only) without listing first. It is returned on every outcome and also appears in the run's log line.
-- **Permissions**: admins may run scripts on any database and database owners on the databases they own; any other user needs a **per-database** script grant — `scriptPermissions: {"mydb": "RUN"}` on their user record (the older boolean form is still accepted and reads as `RUN`). Every operation the script itself issues is authorized again on its own request, so the grant never widens what the caller can read or write, and the collection schema still applies to a script's writes. A script cannot leave its database (`admin` included) — an attempt throws a catchable error inside the script.
-- The exposed surface is read+write only (`findById`, `aggregate`, `save`, `bulkSave`, `delete`, `cursor`, `listCollections`, `listDatabases`, `transaction`); DDL and user management are not reachable from a script. **Outbound HTTP** is available: `scriptFetchEnabled` is on by default so the capability is discoverable rather than hidden, and `scriptFetchAllowlist` decides which hosts a script may reach (`api.example.com`, `*.example.com` for sub-domains, `*` for every host; an empty list denies everything). **It ships as `*` and the server warns about that at every startup — narrow it.** The request leaves from inside your network, so `*` reaches internal services and the cloud instance-metadata endpoint (`169.254.169.254`), not just the public internet; anyone you let run a script can therefore use the server's network position. `fetch` stays unavailable to pipeline scripts and before-write hooks, which run holding collection locks.
-- **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded as a document in the reserved `script_runs` collection of the database it ran against, so what ran, what it cost and why it failed is queryable with an ordinary `AGGREGATE`. `scriptRunHistoryKinds` selects which kinds are recorded (`CALL_PROCEDURE,TRIGGER,SCHEDULE` by default — ad-hoc `RUN_SCRIPT` is opt-in so an exploratory client cannot flood it). The collection is created lazily on the first row, is refused to client writes (`400-1`) while staying open to reads, and never fires a trigger of its own.
-- **Importing shared code**: besides `args`, `db` and `script`, a script may import any stored procedure of its own database as a module with `import … from "procedures/<name>"`. A library is just a procedure that exports instead of returning:
-
-  ```json
-  {"type":"SAVE_PROCEDURE","databaseName":"mydb","name":"money",
-   "script":"export function cents(n) { return Math.round(n * 100); }"}
-  ```
-  ```js
-  import { cents } from "procedures/money";
-  import db from "db";
-  const o = db.findById(db.name, "orders", "o1");
-  return cents(o.amount);
-  ```
-
-  Only the script's own database is searched, a missing **or disabled** procedure throws a catchable `Cannot find module 'procedures/…'`, and a cycle throws `Circular import of module '…'`. `SAVE_PROCEDURE` **refuses** a procedure whose `procedures/…` import does not resolve (`400-18`), so a typo is reported to whoever installs it rather than to whoever calls it next — which means libraries must be installed before the procedures that import them. The imported module shares the importing run's budget, deadline and authority — so a trigger importing a helper keeps its definer rights, and importing never widens what the caller may do. **Only `export`ed bindings are visible**: a procedure written with a top-level `return` (the `CALL_PROCEDURE` style) imports as `undefined`, so a module meant to be imported must `export`. Set `scriptProcedureImportEnabled=false` to refuse the whole `procedures/` prefix.
-- **`db.cursor(database, collection, pipeline, options)`** is the memory-safe way to read more than fits in one result: it returns an iterator that runs the pipeline one page at a time (`SKIP`/`LIMIT` appended per batch), so only one batch is ever in memory and only that batch counts against `scriptMaxMemoryBytes`. `options.batchSize` defaults to `scriptCursorBatchSize` and is clamped to `scriptCursorMaxBatchSize`; a non-positive value is a `RangeError`. It works with `for-of`, spread and the iterator helpers (`.map`/`.take`/…).
+- `script` (required) is the program source and `args` (optional) an arbitrary object the script reads through `import args from "args"`. `db.name` is the scoped database, so one script can run anywhere without hardcoding it.
+- `result` is the script's value: a top-level `return`, else `export default`, else an object of the named exports, else JSON `null`. A promise returned at top level is awaited; one that never settles fails the run with `400-20`.
+- `logs` holds the newest `scriptMaxLogLines` lines of `console` output, each clipped to `scriptMaxLogLineChars`, with `logsTruncated` reporting whether anything was dropped. `metrics` reports instructions, peak bytes, `db` operations and duration, each beside its budget. `stack`, on a failure, lists the frames the error came from innermost first (`"applyRule (procedures/rules:12:7)"`), capped at 32. All three are returned on **every** outcome, including a failure — which is when they matter most. A sandbox abort carries no frames, being no program error.
+- `runId` names the run while it executes, so a slow one can be found with [`LIST_SCRIPTS`](#list_scripts-admin-only) and stopped with [`CANCEL_SCRIPT`](#cancel_script-admin-only).
+- **Permissions**: admins on any database, database owners on theirs, anyone else with a per-database grant (`scriptPermissions: {"mydb": "RUN"}`). Starting a script is a separate capability from what it may do — every operation it issues is authorized again on its own request against the caller's own permissions, and the collection schema still applies to its writes. A script cannot leave its database (`admin` included).
+- **The exposed surface is read+write only**: `findById`, `aggregate`, `cursor`, `save`, `bulkSave`, `delete`, `listCollections`, `listDatabases`, `transaction`. DDL and user management are not reachable. Every failed operation throws a catchable `Error` inside the script; only genuine absence is a value (`findById` → `null`, `aggregate` → `[]`, deleting a missing document is a no-op).
+- **Reading more than fits in memory**: `db.cursor(database, collection, pipeline, options)` returns an iterator that runs the pipeline one batch at a time, so only one batch counts against `scriptMaxMemoryBytes`. It is a paged read over a live collection, not a snapshot, and only meaningful with a `SORT` step.
 
   ```js
   import db from "db";
@@ -559,11 +511,11 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
   }
   return total;
   ```
-
-  It is a **paged read, not a snapshot**: each batch is an ordinary `AGGREGATE` against the live collection (authorized, schema-checked and cluster-routed like any other), so a concurrent insert or delete between two batches can make a document be seen twice or not at all. Paging is only meaningful with a `SORT` step — without one the pipeline's order is unspecified — and `db.cursor` does not inject one, because that would change the results of a pipeline ending in `GROUP_BY`/`COUNT`. Such a pipeline still works, but it pages the *step output*, which is rarely what is meant.
-- **Every failed `db` operation throws a catchable `Error` inside the script** — a permission denial, a schema violation, an oversized entry, a cluster rejection or an internal error alike; a failure is never silently swallowed. The two exceptions are ordinary absence rather than failure: a missing document reads as `null` from `findById`, an empty pipeline as `[]` from `aggregate`, and deleting a document that is not there is a no-op.
-- **Errors**: `403-2` when scripting is disabled, `403-1` when the caller may not run scripts, `404-4` for an unknown database, `400-10` when the source exceeds `scriptMaxSourceBytes`, `400-9` when the script throws or fails to parse (the `message` is `"<ErrorName>: <message>"`), `400-11` when it exceeds the instruction or depth budget, `400-12` when it exceeds `scriptMaxMemoryBytes`, `400-15` when its result exceeds `scriptMaxResultBytes`, `400-20` when its result is a promise that never settled, `408-1` when it exceeds `scriptTimeoutMs`, `408-2` when an operator cancelled it with `CANCEL_SCRIPT`, `503-6` when a concurrency ceiling refused the run — the node-wide `maxConcurrentScripts` with no permit free within `scriptQueueWaitMs`, or this caller's `maxConcurrentScriptsPerUser` / this database's `maxConcurrentScriptsPerDatabase` slice, which do not wait; the `message` names which of the three (`node`, `user`, `database`) and nothing ran, so it is retryable, and `409-6` if sent while a transaction is open on the connection.
-- Under clustering the script runs on the node that received it; each operation it issues is routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
+- **Importing shared code**: a script may import any stored procedure of its own database with `import … from "procedures/<name>"` — a library is just a procedure that `export`s instead of returning. `SAVE_PROCEDURE` refuses an import that does not resolve (`400-18`), so libraries must be installed before their users. Only `export`ed bindings are visible, so a procedure written in the `CALL_PROCEDURE` style (a top-level `return`) imports as `undefined`.
+- **Outbound HTTP** is available and **ships open**: `scriptFetchEnabled` is on and `scriptFetchAllowlist` is `*`, which reaches internal services and the cloud metadata endpoint, not just the public internet. The server warns at every startup — **narrow it**. `fetch` stays unavailable to pipeline scripts and before-write hooks, which hold collection locks.
+- **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded in the reserved `script_runs` collection of its database, queryable with an ordinary `AGGREGATE`. Ad-hoc `RUN_SCRIPT` is opt-in via `scriptRunHistoryKinds`; the collection is created lazily and refused to client writes.
+- **Errors**: `403-2` scripting disabled, `403-1` caller may not run scripts, `404-4` unknown database, `400-10` source over `scriptMaxSourceBytes`, `400-9` threw or would not parse (`message` is `"<ErrorName>: <message>"`), `400-11` instruction or depth budget, `400-12` over `scriptMaxMemoryBytes`, `400-15` result over `scriptMaxResultBytes`, `400-20` result promise never settled, `408-1` over `scriptTimeoutMs`, `408-2` cancelled, `503-6` a concurrency ceiling refused it (the `message` names which of `node`/`user`/`database`; nothing ran, so it is retryable), `409-6` sent with a transaction open.
+- Under clustering the run is **placed** on a live node chosen by script load and ownership share (`scriptRoutingEnabled`, on by default); each operation it issues is then routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
 #### `SAVE_PROCEDURE`
 Stores a named script in a database so it can be called by name instead of being sent on every request. Requires admin privileges, ownership of the database, or `scriptPermissions: {"mydb": "MANAGE"}`. The source is **parsed at save time**, so a broken procedure is refused here rather than on somebody else's first call. Idempotent upsert: saving an existing name replaces it and bumps its `version`.
@@ -732,8 +684,8 @@ Runs a stored procedure around a write to a collection — **after** it commits 
 - The procedure receives `{event, database, collection, id, document, trigger, actingUser, definer, firedAt, depth}` as its `args` — `actingUser` is who wrote, `definer` is whose authority the run has. In `batch` mode `documents` replaces `id`/`document`.
 - Triggers are stored **with their collection**, in `{filePath}/{database}/{collection}/{collection}-triggers.json`, so dropping the collection removes them.
 - **Errors**: `403-1` not permitted, `404-4` unknown collection, `404-8` unknown or disabled procedure, `400-14` no events / an unknown event / an unknown mode, `409-8` version conflict.
-- **A failing trigger names where it failed.** Nobody is waiting on a response, so the run's warning line in the server log carries `stack=[…]` — the frames the error came from, innermost first, naming the procedure and line.
-- **Testing an `after` trigger before installing it.** There is no dry run for one (`TEST_TRIGGER` covers `before` triggers only, because only those are directly callable). Put the logic in a stored procedure, exercise it with [`CALL_PROCEDURE`](#call_procedure) against a representative document, and make the trigger a thin wrapper that imports and delegates to it. That exercises the body, not dispatch — cascade depth, definer rights and the pending-run record still need a real write to observe.
+- **A failing run is retried** with a doubling backoff up to `triggerMaxAttempts` and then kept as a dead letter for [`LIST_TRIGGER_RUNS`](#list_trigger_runs-admin-only) / [`RESOLVE_TRIGGER_RUN`](#resolve_trigger_run-admin-only). Its warning line in the server log carries `stack=[…]`, naming the procedure and line — nobody is waiting on a response, so that log is the diagnosis.
+- **There is no dry run for an `after` trigger** ([`TEST_TRIGGER`](#test_trigger) covers `before` triggers, which are directly callable). Put the logic in a procedure, exercise it with [`CALL_PROCEDURE`](#call_procedure), and make the trigger a thin wrapper that delegates to it — that exercises the body, not dispatch.
 
 ##### `timing: "before"` — validating and mutating hooks
 
@@ -763,16 +715,14 @@ export default function (document, context) {
   | a sandbox abort | refuse the write with `408-1` / `400-11` / `400-12` |
   | cancelled via [`CANCEL_SCRIPT`](#cancel_script-admin-only) | refuse the write with `408-2` |
 
-- **Fail-closed.** Every failure stops the write, including a timeout: a hook that could not run must never let a write through.
-- **A replacement may not change `_id`**, and is **re-validated against the collection's schema** — schema validation runs at the edge, before the hook, so without that a hook could manufacture a document the schema forbids. On a `DELETED` event there is nothing to replace, so returning a document is an error rather than a silently ignored value.
-- **There is no `db`.** A hook running under a held write lock must not re-enter the database (nor, under clustering, make a network call while a writer waits), so `import db from "db"` fails inside one — the same posture a [pipeline script](#script-operators-simplejs-in-the-pipeline) has. It may still `import` a stored procedure to share library code. With no `db` a hook writes nothing, which is why `mode: "batch"` and `allowCascade` are **rejected** on a `before` trigger.
-- **The `definer` is recorded but not enforced.** A hook exercises no authority, so — unlike an `after` trigger — deleting the definer does not disable it.
+- **Fail-closed.** Every failure stops the write, a timeout included: a hook that could not run must never let a write through.
+- **A replacement may not change `_id`** and is **re-validated against the collection's schema** (schema validation runs at the edge, *before* the hook). On a `DELETED` event there is nothing to replace, so returning a document is an error.
+- **There is no `db`.** A hook runs under a held write lock, so `import db from "db"` fails inside one — the same posture a [pipeline script](#script-operators-simplejs-in-the-pipeline) has. It may still `import` a stored procedure for shared code. Writing nothing is why `mode: "batch"` and `allowCascade` are **rejected** on a `before` trigger, and why its `definer` is recorded but not enforced — deleting the definer does not disable it, unlike an `after` trigger.
 - **Several hooks on one collection chain in ascending name order**, each one's output feeding the next; the first refusal stops the chain.
-- **Budgets are per request, not per document.** One interpreter serves the whole request, so a `BULK_SAVE` of 10,000 documents evaluates the module body once and shares one `beforeHookInstructionBudget` and one `beforeHookTimeoutMs` across all of them. The first refusal fails the whole `BULK_SAVE`; nothing from the batch is written. (One exception, bounded at 2×: a `BULK_SAVE` that mixes inserts and updates on a collection carrying hooks for **both** `CREATED` and `UPDATED` runs two sets of hooks, each with its own budget and deadline.)
-- **A running hook is visible to [`LIST_SCRIPTS`](#list_scripts-admin-only) and stoppable with [`CANCEL_SCRIPT`](#cancel_script-admin-only)**, as one run per request named for the collection — not one per document, since the whole request shares a budget. Cancelling it refuses the write with `408-2`, like any other way a hook can fail to finish. Hooks are exempt from `maxConcurrentScripts` for the reason triggers are: a write refused for want of a script permit would be a failed write, not a queued one.
-- **Console output is discarded** on the write path (a hook runs once per document, so a `console.log` over a bulk save is a log-flood risk). [`TEST_TRIGGER`](#test_trigger) is the window that replaces it.
-- Under clustering the hook runs on the collection's **owner**, where the write commits, not on the node the client is connected to.
-- **Rolling upgrade:** an older node re-executing a `SAVE_TRIGGER` does not understand `timing` and would install the hook as an `after` trigger. Roll every node before installing a `before` trigger.
+- **Budgets are per request, not per document.** One interpreter serves the whole request, so a `BULK_SAVE` of 10,000 documents evaluates the module body once and shares one `beforeHookInstructionBudget` and one `beforeHookTimeoutMs`. The first refusal fails the whole `BULK_SAVE`. (One exception, bounded at 2×: a batch mixing inserts and updates on a collection hooked for both runs two sets, each with its own budget.)
+- **A running hook is visible to [`LIST_SCRIPTS`](#list_scripts-admin-only) and stoppable with [`CANCEL_SCRIPT`](#cancel_script-admin-only)** as one run per request, named for the collection. Cancelling refuses the write with `408-2`. Hooks are exempt from `maxConcurrentScripts`: a write refused for want of a permit would be a failed write, not a queued one.
+- **Console output is discarded** on the write path (a hook runs once per document, so a `console.log` over a bulk save floods the log). [`TEST_TRIGGER`](#test_trigger) is the window that replaces it.
+- Under clustering the hook runs on the collection's **owner**, where the write commits. An older node does not understand `timing` and would install the hook as an `after` trigger, so **roll every node** before installing a `before` trigger.
 
 #### `TEST_TRIGGER`
 Runs a `before` trigger against a document you supply and reports what it would do, **without writing anything**. Requires admin privileges, ownership, or `MANAGE` — it executes code. Not routed: it runs on the node you are connected to.
@@ -1245,8 +1195,8 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `replicationAckTimeoutMs` | Valid number ≥ 1. Max wait for the replication quorum |
 | `virtualNodesPerNode` | Valid number ≥ 1. Virtual nodes per node on the consistent-hash ring |
 | `readFallbackToLocal` | `true` or `false`. Serve reads from the local replica when the owner is unreachable |
-| `scriptRoutingEnabled` | `true` or `false` (default `true`). Whether a script ([`RUN_SCRIPT`](#run_script), `CALL_PROCEDURE`) may be forwarded to a live node chosen by current script load instead of running on the node that received it. Set `false` to keep every script on the receiving node. Only a node that is alive **and** caught up on admin metadata is chosen, so a script never lands on a node that has not applied the DDL it depends on. Placement blends load with how much of the scoped database a candidate owns (`scriptLocalityWeight`). `scriptsEnabled` and the `script*` sandbox keys must be uniform across the cluster, and every node must be rolled before the first script runs on an upgraded cluster |
-| `scriptLocalityWeight` | Integer `0`-`100` (default `50`). How strongly script placement prefers a node that owns the scoped database's collections, as a percentage of that node's load ratio: the score is `(weight / 100) * share - loadRatio`, higher wins. `0` places purely by load, reproducing the ordering placement had before locality existed; at `50` a node owning the whole database beats an idle rival unless it is itself more than half full. A saturated node still loses outright, whatever it owns. Only meaningful for databases with few collections — a wide database spreads near-uniformly across the ring, so every node owns about the same share. Each node places using its own view, so unlike the `script*` sandbox keys this one need **not** be uniform across the cluster |
+| `scriptRoutingEnabled` | `true` or `false` (default `true`). Whether a script ([`RUN_SCRIPT`](#run_script), [`CALL_PROCEDURE`](#call_procedure)) may be placed on another live node instead of running where it arrived. Only a node that is alive **and** caught up on admin metadata is chosen. `scriptsEnabled` and the `script*` sandbox keys must be uniform across the cluster, and every node rolled, before enabling it — see [docs/clustering.md](docs/clustering.md) → *Scripts* |
+| `scriptLocalityWeight` | Integer `0`–`100` (default `50`). How strongly placement prefers a node owning the scoped database's collections: score is `(weight / 100) * share - loadRatio`, higher wins, and `0` places purely by load. Only meaningful for databases with few collections. A **local** decision — it need not be uniform across the cluster |
 | `clusterTlsEnabled` | `true` or `false`. TLS-encrypt the node-to-node channel (reuses the keystore) |
 | `clusterSecret` | Non-blank shared secret authenticating the cluster channel. Required when `clusterEnabled=true` |
 | `antiEntropyIntervalMs` | Valid number ≥ 1. How often each node runs a background anti-entropy sweep reconciling its collections against live peers |
@@ -1262,11 +1212,11 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scriptMaxResultBytes` | Human-readable size > 0 (default `16Mb`). Max size of the value a script returns; a larger result fails the run with `400-15` (the `console` output still comes back). Use `db.cursor` to process more data than can be returned |
 | `scriptCursorBatchSize` | Valid number ≥ 1 (default `500`). Default number of documents `db.cursor` fetches per batch |
 | `scriptCursorMaxBatchSize` | Valid number ≥ 1 (default `5000`), and ≥ `scriptCursorBatchSize`. Upper clamp for a caller-supplied `batchSize`, so one call cannot materialise an unbounded batch |
-| `aggregationScriptInstructionBudget` | Valid number ≥ 1 (default `1000000`). Max interpreter instructions **all** the [script operators](#script-operators-simplejs-in-the-pipeline) in one `AGGREGATE` pipeline may execute in total before the query aborts with `400-11`. Deliberately an order below `scriptInstructionBudget`, and deliberately per-pipeline rather than per-document: one interpreter serves the whole query, so a runaway predicate aborts it instead of getting a fresh budget on every row |
+| `aggregationScriptInstructionBudget` | Valid number ≥ 1 (default `1000000`). Max instructions **all** the [script operators](#script-operators-simplejs-in-the-pipeline) in one pipeline may execute before the query aborts with `400-11`. Per pipeline, not per document — one interpreter serves the whole query, so a runaway predicate aborts it rather than getting a fresh budget per row |
 | `aggregationScriptTimeoutMs` | Valid number ≥ 1 (default `2000`). Wall clock for the same set of operators, also per pipeline; exceeding it aborts the query with `408-1` |
 | `aggregationScriptMaxSourceBytes` | Human-readable size > 0 (default `16Kb`). Max source size of a single script operator; a larger one is rejected with `400-10` |
-| `maxConcurrentScripts` | Valid number ≥ 0 (default `16`); `0` disables the cap. Max client-initiated script runs ([`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure)) executing on this node at once. Each run gets its own interpreter and its own `scriptMaxMemoryBytes` allocation budget, so this cap × `scriptMaxMemoryBytes` is the worst-case heap the script surface can hold — **additive** with `maxMemory` and the metadata cache budgets, exactly as those are additive with each other. Triggers and scheduled procedures are bounded separately by `triggerThreads` and `scheduleThreads` and are deliberately **not** subject to this cap, so the node-wide ceiling on concurrent interpreters is `maxConcurrentScripts + triggerThreads + scheduleThreads`. A caller refused after waiting `scriptQueueWaitMs` receives `503-6` |
-| `scriptQueueWaitMs` | Valid number ≥ 0 (default `250`); `0` rejects immediately. How long a client-initiated script run waits for a permit before it is rejected with `503-6`. The wait absorbs bursts so a short spike queues instead of erroring, while the cap still bounds the heap. May legally exceed `scriptTimeoutMs` — a caller can wait longer than a run takes |
+| `maxConcurrentScripts` | Valid number ≥ 0 (default `16`); `0` disables the cap. Max client-initiated script runs on this node at once; a caller refused after waiting `scriptQueueWaitMs` gets `503-6`. Triggers and schedules are bounded by their own pools instead, so the node-wide ceiling on concurrent interpreters is `maxConcurrentScripts + triggerThreads + scheduleThreads` — and that sum × `scriptMaxMemoryBytes` is the worst-case script heap, **additive** with `maxMemory` and the metadata cache budgets |
+| `scriptQueueWaitMs` | Valid number ≥ 0 (default `250`); `0` rejects immediately. How long a run waits for a permit before `503-6`. The wait absorbs bursts so a short spike queues instead of erroring; it may legally exceed `scriptTimeoutMs` |
 | `scriptMaxLogLines` | Valid number ≥ 1. Max `console` lines returned with the response (newest kept) |
 | `scriptMaxLogLineChars` | Valid number ≥ 1. Max characters kept per returned `console` line |
 | `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
@@ -1282,11 +1232,11 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `triggerQueueSize` | Bounded trigger queue (>= 1, default `10000`). On overflow the oldest queued event is dropped with a warning and counted in `GET_DATABASE_STATS` |
 | `triggerMaxDepth` | How deep a chain of trigger-fired writes may go (>= 0, default `3`). A trigger with `allowCascade=false` (the default) already fires nothing above depth 0 |
 | `triggerTimeoutMs` | Max wall-clock ms a single trigger run may take (>= 1, default `1000`). Tighter than `scriptTimeoutMs` because nobody is waiting on the result |
-| `triggerRunLogEnabled` | `true` or `false` (default `true`). Whether a fired trigger is recorded durably before it runs, so a run queued when the process dies is replayed at startup. The run's effects and the consumption of its record commit together, so a replay cannot apply it twice; turning this off trades that for one less admin write per fired trigger. The record is **node-local** — see [docs/clustering.md](docs/clustering.md) → *Pending trigger runs are node-local* |
+| `triggerRunLogEnabled` | `true` or `false` (default `true`). Whether a fired trigger is recorded durably before it runs, so a run queued when the process dies is replayed at startup. Effects and the consumption of the record commit together, so a replay cannot double-apply; off trades that for one less admin write per fired trigger. The record is **node-local** — see [docs/clustering.md](docs/clustering.md) → *Pending trigger runs are node-local* |
 | `triggerRunRetentionMs` | Valid number ≥ 1 (default `86400000`). How long a pending trigger-run record is kept before it is garbage-collected as stranded — its collection was dropped, or the node that owned it never came back |
 | `beforeHookInstructionBudget` | Valid number ≥ 1 (default `200000`). Instruction budget for the before triggers of **one request** — a `BULK_SAVE` of N documents shares it rather than getting a fresh one per row. A client write is blocked while a hook runs, so it is deliberately an order below `scriptInstructionBudget`. |
 | `beforeHookTimeoutMs` | Valid number ≥ 1 (default `200`). Wall clock all the before triggers of one request may take together. Exceeding it **refuses the write** (`408-1`): a hook that could not run must never let a write through. |
-| `schedulesEnabled` | `true` or `false` (default `true`). Whether schedules fire. Separate from `scriptsEnabled`/`triggersEnabled`: a scheduled run executes code on a clock, with no client asking for it and with its installer's authority. Leaving it on costs a ticker thread and nothing else until somebody installs a schedule — and installing one requires `scriptsEnabled`, since a schedule can only name a stored procedure. While it is off the three schedule operations answer `403-2` |
+| `schedulesEnabled` | `true` or `false` (default `true`). Whether schedules fire; the three schedule operations answer `403-2` while off. Separate from `scriptsEnabled`/`triggersEnabled` because a scheduled run executes code on a clock with its installer's authority and no client asking. Leaving it on costs a ticker thread until somebody installs a schedule |
 | `scheduleThreads` | Valid number ≥ 1 (default `2`). Workers running scheduled procedures. Its own pool rather than the trigger executor's, because a scheduled job may hold a worker for its whole timeout |
 | `scheduleQueueSize` | Valid number ≥ 1 (default `100`). Bounded queue of due runs; on overflow the oldest is dropped with a warning and counted, since no client is waiting and the schedule fires again at its next occurrence |
 | `scheduleTickMs` | Valid number ≥ 1 (default `1000`). How often the scheduler looks for due schedules. Firing is never finer-grained than this, so a schedule whose `intervalMs` is below the tick fires once per tick |
@@ -1379,8 +1329,9 @@ process (Docker's default is 10s, so lower it or raise `--stop-timeout`).
 
 **Two cache budgets, not one.** `maxMemory` bounds the *user* document/index cache
 only. The admin metadata caches — stored procedure sources, per-collection JSON
-Schemas and trigger lists — are bounded separately by `procedureCacheMaxBytes`,
-`schemaCacheMaxBytes` and `triggerCacheMaxEntries`, and sit on top of it. All three
+Schemas, trigger lists and schedule definitions — are bounded separately by
+`procedureCacheMaxBytes`, `schemaCacheMaxBytes`, `triggerCacheMaxEntries` and
+`scheduleCacheMaxBytes`, and sit on top of it. All of them
 are LRU-evicted and backed by disk, so lowering them only costs a re-read. Size
 `-Xmx` against the sum: the server logs a warning at startup when the budgets total
 more than the heap. `GET_DATABASE_STATS` reports the live footprint under
@@ -1410,9 +1361,9 @@ before.
 
 ### Clustering (multi-node)
 
-> **Experimental.** Full design, implementation details, and the operations runbook
-> live in [docs/clustering.md](docs/clustering.md). With `clusterEnabled=false` (the
-> default) the node behaves exactly as a standalone server.
+> Full design, implementation details and the operations runbook live in
+> [docs/clustering.md](docs/clustering.md). With `clusterEnabled=false` (the default)
+> the node behaves exactly as a standalone server, with no behaviour change on any path.
 
 LWNRDB can run as a cluster of fully-replicated nodes with a **distributed cache**:
 every collection is consistent-hashed to an **owner node** (there is no single
@@ -1439,7 +1390,7 @@ share the same keystore for the TLS cluster channel to establish).
 
 ### Memory management
 
-`maxMemory` is the **JVM heap-used budget**: a background sweep (every 5s) drops least-frequently-used user collections/indexes whenever the JVM heap exceeds this value, until heap is back below the budget. Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
+`maxMemory` bounds the **user cache**: a background sweep (every 5s) sums the estimated size of the cached user collections and indexes and, while that total exceeds the budget, evicts the least-frequently-used of them. It is the cache's own accounting, not measured JVM heap — nothing reads real heap to decide an eviction (`GET_DATABASE_STATS` reads it only to report). Values are human-readable (e.g. `512Mb`, `2Gb`). Two special values are accepted:
 - `0` — unlimited; caching is on but eviction never triggers (suitable when `-Xmx` is already the only ceiling you want).
 - `-1` — caching disabled; user collections and indexes are always read from disk. Admin collections are always cached regardless.
 
