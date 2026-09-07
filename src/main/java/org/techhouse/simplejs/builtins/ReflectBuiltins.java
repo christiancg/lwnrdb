@@ -12,7 +12,6 @@ import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
-import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -62,61 +61,8 @@ public final class ReflectBuiltins {
         final var key = key(ops, args);
         final var value = arg(args, 2);
         return JsBoolean.of(args.size() > 3 && args.get(3) != target
-                ? ordinarySet(ops, target, key, value, args.get(3))
+                ? OrdinarySet.set(ops, target, key, value, args.get(3))
                 : ops.setMember(target, key, value));
-    }
-
-    // OrdinarySet with a Receiver that is not the target: the write lands on the receiver, and the
-    // target is consulted only for the descriptor that authorises it.
-    private static boolean ordinarySet(InterpreterOps ops, JsValue target, JsValue key, JsValue value,
-            JsValue receiver) {
-        if (target instanceof JsProxy) {
-            return ops.setMemberWithReceiver(target, key, value, receiver);
-        }
-        // Integer-Indexed [[Set]] short-circuits before OrdinarySet: a canonical numeric key that is
-        // not a valid index on this view is a silent no-op (no coercion, no prototype walk), and a
-        // valid one handled directly here never reaches a setter the receiver would otherwise inherit
-        // from a per-kind prototype further up the chain.
-        if (target instanceof JsTypedArray typed && typed.setExoticIndex(key, value, receiver)) {
-            return true;
-        }
-        if (!(ops.getOwnPropertyDescriptor(target, key) instanceof JsObject own)) {
-            final var parent = ops.getPrototypeOf(target);
-            return InterpreterUtils.isObjectLike(parent)
-                    ? ordinarySet(ops, parent, key, value, receiver)
-                    : defineOnReceiver(ops, key, value, receiver);
-        }
-        if (own.has("get") || own.has("set")) {
-            final var setter = own.get("set");
-            if (!InterpreterUtils.isCallable(setter)) {
-                return false;
-            }
-            ops.call(setter, receiver, List.of(value));
-            return true;
-        }
-        return JsCoercion.toBoolean(own.get("writable")) && defineOnReceiver(ops, key, value, receiver);
-    }
-
-    private static boolean defineOnReceiver(InterpreterOps ops, JsValue key, JsValue value, JsValue receiver) {
-        if (!InterpreterUtils.isObjectLike(receiver)) {
-            return false;
-        }
-        final var descriptor = new JsObject();
-        descriptor.set("value", value);
-        if (ops.getOwnPropertyDescriptor(receiver, key) instanceof JsObject existing) {
-            if (existing.has("get") || existing.has("set") || !JsCoercion.toBoolean(existing.get("writable"))) {
-                return false;
-            }
-        } else {
-            descriptor.set("writable", JsBoolean.TRUE);
-            descriptor.set("enumerable", JsBoolean.TRUE);
-            descriptor.set("configurable", JsBoolean.TRUE);
-        }
-        try {
-            return ops.defineProperty(receiver, key, descriptor);
-        } catch (TypeErrorException ignored) {
-            return false;
-        }
     }
 
     // OrdinarySetPrototypeOf answers false rather than throwing; only Object.setPrototypeOf turns

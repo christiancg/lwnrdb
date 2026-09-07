@@ -2149,6 +2149,13 @@ The following were previously listed as gaps and are now implemented:
   now threads the proxy as the `this`/receiver (and `Reflect.get`/`Reflect.set` honour an explicit
   receiver), and `Object.keys`/`values`/`entries` + `for-in` re-filter an `ownKeys` trap's result
   down to enumerable string keys.
+- **`super` writes run the shared OrdinarySet** — `super.x = v` (plain, compound and `++`/`--`, in an
+  instance method, a `static` method or an object-literal method) now goes through the same
+  OrdinarySetWithOwnDescriptor as `Reflect.set(target, key, value, receiver)`, extracted as
+  `builtins/OrdinarySet`. The member-write path had its own partial version that skipped the
+  own-descriptor step whenever the receiver was not the target, so a write to a non-writable property
+  silently created an own property on the instance instead of throwing a `TypeError`, and a static
+  `super.x = v` mutated the base class instead of landing on the receiving one.
 - **Intrinsic prototypes and builtin subclassing** — `Object.prototype`/`Array.prototype`/
   `String.prototype`/`Number.prototype`/… and a `Function` global are real objects, prototype
   monkey-patching works, and `class E extends Error {}` (or `Map`/`Set`/`Array`/…) produces a usable

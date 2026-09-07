@@ -13,6 +13,7 @@ import org.techhouse.simplejs.builtins.AsyncIteratorBuiltins;
 import org.techhouse.simplejs.builtins.FunctionProtoBuiltins;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.builtins.IteratorBuiltins;
+import org.techhouse.simplejs.builtins.OrdinarySet;
 import org.techhouse.simplejs.builtins.RegexBuiltins;
 import org.techhouse.simplejs.builtins.SymbolBuiltins;
 import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
@@ -636,6 +637,13 @@ public final class MemberEvaluator {
         if (target instanceof JsObject object) {
             return setObjectMember(object, key, value, receiver);
         }
+        // Every other target type answers the 3-argument [[Set]] with itself as the receiver, which is
+        // wrong for a foreign one: a static `super.x = v` sets on the *base class* with the derived
+        // class as the receiver, so the write has to land on the derived class (and be refused
+        // outright when the base's own property is non-writable) rather than mutating the base.
+        if (receiver != target) {
+            return OrdinarySet.set(interp.ops(), target, new JsString(key), value, receiver);
+        }
         return setMember(target, key, value);
     }
 
@@ -663,6 +671,14 @@ public final class MemberEvaluator {
             return receiver == object
                     ? primitiveTyped.setExoticIndex(new JsString(key), value, primitiveTyped)
                     : setOnReceiver(receiver, key, value);
+        }
+        // OrdinarySetWithOwnDescriptor's own-descriptor step. Only reachable for a receiver other than
+        // the object - a write with the object as its own receiver is enforced by JsObject.set below -
+        // and that is exactly the super-reference case: `super.x = v` sets on the home object's
+        // prototype with `this` as the receiver, so skipping the check let the write fall through to
+        // creating an own property on the instance instead of refusing.
+        if (protoOwnsNonWritableData(object, key)) {
+            return false;
         }
         if (!object.has(key)) {
             for (var chain = new Chain(object); chain.hasLink(); chain.advance()) {
