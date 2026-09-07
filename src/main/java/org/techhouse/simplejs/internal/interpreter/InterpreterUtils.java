@@ -228,48 +228,6 @@ public final class InterpreterUtils {
         return object.get(key);
     }
 
-    // Symbol-keyed counterpart to ownValue: a symbol-keyed accessor (installed e.g. via
-    // Object.defineProperty(obj, aSymbol, {get(){...}})) must be read through its getter too, mirrored
-    // from BindingEvaluator's private ownSymbolValue so CopyDataProperties call sites outside that
-    // class (object-literal/call-argument spread) invoke it as well instead of reading the (absent)
-    // stored data value.
-    public static JsValue ownSymbolValue(JsObject object, JsSymbol symbol, InterpreterOps ops) {
-        if (ops != null && object.hasSymbolAccessor(symbol)) {
-            return ops.getMember(object, symbol);
-        }
-        return object.getSymbol(symbol);
-    }
-
-    public static void spreadObject(JsObject target, JsValue source, InterpreterOps ops) {
-        switch (source) {
-            case JsObject object -> {
-                for (final var key : object.keys()) {
-                    if (object.isEnumerable(key)) {
-                        target.set(key, ownValue(object, key, ops));
-                    }
-                }
-                for (final var symbol : object.symbolKeys()) {
-                    if (object.ownProperties().getSymbolFlags(symbol).enumerable()) {
-                        target.setSymbol(symbol, ownSymbolValue(object, symbol, ops));
-                    }
-                }
-            }
-            case JsArray array -> {
-                final var elements = array.getElements();
-                for (var i = 0; i < elements.size(); i++) {
-                    target.set(Integer.toString(i), elements.get(i));
-                }
-            }
-            case JsString string -> {
-                for (var i = 0; i < string.getValue().length(); i++) {
-                    target.set(Integer.toString(i), new JsString(String.valueOf(string.getValue().charAt(i))));
-                }
-            }
-            default -> {
-            }
-        }
-    }
-
     public static List<JsValue> arrayLikeElements(JsValue value) {
         if (value instanceof JsArray array) {
             return array.getElements();
