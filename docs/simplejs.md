@@ -15,19 +15,22 @@ source String
   → Interpreter.run(ast)   → result                (evaluation)
 ```
 
-The **lexer** and **parser** are implemented and cover the ES2020–ES2026
-syntactic surface. The **interpreter** is complete: sub-phases **6a–6f** plus every
-follow-up (async generators, regex, tagged templates, `using`, the engine-completion
+**The engine is done.** The **lexer** and **parser** cover the ES2020–ES2026
+syntactic surface; the **interpreter** is complete (sub-phases **6a–6f** plus every
+follow-up: async generators, regex, tagged templates, `using`, the engine-completion
 phases, spec-gap Phases A–G, the ES2022–2026 stdlib additions, ASI, always-on strict
-mode and the ES2026 conformance phases) are done, so the whole document below
-describes the engine **as built**. The engine is reached through
+mode, the ES2026 conformance phases and Temporal); and the host contract is closed, so
+the whole document below describes the engine **as built** rather than as planned. No
+further *engine* work is scheduled — what comes next are database features that use
+SimpleJS. See *[Engine status — closed](#engine-status--closed)* for what that claim
+rests on and for the three things deliberately left open. The engine is reached through
 `SimpleJs.run(source, HostBindings)`, and clients reach that through the `RUN_SCRIPT`
 wire operation (see *The `RUN_SCRIPT` operation* below).
 
 Two lists bound what the engine does **not** do: the
 [verified gaps and divergences](#known-gaps-and-divergences)
-(things a conformant engine has that this one is missing or gets wrong — candidates
-for closing) and the
+(things a conformant engine has that this one is missing or gets wrong — now
+residue, not a roadmap) and the
 [deliberately unimplemented features](#deliberately-unimplemented-es2026-features-out-of-scope-for-a-database-interpreter)
 (design decisions, not gaps).
 
@@ -894,11 +897,11 @@ but is not a constructor.
 
 ## Measuring conformance
 
-Conformance is **measured, not asserted** (currently **100.00%**, 36,477/36,477 — the tracked
-baseline of known failures is empty). The denominator shrank from 36,535 when the restriction-bound
-tests below were filtered out — that step moved the rate without changing the passing count, so the
-two figures are only comparable through the ledger in `plans/simplejs-test262-100-percent-progress.md`.
-The official
+Conformance is **measured, not asserted** (currently **100.00%**, 41,078/41,078 — the tracked
+baseline of known failures is empty, and the latest run is committed as
+`test_log/test262-report.md`). The denominator has moved over time as restriction-bound tests were
+filtered out, so a historical rate is only comparable to today's through the exclusion file rather
+than by its percentage. The official
 tc39/test262 corpus runs against
 `SimpleJs.run(source, HostBindings)` through a harness in `test_utils/test262.py`, filtered down to
 the language + built-ins surface a database script host actually exposes, and gated on a tracked
@@ -945,6 +948,73 @@ the filter has started excluding.
 Because the baseline's line count is the honest answer to "is SimpleJS ES2026 compliant?", the table
 below is no longer a hand-maintained inventory of gaps — it lists only what is not expressible as a
 test262 id. Everything else is a diff against the baseline.
+
+## Engine status — closed
+
+**The engine is done.** The language surface and the host contract are complete, and no further
+*engine* work is planned: what follows are database features that use SimpleJS, not changes to it.
+Three things make that checkable rather than declarative.
+
+- **Conformance is 100.00% (41,078/41,078)** over the filtered corpus with an empty baseline —
+  reproduce it with the commands above, and read the filter's own justification in *Deliberately
+  unimplemented ES2026 features* below, since an exclusion with no entry there is a number being
+  flattered.
+- **The gaps table below is residue, not a roadmap.** Three of its rows are marked *Closed*, four
+  more closed together when the custom regex engine replaced `java.util.regex`, and what remains is
+  unreachable from ordinary procedure/trigger/schedule code: an array index at or past 2^31 assigned
+  through `arr[i] = v`, `super.m()` on a native super, source text and positions for a function
+  written inside a template substitution, exhaustive per-code-point property escapes, and the
+  `localeCompare`/`toLocaleString` option subset `java.text` cannot express. Row 7 is the one
+  exception, and it is an operator concern rather than a defect — see below.
+- **Every host surface a database script needs is wired**: `RUN_SCRIPT`, stored procedures,
+  before-write hooks and after triggers (exactly-once runs, retry, dead letters), scheduled
+  procedures, pipeline scripts, `db.cursor`, transactions both single-owner and cross-owner,
+  captured console output, run history, per-run metrics, real call stacks, cancellation, per-tenant
+  admission, and cluster placement by script load.
+
+### What is deliberately left open
+
+Three items remain. None of them is engine work.
+
+1. **`scriptMaxMemoryBytes` is a bulk-allocation budget, not a live-heap cap** (row 7 of the gaps
+   table). A script allocating a small object per instruction is bounded only by
+   `scriptInstructionBudget`, so the two must be sized together, and the node's worst-case script
+   heap is `(maxConcurrentScripts + triggerThreads + scheduleThreads) × scriptMaxMemoryBytes`,
+   additive with `maxMemory` and the metadata cache budgets. That is a sizing contract the operator
+   has to honour, and it belongs in operator-facing documentation rather than only here.
+2. **Outbound `fetch` ships on, with its allowlist at `*`.** The reasoning is in *Host-contract
+   notes* — a capability behind a default-off flag is one nobody discovers — and
+   `Main.warnIfScriptFetchEnabled` says so at every startup. It is still a posture worth deciding
+   deliberately before a release rather than inheriting by inertia.
+3. **npm packages through the `ModuleResolver` seam are a non-goal**, not a pending phase, for the
+   reason below.
+
+### Why npm is a non-goal
+
+Module resolution is the smaller half of what a real package needs, and `mysql2` is the worked
+example. It speaks the MySQL wire protocol over a **raw TCP socket**, and the only egress capability
+here is `NetworkAccess.fetch(FetchRequest) → FetchResponse`: one request, one response, a size cap, a
+timeout, a host allowlist, run off the interpreter thread as an `EventLoop` async job. It also needs
+`Buffer` (every packet is built and parsed as one), `stream`'s Duplex/Transform plus `EventEmitter`,
+asymmetric crypto for `caching_sha2_password` (`CryptoBuiltins` has `randomUUID`/`getRandomValues`/
+`hash` and no RSA), and `process`/`zlib`/`tls`/`require`. Supplying that set is building a Node
+runtime, which is the boundary this document draws everywhere else.
+
+The socket is the real blocker, and it is a far bigger decision than `fetch` was. `fetch` is bounded
+by construction; a socket is long-lived and bidirectional, has no natural size or time bound, needs
+pooling whose lifetime outlives a run, and hands a script the server's network position in a form a
+host allowlist cannot police. So the two supported ways to reach an external database from a script
+are:
+
+- **a host-side connector** — a Java/JDBC capability the operator configures as named, credentialed
+  datasources, where a script names a datasource and sends a statement instead of opening a socket,
+  bounded the way `fetch` is (allowlisted targets, a statement timeout, a row/byte cap charged to
+  `scriptMaxMemoryBytes`); or
+- **HTTP in front of the external database** — already possible today with `fetch`, at zero engine
+  cost.
+
+Neither is built, and neither is a SimpleJS gap: the first is a new host capability, the second a
+deployment choice.
 
 ## Known gaps and divergences
 
@@ -2007,7 +2077,11 @@ be kept in step — an exclusion with no entry here is a number being flattered.
   claims it, so what is importable is entirely the host's decision. Under the database host that
   means `procedures/<name>` (see *Module loading*) and nothing else. Loading an npm package through
   that seam additionally needs work that is not built: CommonJS/`require`, node core-module shims,
-  `package.json` `exports` resolution, and ESM live-binding cycles (a cycle currently throws).
+  `package.json` `exports` resolution, and ESM live-binding cycles (a cycle currently throws) — and
+  the resolver is the smaller half of the problem, since a real package reaches for capabilities
+  (raw sockets, `Buffer`, `stream`, asymmetric crypto) that this host does not have and will not
+  grow. That makes npm a **non-goal** rather than a pending phase; the worked example is in
+  *[Engine status — closed](#engine-status--closed)*.
 - **`Symbol.species`** — `JsArray`/`JsTypedArray` are not subclassable, so species is unobservable;
   by-copy methods always allocate the default type. The same gap means a derived-construction builtin
   method (e.g. `ArrayBuffer.prototype.slice`) always returns a base-type instance even on a subclass
@@ -2029,9 +2103,11 @@ be kept in step — an exclusion with no entry here is a number being flattered.
 One `dir:` exclusion is not a feature decision but a measurement one:
 `built-ins/RegExp/property-escapes/generated/` asserts, code point by code point, the contents of a
 single Unicode version. Property escapes are implemented (see *Unicode property escapes* above), but
-their data is the build JDK's — Unicode 16.0 on JDK 25, 17.0 on JDK 26 — so those files answer
-differently on the two supported build JDKs and no single baseline can be green on both. The
-hand-written property-escapes tests next to them stay measured.
+their data is the build JDK's. That was originally a portability argument (the subtree answered
+differently on JDK 25's Unicode 16.0 and JDK 26's 17.0); the JDK floor of 26 settled the version, and
+re-measuring on that footing scored **66.31% (311/469)**, so the subtree now stays excluded for a
+genuine per-code-point gap in property resolution — see row 6 of the gaps table. The hand-written
+property-escapes tests next to them stay measured.
 
 ### ES2026 conformance follow-up (2026-08-11)
 
