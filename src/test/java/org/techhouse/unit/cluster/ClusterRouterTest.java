@@ -3,6 +3,7 @@ package org.techhouse.unit.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -150,11 +151,39 @@ public class ClusterRouterTest {
         assertEquals(fallbacksBefore, scriptPlacement.getForwardFallbacks());
     }
 
+    // Placement scores candidates by what they own of the database the script is scoped to, so the router
+    // has to hand it that database rather than letting it place blind.
+    @Test
+    public void test_the_scoped_database_reaches_placement() throws Exception {
+        routableMembership();
+        final var recorder = new RecordingPlacement();
+        TestUtils.setPrivateField(router, "scriptPlacement", recorder);
+        try {
+            assertNull(router.forward(runScript(), "{}", false, "someuser", null));
+            assertNull(router.forward(new CallProcedureRequest(TestGlobals.DB, "proc", null), "{}", false, "someuser",
+                    null));
+        } finally {
+            TestUtils.setPrivateField(router, "scriptPlacement", scriptPlacement);
+        }
+        assertEquals(List.of(TestGlobals.DB, TestGlobals.DB), recorder.databases);
+    }
+
     @Test
     public void test_null_when_ownership_not_established() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         ownership.setSelfNodeId("self");
         ownership.onMembershipChanged(new MembershipView(List.of()));
         assertNull(router.forward(save(), "{}", false, null, null));
+    }
+
+    // Answers null so the run stays local: what is under test is the argument, not the placement decision.
+    private static final class RecordingPlacement extends ScriptPlacement {
+        private final List<String> databases = new ArrayList<>();
+
+        @Override
+        public NodeInfo choose(String databaseName) {
+            databases.add(databaseName);
+            return null;
+        }
     }
 }

@@ -146,6 +146,7 @@ public class ConfigurationTest {
         map.put("virtualNodesPerNode", "128");
         map.put("readFallbackToLocal", "true");
         map.put("scriptRoutingEnabled", "true");
+        map.put("scriptLocalityWeight", "50");
         map.put("clusterTlsEnabled", "false");
         map.put("clusterSecret", "");
         map.put("antiEntropyIntervalMs", "60000");

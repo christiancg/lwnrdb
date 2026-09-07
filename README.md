@@ -43,7 +43,7 @@ As such, this DB is not intended to be the fastest one out there, the most relia
   - [x] Shared code between procedures: a script, procedure, trigger or schedule can `import … from "procedures/<name>"` to reuse a stored procedure as a module (`scriptProcedureImportEnabled`, on by default) — see [docs/simplejs.md](docs/simplejs.md) → *Module loading*
   - [x] Scripting inside the query pipeline: `SCRIPT` filter and `MAP` operators plus a `REDUCE` step — see [Script operators](#script-operators-simplejs-in-the-pipeline)
   - [x] Script node selection under clustering: [`RUN_SCRIPT`](#run_script) and [`CALL_PROCEDURE`](#call_procedure) are forwarded to a live node chosen by current script load (`scriptRoutingEnabled`, on by default), skipping any node not yet caught up on admin metadata — see [docs/clustering.md](docs/clustering.md) → *Scripts*
-    - [ ] Locality-aware placement: selection is by load only, so the chosen node is usually not the owner of the collections the script touches and every operation the script issues still costs a round trip
+    - [x] Locality-aware placement: placement blends the share of the scoped database's collections a candidate owns with its load (`scriptLocalityWeight`, 50 by default; 0 restores load-only). Only meaningful for databases with few collections — a wide database spreads across the ring, so every node owns about the same share
 - [x] Add ability to restrict the save of a document taking into consideration a specific format. Reject write if not compliant (per-collection JSON Schema — see [Schema validation](#schema-validation)) 
 - [x] Replication between nodes (no master-slave arch; all nodes are equal; no sharding) — see [docs/clustering.md](docs/clustering.md)
 - [x] Move pages admin collections to a separate folder called "pages" to make things more organized
@@ -990,6 +990,8 @@ Response shape:
       "waited": 7,
       "forwarded": 118,
       "forwardFallbacks": 3,
+      "localityWeight": 50,
+      "localityPreferred": 47,
       "cancelled": 1
     },
     "totals": {
@@ -1243,7 +1245,8 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `replicationAckTimeoutMs` | Valid number ≥ 1. Max wait for the replication quorum |
 | `virtualNodesPerNode` | Valid number ≥ 1. Virtual nodes per node on the consistent-hash ring |
 | `readFallbackToLocal` | `true` or `false`. Serve reads from the local replica when the owner is unreachable |
-| `scriptRoutingEnabled` | `true` or `false` (default `true`). Whether a script ([`RUN_SCRIPT`](#run_script), `CALL_PROCEDURE`) may be forwarded to a live node chosen by current script load instead of running on the node that received it. Set `false` to keep every script on the receiving node. Only a node that is alive **and** caught up on admin metadata is chosen, so a script never lands on a node that has not applied the DDL it depends on. Placement spreads interpreter CPU, not data locality: the chosen node is usually not the owner of the collections the script touches, so each operation still costs a round trip. `scriptsEnabled` and the `script*` sandbox keys must be uniform across the cluster, and every node must be rolled before the first script runs on an upgraded cluster |
+| `scriptRoutingEnabled` | `true` or `false` (default `true`). Whether a script ([`RUN_SCRIPT`](#run_script), `CALL_PROCEDURE`) may be forwarded to a live node chosen by current script load instead of running on the node that received it. Set `false` to keep every script on the receiving node. Only a node that is alive **and** caught up on admin metadata is chosen, so a script never lands on a node that has not applied the DDL it depends on. Placement blends load with how much of the scoped database a candidate owns (`scriptLocalityWeight`). `scriptsEnabled` and the `script*` sandbox keys must be uniform across the cluster, and every node must be rolled before the first script runs on an upgraded cluster |
+| `scriptLocalityWeight` | Integer `0`-`100` (default `50`). How strongly script placement prefers a node that owns the scoped database's collections, as a percentage of that node's load ratio: the score is `(weight / 100) * share - loadRatio`, higher wins. `0` places purely by load, reproducing the ordering placement had before locality existed; at `50` a node owning the whole database beats an idle rival unless it is itself more than half full. A saturated node still loses outright, whatever it owns. Only meaningful for databases with few collections — a wide database spreads near-uniformly across the ring, so every node owns about the same share. Each node places using its own view, so unlike the `script*` sandbox keys this one need **not** be uniform across the cluster |
 | `clusterTlsEnabled` | `true` or `false`. TLS-encrypt the node-to-node channel (reuses the keystore) |
 | `clusterSecret` | Non-blank shared secret authenticating the cluster channel. Required when `clusterEnabled=true` |
 | `antiEntropyIntervalMs` | Valid number ≥ 1. How often each node runs a background anti-entropy sweep reconciling its collections against live peers |

@@ -29,6 +29,9 @@ point of clustering is that any node serves any request transparently):
     cut off by the replication-ack timeout, an unreachable target falls back to local
     execution, and a node with scriptRoutingEnabled=false never forwards (node-2 turns the
     on-by-default flag off on purpose, so both behaviours are covered in one cluster);
+  * locality-aware placement: the choice blends a candidate's share of the scoped database's
+    collections with its script load, and node-0 / node-1 carry opposite scriptLocalityWeight
+    values (100 and 0) so one cluster covers both the blended path and the load-only control;
   * script control across nodes: a run executing on one node is listed by every live member
     with that node's address and can be cancelled from any of them, the cancelled caller
     getting 408-2 (LIST_SCRIPTS / CANCEL_SCRIPT fan out rather than being routed);
@@ -325,6 +328,25 @@ def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.
         time.sleep(0.3)
 
 
+def until_locality_preferred(port, attempt: Callable[[int], list], timeout_s: float = 25.0):
+    """Repeat attempt(round) until locality changed at least one placement decision.
+
+    Same shape as until_forwarded, and for the same reason: two random samples per run, so the
+    owner is only in the sampled pair about two thirds of the time and only outranks the nodeId
+    tiebreak on some of those.
+    """
+    deadline = time.time() + timeout_s
+    round_no = 0
+    while True:
+        before = script_stats(port).get("localityPreferred", 0)
+        results = attempt(round_no)
+        delta = script_stats(port).get("localityPreferred", 0) - before
+        round_no += 1
+        if delta > 0 or time.time() >= deadline:
+            return results, delta
+        time.sleep(0.3)
+
+
 def script_stats(port) -> dict:
     r = op(port, {"type": "GET_DATABASE_STATS"})
     return ((r.get("stats") or {}).get("scripts") or {})
@@ -442,6 +464,10 @@ class Node:
             # node-2 deliberately turns placement off (it is on by default): the flag governs a node's
             # own outgoing runs, so the same cluster covers routing on and routing off.
             f"scriptRoutingEnabled={'false' if self.index == 2 else 'true'}\n"
+            # node-0 places with locality weighted heavily, node-1 with it off: the weight governs a
+            # node's own outgoing placement exactly as scriptRoutingEnabled does, so one cluster covers
+            # the blended path and the load-only control. node-2 never forwards, so its value is moot.
+            f"scriptLocalityWeight={100 if self.index == 0 else 0}\n"
             # Schedules: a short tick so an interval schedule is observable inside a test, and a short
             # refresh so a rejoining node's registry picks up what anti-entropy brought in promptly.
             "triggersEnabled=true\n"
@@ -513,6 +539,7 @@ class Node:
 # ══════════════════════════════════════════════════════════════════════════
 
 DB = "cluster_test_db"
+LOCALITY_DB = "locality_db"
 
 
 def test_formation_and_quorum_writes():
@@ -1106,6 +1133,84 @@ def test_script_routing_disabled_stays_local():
                after.get("forwardFallbacks", 0) == before.get("forwardFallbacks", 0))
 
 
+def _locality_db_ready():
+    check("CREATE_DATABASE for the locality database", create_db(nodes[0].client_port, LOCALITY_DB), "OK")
+    check("CREATE_COLLECTION for the locality database",
+          create_coll(nodes[0].client_port, LOCALITY_DB, "only"), "OK")
+    check("SAVE the locality document",
+          save(nodes[0].client_port, LOCALITY_DB, "only", {"_id": "l1", "v": 9}), "OK")
+
+
+def test_script_placement_prefers_the_collection_owner():
+    section("Script node selection — placement prefers a node owning the scoped database")
+
+    _locality_db_ready()
+    stats = script_stats(nodes[0].client_port)
+    check_true("node-0 reports the locality weight it was configured with",
+               stats.get("localityWeight") == 100, detail=f"scripts={stats!r}")
+
+    before = script_stats(nodes[0].client_port)
+    script = ('import db from "db";\n'
+              'import args from "args";\n'
+              'return db.findById(db.name, "only", "l1").v;')
+
+    def _batch(_round):
+        conn = authed(nodes[0].client_port)
+        try:
+            return [run_script(None, script, db=LOCALITY_DB, conn=conn) for _ in range(40)]
+        finally:
+            conn.close()
+
+    results, preferred = until_locality_preferred(nodes[0].client_port, _batch)
+    after = script_stats(nodes[0].client_port)
+
+    check_true("every placed run returned OK", all(r.get("status") == "OK" for r in results),
+               detail=f"statuses={sorted({r.get('status') for r in results})}")
+    check_true("every placed run returned the script's value", all(r.get("result") == 9 for r in results),
+               detail=f"results={sorted({repr(r.get('result')) for r in results})}")
+    # Not `forwarded`: locality can make the *receiving* node win, in which case the run stays here,
+    # choose() answers null and `forwarded` never moves — the best possible outcome, zero round trips.
+    # localityPreferred is incremented inside the comparison, before the self-check, so it counts both
+    # "moved the run to the owner" and "kept the run on the owner". It is the only sound lever here.
+    check_true("the ownership share changed placement decisions", preferred > 0,
+               detail=f"localityPreferred delta={preferred}")
+    fallbacks = after.get("forwardFallbacks", 0) - before.get("forwardFallbacks", 0)
+    check_true("no forward failed while every node was up", fallbacks == 0,
+               detail=f"forwardFallbacks delta={fallbacks}")
+
+
+def test_script_placement_locality_weight_zero_is_load_only():
+    section("Script node selection — scriptLocalityWeight=0 places purely by load")
+
+    stats = script_stats(nodes[1].client_port)
+    check_true("node-1 reports locality weighting turned off",
+               stats.get("localityWeight") == 0, detail=f"scripts={stats!r}")
+
+    before = script_stats(nodes[1].client_port)
+    script = ('import db from "db";\n'
+              'return db.findById(db.name, "only", "l1").v;')
+
+    def _batch(_round):
+        conn = authed(nodes[1].client_port)
+        try:
+            return [run_script(None, script, db=LOCALITY_DB, conn=conn) for _ in range(40)]
+        finally:
+            conn.close()
+
+    results, forwarded = until_forwarded(nodes[1].client_port, _batch)
+    after = script_stats(nodes[1].client_port)
+
+    check_true("every placed run returned OK", all(r.get("status") == "OK" for r in results),
+               detail=f"statuses={sorted({r.get('status') for r in results})}")
+    check_true("every placed run returned the script's value", all(r.get("result") == 9 for r in results),
+               detail=f"results={sorted({repr(r.get('result')) for r in results})}")
+    check_true("routing is still fully active at weight 0", forwarded > 0,
+               detail=f"forwarded delta={forwarded}")
+    preferred = after.get("localityPreferred", 0) - before.get("localityPreferred", 0)
+    check_true("locality changed nothing at weight 0", preferred == 0,
+               detail=f"localityPreferred delta={preferred}")
+
+
 def test_node_failure_quorum_maintained():
     section("Node failure — quorum (2 of 3) maintained, writes + reads keep working")
 
@@ -1363,6 +1468,8 @@ def main():
         test_forwarded_script_preserves_the_acting_user()
         test_long_forwarded_script_is_not_cut_off()
         test_script_routing_disabled_stays_local()
+        test_script_placement_prefers_the_collection_owner()
+        test_script_placement_locality_weight_zero_is_load_only()
         test_script_placement_falls_back_when_the_target_dies()
         test_before_hook_runs_on_the_owner()
         test_schedule_replication_and_single_firing()
@@ -1379,6 +1486,7 @@ def main():
         # Cleanup (best-effort).
         drop_db(nodes[0].client_port, DB)
         drop_db(nodes[0].client_port, CANARY_DB)
+        drop_db(nodes[0].client_port, LOCALITY_DB)
     finally:
         for n in nodes:
             n.stop()

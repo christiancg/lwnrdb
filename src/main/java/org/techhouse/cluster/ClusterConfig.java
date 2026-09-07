@@ -83,6 +83,10 @@ public class ClusterConfig {
         return configuration.isScriptRoutingEnabled();
     }
 
+    public int scriptLocalityWeight() {
+        return configuration.getScriptLocalityWeight();
+    }
+
     public boolean tlsEnabled() {
         return configuration.isClusterTlsEnabled();
     }

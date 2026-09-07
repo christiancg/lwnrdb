@@ -20,6 +20,7 @@ import org.techhouse.test.TestUtils;
 
 public class ScriptPlacementTest {
     private static final long EPOCH = 42L;
+    private static final String DB = "placement_db";
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Configuration config = Configuration.getInstance();
@@ -27,6 +28,7 @@ public class ScriptPlacementTest {
     private ScriptPlacement placement;
     private boolean origEnabled;
     private boolean origRouting;
+    private int origWeight;
     private long origEpoch;
 
     // The two samples are taken by index, so the members map must iterate in a known order.
@@ -60,17 +62,20 @@ public class ScriptPlacementTest {
         placement = new ScriptPlacement(scriptedRandom);
         origEnabled = config.isClusterEnabled();
         origRouting = config.isScriptRoutingEnabled();
+        origWeight = config.getScriptLocalityWeight();
         origEpoch = adminEpoch.current();
         // Set directly rather than through bump(): the setter would persist the epoch file.
         TestUtils.setPrivateField(adminEpoch, "epoch", EPOCH);
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
+        TestUtils.setPrivateField(config, "scriptLocalityWeight", 0);
     }
 
     @AfterEach
     public void tearDown() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", origRouting);
+        TestUtils.setPrivateField(config, "scriptLocalityWeight", origWeight);
         TestUtils.setPrivateField(membershipService, "members", new java.util.concurrent.ConcurrentHashMap<>());
         TestUtils.setPrivateField(membershipService, "self", null);
         TestUtils.setPrivateField(adminEpoch, "epoch", origEpoch);
@@ -80,33 +85,33 @@ public class ScriptPlacementTest {
     public void test_null_when_clustering_disabled() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", false);
         membership(node("a-self", 1, 9, NodeState.ALIVE), node("b", 2, 0, NodeState.ALIVE));
-        assertNull(placement.choose());
+        assertNull(placement.choose(DB));
     }
 
     @Test
     public void test_null_when_routing_disabled() throws Exception {
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", false);
         membership(node("a-self", 1, 9, NodeState.ALIVE), node("b", 2, 0, NodeState.ALIVE));
-        assertNull(placement.choose());
+        assertNull(placement.choose(DB));
     }
 
     @Test
     public void test_null_when_membership_has_no_self() throws Exception {
         TestUtils.setPrivateField(membershipService, "self", null);
-        assertNull(placement.choose());
+        assertNull(placement.choose(DB));
     }
 
     @Test
     public void test_null_when_self_is_the_only_live_member() throws Exception {
         membership(node("a-self", 1, 0, NodeState.ALIVE));
-        assertNull(placement.choose());
+        assertNull(placement.choose(DB));
     }
 
     @Test
     public void test_skips_suspect_and_dead_members() throws Exception {
         membership(node("a-self", 1, 9, NodeState.ALIVE), node("b", 2, 0, NodeState.SUSPECT),
                 node("c", 3, 0, NodeState.DEAD));
-        assertNull(placement.choose());
+        assertNull(placement.choose(DB));
     }
 
     @Test
@@ -114,7 +119,7 @@ public class ScriptPlacementTest {
         membership(node("a-self", 1, 9, NodeState.ALIVE), node("b", 2, 7, NodeState.ALIVE),
                 node("c", 3, 2, NodeState.ALIVE));
         samples(1, 1);
-        final var chosen = placement.choose();
+        final var chosen = placement.choose(DB);
         assertNotNull(chosen);
         assertEquals("c", chosen.getNodeId());
     }
@@ -124,16 +129,16 @@ public class ScriptPlacementTest {
         membership(node("a-self", 1, 9, NodeState.ALIVE), node("c", 2, 4, NodeState.ALIVE),
                 node("b", 3, 4, NodeState.ALIVE));
         samples(1, 1);
-        assertEquals("b", placement.choose().getNodeId());
+        assertEquals("b", placement.choose(DB).getNodeId());
         samples(2, 1);
-        assertEquals("b", placement.choose().getNodeId());
+        assertEquals("b", placement.choose(DB).getNodeId());
     }
 
     @Test
     public void test_null_when_the_chosen_node_is_self() throws Exception {
         membership(node("a-self", 1, 0, NodeState.ALIVE), node("b", 2, 5, NodeState.ALIVE));
         samples(0, 0);
-        assertNull(placement.choose());
+        assertNull(placement.choose(DB));
     }
 
     // A second sample equal to the first is shifted past it, so the two samples are never the same node -
@@ -143,7 +148,7 @@ public class ScriptPlacementTest {
         membership(node("a-self", 1, 0, NodeState.ALIVE), node("b", 2, 8, NodeState.ALIVE),
                 node("c", 3, 1, NodeState.ALIVE));
         samples(1, 1);
-        assertEquals("c", placement.choose().getNodeId());
+        assertEquals("c", placement.choose(DB).getNodeId());
     }
 
     // A node that has not finished catching up on admin metadata may not know the database the script is
@@ -153,7 +158,7 @@ public class ScriptPlacementTest {
         final var syncing = caughtUpPeer("b", 0);
         syncing.setAdminSyncing(true);
         membership(node("a-self", 1, 9, NodeState.ALIVE), syncing);
-        assertNull(placement.choose());
+        assertNull(placement.choose(DB));
     }
 
     // A peer that missed a majority-replicated DDL reports a lower epoch until anti-entropy catches it up.
@@ -162,7 +167,7 @@ public class ScriptPlacementTest {
         final var behind = caughtUpPeer("b", 0);
         behind.setAdminEpoch(EPOCH - 1);
         membership(node("a-self", 1, 9, NodeState.ALIVE), behind);
-        assertNull(placement.choose());
+        assertNull(placement.choose(DB));
     }
 
     @Test
@@ -171,7 +176,7 @@ public class ScriptPlacementTest {
         ahead.setAdminEpoch(EPOCH + 5);
         membership(node("a-self", 1, 9, NodeState.ALIVE), ahead);
         samples(0, 0);
-        assertEquals("b", placement.choose().getNodeId());
+        assertEquals("b", placement.choose(DB).getNodeId());
     }
 
     // Self is never filtered by its own catch-up state: it is where the script runs anyway.
@@ -181,7 +186,7 @@ public class ScriptPlacementTest {
         self.setAdminSyncing(true);
         membership(self, caughtUpPeer("b", 5));
         samples(0, 0);
-        assertNull(placement.choose());
+        assertNull(placement.choose(DB));
     }
 
     // One caught-up peer among two ineligible ones still leaves only that peer plus self to sample.
@@ -193,7 +198,7 @@ public class ScriptPlacementTest {
         behind.setAdminEpoch(EPOCH - 1);
         membership(node("a-self", 1, 9, NodeState.ALIVE), syncing, behind, caughtUpPeer("d", 0));
         samples(0, 0);
-        assertEquals("d", placement.choose().getNodeId());
+        assertEquals("d", placement.choose(DB).getNodeId());
     }
 
     @Test

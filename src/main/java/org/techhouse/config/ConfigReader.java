@@ -22,7 +22,7 @@ public final class ConfigReader {
             "tlsKeystorePath", "tlsKeystorePassword", "clusterEnabled", "clusterPort", "clusterBindAddress",
             "clusterAdvertisedAddress", "clusterSeeds", "nodeId", "clusterExpectedSize", "gossipIntervalMs",
             "suspectTimeoutMs", "deadTimeoutMs", "replicationAckTimeoutMs", "virtualNodesPerNode",
-            "readFallbackToLocal", "scriptRoutingEnabled", "clusterTlsEnabled", "clusterSecret",
+            "readFallbackToLocal", "scriptRoutingEnabled", "scriptLocalityWeight", "clusterTlsEnabled", "clusterSecret",
             "antiEntropyIntervalMs", "tombstoneRetentionMs", "scriptTimeZone", "scriptLocale", "scriptMaxResultBytes",
             "scriptCursorBatchSize", "scriptCursorMaxBatchSize");
     private static final String COMMENT_PREFIX = "#";

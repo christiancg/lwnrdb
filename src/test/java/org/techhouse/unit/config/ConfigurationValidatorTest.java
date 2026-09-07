@@ -42,6 +42,7 @@ public class ConfigurationValidatorTest {
         map.put("virtualNodesPerNode", "128");
         map.put("readFallbackToLocal", "true");
         map.put("scriptRoutingEnabled", "true");
+        map.put("scriptLocalityWeight", "50");
         map.put("clusterTlsEnabled", "false");
         map.put("clusterSecret", "");
         map.put("antiEntropyIntervalMs", "60000");
@@ -361,6 +362,20 @@ public class ConfigurationValidatorTest {
         assertHasError(tempDir, "maxConcurrentScripts", "not-a-number", "maxConcurrentScripts");
         assertHasError(tempDir, "scriptQueueWaitMs", "-1", "scriptQueueWaitMs");
         assertHasError(tempDir, "scriptQueueWaitMs", "not-a-number", "scriptQueueWaitMs");
+    }
+
+    // The weight is a percentage of the load ratio: 0 restores load-only placement, 100 is the cap.
+    @Test
+    public void test_script_locality_weight_bounds(@TempDir Path tempDir) {
+        final var zero = baseValid(tempDir);
+        zero.put("scriptLocalityWeight", "0");
+        assertTrue(ConfigurationValidator.validate(zero).isEmpty());
+        final var hundred = baseValid(tempDir);
+        hundred.put("scriptLocalityWeight", "100");
+        assertTrue(ConfigurationValidator.validate(hundred).isEmpty());
+        assertHasError(tempDir, "scriptLocalityWeight", "101", "scriptLocalityWeight must be between 0 and 100");
+        assertHasError(tempDir, "scriptLocalityWeight", "-1", "scriptLocalityWeight");
+        assertHasError(tempDir, "scriptLocalityWeight", "not-a-number", "scriptLocalityWeight");
     }
 
     @Test

@@ -14,6 +14,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.Cache;
 import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.ClusterServer;
@@ -75,6 +76,7 @@ public class ScriptClusterRoutingIntegrationTest {
     private int origExpected;
     private boolean origScripts;
     private boolean origScriptRouting;
+    private int origLocalityWeight;
 
     private static NodeInfo node(String id, int port) {
         return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
@@ -99,6 +101,7 @@ public class ScriptClusterRoutingIntegrationTest {
         origExpected = config.getClusterExpectedSize();
         origScripts = config.isScriptsEnabled();
         origScriptRouting = config.isScriptRoutingEnabled();
+        origLocalityWeight = config.getScriptLocalityWeight();
         TestUtils.setPrivateField(config, "clusterSecret", SECRET);
         TestUtils.setPrivateField(config, "clusterTlsEnabled", false);
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 1000L);
@@ -118,6 +121,7 @@ public class ScriptClusterRoutingIntegrationTest {
         TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
         TestUtils.setPrivateField(config, "scriptsEnabled", origScripts);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", origScriptRouting);
+        TestUtils.setPrivateField(config, "scriptLocalityWeight", origLocalityWeight);
         ownership.setSelfNodeId(null);
         ownership.onMembershipChanged(new MembershipView(List.of()));
         TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
@@ -471,11 +475,65 @@ public class ScriptClusterRoutingIntegrationTest {
         assertNull(router.forward(RequestParser.parseRequest(raw), raw, false, ADMIN, null));
     }
 
-    // Self carries a load the peer does not, so placement always prefers the peer.
+    // Self carries a load the peer does not, so placement always prefers the peer. Locality is pinned off
+    // so these cases keep exercising the load path in isolation.
     private void enableScriptRouting() throws Exception {
         configureMembership(2, node("self", 19990, 9), node("other", serverPort, 0));
         TestUtils.setPrivateField(config, "scriptsEnabled", true);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
+        TestUtils.setPrivateField(config, "scriptLocalityWeight", 0);
+    }
+
+    // Both nodes report the same load and no capacity, and the peer's id sorts after "self", so the nodeId
+    // tiebreak would keep the run here: whatever moves it can only be the ownership share.
+    private void configureMembershipWithAPeerOwningTheWholeDatabase() throws Exception {
+        final var collections = IocContainer.get(Cache.class).getCollectionNamesForDatabase(TestGlobals.DB);
+        assertFalse(collections.isEmpty(), "the fixture database must have at least one collection");
+        for (var i = 0; i < 500; i++) {
+            final var peer = node("z-owner-" + i, serverPort, 0);
+            configureMembership(2, node("self", 19990, 0), peer);
+            if (collections.stream()
+                    .allMatch(coll -> peer.getNodeId().equals(ownership.ownerFor(TestGlobals.DB, coll)))) {
+                return;
+            }
+        }
+        throw new IllegalStateException("no peer id owning every collection of the database");
+    }
+
+    // Placement blends how much of the scoped database a node owns with its load, so a run whose loads tie
+    // goes to the owner - which is what makes the operations it issues resolve without a round trip.
+    @Test
+    public void test_run_script_is_placed_on_the_owner_of_the_scoped_database() throws Exception {
+        TestUtils.setPrivateField(config, "scriptsEnabled", true);
+        TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
+        TestUtils.setPrivateField(config, "scriptLocalityWeight", 100);
+        configureMembershipWithAPeerOwningTheWholeDatabase();
+        final var raw = "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"script\":\"return 41 + 1;\"}";
+        final var forwardedBefore = scriptPlacement.getForwarded();
+        final var preferredBefore = scriptPlacement.getLocalityPreferred();
+        final var response = router.forward(RequestParser.parseRequest(raw), raw, false, ADMIN, null);
+        assertNotNull(response, "locality should have moved the run to the owner, not kept it here");
+        assertTrue(response.contains("\"result\":42"), response);
+        assertEquals(forwardedBefore + 1, scriptPlacement.getForwarded());
+        assertTrue(scriptPlacement.getLocalityPreferred() > preferredBefore);
+    }
+
+    // The equivalence claim: the same fixture at weight 0 falls back to the nodeId tiebreak, which keeps the
+    // run here, and locality is recorded as having changed nothing.
+    @Test
+    public void test_locality_weight_zero_leaves_placement_load_only() throws Exception {
+        TestUtils.setPrivateField(config, "scriptsEnabled", true);
+        TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
+        configureMembershipWithAPeerOwningTheWholeDatabase();
+        TestUtils.setPrivateField(config, "scriptLocalityWeight", 0);
+        final var raw = "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"" + TestGlobals.DB
+                + "\",\"script\":\"return 41 + 1;\"}";
+        final var forwardedBefore = scriptPlacement.getForwarded();
+        final var preferredBefore = scriptPlacement.getLocalityPreferred();
+        assertNull(router.forward(RequestParser.parseRequest(raw), raw, false, ADMIN, null));
+        assertEquals(forwardedBefore, scriptPlacement.getForwarded());
+        assertEquals(preferredBefore, scriptPlacement.getLocalityPreferred());
     }
 
     // An unreadable response from the owner becomes a script-visible error, not a raw exception

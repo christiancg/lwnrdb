@@ -115,6 +115,16 @@ public final class ConfigurationValidator {
         }
     }
 
+    private static void validateLocalityWeight(Map<String, String> configs, List<String> errors) {
+        final var value = configs.get("scriptLocalityWeight");
+        if (notAnInt(value, parsed -> parsed >= 0)) {
+            return;
+        }
+        if (Integer.parseInt(value.trim()) > 100) {
+            errors.add("scriptLocalityWeight must be between 0 and 100, but was: " + value);
+        }
+    }
+
     // 0 is legal and means reject the caller immediately, so this cannot use validatePositiveLong.
     private static void validateQueueWait(Map<String, String> configs, List<String> errors) {
         final var value = configs.get("scriptQueueWaitMs");
@@ -128,6 +138,8 @@ public final class ConfigurationValidator {
         validateBoolean(configs, "clusterTlsEnabled", errors);
         validateBoolean(configs, "readFallbackToLocal", errors);
         validateBoolean(configs, "scriptRoutingEnabled", errors);
+        validateInt(configs, "scriptLocalityWeight", 0, errors);
+        validateLocalityWeight(configs, errors);
         if (notAnInt(configs.get("clusterPort"), port -> port >= 1 && port <= 65535)) {
             errors.add(
                     "clusterPort must be a valid number between 1 and 65535, but was: " + configs.get("clusterPort"));

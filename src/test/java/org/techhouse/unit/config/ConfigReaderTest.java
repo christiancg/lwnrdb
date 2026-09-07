@@ -77,6 +77,7 @@ public class ConfigReaderTest {
         expectedConfig.put("virtualNodesPerNode", "128");
         expectedConfig.put("readFallbackToLocal", "true");
         expectedConfig.put("scriptRoutingEnabled", "true");
+        expectedConfig.put("scriptLocalityWeight", "50");
         expectedConfig.put("clusterTlsEnabled", "false");
         expectedConfig.put("clusterSecret", "");
         expectedConfig.put("antiEntropyIntervalMs", "60000");

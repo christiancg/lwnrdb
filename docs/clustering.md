@@ -130,26 +130,58 @@ was down when B was created — both implemented; see *Admin / DDL replication* 
 
 ### Scripts (`RUN_SCRIPT`)
 
-A script is **placed by availability**, not by ownership. There is no owner to route it to — a script is
-scoped to a database but may touch any number of collections in it, owned by different nodes — so
-`ClusterRouter` instead chooses a live node by current script load and forwards the whole run there,
-relaying the target's response JSON verbatim. This is on by default (`scriptRoutingEnabled=true`), so one
-node cannot end up running every script in the cluster just because a load balancer sent it every
-connection; setting it to `false` restores the older behaviour of executing on the node that received the
-request, which is what you want when scripts do many small reads and clients already connect to the node
-that owns the data.
+A script is **placed by availability and by how much of its database a node owns**, not by the ownership of
+a single collection. There is no one owner to route it to — a script is scoped to a database but may touch
+any number of collections in it, owned by different nodes — so `ClusterRouter` instead chooses a live node
+by current script load *blended with* the share of that database's collections the node owns, and forwards
+the whole run there, relaying the target's response JSON verbatim. This is on by default
+(`scriptRoutingEnabled=true`), so one node cannot end up running every script in the cluster just because a
+load balancer sent it every connection; setting it to `false` restores the older behaviour of executing on
+the node that received the request.
 
-`cluster/ScriptPlacement.choose()` makes the choice by **power of two choices**: sample two distinct
-`ALIVE` members of the local membership view at random and take the less loaded one — load **relative to
-`maxConcurrentScripts`**, not absolute, since a node running 3/4 is nearly full where one running 6/32 is
-idle, and a sample already at its cap loses outright to one that is not (a saturated target could only
-answer `503-6`). A member reporting capacity `0` is either uncapped or too old to gossip the field, so
-that pair falls back to comparing absolute load; ties break on `nodeId`, so two edges sampling the same
-pair agree. Picking the globally least-loaded
-node would herd — every edge sees the same gossiped view, stale by up to one `gossipIntervalMs`, so they
-would all forward to the same node at once and then all see it saturated. Sampling needs no accurate
-global view, is O(1), and still keeps the maximum load exponentially closer to the mean than random
-placement. `choose()` answering "this node" (or a cluster of one) means the script runs locally.
+`cluster/ScriptPlacement.choose(databaseName)` makes the choice by **power of two choices**: sample two
+distinct `ALIVE` members of the local membership view at random and take the better one, scored as
+
+```
+score = (scriptLocalityWeight / 100) * share - loadRatio        higher wins
+```
+
+`loadRatio` is load **relative to `maxConcurrentScripts`**, not absolute, since a node running 3/4 is
+nearly full where one running 6/32 is idle. `share` is the fraction of the scoped database's collections
+the candidate owns, computed per placement from `Cache.getCollectionNamesForDatabase(db)` (admin metadata,
+always cached and never evicted) and the hash ring already in memory — no new wire field, no new metadata,
+no extra round trip. It is deliberately **not** cached: `K` ring lookups for a `K`-collection database is
+microseconds against a run measured in milliseconds, while a cache would need invalidating on both
+membership change and DDL for a value that is only a hint.
+
+Saturation is checked **before** the score: a sample already at its cap loses outright to one that is not,
+whatever it owns, because a saturated target could only answer `503-6`. A member reporting capacity `0` is
+either uncapped or too old to gossip the field, so that pair falls back to comparing absolute load and uses
+`share` only to settle what the `nodeId` tiebreak would otherwise decide; ties break on `nodeId`, so two
+edges sampling the same pair agree.
+
+`scriptLocalityWeight` is a percentage of the load ratio (0–100, default `50`). **`0` reproduces the
+load-only ordering exactly**, which is what makes the blend safe to ship on by default; read the default as
+*a node owning the whole database beats an idle rival until it is itself more than half full*. Locality
+cannot herd for the same reason: as the owner's load ratio climbs past `weight / 100` the score inverts and
+sampling moves elsewhere. Because each node places using its own view, this key is a **local** decision and
+— unlike `scriptsEnabled` and the `script*` sandbox keys — need not be uniform across the cluster.
+
+Picking the globally best node instead would herd — every edge sees the same gossiped view, stale by up to
+one `gossipIntervalMs`, so they would all forward to the same node at once and then all see it saturated.
+Sampling needs no accurate global view, is O(1), and still keeps the maximum load exponentially closer to
+the mean than random placement. `choose()` answering "this node" (or a cluster of one) means the script runs
+locally — which, when locality is what kept it here, is the best possible outcome: zero round trips. The
+`scripts` object in `GET_DATABASE_STATS` reports `localityWeight` and `localityPreferred`, the number of
+placement decisions the share changed (in either direction, since a run kept local is invisible in
+`forwarded`).
+
+Placing a run on an owner is what removes round trips: the operations the script issues route themselves
+through `EnforcingDatabaseAccess` → `ClusterRouter`, so on an owner they resolve locally instead of
+forwarding. The **limitation** is inherent to a signal that does not know which collections the script will
+actually touch: the gain is real for a database with a handful of collections (the common case for a
+script-heavy database) and negligible for a wide one, since with consistent hashing a 50-collection
+database spreads near-uniformly and any node owns about `1/N` of it either way.
 
 A **pipeline script** (a `SCRIPT` operator or a `REDUCE` step inside an `AGGREGATE`) is the exception, and
 needs no new code: an `AGGREGATE` this node does not own is forwarded to the collection's owner as raw
@@ -201,13 +233,13 @@ answers `403-2`, which the edge relays.
 **The trade-off is locality.** Placement spreads interpreter CPU; it does not move the script closer to
 its data. Each operation the script issues is still routed normally by `host/EnforcingDatabaseAccess`
 (forwarded to its collection's owner, with `db.transaction` spanning owners through the same 2PC the wire
-protocol uses), so a forwarded script is usually remote from the collections it touches and pays one
-round trip per operation. A script doing many small reads is fastest on the owner of the collections it
-reads; a script that is mostly computation is best spread. `ScriptPlacement` is isolated enough that a
-locality term could be added later without touching the routing, wire or execution paths.
+protocol uses), so a forwarded script pays one round trip per operation against every collection its host
+does not own. That is what `scriptLocalityWeight` narrows: placement prefers a node owning the scoped
+database, and on a database of a few collections that is usually all of them. It cannot close the gap on a
+wide database, where every node owns about the same share.
 
 `GET_DATABASE_STATS` reports placement per node under `scripts`: `routingEnabled`, `running` (the live
-count), `forwarded`, `forwardFallbacks` and `cancelled`.
+count), `forwarded`, `forwardFallbacks`, `localityWeight`, `localityPreferred` and `cancelled`.
 
 Because placement decides where a run executes, **visibility and cancellation are cluster-wide from the
 start**: the admin-only `LIST_SCRIPTS` and `CANCEL_SCRIPT` operations (`cluster/ScriptRunDirectory`) run on
@@ -240,7 +272,7 @@ mean the same write runs under different authority depending on which node owns 
 
 `CALL_PROCEDURE` is placed exactly like `RUN_SCRIPT` (both are in `ClusterRouter`'s `SCRIPT_OPS`): a
 procedure is scoped to a database but may touch collections owned by different nodes, so there is no single
-owner to route to and it is instead forwarded to a live node chosen by script load when
+owner to route to and it is instead forwarded to a live node chosen by script load and ownership share when
 `scriptRoutingEnabled` is on (the default), else run on the node that received it. Either way each operation it issues is
 routed normally, `db.transaction` included.
 
@@ -543,7 +575,7 @@ See the *Clustering* row of the configuration table in the main
 `clusterPort`, `clusterBindAddress`, `clusterAdvertisedAddress`, `clusterSeeds`,
 `nodeId`, `clusterExpectedSize`, `gossipIntervalMs`, `suspectTimeoutMs`,
 `deadTimeoutMs`, `replicationAckTimeoutMs`, `virtualNodesPerNode`,
-`readFallbackToLocal`, `scriptRoutingEnabled`, `clusterTlsEnabled`, `clusterSecret`,
+`readFallbackToLocal`, `scriptRoutingEnabled`, `scriptLocalityWeight`, `clusterTlsEnabled`, `clusterSecret`,
 `antiEntropyIntervalMs`, `tombstoneRetentionMs`.
 
 ## Operations runbook

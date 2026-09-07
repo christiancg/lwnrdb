@@ -25,6 +25,7 @@ import org.techhouse.test.TestUtils;
  */
 public class ScriptPlacementCapacityTest {
     private static final long EPOCH = 42L;
+    private static final String DB = "placement_db";
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Configuration config = Configuration.getInstance();
@@ -32,6 +33,7 @@ public class ScriptPlacementCapacityTest {
     private ScriptPlacement placement;
     private boolean origEnabled;
     private boolean origRouting;
+    private int origWeight;
     private long origEpoch;
 
     private static NodeInfo node(String id, int port, int scriptLoad, int scriptCapacity) {
@@ -56,16 +58,19 @@ public class ScriptPlacementCapacityTest {
         placement = new ScriptPlacement(scriptedRandom);
         origEnabled = config.isClusterEnabled();
         origRouting = config.isScriptRoutingEnabled();
+        origWeight = config.getScriptLocalityWeight();
         origEpoch = adminEpoch.current();
         TestUtils.setPrivateField(adminEpoch, "epoch", EPOCH);
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
+        TestUtils.setPrivateField(config, "scriptLocalityWeight", 0);
     }
 
     @AfterEach
     public void tearDown() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", origRouting);
+        TestUtils.setPrivateField(config, "scriptLocalityWeight", origWeight);
         TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(membershipService, "self", null);
         TestUtils.setPrivateField(adminEpoch, "epoch", origEpoch);
@@ -75,7 +80,7 @@ public class ScriptPlacementCapacityTest {
     public void test_prefers_the_lower_load_ratio() throws Exception {
         membership(node("a-self", 1, 99, 100), node("b", 2, 3, 4), node("c", 3, 6, 32));
         scriptedRandom.give();
-        final var chosen = placement.choose();
+        final var chosen = placement.choose(DB);
         assertNotNull(chosen);
         assertEquals("c", chosen.getNodeId(), "6/32 is idler than 3/4, despite the higher absolute load");
     }
@@ -86,7 +91,7 @@ public class ScriptPlacementCapacityTest {
     public void test_falls_back_to_absolute_load_when_capacity_is_unknown() throws Exception {
         membership(node("a-self", 1, 99, 100), node("b", 2, 3, 0), node("c", 3, 6, 32));
         scriptedRandom.give();
-        assertEquals("b", placement.choose().getNodeId());
+        assertEquals("b", placement.choose(DB).getNodeId());
     }
 
     // A saturated target could only answer 503-6, so forwarding to it would waste a round trip.
@@ -94,7 +99,7 @@ public class ScriptPlacementCapacityTest {
     public void test_skips_a_saturated_target() throws Exception {
         membership(node("a-self", 1, 99, 100), node("b", 2, 4, 4), node("c", 3, 30, 32));
         scriptedRandom.give();
-        assertEquals("c", placement.choose().getNodeId());
+        assertEquals("c", placement.choose(DB).getNodeId());
     }
 
     // Two nodes at the same ratio still resolve deterministically, so two edges sampling the same pair agree.
@@ -102,7 +107,7 @@ public class ScriptPlacementCapacityTest {
     public void test_equal_ratios_break_on_node_id() throws Exception {
         membership(node("a-self", 1, 99, 100), node("c", 2, 2, 4), node("b", 3, 8, 16));
         scriptedRandom.give();
-        assertEquals("b", placement.choose().getNodeId());
+        assertEquals("b", placement.choose(DB).getNodeId());
     }
 
     // Both full: neither is preferable, so the tie-break decides rather than the ratio.
@@ -110,7 +115,7 @@ public class ScriptPlacementCapacityTest {
     public void test_two_saturated_samples_still_choose_one() throws Exception {
         membership(node("a-self", 1, 99, 100), node("c", 2, 4, 4), node("b", 3, 32, 32));
         scriptedRandom.give();
-        assertEquals("b", placement.choose().getNodeId());
+        assertEquals("b", placement.choose(DB).getNodeId());
     }
 
     private static final class ScriptedRandom implements RandomGenerator {

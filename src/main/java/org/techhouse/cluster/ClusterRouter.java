@@ -62,7 +62,7 @@ public class ClusterRouter {
             return forwardAdmin(type, rawJson, actingUser);
         }
         if (SCRIPT_OPS.contains(type)) {
-            return forwardScript(rawJson, actingUser);
+            return forwardScript(request.getDatabaseName(), rawJson, actingUser);
         }
         if (!ROUTABLE.contains(type)) {
             return null;
@@ -205,11 +205,12 @@ public class ClusterRouter {
         return forwardToOwner(type, rawJson, coordinatorAddress, actingUser);
     }
 
-    // A script is placed by load rather than by ownership (see ScriptPlacement). A forward that fails falls
-    // back to local execution instead of erroring: the script would have run here before placement existed,
-    // so local is always a correct outcome and placement can never make a working call fail.
-    private String forwardScript(String rawJson, String actingUser) {
-        final var target = scriptPlacement.choose();
+    // A script is placed by load and by how much of the scoped database a node owns, not by the ownership
+    // of a single collection (see ScriptPlacement). A forward that fails falls back to local execution
+    // instead of erroring: the script would have run here before placement existed, so local is always a
+    // correct outcome and placement can never make a working call fail.
+    private String forwardScript(String databaseName, String rawJson, String actingUser) {
+        final var target = scriptPlacement.choose(databaseName);
         if (target == null) {
             return null;
         }

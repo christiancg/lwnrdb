@@ -15,6 +15,7 @@ import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -869,6 +870,9 @@ public class OperationProcessorTest {
         assertEquals(admission.getWaited(), scripts.get("waited").asJsonNumber().getValue().longValue());
         assertTrue(scripts.has("forwarded"));
         assertTrue(scripts.has("forwardFallbacks"));
+        assertEquals(Configuration.getInstance().getScriptLocalityWeight(),
+                scripts.get("localityWeight").asJsonNumber().getValue().intValue());
+        assertTrue(scripts.has("localityPreferred"));
         assertEquals(IocContainer.get(org.techhouse.ops.ScriptRunRegistry.class).getCancelled(),
                 scripts.get("cancelled").asJsonNumber().getValue().longValue());
 

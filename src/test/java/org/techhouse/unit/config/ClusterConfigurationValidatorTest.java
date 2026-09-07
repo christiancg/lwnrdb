@@ -41,6 +41,7 @@ public class ClusterConfigurationValidatorTest {
         map.put("virtualNodesPerNode", "128");
         map.put("readFallbackToLocal", "true");
         map.put("scriptRoutingEnabled", "true");
+        map.put("scriptLocalityWeight", "50");
         map.put("clusterTlsEnabled", "false");
         map.put("clusterSecret", "shared-secret");
         map.put("antiEntropyIntervalMs", "60000");
@@ -117,6 +118,7 @@ public class ClusterConfigurationValidatorTest {
         assertError(tempDir, "clusterTlsEnabled", "maybe", "clusterTlsEnabled");
         assertError(tempDir, "readFallbackToLocal", "maybe", "readFallbackToLocal");
         assertError(tempDir, "scriptRoutingEnabled", "maybe", "scriptRoutingEnabled");
+        assertError(tempDir, "scriptLocalityWeight", "101", "scriptLocalityWeight");
     }
 
     @Test

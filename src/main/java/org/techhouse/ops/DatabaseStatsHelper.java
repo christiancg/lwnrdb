@@ -109,6 +109,8 @@ public final class DatabaseStatsHelper {
         scripts.addProperty("waited", scriptAdmission.getWaited());
         scripts.addProperty("forwarded", scriptPlacement.getForwarded());
         scripts.addProperty("forwardFallbacks", scriptPlacement.getForwardFallbacks());
+        scripts.addProperty("localityWeight", (long) Configuration.getInstance().getScriptLocalityWeight());
+        scripts.addProperty("localityPreferred", scriptPlacement.getLocalityPreferred());
         scripts.addProperty("cancelled", scriptRunRegistry.getCancelled());
         scripts.addProperty("compiledCacheEntries", (long) compiledScripts.size());
         scripts.addProperty("historyRecorded", ScriptRunHistory.getRecorded());

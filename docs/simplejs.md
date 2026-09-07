@@ -1606,6 +1606,9 @@ locally, so a script sees the same routing a socket client does. `ClusterRouter.
   it, so a round trip through `eJson.toJson` would mangle a `CUSTOM` (geo/vector) operator.
 - Thread affinity is unchanged: the 2PC round trips block on the thread that owns the transaction's
   locks, which is what `assertSessionThread` and `ResourceLocking`'s thread-owned release require.
+- **Where the run itself lands** is decided by `cluster/ScriptPlacement`, which blends a candidate's
+  script load with the share of the scoped database's collections it owns (`scriptLocalityWeight`) —
+  see [docs/clustering.md](clustering.md) → *Scripts*.
 
 ### Captured console output
 

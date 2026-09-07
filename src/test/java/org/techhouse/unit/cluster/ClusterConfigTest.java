@@ -35,6 +35,7 @@ public class ClusterConfigTest {
         TestUtils.setPrivateField(configuration, "virtualNodesPerNode", 64);
         TestUtils.setPrivateField(configuration, "readFallbackToLocal", true);
         TestUtils.setPrivateField(configuration, "scriptRoutingEnabled", true);
+        TestUtils.setPrivateField(configuration, "scriptLocalityWeight", 75);
         TestUtils.setPrivateField(configuration, "clusterTlsEnabled", false);
         TestUtils.setPrivateField(configuration, "clusterSecret", "top-secret");
         return new ClusterConfig(configuration);
@@ -56,6 +57,7 @@ public class ClusterConfigTest {
         assertEquals(64, config.virtualNodesPerNode());
         assertTrue(config.readFallbackToLocal());
         assertTrue(config.scriptRoutingEnabled());
+        assertEquals(75, config.scriptLocalityWeight());
         assertFalse(config.tlsEnabled());
         assertEquals("top-secret", config.secret());
     }

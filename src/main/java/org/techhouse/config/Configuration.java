@@ -40,6 +40,7 @@ public final class Configuration {
     private int virtualNodesPerNode;
     private boolean readFallbackToLocal;
     private boolean scriptRoutingEnabled;
+    private int scriptLocalityWeight;
     private boolean clusterTlsEnabled;
     private String clusterSecret;
     private long antiEntropyIntervalMs;
@@ -153,6 +154,7 @@ public final class Configuration {
         virtualNodesPerNode = intOf(configs, "virtualNodesPerNode");
         readFallbackToLocal = booleanOf(configs, "readFallbackToLocal");
         scriptRoutingEnabled = booleanOf(configs, "scriptRoutingEnabled");
+        scriptLocalityWeight = intOf(configs, "scriptLocalityWeight");
         clusterTlsEnabled = booleanOf(configs, "clusterTlsEnabled");
         clusterSecret = configs.get("clusterSecret");
         antiEntropyIntervalMs = longOf(configs, "antiEntropyIntervalMs");
@@ -369,6 +371,10 @@ public final class Configuration {
 
     public boolean isScriptRoutingEnabled() {
         return scriptRoutingEnabled;
+    }
+
+    public int getScriptLocalityWeight() {
+        return scriptLocalityWeight;
     }
 
     public boolean isClusterTlsEnabled() {
