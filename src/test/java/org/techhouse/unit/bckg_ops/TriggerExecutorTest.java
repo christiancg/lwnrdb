@@ -31,16 +31,14 @@ public class TriggerExecutorTest {
     }
 
     @Test
-    public void test_runs_submitted_event() throws Exception {
+    public void test_runs_submitted_event() {
         executor = new TriggerExecutor();
-        final var latch = new CountDownLatch(1);
         final var seen = new CopyOnWriteArrayList<TriggerEvent>();
-        executor.start(triggerEvent -> {
-            seen.add(triggerEvent);
-            latch.countDown();
-        });
+        executor.start(seen::add);
         executor.submit(event("t"));
-        assertTrue(latch.await(5, TimeUnit.SECONDS));
+        // Waited on rather than a latch inside the dispatcher: the worker counts the event after the
+        // dispatcher returns, and only going idle orders that increment against the assertion below.
+        assertTrue(executor.drain(5000));
         assertEquals("t", seen.getFirst().getTriggerName());
         assertEquals(1L, executor.getFired());
         assertEquals(0L, executor.getDropped());

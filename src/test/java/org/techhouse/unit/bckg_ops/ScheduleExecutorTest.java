@@ -79,16 +79,14 @@ public class ScheduleExecutorTest {
     @Test
     public void test_fires_a_due_schedule() throws Exception {
         final var entry = register("s", true);
-        final var latch = new CountDownLatch(1);
         final var seen = new CopyOnWriteArrayList<String>();
         executor = new ScheduleExecutor();
-        executor.start(due -> {
-            seen.add(due.getName());
-            latch.countDown();
-        });
+        executor.start(due -> seen.add(due.getName()));
         entry.setNextRunAt(System.currentTimeMillis() - 1);
         executor.tick(System.currentTimeMillis());
-        assertTrue(latch.await(5, TimeUnit.SECONDS));
+        // Waited on rather than a latch inside the dispatcher: the worker counts the run after the
+        // dispatcher returns, and only going idle orders that increment against the assertion below.
+        assertTrue(executor.drain(5000));
         assertEquals("s", seen.getFirst());
         assertEquals(1L, executor.getFired());
         // The next occurrence is computed before the run, so a second tick does not fire it again.
