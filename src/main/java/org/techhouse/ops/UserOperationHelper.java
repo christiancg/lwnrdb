@@ -50,7 +50,7 @@ public class UserOperationHelper {
             final var passwordHash = PasswordHasher.hash(request.getPassword());
             final var userEntry = new AdminUserEntry(username, passwordHash, request.getAdmin(),
                     request.getGlobalPermissions(), request.getDatabasePermissions(),
-                    request.getCollectionPermissions());
+                    request.getCollectionPermissions(), request.getScriptPermissions());
 
             AdminOperationHelper.saveUserEntry(userEntry);
             return new CreateUserResponse("User created successfully");
@@ -102,7 +102,8 @@ public class UserOperationHelper {
 
             final var newHash = PasswordHasher.hash(request.getNewPassword());
             final var updated = new AdminUserEntry(target.get_id(), newHash, target.isAdmin(),
-                    target.getGlobalPermissions(), target.getDatabasePermissions(), target.getCollectionPermissions());
+                    target.getGlobalPermissions(), target.getDatabasePermissions(), target.getCollectionPermissions(),
+                    target.getScriptPermissions());
             AdminOperationHelper.saveUserEntry(updated);
             return new SetPasswordResponse("Password changed successfully");
         } catch (IOException | InterruptedException e) {
@@ -129,7 +130,7 @@ public class UserOperationHelper {
 
             final var updatedUser = new AdminUserEntry(username, user.getPasswordHash(), isBecomingAdmin,
                     request.getGlobalPermissions(), request.getDatabasePermissions(),
-                    request.getCollectionPermissions());
+                    request.getCollectionPermissions(), request.getScriptPermissions());
 
             AdminOperationHelper.saveUserEntry(updatedUser);
             return new ChangePermissionsResponse("Permissions changed successfully");

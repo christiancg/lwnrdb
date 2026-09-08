@@ -33,12 +33,59 @@ public class ClusterMessage {
     // This node's in-doubt (PREPARED) distributed transactions on a LIST_TX_ACK, aggregated cluster-wide by
     // the node handling a LIST_TRANSACTIONS request.
     private List<InDoubtTx> inDoubtTransactions;
+    // This node's script runs executing right now on a LIST_SCRIPTS_ACK, aggregated cluster-wide by the node
+    // handling a LIST_SCRIPTS request.
+    private List<RunningScript> runningScripts;
+    // The run id to cancel on a CANCEL_SCRIPT message.
+    private String cancelRunId;
+    // This node's recorded trigger runs on a LIST_TRIGGER_RUNS_ACK, aggregated cluster-wide by the node
+    // handling a LIST_TRIGGER_RUNS request.
+    private List<TriggerRunRow> triggerRuns;
+    // The run id and decision (replay/discard) on a RESOLVE_TRIGGER_RUN message, and whether the receiving
+    // node held that record on the ack.
+    private String triggerRunId;
+    private String triggerRunDecision;
+    private boolean triggerRunResolved;
+    // Whether the receiving node was executing that run and has asked it to stop, on a CANCEL_SCRIPT_ACK.
+    private boolean cancelledRun;
     // This node's authoritative admin state (epoch + databases/collections/users) on an ADMIN_SNAPSHOT_ACK.
     private AdminSnapshotPayload adminSnapshot;
     // The admin coordinator's current admin epoch, shipped on REPLICATE_ADMIN/REPLICATE_USER so live replicas
     // advance without pulling a snapshot.
     private long adminEpoch;
     private String errorMessage;
+
+    public List<TriggerRunRow> getTriggerRuns() {
+        return triggerRuns;
+    }
+
+    public void setTriggerRuns(List<TriggerRunRow> triggerRuns) {
+        this.triggerRuns = triggerRuns;
+    }
+
+    public String getTriggerRunId() {
+        return triggerRunId;
+    }
+
+    public void setTriggerRunId(String triggerRunId) {
+        this.triggerRunId = triggerRunId;
+    }
+
+    public String getTriggerRunDecision() {
+        return triggerRunDecision;
+    }
+
+    public void setTriggerRunDecision(String triggerRunDecision) {
+        this.triggerRunDecision = triggerRunDecision;
+    }
+
+    public boolean isTriggerRunResolved() {
+        return triggerRunResolved;
+    }
+
+    public void setTriggerRunResolved(boolean triggerRunResolved) {
+        this.triggerRunResolved = triggerRunResolved;
+    }
 
     public ClusterMessage() {
     }
@@ -170,6 +217,30 @@ public class ClusterMessage {
 
     public void setInDoubtTransactions(List<InDoubtTx> inDoubtTransactions) {
         this.inDoubtTransactions = inDoubtTransactions;
+    }
+
+    public List<RunningScript> getRunningScripts() {
+        return runningScripts;
+    }
+
+    public void setRunningScripts(List<RunningScript> runningScripts) {
+        this.runningScripts = runningScripts;
+    }
+
+    public String getCancelRunId() {
+        return cancelRunId;
+    }
+
+    public void setCancelRunId(String cancelRunId) {
+        this.cancelRunId = cancelRunId;
+    }
+
+    public boolean isCancelledRun() {
+        return cancelledRun;
+    }
+
+    public void setCancelledRun(boolean cancelledRun) {
+        this.cancelledRun = cancelledRun;
     }
 
     public AdminSnapshotPayload getAdminSnapshot() {

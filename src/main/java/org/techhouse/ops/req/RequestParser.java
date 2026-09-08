@@ -19,9 +19,11 @@ import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastToType;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.ScriptMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
@@ -29,6 +31,7 @@ import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 import org.techhouse.ops.req.agg.step.MapAggregationStep;
+import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
@@ -83,6 +86,22 @@ public final class RequestParser {
                 case ROLLBACK_TRANSACTION -> eJson.fromJson(message, RollbackTransactionRequest.class);
                 case RESOLVE_TRANSACTION -> eJson.fromJson(message, ResolveTransactionRequest.class);
                 case LIST_TRANSACTIONS -> eJson.fromJson(message, ListTransactionsRequest.class);
+                case LIST_SCRIPTS -> eJson.fromJson(message, ListScriptsRequest.class);
+                case CANCEL_SCRIPT -> eJson.fromJson(message, CancelScriptRequest.class);
+                case LIST_TRIGGER_RUNS -> eJson.fromJson(message, ListTriggerRunsRequest.class);
+                case RESOLVE_TRIGGER_RUN -> eJson.fromJson(message, ResolveTriggerRunRequest.class);
+                case RUN_SCRIPT -> eJson.fromJson(message, RunScriptRequest.class);
+                case SAVE_PROCEDURE -> eJson.fromJson(message, SaveProcedureRequest.class);
+                case DELETE_PROCEDURE -> eJson.fromJson(message, DeleteProcedureRequest.class);
+                case LIST_PROCEDURES -> eJson.fromJson(message, ListProceduresRequest.class);
+                case CALL_PROCEDURE -> eJson.fromJson(message, CallProcedureRequest.class);
+                case SAVE_TRIGGER -> eJson.fromJson(message, SaveTriggerRequest.class);
+                case DELETE_TRIGGER -> eJson.fromJson(message, DeleteTriggerRequest.class);
+                case LIST_TRIGGERS -> eJson.fromJson(message, ListTriggersRequest.class);
+                case TEST_TRIGGER -> eJson.fromJson(message, TestTriggerRequest.class);
+                case SAVE_SCHEDULE -> eJson.fromJson(message, SaveScheduleRequest.class);
+                case DELETE_SCHEDULE -> eJson.fromJson(message, DeleteScheduleRequest.class);
+                case LIST_SCHEDULES -> eJson.fromJson(message, ListSchedulesRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);
@@ -133,7 +152,18 @@ public final class RequestParser {
             case LIMIT -> eJson.fromJson(obj, LimitAggregationStep.class);
             case SKIP -> eJson.fromJson(obj, SkipAggregationStep.class);
             case SORT -> eJson.fromJson(obj, SortAggregationStep.class);
+            case REDUCE -> parseReduceStep(obj);
         };
+    }
+
+    // Hand-written rather than eJson.fromJson: the step carries a raw JsonBaseElement initial value
+    // alongside the source, which the reflective path would try to bind to a concrete type.
+    private static BaseAggregationStep parseReduceStep(final JsonObject obj) {
+        final var script = obj.get("script").asJsonString().getValue();
+        final var initialValue = obj.get("initialValue");
+        final var resultField = obj.get("resultField");
+        return new ReduceAggregationStep(script, initialValue,
+                resultField == null || resultField.isJsonNull() ? null : resultField.asJsonString().getValue());
     }
 
     private static BaseAggregationStep parseMapStep(final JsonObject obj) {
@@ -178,6 +208,7 @@ public final class RequestParser {
                 }
                 yield new CastMidOperator(obj.get("fieldName").asJsonString().getValue(), toType);
             }
+            case SCRIPT -> new ScriptMidOperator(obj.get("script").asJsonString().getValue());
         };
     }
 
@@ -193,6 +224,10 @@ public final class RequestParser {
             final var fieldValue = operator.get("value");
             final var operatorType = eJson.fromJson(operator.get("fieldOperatorType"), FieldOperatorType.class);
             parsedOperator = new FieldOperator(operatorType, fieldName, fieldValue);
+        } else if (operator.has("script")) {
+            // Checked before the conjunction fallback: a malformed script operator would otherwise be
+            // read as a conjunction and fail with a confusing message about conjunctionType.
+            parsedOperator = new ScriptOperator(operator.get("script").asJsonString().getValue());
         } else if (operator.has("customOperatorName")) {
             final var customOperatorName = operator.get("customOperatorName").asJsonString().getValue();
             final var fieldName = operator.get("field").asJsonString().getValue();

@@ -82,6 +82,22 @@ public class LexerTest {
         assertInstanceOf(JsonCustom.class, tokens.getFirst());
     }
 
+    // Numbers in exponent notation lex as a single token, with either exponent sign
+    @Test
+    public void test_lex_exponent_numbers() {
+        assertEquals(1e21, Lexer.lex("1e+21").getFirst().asJsonNumber().getValue().doubleValue());
+        assertEquals(1e-7, Lexer.lex("1e-7").getFirst().asJsonNumber().getValue().doubleValue());
+        assertEquals(1e21, Lexer.lex("1.0E21").getFirst().asJsonNumber().getValue().doubleValue());
+        assertEquals(-4.9e-324, Lexer.lex("-4.9E-324").getFirst().asJsonNumber().getValue().doubleValue());
+    }
+
+    // An exponent marker with no digits after it is not absorbed into the number token
+    @Test
+    public void test_lex_incomplete_exponent_is_not_consumed() {
+        assertThrows(org.techhouse.ejson.exceptions.UnexpectedCharacterException.class, () -> Lexer.lex("[1e]"));
+        assertThrows(org.techhouse.ejson.exceptions.UnexpectedCharacterException.class, () -> Lexer.lex("[1e+]"));
+    }
+
     // Unterminated string throws MissingEndOfStringException (L79 branch)
     @Test
     public void test_lex_unterminated_string_throws() {

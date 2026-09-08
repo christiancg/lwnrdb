@@ -110,4 +110,21 @@ public class JsonNumberTest {
         JsonNumber num = new JsonNumber("3.14");
         assertEquals(3.14, num.getValue().doubleValue(), 0.001);
     }
+
+    // An integral value past the int range stays a double rather than being clamped
+    @Test
+    public void test_string_constructor_keeps_large_integral_values() {
+        assertEquals(1e10, new JsonNumber("10000000000").getValue().doubleValue());
+        assertEquals(1e20, new JsonNumber("100000000000000000000").getValue().doubleValue());
+        assertEquals(1e21, new JsonNumber("1e+21").getValue().doubleValue());
+        assertEquals(-1e10, new JsonNumber("-10000000000").getValue().doubleValue());
+    }
+
+    // Integral values inside the int range keep their existing Integer representation
+    @Test
+    public void test_string_constructor_keeps_int_representation_in_range() {
+        assertEquals(42, new JsonNumber("42").getValue());
+        assertEquals(Integer.MAX_VALUE, new JsonNumber("2147483647").getValue());
+        assertEquals(-2147483647, new JsonNumber("-2147483647").getValue());
+    }
 }

@@ -21,6 +21,8 @@ public final class AnalyzeContext {
     private final AtomicLong documentsScanned = new AtomicLong();
     private final Set<String> indexesUsed = ConcurrentHashMap.newKeySet();
     private final List<String> locksAcquired = new CopyOnWriteArrayList<>();
+    private final AtomicLong scriptInvocations = new AtomicLong();
+    private final AtomicLong scriptNanos = new AtomicLong();
 
     public static AnalyzeContext current() {
         return CURRENT.get();
@@ -50,6 +52,19 @@ public final class AnalyzeContext {
 
     public void addLock(String lockIdentifier) {
         locksAcquired.add(lockIdentifier);
+    }
+
+    public void recordScriptInvocation(long nanos) {
+        scriptInvocations.incrementAndGet();
+        scriptNanos.addAndGet(nanos);
+    }
+
+    public long getScriptInvocations() {
+        return scriptInvocations.get();
+    }
+
+    public long getScriptMillis() {
+        return scriptNanos.get() / 1_000_000L;
     }
 
     public long getDocumentsScanned() {

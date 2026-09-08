@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC
+        "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+        "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+
+<!--
+  FileLength debt list. Every entry is a file over the 500-line limit the Checker enforces.
+  Test sources are out of scope for the limit; every main source below predates the SimpleJS
+  work. No SimpleJS file is listed - the limit is enforced there with no exceptions, so a new
+  oversized file in that subsystem fails the build. An entry is removed as soon as the file
+  drops under the limit; nothing may be added without a reason.
+-->
+<suppressions>
+    <!-- Test sources are not subject to the file-length limit. -->
+    <suppress files="[\\/]src[\\/]test[\\/]" checks="FileLength"/>
+
+    <!-- Pre-existing, outside the SimpleJS remediation scope. -->
+    <suppress files="org[\\/]techhouse[\\/]fs[\\/]FileSystem\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]ops[\\/]TransactionOperationHelper\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]ops[\\/]OperationProcessor\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]ops[\\/]AdminOperationHelper\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]ops[\\/]req[\\/]validations[\\/]RequestValidator\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]ops[\\/]IndexHelper\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]cache[\\/]AdminCache\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]cache[\\/]UserCache\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]ops[\\/]FilterOperatorHelper\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]ejson[\\/]internal[\\/]LinkedTreeMap\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]cache[\\/]Cache\.java" checks="FileLength"/>
+    <suppress files="org[\\/]techhouse[\\/]cluster[\\/]AdminAntiEntropyService\.java" checks="FileLength"/>
+</suppressions>

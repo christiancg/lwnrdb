@@ -1,6 +1,7 @@
 package org.techhouse.data;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -27,10 +28,14 @@ public class Transaction {
     private final UUID clientId;
     private int seq;
     private final Set<String> heldLocks = new HashSet<>();
+    // The cascade depth writes committed by this transaction fire their triggers at, so a trigger's own
+    // transaction cannot restart the chain at zero and cascade forever.
+    private int triggerDepth;
     private final List<String> bufferedOpIds = new ArrayList<>();
     // collId -> (id -> buffered document | TOMBSTONE). LinkedHashMap keeps insertion order so pure
     // inserts stream in a stable order after the committed documents during an aggregation read.
     private final Map<String, LinkedHashMap<String, JsonObject>> overlay = new HashMap<>();
+    private final Map<Long, Set<String>> insertedIdsByOp = new HashMap<>();
 
     public Transaction(UUID transactionId, UUID clientId) {
         this.transactionId = transactionId;
@@ -39,6 +44,14 @@ public class Transaction {
 
     public UUID getTransactionId() {
         return transactionId;
+    }
+
+    public int getTriggerDepth() {
+        return triggerDepth;
+    }
+
+    public void setTriggerDepth(int triggerDepth) {
+        this.triggerDepth = triggerDepth;
     }
 
     public UUID getClientId() {
@@ -67,6 +80,19 @@ public class Transaction {
 
     public List<String> getBufferedOpIds() {
         return bufferedOpIds;
+    }
+
+    // seq of a buffered save -> the ids that operation inserts rather than updates. Decided when the write
+    // is buffered, because once the commit has applied it the store can no longer tell an insert from an
+    // update, and that is what decides whether the write fires CREATED or UPDATED.
+    public void recordInserts(long seq, Collection<String> ids) {
+        if (!ids.isEmpty()) {
+            insertedIdsByOp.put(seq, Set.copyOf(ids));
+        }
+    }
+
+    public Set<String> insertedIdsFor(long seq) {
+        return insertedIdsByOp.getOrDefault(seq, Set.of());
     }
 
     public void recordSave(String collId, String id, JsonObject doc) {

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
@@ -146,5 +147,74 @@ public class UserOperationHelperTest {
         req.setUsername("nonexistent");
         final var resp = UserOperationHelper.processChangePermissions(req);
         assertEquals(OperationStatus.NOT_FOUND, resp.getStatus());
+    }
+
+    @Test
+    public void test_create_user_persists_per_database_script_permission() {
+        final var request = new CreateUserRequest();
+        request.setUsername("scriptgrantee");
+        request.setPassword("password123");
+        request.setAdmin(false);
+        request.setGlobalPermissions(new HashSet<>());
+        request.setDatabasePermissions(new HashMap<>());
+        request.setCollectionPermissions(new HashMap<>());
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("mydb", ScriptPermissionLevel.RUN);
+        request.setScriptPermissions(scriptPerms);
+        assertEquals(OperationStatus.OK, UserOperationHelper.processCreateUser(request).getStatus());
+
+        final var stored = cache.getAdminUserEntry("scriptgrantee");
+        assertTrue(stored.canRunScripts("mydb"));
+        assertFalse(stored.canRunScripts("otherdb"));
+    }
+
+    @Test
+    public void test_change_permissions_updates_script_permissions() {
+        final var create = new CreateUserRequest();
+        create.setUsername("scriptchanged");
+        create.setPassword("password123");
+        create.setAdmin(false);
+        create.setGlobalPermissions(new HashSet<>());
+        create.setDatabasePermissions(new HashMap<>());
+        create.setCollectionPermissions(new HashMap<>());
+        UserOperationHelper.processCreateUser(create);
+        assertFalse(cache.getAdminUserEntry("scriptchanged").canRunScripts("mydb"));
+
+        final var change = new ChangePermissionsRequest();
+        change.setUsername("scriptchanged");
+        change.setAdmin(false);
+        change.setGlobalPermissions(new HashSet<>());
+        change.setDatabasePermissions(new HashMap<>());
+        change.setCollectionPermissions(new HashMap<>());
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("mydb", ScriptPermissionLevel.RUN);
+        change.setScriptPermissions(scriptPerms);
+        assertEquals(OperationStatus.OK, UserOperationHelper.processChangePermissions(change).getStatus());
+        assertTrue(cache.getAdminUserEntry("scriptchanged").canRunScripts("mydb"));
+    }
+
+    // A password change rebuilds the record, so it must carry the script grants over
+    @Test
+    public void test_set_password_preserves_script_permissions() {
+        final var create = new CreateUserRequest();
+        create.setUsername("scriptpwd");
+        create.setPassword("password123");
+        create.setAdmin(false);
+        create.setGlobalPermissions(new HashSet<>());
+        create.setDatabasePermissions(new HashMap<>());
+        create.setCollectionPermissions(new HashMap<>());
+        final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
+        scriptPerms.put("mydb", ScriptPermissionLevel.RUN);
+        create.setScriptPermissions(scriptPerms);
+        UserOperationHelper.processCreateUser(create);
+
+        final var setPassword = new org.techhouse.ops.req.SetPasswordRequest();
+        setPassword.setUsername("scriptpwd");
+        setPassword.setCurrentPassword("password123");
+        setPassword.setNewPassword("password456");
+        final var callerId = IocContainer.get(org.techhouse.conn.ClientTracker.class)
+                .registerForwardedClient("scriptpwd");
+        UserOperationHelper.processSetPassword(setPassword, callerId);
+        assertTrue(cache.getAdminUserEntry("scriptpwd").canRunScripts("mydb"));
     }
 }

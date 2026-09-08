@@ -1,5 +1,7 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -17,8 +19,6 @@ import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class SchemaValidationHelperTest {
     private final Cache cache = IocContainer.get(Cache.class);

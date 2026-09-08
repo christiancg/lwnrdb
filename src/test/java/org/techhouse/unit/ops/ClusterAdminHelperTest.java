@@ -1,8 +1,10 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.Objects;
@@ -118,6 +120,39 @@ public class ClusterAdminHelperTest {
     public void test_after_admin_op_passes_through_when_not_applicable() {
         final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
         assertSame(response, ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response));
+    }
+
+    // Procedure and trigger DDL are coordinator-serialized exactly as SAVE_SCHEMA/DELETE_SCHEMA are
+    @Test
+    public void test_procedure_and_trigger_ops_are_coordinated_admin_ops() {
+        assertTrue(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.SAVE_PROCEDURE));
+        assertTrue(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.DELETE_PROCEDURE));
+        assertTrue(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.SAVE_TRIGGER));
+        assertTrue(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.DELETE_TRIGGER));
+    }
+
+    // Calling one is not: it runs where it lands and its own operations route themselves, like RUN_SCRIPT
+    @Test
+    public void test_call_procedure_and_lists_are_not_coordinated_admin_ops() {
+        assertFalse(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.CALL_PROCEDURE));
+        assertFalse(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.LIST_PROCEDURES));
+        assertFalse(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.LIST_TRIGGERS));
+        assertFalse(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.RUN_SCRIPT));
+    }
+
+    @Test
+    public void test_guard_rejects_procedure_op_without_quorum() throws Exception {
+        enable(3);
+        final var request = new org.techhouse.ops.req.SaveProcedureRequest(TestGlobals.DB, "p", "return 1;");
+        assertEquals("503-2", Objects.requireNonNull(ClusterAdminHelper.guard(request)).getErrorCode());
+    }
+
+    @Test
+    public void test_guard_rejects_trigger_op_without_quorum() throws Exception {
+        enable(3);
+        final var request = new org.techhouse.ops.req.SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "t",
+                java.util.List.of("CREATED"), "p");
+        assertEquals("503-2", Objects.requireNonNull(ClusterAdminHelper.guard(request)).getErrorCode());
     }
 
     @Test

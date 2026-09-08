@@ -7,6 +7,7 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.auth.GlobalPermissionType;
 import org.techhouse.data.auth.PermissionLevel;
+import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateUserRequest;
 
@@ -77,5 +78,30 @@ public class CreateUserRequestTest {
         assertTrue(req.getGlobalPermissions().isEmpty());
         assertTrue(req.getDatabasePermissions().isEmpty());
         assertTrue(req.getCollectionPermissions().isEmpty());
+    }
+
+    @Test
+    public void test_script_permissions_default_to_empty() {
+        final var request = new CreateUserRequest();
+        assertTrue(request.getScriptPermissions().isEmpty());
+        assertNotNull(request.getRawScriptPermissions());
+    }
+
+    @Test
+    public void test_script_permissions_setter_and_getter() {
+        final var request = new CreateUserRequest();
+        request.setScriptPermissions(
+                Map.of("mydb", ScriptPermissionLevel.MANAGE, "otherdb", ScriptPermissionLevel.NONE));
+        assertEquals(Map.of("mydb", ScriptPermissionLevel.MANAGE, "otherdb", ScriptPermissionLevel.NONE),
+                request.getScriptPermissions());
+        assertEquals("MANAGE", request.getRawScriptPermissions().get("mydb").asJsonString().getValue());
+    }
+
+    // A request that omits the field reads as no grants rather than failing
+    @Test
+    public void test_absent_script_permissions_reads_as_empty() {
+        final var request = (CreateUserRequest) org.techhouse.ops.req.RequestParser
+                .parseRequest("{\"type\":\"CREATE_USER\",\"username\":\"user\",\"password\":\"password123\"}");
+        assertTrue(request.getScriptPermissions().isEmpty());
     }
 }

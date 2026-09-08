@@ -32,9 +32,17 @@ public class AdminTransactionEntry extends DbEntry {
     // A resolved participant's retained outcome (committed/aborted), so a peer can still report the decision
     // during cooperative termination after the participant has already applied it. GC'd after a retention.
     public static final String OP_TYPE_TRANSACTION_OUTCOME = "TRANSACTION_OUTCOME";
+    // A single-node commit's durable intent marker (_id = {txId}|localcommit). Written before the first op is
+    // applied, so its presence at startup means the commit was decided and must be finished; its absence means
+    // the transaction was still buffering and the slice is discarded.
+    public static final String OP_TYPE_LOCAL_COMMIT = "LOCAL_COMMIT";
+    // Consumes a pending trigger run, buffered as the last op of the run's own transaction so the run's effects
+    // and the record that would replay them commit or roll back together.
+    public static final String OP_TYPE_DELETE_TRIGGER_RUN = "DELETE_TRIGGER_RUN";
     public static final String MARKER_PARTICIPANT = "part";
     public static final String MARKER_COORDINATOR = "coord";
     public static final String MARKER_OUTCOME = "outcome";
+    public static final String MARKER_LOCAL_COMMIT = "localcommit";
 
     private String transactionId;
     private String clientId;

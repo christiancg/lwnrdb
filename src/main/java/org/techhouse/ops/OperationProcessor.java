@@ -5,6 +5,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 import org.techhouse.analyze.AnalyzeContext;
+import org.techhouse.bckg_ops.ScheduleRegistry;
+import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -13,6 +15,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -20,48 +23,70 @@ import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.ops.req.CallProcedureRequest;
+import org.techhouse.ops.req.CancelScriptRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.DeleteProcedureRequest;
 import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DeleteScheduleRequest;
 import org.techhouse.ops.req.DeleteSchemaRequest;
+import org.techhouse.ops.req.DeleteTriggerRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
 import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListCollectionsRequest;
+import org.techhouse.ops.req.ListProceduresRequest;
+import org.techhouse.ops.req.ListSchedulesRequest;
+import org.techhouse.ops.req.ListTriggerRunsRequest;
+import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
+import org.techhouse.ops.req.ResolveTriggerRunRequest;
+import org.techhouse.ops.req.RunScriptRequest;
+import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
+import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
+import org.techhouse.ops.req.TestTriggerRequest;
 import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
+import org.techhouse.ops.resp.CancelScriptResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
 import org.techhouse.ops.resp.CreateCollectionResponse;
 import org.techhouse.ops.resp.CreateDatabaseResponse;
 import org.techhouse.ops.resp.CreateIndexResponse;
+import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.DropCollectionResponse;
 import org.techhouse.ops.resp.DropDatabaseResponse;
 import org.techhouse.ops.resp.DropIndexResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
+import org.techhouse.ops.resp.ListScriptsResponse;
 import org.techhouse.ops.resp.ListTransactionsResponse;
+import org.techhouse.ops.resp.ListTriggerRunsResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ReindexResponse;
+import org.techhouse.ops.resp.ResolveTriggerRunResponse;
+import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.SetDatabaseOwnersResponse;
 import org.techhouse.ops.resp.StopListenResponse;
+import org.techhouse.simplejs.exceptions.ScriptCallableException;
 
 public class OperationProcessor {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -69,10 +94,16 @@ public class OperationProcessor {
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
+    private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private final org.techhouse.cluster.Tx2pcCoordinator tx2pcCoordinator = IocContainer
             .get(org.techhouse.cluster.Tx2pcCoordinator.class);
     private final org.techhouse.cluster.Tx2pcDirectory tx2pcDirectory = IocContainer
             .get(org.techhouse.cluster.Tx2pcDirectory.class);
+    private final org.techhouse.cluster.ScriptRunDirectory scriptRunDirectory = IocContainer
+            .get(org.techhouse.cluster.ScriptRunDirectory.class);
+    private final org.techhouse.cluster.TriggerRunDirectory triggerRunDirectory = IocContainer
+            .get(org.techhouse.cluster.TriggerRunDirectory.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
         return processMessage(operationRequest, null);
@@ -93,11 +124,12 @@ public class OperationProcessor {
         }
         final var actingUser = clientTracker.getAuthenticatedUsername(clientId);
         final var response = switch (operationRequest.getType()) {
-            case BULK_SAVE -> processBulkSaveOperation((BulkSaveRequest) operationRequest, activeTransaction);
-            case SAVE -> processSaveOperation((SaveRequest) operationRequest, activeTransaction);
+            case BULK_SAVE ->
+                processBulkSaveOperation((BulkSaveRequest) operationRequest, activeTransaction, actingUser);
+            case SAVE -> processSaveOperation((SaveRequest) operationRequest, activeTransaction, actingUser);
             case FIND_BY_ID -> processFindByIdOperation((FindByIdRequest) operationRequest, activeTransaction);
             case AGGREGATE -> processAggregateOperation((AggregateRequest) operationRequest, activeTransaction);
-            case DELETE -> processDeleteOperation((DeleteRequest) operationRequest, activeTransaction);
+            case DELETE -> processDeleteOperation((DeleteRequest) operationRequest, activeTransaction, actingUser);
             case CREATE_DATABASE -> processCreateDatabaseOperation((CreateDatabaseRequest) operationRequest, clientId);
             case DROP_DATABASE -> processDropDatabaseOperation((DropDatabaseRequest) operationRequest);
             case LIST_DATABASES -> processListDatabasesOperation();
@@ -123,16 +155,120 @@ public class OperationProcessor {
             case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
             case LISTEN -> processListenOperation((ListenRequest) operationRequest, clientId);
             case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest);
-            case START_TRANSACTION -> TransactionOperationHelper.start(clientId);
+            case START_TRANSACTION ->
+                TransactionOperationHelper.start(clientId, UUID.randomUUID(), operationRequest.getTriggerDepth());
             case COMMIT_TRANSACTION -> TransactionOperationHelper.commit(clientId);
             case ROLLBACK_TRANSACTION -> TransactionOperationHelper.rollback(clientId);
             case RESOLVE_TRANSACTION -> processResolveTransaction((ResolveTransactionRequest) operationRequest);
             case LIST_TRANSACTIONS -> processListTransactions();
+            case RUN_SCRIPT -> processRunScriptOperation((RunScriptRequest) operationRequest, actingUser, clientId);
+            case SAVE_PROCEDURE -> processSaveProcedure((SaveProcedureRequest) operationRequest, actingUser);
+            case DELETE_PROCEDURE -> processDeleteProcedure((DeleteProcedureRequest) operationRequest);
+            case LIST_PROCEDURES -> processListProcedures((ListProceduresRequest) operationRequest);
+            case CALL_PROCEDURE -> processCallProcedure((CallProcedureRequest) operationRequest, actingUser, clientId);
+            case SAVE_TRIGGER -> processSaveTrigger((SaveTriggerRequest) operationRequest, actingUser);
+            case DELETE_TRIGGER -> processDeleteTrigger((DeleteTriggerRequest) operationRequest);
+            case LIST_TRIGGERS -> processListTriggers((ListTriggersRequest) operationRequest);
+            case TEST_TRIGGER -> processTestTrigger((TestTriggerRequest) operationRequest, actingUser);
+            case SAVE_SCHEDULE -> processSaveSchedule((SaveScheduleRequest) operationRequest, actingUser);
+            case DELETE_SCHEDULE -> processDeleteSchedule((DeleteScheduleRequest) operationRequest);
+            case LIST_SCHEDULES -> processListSchedules((ListSchedulesRequest) operationRequest);
+            case LIST_SCRIPTS -> processListScripts();
+            case CANCEL_SCRIPT -> processCancelScript((CancelScriptRequest) operationRequest);
+            case LIST_TRIGGER_RUNS -> processListTriggerRuns((ListTriggerRunsRequest) operationRequest);
+            case RESOLVE_TRIGGER_RUN -> processResolveTriggerRun((ResolveTriggerRunRequest) operationRequest);
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
     }
 
-    private OperationResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest, Transaction activeTransaction) {
+    private OperationResponse processRunScriptOperation(RunScriptRequest request, String actingUser, UUID clientId) {
+        return ScriptOperationHelper.execute(request, actingUser, clientId);
+    }
+
+    private OperationResponse processSaveProcedure(SaveProcedureRequest request, String actingUser) {
+        try {
+            return ProcedureOperationHelper.executeSave(request, actingUser);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.ERROR_SAVING_PROCEDURE);
+        }
+    }
+
+    private OperationResponse processDeleteProcedure(DeleteProcedureRequest request) {
+        try {
+            return ProcedureOperationHelper.executeDelete(request);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.DELETE_PROCEDURE, ErrorCode.ERROR_DELETING_PROCEDURE);
+        }
+    }
+
+    private OperationResponse processListProcedures(ListProceduresRequest request) {
+        return ProcedureOperationHelper.executeList(request);
+    }
+
+    private OperationResponse processCallProcedure(CallProcedureRequest request, String actingUser, UUID clientId) {
+        return ProcedureCallHelper.execute(request, actingUser, clientId);
+    }
+
+    private OperationResponse processSaveTrigger(SaveTriggerRequest request, String actingUser) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        try {
+            // The collection write lock serializes the trigger-file rewrite against a concurrent save to
+            // the same collection, mirroring processSaveSchema.
+            locks.lock(dbName, collName);
+            return TriggerOperationHelper.executeSave(request, actingUser);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.SAVE_TRIGGER, ErrorCode.ERROR_SAVING_TRIGGER);
+        } finally {
+            locks.release(dbName, collName);
+        }
+    }
+
+    private OperationResponse processDeleteTrigger(DeleteTriggerRequest request) {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
+        try {
+            locks.lock(dbName, collName);
+            return TriggerOperationHelper.executeDelete(request);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.DELETE_TRIGGER, ErrorCode.ERROR_DELETING_TRIGGER);
+        } finally {
+            locks.release(dbName, collName);
+        }
+    }
+
+    private OperationResponse processListTriggers(ListTriggersRequest request) {
+        return TriggerOperationHelper.executeList(request);
+    }
+
+    // No lock and no write: the hook is run against the caller's own document, so nothing on disk is
+    // touched and nothing needs serializing against a concurrent save.
+    private OperationResponse processTestTrigger(TestTriggerRequest request, String actingUser) {
+        return TriggerOperationHelper.executeTest(request, actingUser);
+    }
+
+    private OperationResponse processSaveSchedule(SaveScheduleRequest request, String actingUser) {
+        try {
+            return ScheduleOperationHelper.executeSave(request, actingUser);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.ERROR_SAVING_SCHEDULE);
+        }
+    }
+
+    private OperationResponse processDeleteSchedule(DeleteScheduleRequest request) {
+        try {
+            return ScheduleOperationHelper.executeDelete(request);
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.DELETE_SCHEDULE, ErrorCode.ERROR_DELETING_SCHEDULE);
+        }
+    }
+
+    private OperationResponse processListSchedules(ListSchedulesRequest request) {
+        return ScheduleOperationHelper.executeList(request);
+    }
+
+    private OperationResponse processBulkSaveOperation(BulkSaveRequest bulkSaveRequest, Transaction activeTransaction,
+            String actingUser) {
         final var dbName = bulkSaveRequest.getDatabaseName();
         final var collName = bulkSaveRequest.getCollectionName();
         if (activeTransaction != null) {
@@ -144,8 +280,14 @@ public class OperationProcessor {
         }
         try {
             locks.lock(dbName, collName);
-            return ClusterWriteHelper.afterBulkSave(dbName, collName,
+            final var hookError = BeforeHookHelper.beforeBulkSave(bulkSaveRequest, actingUser);
+            if (hookError != null) {
+                return hookError;
+            }
+            final var response = ClusterWriteHelper.afterBulkSave(dbName, collName,
                     SaveOperationHelper.executeBulkSave(bulkSaveRequest));
+            TriggerHelper.afterBulkSave(dbName, collName, response, actingUser, bulkSaveRequest.getTriggerDepth());
+            return response;
         } catch (Exception exception) {
             return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
         } finally {
@@ -153,7 +295,8 @@ public class OperationProcessor {
         }
     }
 
-    private OperationResponse processSaveOperation(SaveRequest saveRequest, Transaction activeTransaction) {
+    private OperationResponse processSaveOperation(SaveRequest saveRequest, Transaction activeTransaction,
+            String actingUser) {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
         if (activeTransaction != null) {
@@ -163,9 +306,21 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
+        final var isInsert = saveRequest.get_id() == null || saveRequest.get_id().isBlank();
         try {
             locks.lock(dbName, collName);
-            return ClusterWriteHelper.afterSave(dbName, collName, SaveOperationHelper.executeSave(saveRequest));
+            final var hookError = BeforeHookHelper.beforeSave(saveRequest,
+                    isInsert ? EventType.CREATED : EventType.UPDATED, actingUser);
+            if (hookError != null) {
+                return hookError;
+            }
+            final var response = ClusterWriteHelper.afterSave(dbName, collName,
+                    SaveOperationHelper.executeSave(saveRequest));
+            if (response instanceof SaveResponse saveResponse) {
+                TriggerHelper.afterWriteIds(dbName, collName, isInsert ? EventType.CREATED : EventType.UPDATED,
+                        List.of(saveResponse.get_id()), actingUser, saveRequest.getTriggerDepth());
+            }
+            return response;
         } catch (Exception exception) {
             return new OperationResponse(OperationType.SAVE, ErrorCode.ERROR_SAVING);
         } finally {
@@ -252,6 +407,9 @@ public class OperationProcessor {
             return results.isEmpty()
                     ? new OperationResponse(OperationType.AGGREGATE, ErrorCode.NO_RESULTS)
                     : new AggregateResponse("Ok", results);
+        } catch (ScriptCallableException scriptFailure) {
+            return new OperationResponse(OperationType.AGGREGATE, scriptFailure.getMessage(),
+                    ScriptOperationHelper.errorCodeFor(scriptFailure.getErrorName()));
         } catch (Exception e) {
             return new OperationResponse(OperationType.AGGREGATE, ErrorCode.ERROR_AGGREGATING);
         } finally {
@@ -262,7 +420,8 @@ public class OperationProcessor {
         }
     }
 
-    private OperationResponse processDeleteOperation(DeleteRequest deleteRequest, Transaction activeTransaction) {
+    private OperationResponse processDeleteOperation(DeleteRequest deleteRequest, Transaction activeTransaction,
+            String actingUser) {
         final var dbName = deleteRequest.getDatabaseName();
         final var collName = deleteRequest.getCollectionName();
         if (activeTransaction != null) {
@@ -274,8 +433,21 @@ public class OperationProcessor {
         }
         try {
             locks.lock(dbName, collName);
-            return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
+            // Read before the delete: afterWrite needs the document that is about to disappear, and this
+            // is a no-op unless a DELETED trigger actually exists on the collection.
+            final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),
+                    deleteRequest.getTriggerDepth());
+            final var hookError = BeforeHookHelper.beforeDelete(deleteRequest, actingUser);
+            if (hookError != null) {
+                return hookError;
+            }
+            final var response = ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
                     DeleteOperationHelper.executeDelete(deleteRequest));
+            if (response instanceof DeleteResponse) {
+                TriggerHelper.afterWrite(dbName, collName, EventType.DELETED, deleted, actingUser,
+                        deleteRequest.getTriggerDepth());
+            }
+            return response;
         } catch (Exception exception) {
             return new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_DELETING);
         } finally {
@@ -348,6 +520,12 @@ public class OperationProcessor {
                 // the duplicate guard and wrongly returned DATABASE_ALREADY_EXISTS (or was unregistered
                 // when the queued delete event later ran).
                 AdminOperationHelper.deleteDatabaseEntry(dbName);
+                // The procedure files went with the folder; drop their compiled programs too, since a
+                // re-created database would restart its procedure versions at 1.
+                compiledProcedures.invalidateDatabase(dbName);
+                // The schedule files went with the folder too; drop the registry entries now rather than
+                // letting the periodic refresh notice, so nothing keeps firing against a gone database.
+                scheduleRegistry.removeDatabase(dbName);
                 listenManager.unregisterAllForDatabase(dbName);
                 return new DropDatabaseResponse("Database dropped successfully");
             }
@@ -608,6 +786,42 @@ public class OperationProcessor {
     private OperationResponse processResolveTransaction(ResolveTransactionRequest request) {
         final var commit = ResolveTransactionRequest.DECISION_COMMIT.equals(request.getDecision());
         return tx2pcCoordinator.forceResolve(request.getDtxId(), commit);
+    }
+
+    private OperationResponse processListScripts() {
+        try {
+            return new ListScriptsResponse("Ok", scriptRunDirectory.listClusterWide());
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.LIST_SCRIPTS, ErrorCode.SCRIPT_FAILED);
+        }
+    }
+
+    private OperationResponse processCancelScript(CancelScriptRequest request) {
+        try {
+            return new CancelScriptResponse("Ok", scriptRunDirectory.cancelClusterWide(request.getRunId()));
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.CANCEL_SCRIPT, ErrorCode.SCRIPT_FAILED);
+        }
+    }
+
+    private OperationResponse processListTriggerRuns(ListTriggerRunsRequest request) {
+        try {
+            final var filter = request.getStatus() == null || request.getStatus().isBlank()
+                    ? null
+                    : TriggerRunStatus.valueOf(request.getStatus().toUpperCase(java.util.Locale.ROOT));
+            return new ListTriggerRunsResponse("Ok", triggerRunDirectory.listClusterWide(filter));
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.LIST_TRIGGER_RUNS, ErrorCode.SCRIPT_FAILED);
+        }
+    }
+
+    private OperationResponse processResolveTriggerRun(ResolveTriggerRunRequest request) {
+        try {
+            return new ResolveTriggerRunResponse("Ok",
+                    triggerRunDirectory.resolveClusterWide(request.getRunId(), request.getDecision()));
+        } catch (Exception e) {
+            return new OperationResponse(OperationType.RESOLVE_TRIGGER_RUN, ErrorCode.SCRIPT_FAILED);
+        }
     }
 
     private OperationResponse processListTransactions() {

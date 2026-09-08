@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Predicate;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.config.Configuration;
@@ -15,6 +16,9 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.data.ProcedureDefinition;
+import org.techhouse.data.ScheduleDefinition;
+import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
@@ -147,11 +151,15 @@ public class Cache {
     public void evictDatabase(String dbName) {
         userCache.evictDatabase(dbName);
         adminCache.removeCollectionSchemasForDatabase(dbName);
+        adminCache.removeProceduresForDatabase(dbName);
+        adminCache.removeSchedulesForDatabase(dbName);
+        adminCache.removeTriggersForDatabase(dbName);
     }
 
     public void evictCollection(String dbName, String collName) {
         userCache.evictCollection(dbName, collName);
         adminCache.removeCollectionSchema(dbName, collName);
+        adminCache.removeTriggers(dbName, collName);
     }
 
     public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
@@ -368,6 +376,82 @@ public class Cache {
         adminCache.removeCollectionSchema(dbName, collName);
     }
 
+    public void removeCollectionSchemasForDatabase(String dbName) {
+        adminCache.removeCollectionSchemasForDatabase(dbName);
+    }
+
+    public JsonObject loadSchemaUncached(String dbName, String collName) {
+        return adminCache.loadSchemaUncached(dbName, collName);
+    }
+
+    public ProcedureDefinition getProcedure(String dbName, String name) {
+        return adminCache.getProcedure(dbName, name);
+    }
+
+    public void putProcedure(String dbName, ProcedureDefinition definition) {
+        adminCache.putProcedure(dbName, definition);
+    }
+
+    public void removeProcedure(String dbName, String name) {
+        adminCache.removeProcedure(dbName, name);
+    }
+
+    public void removeProceduresForDatabase(String dbName) {
+        adminCache.removeProceduresForDatabase(dbName);
+    }
+
+    public ProcedureDefinition loadProcedureUncached(String dbName, String name) {
+        return adminCache.loadProcedureUncached(dbName, name);
+    }
+
+    public List<TriggerDefinition> getTriggersFor(String dbName, String collName) {
+        return adminCache.getTriggersFor(dbName, collName);
+    }
+
+    public void putTriggers(String dbName, String collName, List<TriggerDefinition> definitions) {
+        adminCache.putTriggers(dbName, collName, definitions);
+    }
+
+    public void removeTriggers(String dbName, String collName) {
+        adminCache.removeTriggers(dbName, collName);
+    }
+
+    public void removeTriggersMatching(Predicate<String> keyMatches) {
+        adminCache.removeTriggersMatching(keyMatches);
+    }
+
+    public List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
+        return adminCache.loadTriggersUncached(dbName, collName);
+    }
+
+    public ScheduleDefinition getSchedule(String dbName, String name) {
+        return adminCache.getSchedule(dbName, name);
+    }
+
+    public ScheduleDefinition loadScheduleUncached(String dbName, String name) {
+        return adminCache.loadScheduleUncached(dbName, name);
+    }
+
+    public void putSchedule(String dbName, ScheduleDefinition definition) {
+        adminCache.putSchedule(dbName, definition);
+    }
+
+    public void removeSchedule(String dbName, String name) {
+        adminCache.removeSchedule(dbName, name);
+    }
+
+    public void removeSchedulesForDatabase(String dbName) {
+        adminCache.removeSchedulesForDatabase(dbName);
+    }
+
+    public void removeSchedulesMatching(Predicate<String> keyMatches) {
+        adminCache.removeSchedulesMatching(keyMatches);
+    }
+
+    public MetadataCacheStats metadataCacheStats() {
+        return adminCache.metadataCacheStats();
+    }
+
     public AdminUserEntry getAdminUserEntry(String username) {
         return adminCache.getAdminUserEntry(username);
     }
@@ -418,5 +502,21 @@ public class Cache {
 
     public Map<String, PkIndexEntry> getTransactionPkIndexes() {
         return adminCache.getTransactionPkIndexes();
+    }
+
+    public PkIndexEntry getPkIndexTriggerRun(String recordId) {
+        return adminCache.getPkIndexTriggerRun(recordId);
+    }
+
+    public void putPkIndexTriggerRun(PkIndexEntry indexEntry) {
+        adminCache.putPkIndexTriggerRun(indexEntry);
+    }
+
+    public void removePkIndexTriggerRun(String recordId) {
+        adminCache.removePkIndexTriggerRun(recordId);
+    }
+
+    public Map<String, PkIndexEntry> getTriggerRunPkIndexes() {
+        return adminCache.getTriggerRunPkIndexes();
     }
 }

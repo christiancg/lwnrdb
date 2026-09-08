@@ -67,7 +67,7 @@ public class MessageProcessor implements Runnable {
                             final var validationResult = RequestValidator.validate(parsedMessage);
                             if (!validationResult.isValid()) {
                                 response = eJson.toJson(new OperationResponse(parsedMessage.getType(),
-                                        validationResult.getErrorMessage(), ErrorCode.VALIDATION_ERROR));
+                                        validationResult.getErrorMessage(), validationResult.getErrorCode()));
                             } else {
                                 final var type = parsedMessage.getType();
                                 final var isPublicOperation = type == OperationType.AUTHENTICATE
@@ -164,6 +164,9 @@ public class MessageProcessor implements Runnable {
     // timer brackets only local processing (parse/validate/authorize already done); only AGGREGATE with
     // analyze=true is timed.
     private Handled handleAuthorized(OperationRequest parsedMessage, String rawMessage, UUID clientId) {
+        // A client never sets its own cascade depth: only EnforcingDatabaseAccess (i.e. a running trigger)
+        // may, so anything that arrived on the wire is discarded here rather than trusted.
+        parsedMessage.setTriggerDepth(0);
         // Enforce the collection schema before the write is committed or forwarded, so a non-compliant
         // document never reaches any node's collection (schemas are replicated to every node).
         final var schemaError = org.techhouse.ops.SchemaValidationHelper.check(parsedMessage);

@@ -16,10 +16,13 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.techhouse.analyze.AnalyzeResult;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.MessageProcessor;
+import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
@@ -294,11 +297,26 @@ public class MessageProcessorTest {
         final var response = runMessages(messages);
 
         assertTrue(response.contains("analyzeResult"), "Should include analyzeResult");
-        assertTrue(response.contains("startTime"), "Should include startTime");
-        assertTrue(response.contains("endTime"), "Should include endTime");
-        assertTrue(response.contains("durationMillis"), "Should include durationMillis");
         assertTrue(response.contains("documentsScanned"), "Should include documentsScanned");
         assertTrue(response.contains("locksAcquired"), "Should include locksAcquired");
+
+        // The timing trio is the one part of analyzeResult MessageProcessor fills in rather than
+        // AnalyzeHelper, so its values are asserted here and not in AnalyzeHelperTest.
+        final var analyze = analyzeResultOf(response);
+        assertTrue(analyze.getStartTime() > 0, "startTime should be a wall-clock instant");
+        assertTrue(analyze.getEndTime() >= analyze.getStartTime(), "endTime should not precede startTime");
+        assertEquals(analyze.getEndTime() - analyze.getStartTime(), analyze.getDurationMillis());
+    }
+
+    private AnalyzeResult analyzeResultOf(String response) {
+        final var eJson = IocContainer.get(EJson.class);
+        for (final var line : response.split("\n")) {
+            if (line.contains("analyzeResult")) {
+                final var element = eJson.fromJson(line, JsonObject.class).get("analyzeResult");
+                return eJson.fromJson(element.asJsonObject(), AnalyzeResult.class);
+            }
+        }
+        throw new IllegalStateException("no analyzeResult in: " + response);
     }
 
     // Without analyze the over-the-wire response must not contain analyzeResult.

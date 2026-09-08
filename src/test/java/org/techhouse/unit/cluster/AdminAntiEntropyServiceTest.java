@@ -180,6 +180,10 @@ public class AdminAntiEntropyServiceTest {
         TestUtils.createTestDatabaseAndCollection();
         final var schema = new JsonObject();
         schema.add("type", new org.techhouse.ejson.elements.JsonString("object"));
+        // Written to disk as SAVE_SCHEMA does, not just cached: conform reads the authoritative file, so a
+        // cache-only schema is a state the server never produces.
+        IocContainer.get(org.techhouse.fs.FileSystem.class).writeCollectionSchema(org.techhouse.test.TestGlobals.DB,
+                org.techhouse.test.TestGlobals.COLL, IocContainer.get(org.techhouse.ejson.EJson.class).toJson(schema));
         cache.putCollectionSchema(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, schema);
 
         stubSnapshot(List.of(dbJson(org.techhouse.test.TestGlobals.DB, List.of())),
@@ -249,6 +253,35 @@ public class AdminAntiEntropyServiceTest {
 
         assertNull(cache.getAdminDbEntry("newdb"));
         assertTrue(service.hasCompletedAdminSync());
+    }
+
+    // The gate is gossiped so peers can keep a script off a node that is not caught up yet.
+    @Test
+    public void test_start_marks_this_node_as_admin_syncing_and_stop_clears_it() throws Exception {
+        TestUtils.setPrivateField(config, "antiEntropyIntervalMs", 0L);
+        TestUtils.setPrivateField(service, "started", false);
+        TestUtils.setPrivateField(service, "adminSyncCompleted", new AtomicBoolean(false));
+
+        service.start();
+        assertTrue(syncingFlag());
+
+        service.stop();
+        assertFalse(syncingFlag());
+    }
+
+    @Test
+    public void test_reconcile_publishes_the_caught_up_state_to_membership() throws Exception {
+        membershipService.setAdminSyncing(true);
+        when(mockPool.request(any(), any(), anyLong())).thenThrow(new RuntimeException("unreachable"));
+
+        service.reconcile();
+
+        assertTrue(service.hasCompletedAdminSync());
+        assertFalse(syncingFlag());
+    }
+
+    private boolean syncingFlag() throws Exception {
+        return TestUtils.getPrivateField(membershipService, "adminSyncing", Boolean.class);
     }
 
     @Test

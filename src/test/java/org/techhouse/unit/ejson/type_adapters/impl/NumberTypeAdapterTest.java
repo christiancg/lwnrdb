@@ -44,6 +44,42 @@ public class NumberTypeAdapterTest {
         assertEquals("null", result);
     }
 
+    // A double past the long range keeps its digits instead of clamping to Long.MAX_VALUE
+    @Test
+    public void test_large_double_is_not_clamped() {
+        NumberTypeAdapter adapter = new NumberTypeAdapter();
+        assertEquals("100000000000000000000", adapter.toJson(1e20));
+        assertEquals("1e+21", adapter.toJson(1e21));
+    }
+
+    // A small double uses the JS exponential form rather than the Java one
+    @Test
+    public void test_small_double_uses_js_form() {
+        NumberTypeAdapter adapter = new NumberTypeAdapter();
+        assertEquals("1e-7", adapter.toJson(1e-7));
+        assertEquals("0.000001", adapter.toJson(1e-6));
+    }
+
+    // Integral boxed types render their exact digits, past the double precision limit
+    @Test
+    public void test_long_keeps_exact_digits() {
+        NumberTypeAdapter adapter = new NumberTypeAdapter();
+        assertEquals("9007199254740993", adapter.toJson(9007199254740993L));
+        assertEquals("123456789012345678901234567890",
+                adapter.toJson(new java.math.BigInteger("123456789012345678901234567890")));
+        assertEquals("1.50", adapter.toJson(new java.math.BigDecimal("1.50")));
+    }
+
+    // Ordinary doubles keep their existing rendering
+    @Test
+    public void test_integral_double_unchanged() {
+        NumberTypeAdapter adapter = new NumberTypeAdapter();
+        assertEquals("1", adapter.toJson(1.0));
+        assertEquals("42", adapter.toJson(42.0));
+        assertEquals("1.5", adapter.toJson(1.5));
+        assertEquals("0", adapter.toJson(-0.0));
+    }
+
     // Input JsonNumber returns its numeric value
     @Test
     public void test_json_number_returns_numeric_value() {

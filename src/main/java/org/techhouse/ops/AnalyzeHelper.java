@@ -12,10 +12,12 @@ import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
+import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 
 /**
@@ -36,6 +38,8 @@ public final class AnalyzeHelper {
         result.setIndexesUsed(indexesUsed);
         result.setDocumentsScanned(context.getDocumentsScanned());
         result.setLocksAcquired(new ArrayList<>(context.getLocksAcquired()));
+        result.setScriptInvocations(context.getScriptInvocations());
+        result.setScriptMillis(context.getScriptMillis());
         result.setSuggestions(buildSuggestions(request, indexUsed));
         return result;
     }
@@ -56,6 +60,18 @@ public final class AnalyzeHelper {
             }
         }
         for (var i = 0; i < steps.size(); i++) {
+            if (steps.get(i) instanceof FilterAggregationStep filterStep
+                    && containsScriptOperator(filterStep.getOperator())) {
+                suggestions.add("FILTER step at step " + (i + 1)
+                        + " uses a SCRIPT operator, which can never use an index; place it after an"
+                        + " index-backed FILTER so the script only sees the narrowed set.");
+            }
+            if (steps.get(i) instanceof ReduceAggregationStep) {
+                suggestions.add("REDUCE at step " + (i + 1)
+                        + " consumes the whole upstream stream; place an index-backed FILTER before it,"
+                        + " and note that a LIMIT after it applies to the single result document,"
+                        + " not to its input.");
+            }
             if (i > 0 && steps.get(i) instanceof FilterAggregationStep filterStep) {
                 final var fields = new LinkedHashSet<String>();
                 collectFilterFields(filterStep.getOperator(), fields);
@@ -66,6 +82,21 @@ public final class AnalyzeHelper {
             }
         }
         return suggestions;
+    }
+
+    private static boolean containsScriptOperator(BaseOperator operator) {
+        if (operator instanceof ScriptOperator) {
+            return true;
+        }
+        if (!(operator instanceof ConjunctionOperator conjunction) || conjunction.getOperators() == null) {
+            return false;
+        }
+        for (var child : conjunction.getOperators()) {
+            if (containsScriptOperator(child)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Collects, in pipeline order, the fields any index-capable step references, so the "no index"

@@ -18,9 +18,11 @@ import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.ScriptMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
@@ -31,36 +33,48 @@ public final class MapOperatorHelper {
     }
 
     public static JsonObject processOperator(MapOperator operator, JsonObject toMap) {
+        return processOperator(operator, toMap, null);
+    }
+
+    public static JsonObject processOperator(MapOperator operator, JsonObject toMap, PipelineScriptContext context) {
         final var condition = operator.getCondition();
         boolean continueProcessing = true;
         if (condition != null) {
-            continueProcessing = filterCondition(condition, toMap);
+            continueProcessing = filterCondition(condition, toMap, context);
         }
         return continueProcessing ? switch (operator.getType()) {
-            case ADD_FIELD -> addField((AddFieldMapOperator) operator, toMap);
+            case ADD_FIELD -> addField((AddFieldMapOperator) operator, toMap, context);
             case REMOVE_FIELD -> removeField((RemoveFieldMapOperator) operator, toMap);
         } : toMap;
     }
 
-    private static boolean filterCondition(BaseOperator condition, JsonObject toMap) {
+    private static boolean filterCondition(BaseOperator condition, JsonObject toMap, PipelineScriptContext context) {
         return switch (condition.getType()) {
-            case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) condition, toMap);
+            case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) condition, toMap, context);
             case FIELD -> processFieldOperator((FieldOperator) condition, toMap);
             case CUSTOM -> processCustomOperator((CustomOperator) condition, toMap);
+            case SCRIPT -> processScriptOperator((ScriptOperator) condition, toMap, context);
         };
+    }
+
+    private static boolean processScriptOperator(ScriptOperator operator, JsonObject toMap,
+            PipelineScriptContext context) {
+        return FilterOperatorHelper.testScript(operator, toMap, context);
     }
 
     private static boolean processCustomOperator(CustomOperator operator, JsonObject toMap) {
         return FilterOperatorHelper.getCustomTester(operator).test(toMap, operator.getField());
     }
 
-    private static boolean processConjunctionOperator(ConjunctionOperator operator, JsonObject toMap) {
+    private static boolean processConjunctionOperator(ConjunctionOperator operator, JsonObject toMap,
+            PipelineScriptContext context) {
         List<Boolean> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
             final var partialResults = switch (step.getType()) {
-                case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) step, toMap);
+                case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) step, toMap, context);
                 case FIELD -> processFieldOperator((FieldOperator) step, toMap);
                 case CUSTOM -> processCustomOperator((CustomOperator) step, toMap);
+                case SCRIPT -> processScriptOperator((ScriptOperator) step, toMap, context);
             };
             combinationResult.add(partialResults);
         }
@@ -96,7 +110,7 @@ public final class MapOperatorHelper {
         return test.test(toMap, fieldName);
     }
 
-    private static JsonObject addField(AddFieldMapOperator operator, JsonObject toMap) {
+    private static JsonObject addField(AddFieldMapOperator operator, JsonObject toMap, PipelineScriptContext context) {
         final var addFieldName = operator.getFieldName();
         final var midOperator = operator.getOperator();
         return switch (midOperator.getType()) {
@@ -113,7 +127,18 @@ public final class MapOperatorHelper {
             case SIZE -> size((OneParamMidOperator) midOperator, addFieldName, toMap);
             case CONCAT -> concat((ArrayParamMidOperator) midOperator, addFieldName, toMap);
             case CAST -> cast((CastMidOperator) midOperator, addFieldName, toMap);
+            case SCRIPT -> script((ScriptMidOperator) midOperator, addFieldName, toMap, context);
         };
+    }
+
+    // An undefined result is the script declining to set the field, so the document is left as it was.
+    private static JsonObject script(ScriptMidOperator midOperator, String addFieldName, JsonObject toMap,
+            PipelineScriptContext context) {
+        final var value = FilterOperatorHelper.callScript(midOperator.getSource(), toMap, context);
+        if (value != null) {
+            toMap.add(addFieldName, value);
+        }
+        return toMap;
     }
 
     private static JsonObject removeField(RemoveFieldMapOperator operator, JsonObject toMap) {
