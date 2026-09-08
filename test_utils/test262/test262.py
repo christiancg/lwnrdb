@@ -8,12 +8,12 @@ baseline of known failures so conformance can only ratchet upward.
 Stdlib only: CI has no `pip install` step, so there is no PyYAML and no requests. That constraint is
 why the frontmatter parser below is hand-rolled.
 
-    python3 test_utils/test262.py --fetch              # download + verify + extract the corpus
-    python3 test_utils/test262.py --self-test          # check the harness itself (no corpus needed)
-    python3 test_utils/test262.py --gate baseline      # the CI run
-    python3 test_utils/test262.py --update-baseline    # after fixing a gap
-    python3 test_utils/test262.py --self-check         # assert the known divergences still fail
-    python3 test_utils/test262.py --dump-failures      # re-run the baseline and write the failure inventory
+    python3 test_utils/test262/test262.py --fetch              # download + verify + extract the corpus
+    python3 test_utils/test262/test262.py --self-test          # check the harness itself (no corpus needed)
+    python3 test_utils/test262/test262.py --gate baseline      # the CI run
+    python3 test_utils/test262/test262.py --update-baseline    # after fixing a gap
+    python3 test_utils/test262/test262.py --self-check         # assert the known divergences still fail
+    python3 test_utils/test262/test262.py --dump-failures      # re-run the baseline and write the failure inventory
 """
 
 import argparse
@@ -33,15 +33,16 @@ import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+HERE = Path(__file__).resolve().parent
+ROOT = HERE.parent.parent
 CONFIG_DIR = ROOT / "config"
 PROPERTIES = CONFIG_DIR / "test262.properties"
 EXCLUSIONS = CONFIG_DIR / "test262-exclusions.txt"
 BASELINE = CONFIG_DIR / "test262-baseline.txt"
 FEATURES = CONFIG_DIR / "test262-features.txt"
 CORPUS = ROOT / "test262"
-SHIMS = ROOT / "test_utils" / "test262_shims"
-FIXTURES = ROOT / "test_utils" / "test262_fixtures"
+SHIMS = HERE / "shims"
+FIXTURES = HERE / "fixtures"
 REPORT = ROOT / "test_log" / "test262-report.md"
 FAILURES = ROOT / "test_log" / "test262-failures.tsv"
 CLASSPATH = os.pathsep.join([str(ROOT / "target" / "test-classes"), str(ROOT / "target" / "classes")])
@@ -332,7 +333,7 @@ def write_features(collected, commit):
                 seen.add(line)
     lines = [
         "# Features present in the pinned corpus and already accounted for. Regenerated together with",
-        "# the baseline: python3 test_utils/test262.py --update-baseline. A feature that appears here",
+        "# the baseline: python3 test_utils/test262/test262.py --update-baseline. A feature that appears here",
         "# is measured (pass or fail); one that is deliberately not measured belongs in",
         "# config/test262-exclusions.txt instead. Anything missing from both is reported as an unknown",
         "# feature, so a corpus bump surfaces newly-added areas.",
@@ -607,7 +608,7 @@ def write_baseline(results, commit):
         if outcome["status"] in ("FAIL", "HANG")
     )
     lines = [
-        "# test262 baseline — regenerate with: python3 test_utils/test262.py --update-baseline",
+        "# test262 baseline — regenerate with: python3 test_utils/test262/test262.py --update-baseline",
         f"# corpus: {commit}",
         f"# generated: {datetime.now(timezone.utc).date().isoformat()}",
         f"# entries: {len(failing)}",
@@ -1073,7 +1074,7 @@ def main(argv=None):
             message = (
                 f"corpus missing or stale under {CORPUS.relative_to(ROOT)} "
                 f"(want {commit[:12]}, have {corpus_stamp()[:12] or 'nothing'}). "
-                "Run: python3 test_utils/test262.py --fetch"
+                "Run: python3 test_utils/test262/test262.py --fetch"
             )
             if args.require_corpus:
                 print(f"{FAIL_COLOUR}{message}{RESET}")
