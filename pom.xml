@@ -291,6 +291,15 @@
                         </executions>
                         <configuration>
                             <mainClass>org.techhouse.Main</mainClass>
+                            <buildArgs>
+                                <!-- native-image bundles only the builder's default locale, so every
+                                     other BCP-47 tag silently falls back to it: localeCompare('sv') would
+                                     stop sorting in Swedish and (1234.5).toLocaleString('de-DE') would
+                                     print 1,234.5. A script may name any tag, so there is no subset to
+                                     enumerate with -H:IncludeLocales instead. -->
+                                <buildArg>-H:+UnlockExperimentalVMOptions</buildArg>
+                                <buildArg>-H:+IncludeAllLocales</buildArg>
+                            </buildArgs>
                         </configuration>
                     </plugin>
                 </plugins>
