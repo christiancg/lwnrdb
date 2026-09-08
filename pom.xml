@@ -9,8 +9,8 @@
     <version>1.0-SNAPSHOT</version>
 
     <properties>
-        <maven.compiler.source>25</maven.compiler.source>
-        <maven.compiler.target>25</maven.compiler.target>
+        <maven.compiler.source>26</maven.compiler.source>
+        <maven.compiler.target>26</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <minimumCoverage>0.95</minimumCoverage>
         <spotless.version>3.8.0</spotless.version>
@@ -20,6 +20,7 @@
         <pmd.version>7.26.0</pmd.version>
         <spotbugs.plugin.version>4.10.2.0</spotbugs.plugin.version>
         <spotbugs.version>4.10.2</spotbugs.version>
+        <enforcer.plugin.version>3.5.0</enforcer.plugin.version>
         <native.maven.plugin.version>1.1.2</native.maven.plugin.version>
     </properties>
 
@@ -39,6 +40,30 @@
     </dependencies>
     <build>
         <plugins>
+            <!-- The regex engine resolves \p{...} against the JDK's own Unicode data, so the build JDK
+                 decides what those escapes match. Pinning the floor at 26 (Unicode 17.0) is what makes a
+                 script answer identically on every node of a cluster. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-enforcer-plugin</artifactId>
+                <version>${enforcer.plugin.version}</version>
+                <executions>
+                    <execution>
+                        <id>enforce-java-version</id>
+                        <goals>
+                            <goal>enforce</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <requireJavaVersion>
+                                    <version>[26,)</version>
+                                    <message>LWNRDB requires JDK 26 or newer.</message>
+                                </requireJavaVersion>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
@@ -73,6 +98,8 @@
                             <version>4.33</version>
                             <file>${project.basedir}/config/eclipse-format.xml</file>
                         </eclipse>
+                        <!-- Lets a declaration table (see config/ConfigKey.java) stay one row per line. -->
+                        <toggleOffOn/>
                         <removeUnusedImports/>
                         <importOrder/>
                         <trimTrailingWhitespace/>
@@ -102,6 +129,7 @@
                 </dependencies>
                 <configuration>
                     <configLocation>${project.basedir}/config/checkstyle.xml</configLocation>
+                    <propertyExpansion>config_loc=${project.basedir}/config</propertyExpansion>
                     <includeTestSourceDirectory>true</includeTestSourceDirectory>
                     <consoleOutput>true</consoleOutput>
                     <failOnViolation>true</failOnViolation>
@@ -138,11 +166,25 @@
                         <ruleset>${project.basedir}/config/pmd-ruleset.xml</ruleset>
                     </rulesets>
                     <includeTests>true</includeTests>
+                    <!-- CPD ratchet: nothing in the tree shares a block this large today, so the
+                         build fails the moment a bigger one appears. Lower it as the remaining
+                         test-fixture duplication goes. -->
+                    <minimumTokens>500</minimumTokens>
                     <printFailingErrors>true</printFailingErrors>
                     <failOnViolation>true</failOnViolation>
                     <linkXRef>false</linkXRef>
                 </configuration>
                 <executions>
+                    <execution>
+                        <id>cpd-check</id>
+                        <phase>verify</phase>
+                        <goals>
+                            <goal>cpd-check</goal>
+                        </goals>
+                        <configuration>
+                            <failOnViolation>true</failOnViolation>
+                        </configuration>
+                    </execution>
                     <execution>
                         <id>pmd-check</id>
                         <phase>verify</phase>

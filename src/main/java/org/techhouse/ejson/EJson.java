@@ -16,6 +16,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.exceptions.InvalidSchemaException;
+import org.techhouse.ejson.internal.JsonPrettyWriter;
 import org.techhouse.ejson.internal.JsonReader;
 import org.techhouse.ejson.internal.JsonWriter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
@@ -102,6 +103,16 @@ public class EJson {
     public <T> String toJson(T obj) {
         final Class<T> clazz = (Class<T>) obj.getClass();
         return writer.toJson(obj, clazz);
+    }
+
+    public String toJson(JsonBaseElement element, String indent) {
+        if (element == null) {
+            return "null";
+        }
+        if (indent == null || indent.isEmpty()) {
+            return toJson(element);
+        }
+        return JsonPrettyWriter.toJson(element, indent);
     }
 
     public SchemaValidationResult validateSchema(JsonObject schema) {

@@ -11,7 +11,6 @@ import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.ConfigurationValidator;
 
 public class ClusterConfigurationValidatorTest {
-
     private static Map<String, String> baseValid(Path writablePath) {
         final var map = new HashMap<String, String>();
         map.put("port", "8989");
@@ -40,10 +39,50 @@ public class ClusterConfigurationValidatorTest {
         map.put("replicationAckTimeoutMs", "5000");
         map.put("virtualNodesPerNode", "128");
         map.put("readFallbackToLocal", "true");
+        map.put("scriptRoutingEnabled", "true");
+        map.put("scriptLocalityWeight", "50");
         map.put("clusterTlsEnabled", "false");
         map.put("clusterSecret", "shared-secret");
         map.put("antiEntropyIntervalMs", "60000");
         map.put("tombstoneRetentionMs", "86400000");
+        map.put("scriptTimeZone", "UTC");
+        map.put("scriptLocale", "en-US");
+        map.put("scriptsEnabled", "false");
+        map.put("scriptInstructionBudget", "10000000");
+        map.put("scriptTimeoutMs", "5000");
+        map.put("scriptMaxDepth", "200");
+        map.put("scriptMaxSourceBytes", "256Kb");
+        map.put("scriptMaxLogLines", "1000");
+        map.put("scriptMaxLogLineChars", "4096");
+        map.put("scriptMaxMemoryBytes", "64Mb");
+        map.put("scriptMaxResultBytes", "16Mb");
+        map.put("scriptCursorBatchSize", "500");
+        map.put("scriptCursorMaxBatchSize", "5000");
+        map.put("aggregationScriptInstructionBudget", "1000000");
+        map.put("aggregationScriptTimeoutMs", "2000");
+        map.put("aggregationScriptMaxSourceBytes", "16Kb");
+        map.put("maxConcurrentScripts", "16");
+        map.put("scriptQueueWaitMs", "250");
+        map.put("procedureCacheSize", "128");
+        map.put("triggersEnabled", "false");
+        map.put("triggerThreads", "2");
+        map.put("triggerQueueSize", "10000");
+        map.put("triggerMaxDepth", "3");
+        map.put("triggerTimeoutMs", "1000");
+        map.put("shutdownTimeoutMs", "15000");
+        map.put("triggerRunLogEnabled", "true");
+        map.put("triggerRunRetentionMs", "86400000");
+        map.put("beforeHookInstructionBudget", "200000");
+        map.put("beforeHookTimeoutMs", "200");
+        map.put("schedulesEnabled", "false");
+        map.put("scheduleThreads", "2");
+        map.put("scheduleQueueSize", "100");
+        map.put("scheduleTickMs", "1000");
+        map.put("scheduleRefreshMs", "60000");
+        map.put("scheduleTimeoutMs", "30000");
+        map.put("scheduleMaxPerDatabase", "100");
+        map.put("scriptTextImportEnabled", "false");
+        map.put("scriptProcedureImportEnabled", "true");
         return map;
     }
 
@@ -72,6 +111,8 @@ public class ClusterConfigurationValidatorTest {
         assertError(tempDir, "clusterEnabled", "maybe", "clusterEnabled");
         assertError(tempDir, "clusterTlsEnabled", "maybe", "clusterTlsEnabled");
         assertError(tempDir, "readFallbackToLocal", "maybe", "readFallbackToLocal");
+        assertError(tempDir, "scriptRoutingEnabled", "maybe", "scriptRoutingEnabled");
+        assertError(tempDir, "scriptLocalityWeight", "101", "scriptLocalityWeight");
     }
 
     @Test

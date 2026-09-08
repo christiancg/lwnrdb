@@ -4,11 +4,13 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.time.DateTimeException;
+import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.function.IntPredicate;
-import java.util.function.LongPredicate;
 
 public final class ConfigurationValidator {
 
@@ -17,47 +19,69 @@ public final class ConfigurationValidator {
 
     public static List<String> validate(Map<String, String> configs) {
         final List<String> errors = new ArrayList<>();
-        validatePort(configs, errors);
-        validateInt(configs, "maxConnections", 0, errors);
-        validateInt(configs, "backgroundProcessingThreads", 1, errors);
-        validateInt(configs, "maxLogFiles", 1, errors);
+        for (final var key : ConfigKey.all()) {
+            final var problem = key.validate(configs.getOrDefault(key.key(), key.defaultValue()));
+            if (problem != null) {
+                errors.add(key.key() + " " + problem);
+            }
+        }
         validateWritablePath(configs, "filePath", errors);
         validateWritablePath(configs, "logPath", errors);
-        final var maxPageSize = validatePositiveSize(configs, "maxPageSize", errors);
-        final var maxEntrySize = validatePositiveSize(configs, "maxEntrySize", errors);
-        if (maxPageSize != null && maxEntrySize != null && maxPageSize <= maxEntrySize) {
-            errors.add("maxPageSize (" + maxPageSize + ") must be greater than maxEntrySize (" + maxEntrySize + ")");
-        }
+        validatePageAndEntrySize(configs, errors);
         validateAdminUsername(configs, errors);
         validateAdminPassword(configs, errors);
-        validateMaxMemory(configs, errors);
-        validateLong(configs, "transactionLockTimeoutMs", 1, errors);
+        validateCursorBatchSizes(configs, errors);
         validateTls(configs, errors);
-        validateCluster(configs, errors);
+        if (Boolean.parseBoolean(configs.getOrDefault("clusterEnabled", "false").trim())) {
+            validateEnabledClusterConstraints(configs, errors);
+        }
+        validateScriptZoneAndLocale(configs, errors);
         return errors;
     }
 
-    private static void validateCluster(Map<String, String> configs, List<String> errors) {
-        validateBoolean(configs, "clusterEnabled", errors);
-        validateBoolean(configs, "clusterTlsEnabled", errors);
-        validateBoolean(configs, "readFallbackToLocal", errors);
-        if (notAnInt(configs.get("clusterPort"), port -> port >= 1 && port <= 65535)) {
-            errors.add(
-                    "clusterPort must be a valid number between 1 and 65535, but was: " + configs.get("clusterPort"));
+    private static void validatePageAndEntrySize(Map<String, String> configs, List<String> errors) {
+        final var maxPageSize = sizeOrNull(configs.get("maxPageSize"));
+        final var maxEntrySize = sizeOrNull(configs.get("maxEntrySize"));
+        if (maxPageSize != null && maxEntrySize != null && maxPageSize <= maxEntrySize) {
+            errors.add("maxPageSize (" + maxPageSize + ") must be greater than maxEntrySize (" + maxEntrySize + ")");
         }
-        validateInt(configs, "clusterExpectedSize", 1, errors);
-        validateInt(configs, "virtualNodesPerNode", 1, errors);
-        validateLong(configs, "gossipIntervalMs", 1, errors);
-        validateLong(configs, "suspectTimeoutMs", 1, errors);
-        validateLong(configs, "deadTimeoutMs", 1, errors);
-        validateLong(configs, "replicationAckTimeoutMs", 1, errors);
-        validateLong(configs, "antiEntropyIntervalMs", 1, errors);
-        validateLong(configs, "tombstoneRetentionMs", 1, errors);
-        final var enabledValue = configs.get("clusterEnabled");
-        if (enabledValue == null || isNotBoolean(enabledValue) || !Boolean.parseBoolean(enabledValue.trim())) {
+    }
+
+    private static Long sizeOrNull(String value) {
+        try {
+            return value == null ? null : SizeParser.parse(value);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static void validateScriptZoneAndLocale(Map<String, String> configs, List<String> errors) {
+        final var zone = configs.get("scriptTimeZone");
+        if (isBlank(zone)) {
+            errors.add("scriptTimeZone must be a non-blank IANA time zone id (e.g. UTC)");
+        } else {
+            try {
+                var _ = ZoneId.of(zone.trim());
+            } catch (DateTimeException e) {
+                errors.add("scriptTimeZone must be a valid time zone id, but was: " + zone);
+            }
+        }
+        final var locale = configs.get("scriptLocale");
+        if (isBlank(locale) || !Locale.forLanguageTag(locale.trim()).toLanguageTag().equals(locale.trim())) {
+            errors.add("scriptLocale must be a valid BCP 47 language tag (e.g. en-US), but was: " + locale);
+        }
+    }
+
+    private static void validateCursorBatchSizes(Map<String, String> configs, List<String> errors) {
+        final var batchSize = configs.get("scriptCursorBatchSize");
+        final var maxBatchSize = configs.get("scriptCursorMaxBatchSize");
+        if (notAnInt(batchSize, parsed -> parsed >= 1) || notAnInt(maxBatchSize, parsed -> parsed >= 1)) {
             return;
         }
-        validateEnabledClusterConstraints(configs, errors);
+        if (Integer.parseInt(batchSize.trim()) > Integer.parseInt(maxBatchSize.trim())) {
+            errors.add("scriptCursorBatchSize (" + batchSize + ") must not be greater than scriptCursorMaxBatchSize ("
+                    + maxBatchSize + ")");
+        }
     }
 
     private static void validateEnabledClusterConstraints(Map<String, String> configs, List<String> errors) {
@@ -81,29 +105,6 @@ public final class ConfigurationValidator {
             errors.add("clusterSecret must be a non-blank string when clusterEnabled is true");
         }
         validateSeeds(configs.get("clusterSeeds"), errors);
-    }
-
-    private static void validateSeeds(String seeds, List<String> errors) {
-        if (seeds == null || seeds.isBlank()) {
-            return;
-        }
-        for (var seed : seeds.split(Globals.CLUSTER_SEED_SEPARATOR)) {
-            final var trimmed = seed.trim();
-            if (trimmed.isEmpty()) {
-                continue;
-            }
-            final var parts = trimmed.split(Globals.CLUSTER_ADDRESS_SEPARATOR, 2);
-            if (parts.length != 2 || parts[0].isBlank() || notAnInt(parts[1], p -> p >= 1 && p <= 65535)) {
-                errors.add("clusterSeeds entry must be host:port with a port between 1 and 65535, but was: " + trimmed);
-            }
-        }
-    }
-
-    private static void validateBoolean(Map<String, String> configs, String key, List<String> errors) {
-        final var value = configs.get(key);
-        if (value == null || isNotBoolean(value)) {
-            errors.add(key + " must be true or false, but was: " + value);
-        }
     }
 
     private static boolean isBlank(String value) {
@@ -167,54 +168,6 @@ public final class ConfigurationValidator {
         }
     }
 
-    private static boolean isNotBoolean(String value) {
-        final var trimmed = value.trim();
-        return !trimmed.equalsIgnoreCase("true") && !trimmed.equalsIgnoreCase("false");
-    }
-
-    private static void validatePort(Map<String, String> configs, List<String> errors) {
-        final var value = configs.get("port");
-        if (notAnInt(value, port -> port >= 1 && port <= 65535)) {
-            errors.add("port must be a valid number between 1 and 65535, but was: " + value);
-        }
-    }
-
-    private static void validateInt(Map<String, String> configs, String key, int min, List<String> errors) {
-        final var value = configs.get(key);
-        if (notAnInt(value, parsed -> parsed >= min)) {
-            errors.add(key + " must be a valid number greater than or equal to " + min + ", but was: " + value);
-        }
-    }
-
-    private static boolean notAnInt(String value, IntPredicate predicate) {
-        if (value == null) {
-            return true;
-        }
-        try {
-            return !predicate.test(Integer.parseInt(value.trim()));
-        } catch (NumberFormatException e) {
-            return true;
-        }
-    }
-
-    private static void validateLong(Map<String, String> configs, String key, long min, List<String> errors) {
-        final var value = configs.get(key);
-        if (notALong(value, parsed -> parsed >= min)) {
-            errors.add(key + " must be a valid number greater than or equal to " + min + ", but was: " + value);
-        }
-    }
-
-    private static boolean notALong(String value, LongPredicate predicate) {
-        if (value == null) {
-            return true;
-        }
-        try {
-            return !predicate.test(Long.parseLong(value.trim()));
-        } catch (NumberFormatException e) {
-            return true;
-        }
-    }
-
     private static void validateWritablePath(Map<String, String> configs, String key, List<String> errors) {
         final var value = configs.get(key);
         if (value == null || value.isBlank()) {
@@ -230,21 +183,6 @@ public final class ConfigurationValidator {
         }
         if (!Files.isWritable(path)) {
             errors.add(key + " (" + value + ") is not writable by the application");
-        }
-    }
-
-    private static Long validatePositiveSize(Map<String, String> configs, String key, List<String> errors) {
-        final var value = configs.get(key);
-        try {
-            final var parsed = SizeParser.parse(value);
-            if (parsed <= 0) {
-                errors.add(key + " must be a valid size greater than 0, but was: " + value);
-                return null;
-            }
-            return parsed;
-        } catch (IllegalArgumentException e) {
-            errors.add(key + " must be a valid size (e.g. 2Mb), but was: " + value);
-            return null;
         }
     }
 
@@ -264,14 +202,35 @@ public final class ConfigurationValidator {
         }
     }
 
-    private static void validateMaxMemory(Map<String, String> configs, List<String> errors) {
-        final var value = configs.get("maxMemory");
+    private static void validateSeeds(String seeds, List<String> errors) {
+        if (seeds == null || seeds.isBlank()) {
+            return;
+        }
+        for (var seed : seeds.split(Globals.CLUSTER_SEED_SEPARATOR)) {
+            final var trimmed = seed.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            final var parts = trimmed.split(Globals.CLUSTER_ADDRESS_SEPARATOR, 2);
+            if (parts.length != 2 || parts[0].isBlank() || notAnInt(parts[1], p -> p >= 1 && p <= 65535)) {
+                errors.add("clusterSeeds entry must be host:port with a port between 1 and 65535, but was: " + trimmed);
+            }
+        }
+    }
+
+    private static boolean isNotBoolean(String value) {
+        final var trimmed = value.trim();
+        return !trimmed.equalsIgnoreCase("true") && !trimmed.equalsIgnoreCase("false");
+    }
+
+    private static boolean notAnInt(String value, IntPredicate predicate) {
+        if (value == null) {
+            return true;
+        }
         try {
-            // SizeParser already accepts 0 (unlimited) and -1 (disabled) as valid values.
-            SizeParser.parse(value);
-        } catch (IllegalArgumentException e) {
-            errors.add(
-                    "maxMemory must be a valid size (e.g. 512Mb), 0 (unlimited) or -1 (disabled), but was: " + value);
+            return !predicate.test(Integer.parseInt(value.trim()));
+        } catch (NumberFormatException e) {
+            return true;
         }
     }
 }

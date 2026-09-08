@@ -16,5 +16,7 @@ public enum MidOperationType {
     SIZE, // -> One param
     CONCAT, // -> Array
     // Cast
-    CAST // - Custom, with fieldName and toType
+    CAST, // - Custom, with fieldName and toType
+    // Script
+    SCRIPT // -> Script source
 }

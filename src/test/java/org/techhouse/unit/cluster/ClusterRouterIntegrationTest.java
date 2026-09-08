@@ -1,9 +1,6 @@
 package org.techhouse.unit.cluster;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
@@ -35,8 +32,11 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ReplicatedApplyHelper;
+import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.agg.operators.ScriptOperator;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -142,6 +142,37 @@ public class ClusterRouterIntegrationTest {
         request.setObject(doc(id));
         request.set_id(id);
         return eJson.toJson(request);
+    }
+
+    // The forward ships the caller's own pipeline JSON, which is what lets a polymorphic operator - a
+    // SCRIPT one included - survive the trip and be re-parsed on the owner.
+    @Test
+    public void test_forwarded_aggregate_runs_the_script_on_the_owner() throws Exception {
+        configureMembership(2, node("self", 19990), node("other", serverPort));
+        final var coll = collectionOwnedByOther();
+        createCollection(coll);
+        ReplicatedApplyHelper.apply(
+                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(priced("s1", 5)), null));
+        ReplicatedApplyHelper.apply(
+                new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(priced("s2", 50)), null));
+
+        final var request = new AggregateRequest(TestGlobals.DB, coll);
+        request.setAggregationSteps(
+                List.of(new FilterAggregationStep(new ScriptOperator("export default (doc) => doc.price > 10;"))));
+        final var raw = "{\"type\":\"AGGREGATE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + coll + "\",\"aggregationSteps\":[{\"type\":\"FILTER\",\"operator\":"
+                + "{\"script\":\"export default (doc) => doc.price > 10;\"}}]}";
+        final var relayed = router.forward(request, raw, false, null, null);
+
+        assertNotNull(relayed);
+        assertTrue(relayed.contains("s2"), "expected the owner's scripted result, got: " + relayed);
+        assertFalse(relayed.contains("\"s1\""), "the script predicate must have excluded s1, got: " + relayed);
+    }
+
+    private static JsonObject priced(String id, double price) {
+        final var object = doc(id);
+        object.add("price", new org.techhouse.ejson.elements.JsonNumber(price));
+        return object;
     }
 
     @Test

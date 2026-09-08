@@ -1,0 +1,31 @@
+package org.techhouse.simplejs.elements;
+
+public abstract class JsBaseElement {
+    public enum JsType {
+        KEYWORD, IDENTIFIER, PRIVATE_IDENTIFIER, NUMBER, BIGINT, STRING, BOOLEAN, NULL, UNDEFINED, OPERATOR, SEPARATOR, REGEX, TEMPLATE_STRING, EOF
+    }
+
+    public JsType getType() {
+        return internalGetType(this);
+    }
+
+    private static JsType internalGetType(Object object) {
+        return switch (object) {
+            case JsKeyword ignored -> JsType.KEYWORD;
+            case JsIdentifier ignored -> JsType.IDENTIFIER;
+            case JsPrivateIdentifier ignored -> JsType.PRIVATE_IDENTIFIER;
+            case JsNumber ignored -> JsType.NUMBER;
+            case JsBigInt ignored -> JsType.BIGINT;
+            case JsString ignored -> JsType.STRING;
+            case JsBoolean ignored -> JsType.BOOLEAN;
+            case JsNull ignored -> JsType.NULL;
+            case JsUndefined ignored -> JsType.UNDEFINED;
+            case JsOperator ignored -> JsType.OPERATOR;
+            case JsSeparator ignored -> JsType.SEPARATOR;
+            case JsRegex ignored -> JsType.REGEX;
+            case JsTemplateString ignored -> JsType.TEMPLATE_STRING;
+            case JsEOF ignored -> JsType.EOF;
+            default -> throw new IllegalStateException("Unexpected value: " + object);
+        };
+    }
+}

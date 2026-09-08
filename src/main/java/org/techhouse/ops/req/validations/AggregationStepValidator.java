@@ -1,11 +1,14 @@
 package org.techhouse.ops.req.validations;
 
+import java.nio.charset.StandardCharsets;
+import org.techhouse.config.Configuration;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.GeoDistanceComparator;
 import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.OperatorType;
@@ -14,14 +17,17 @@ import org.techhouse.ops.req.agg.mid_operators.BaseMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastToType;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.ScriptMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 import org.techhouse.ops.req.agg.step.MapAggregationStep;
+import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
@@ -39,7 +45,90 @@ public class AggregationStepValidator {
             case LIMIT -> validateLimit((LimitAggregationStep) step);
             case SKIP -> validateSkip((SkipAggregationStep) step);
             case SORT -> validateSort((SortAggregationStep) step);
+            case REDUCE -> validateReduce((ReduceAggregationStep) step);
         };
+    }
+
+    private static ValidationResult validateReduce(ReduceAggregationStep step) {
+        if (step.getResultField() == null || step.getResultField().isBlank()) {
+            return ValidationResult.fail("REDUCE step requires a non-blank resultField");
+        }
+        return validateScriptSource(step.getScript(), "REDUCE step");
+    }
+
+    // The gate for every script inside a pipeline: the same master switch RUN_SCRIPT sits behind, then
+    // the source itself. Who may run one is decided separately, by AuthorizationChecker.
+    static ValidationResult validateScriptSource(String source, String what) {
+        if (!Configuration.getInstance().isScriptsEnabled()) {
+            return ValidationResult.fail(ErrorCode.SCRIPTS_DISABLED, ErrorCode.SCRIPTS_DISABLED.getDefaultMessage());
+        }
+        if (source == null || source.isBlank()) {
+            return ValidationResult.fail(what + " requires a non-blank script");
+        }
+        final var maxBytes = Configuration.getInstance().getAggregationScriptMaxSourceBytes();
+        if (source.getBytes(StandardCharsets.UTF_8).length > maxBytes) {
+            return ValidationResult.fail(ErrorCode.SCRIPT_TOO_LARGE, ErrorCode.SCRIPT_TOO_LARGE.getDefaultMessage());
+        }
+        return ValidationResult.ok();
+    }
+
+    // True when any step (or any operator nested in one) carries a script, so a caller that has to treat
+    // a scripted pipeline differently - LISTEN refusing one, AuthorizationChecker demanding the script
+    // grant for one - can ask once rather than re-walking the tree itself.
+    public static boolean containsScript(java.util.List<BaseAggregationStep> steps) {
+        if (steps == null) {
+            return false;
+        }
+        for (final var step : steps) {
+            final var carries = switch (step.getType()) {
+                case REDUCE -> true;
+                case FILTER -> operatorContainsScript(((FilterAggregationStep) step).getOperator());
+                case MAP -> mapContainsScript((MapAggregationStep) step);
+                default -> false;
+            };
+            if (carries) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean mapContainsScript(MapAggregationStep step) {
+        if (step.getOperators() == null) {
+            return false;
+        }
+        for (final var operator : step.getOperators()) {
+            if (operatorContainsScript(operator.getCondition())) {
+                return true;
+            }
+            if (operator.getType() == MapOperationType.ADD_FIELD
+                    && ((AddFieldMapOperator) operator).getOperator() instanceof ScriptMidOperator) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean operatorContainsScript(BaseOperator operator) {
+        if (operator == null) {
+            return false;
+        }
+        if (operator.getType() == OperatorType.SCRIPT) {
+            return true;
+        }
+        if (operator.getType() != OperatorType.CONJUNCTION) {
+            return false;
+        }
+        final var nested = ((ConjunctionOperator) operator).getOperators();
+        if (nested == null) {
+            return false;
+        }
+        for (final var child : nested) {
+            if (operatorContainsScript(child)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static ValidationResult validateFilter(FilterAggregationStep step) {
@@ -145,6 +234,8 @@ public class AggregationStepValidator {
             }
         } else if (operator.getType() == OperatorType.CUSTOM) {
             return validateCustomOperator((CustomOperator) operator);
+        } else if (operator.getType() == OperatorType.SCRIPT) {
+            return validateScriptSource(((ScriptOperator) operator).getSource(), "Script operator");
         } else {
             final var conjOp = (ConjunctionOperator) operator;
             if (conjOp.getConjunctionType() == null) {
@@ -268,6 +359,7 @@ public class AggregationStepValidator {
                 }
                 yield ValidationResult.ok();
             }
+            case SCRIPT -> validateScriptSource(((ScriptMidOperator) midOperator).getSource(), "SCRIPT operator");
             case CAST -> {
                 final var op = (CastMidOperator) midOperator;
                 if (op.getFieldName() == null || op.getFieldName().isBlank()) {

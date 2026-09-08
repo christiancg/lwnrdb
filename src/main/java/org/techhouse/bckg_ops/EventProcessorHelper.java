@@ -8,12 +8,14 @@ import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.bckg_ops.events.ScriptRunHistoryEvent;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.ScriptRunHistory;
 
 public class EventProcessorHelper {
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
@@ -26,6 +28,7 @@ public class EventProcessorHelper {
             case CollectionUsageEvent usageEvent -> AdminOperationHelper.upsertCollectionUsage(usageEvent);
             case UsageProfileCleanupEvent ignored ->
                 AdminOperationHelper.cleanupCollectionUsage(memoryManagement.usageRetentionMillis());
+            case ScriptRunHistoryEvent historyEvent -> ScriptRunHistory.write(historyEvent.getRecord());
             default -> throw new IllegalStateException("Unexpected value: " + event);
         }
     }

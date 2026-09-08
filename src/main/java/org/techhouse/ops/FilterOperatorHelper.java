@@ -32,6 +32,8 @@ import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.operators.ScriptOperator;
+import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.utils.JsonUtils;
 
 public class FilterOperatorHelper {
@@ -40,24 +42,32 @@ public class FilterOperatorHelper {
 
     public static Stream<JsonObject> processOperator(BaseOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName) throws IOException {
+        return processOperator(operator, resultStream, dbName, collName, null);
+    }
+
+    public static Stream<JsonObject> processOperator(BaseOperator operator, Stream<JsonObject> resultStream,
+            String dbName, String collName, PipelineScriptContext context) throws IOException {
         resultStream = switch (operator.getType()) {
             case CONJUNCTION ->
-                processConjunctionOperator((ConjunctionOperator) operator, resultStream, dbName, collName);
+                processConjunctionOperator((ConjunctionOperator) operator, resultStream, dbName, collName, context);
             case FIELD -> processFieldOperator((FieldOperator) operator, resultStream, dbName, collName);
             case CUSTOM -> processCustomOperator((CustomOperator) operator, resultStream, dbName, collName);
+            case SCRIPT -> processScriptOperator((ScriptOperator) operator, resultStream, dbName, collName, context);
         };
         return resultStream;
     }
 
     private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator,
-            Stream<JsonObject> resultStream, String dbName, String collName) throws IOException {
+            Stream<JsonObject> resultStream, String dbName, String collName, PipelineScriptContext context)
+            throws IOException {
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
             final var partialResults = switch (step.getType()) {
                 case CONJUNCTION ->
-                    processConjunctionOperator((ConjunctionOperator) step, resultStream, dbName, collName);
+                    processConjunctionOperator((ConjunctionOperator) step, resultStream, dbName, collName, context);
                 case FIELD -> processFieldOperator((FieldOperator) step, resultStream, dbName, collName);
                 case CUSTOM -> processCustomOperator((CustomOperator) step, resultStream, dbName, collName);
+                case SCRIPT -> processScriptOperator((ScriptOperator) step, resultStream, dbName, collName, context);
             };
             combinationResult.add(partialResults);
         }
@@ -115,6 +125,51 @@ public class FilterOperatorHelper {
 
         final var tester = getTester(operator, operator.getFieldOperatorType());
         return internalBaseFiltering(tester, operator, resultStream, dbName, collName);
+    }
+
+    // A script predicate is opaque to every index, so there is nothing to pre-filter with: the stream is
+    // materialised (or the collection scanned) and each document is handed to the callable. Inside a
+    // conjunction the other operands still resolve via index, and the script then sees only their output.
+    private static Stream<JsonObject> processScriptOperator(ScriptOperator operator, Stream<JsonObject> resultStream,
+            String dbName, String collName, PipelineScriptContext context) throws IOException {
+        final var stream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
+        return stream.filter(data -> testScript(operator, data, context));
+    }
+
+    // JavaScript truthiness rather than a strict boolean: the operator's contract is a JS predicate, so
+    // 0/""/null/undefined exclude a document and any other value includes it.
+    static boolean testScript(ScriptOperator operator, JsonObject document, PipelineScriptContext context) {
+        return isTruthy(callScript(operator.getSource(), document, context));
+    }
+
+    private static boolean isTruthy(JsonBaseElement value) {
+        if (value == null || value.isJsonNull()) {
+            return false;
+        }
+        if (value.isJsonBoolean()) {
+            return value.asJsonBoolean().getValue();
+        }
+        if (value.isJsonNumber()) {
+            final var number = value.asJsonNumber().getValue().doubleValue();
+            return number != 0 && !Double.isNaN(number);
+        }
+        if (value.isJsonString()) {
+            return !value.asJsonString().getValue().isEmpty();
+        }
+        return true;
+    }
+
+    static JsonBaseElement callScript(String source, JsonObject document, PipelineScriptContext context) {
+        if (context == null) {
+            throw new ScriptCallableException("InternalError", "No script context available for this pipeline");
+        }
+        final var analyze = AnalyzeContext.current();
+        final var start = analyze == null ? 0 : System.nanoTime();
+        final var value = context.callableFor(source).apply(document);
+        if (analyze != null) {
+            analyze.recordScriptInvocation(System.nanoTime() - start);
+        }
+        return value;
     }
 
     private static Stream<JsonObject> processCustomOperator(CustomOperator operator, Stream<JsonObject> resultStream,
@@ -386,6 +441,8 @@ public class FilterOperatorHelper {
             // against fetched documents, which the index-only COUNT path cannot do; disqualify it so
             // COUNT falls back to the document-reading path (exact).
             case CUSTOM -> null;
+            // A script predicate cannot be evaluated without the document, so it can never resolve ids.
+            case SCRIPT -> null;
         };
     }
 

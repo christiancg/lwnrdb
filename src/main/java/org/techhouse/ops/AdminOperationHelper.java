@@ -20,6 +20,7 @@ import org.techhouse.data.admin.AdminCollectionUsageEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminTransactionEntry;
+import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -607,6 +608,89 @@ public final class AdminOperationHelper {
             }
         } finally {
             releaseAdminTransactionsCollection();
+        }
+    }
+
+    private static void lockAdminTriggerRunsCollection() throws InterruptedException {
+        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
+    }
+
+    private static void releaseAdminTriggerRunsCollection() {
+        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
+    }
+
+    // Appends one pending trigger run record. Records are always new inserts (their _id is runId|chunkSeq,
+    // unique per run), so this only ever inserts.
+    public static void saveTriggerRun(AdminTriggerRunEntry entry) throws IOException, InterruptedException {
+        lockAdminTriggerRunsCollection();
+        try {
+            entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME,
+                    entry.byteSize()));
+            final var savedPk = fs.insertIntoCollection(entry);
+            cache.putPkIndexTriggerRun(savedPk);
+            baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, EventType.CREATED,
+                    List.of(entry), false);
+        } finally {
+            releaseAdminTriggerRunsCollection();
+        }
+    }
+
+    public static List<AdminTriggerRunEntry> readTriggerRuns(List<String> recordIds)
+            throws IOException, InterruptedException {
+        lockAdminTriggerRunsCollection();
+        try {
+            final var result = new ArrayList<AdminTriggerRunEntry>();
+            for (var recordId : recordIds) {
+                final var pk = cache.getPkIndexTriggerRun(recordId);
+                if (pk == null) {
+                    continue;
+                }
+                final DbEntry entry;
+                try {
+                    entry = fs.getById(pk);
+                } catch (Exception ex) {
+                    throw new IOException("Failed to read trigger run " + recordId, ex);
+                }
+                if (entry == null) {
+                    continue;
+                }
+                final var data = entry.getData();
+                data.addProperty(Globals.PK_FIELD, entry.get_id());
+                result.add(AdminTriggerRunEntry.fromJsonObject(data));
+            }
+            return result;
+        } finally {
+            releaseAdminTriggerRunsCollection();
+        }
+    }
+
+    public static void deleteTriggerRuns(List<String> recordIds) throws IOException, InterruptedException {
+        lockAdminTriggerRunsCollection();
+        try {
+            for (var recordId : recordIds) {
+                final var pk = cache.getPkIndexTriggerRun(recordId);
+                if (pk == null) {
+                    continue;
+                }
+                final DbEntry entry;
+                try {
+                    entry = fs.getById(pk);
+                } catch (Exception ex) {
+                    throw new IOException("Failed to read trigger run " + recordId, ex);
+                }
+                if (entry == null) {
+                    continue;
+                }
+                entry.setPage(pk.getPage());
+                entry.setPreviousByteSize(pk.getLength());
+                final var compaction = fs.deleteFromCollection(pk);
+                cache.shiftPkPositionsAfterCompaction(compaction);
+                cache.removePkIndexTriggerRun(recordId);
+                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME,
+                        EventType.DELETED, List.of(entry), false);
+            }
+        } finally {
+            releaseAdminTriggerRunsCollection();
         }
     }
 

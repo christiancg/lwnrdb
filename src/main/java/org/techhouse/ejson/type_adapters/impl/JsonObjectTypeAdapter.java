@@ -4,6 +4,7 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.internal.JsonStrings;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 
@@ -13,7 +14,8 @@ public class JsonObjectTypeAdapter implements TypeAdapter<JsonObject> {
     public String toJson(JsonObject value) {
         return '{'
                 + value.entrySet().stream()
-                        .map(stringJsonBaseElementEntry -> "\"" + stringJsonBaseElementEntry.getKey() + "\":"
+                        .map(stringJsonBaseElementEntry -> "\""
+                                + JsonStrings.escape(stringJsonBaseElementEntry.getKey()) + "\":"
                                 + Objects.requireNonNull(TypeAdapterFactory.getAdapter(JsonBaseElement.class))
                                         .toJson(stringJsonBaseElementEntry.getValue()))
                         .collect(Collectors.joining(","))

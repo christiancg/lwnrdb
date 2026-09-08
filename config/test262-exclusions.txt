@@ -1,0 +1,163 @@
+# test262 exclusions for the SimpleJS conformance harness.
+#
+# An exclusion says "we deliberately do not measure this", so every line carries a reason and is
+# counted and reported by category. This file is the machine-readable form of the *Deliberately
+# unimplemented ES2026 features* section of docs/simplejs.md — keep the two in step.
+#
+# Line kinds:
+#   dir:     <path prefix relative to test262/test/>   # reason
+#   keep:    <path prefix re-admitted from a dir:>     # reason
+#   feature: <features: value>                         # reason
+#   include: <harness file from the includes: list>    # reason
+#   pattern: <python regex matched against the source> # reason
+#
+# A `keep:` line wins over any `dir:` line, and exists so a broad directory exclusion cannot
+# silently swallow a subtree that is failing for a reason we own. It overrides `dir:` only —
+# `feature:` and `pattern:` still apply.
+#
+# An `include:` line excludes every test pulling in a harness helper the engine cannot run. It exists
+# because `pattern:` scans the test's own source but not the helpers it includes, so a test that
+# never mentions `Function` still dies inside a helper that builds its fixtures with `new Function`.
+#
+# A `pattern:` line is a source scan, not a feature flag, because test262 does not flag `eval` or the
+# Function constructor. It can false-positive on a test that merely mentions the word; the count is
+# reported so the cost stays visible. The alternative is thousands of guaranteed failures carrying no
+# information.
+#
+# Deliberately NOT excluded, even though it would be tempting: resizable-arraybuffer (supported,
+# including length-tracking views) and explicit-resource-management (supported). Anything the engine
+# gets wrong there belongs in config/test262-baseline.txt, not here.
+
+dir:     intl402/                    # Intl not implemented (deliberate)
+dir:     staging/                    # not part of the conformance corpus
+dir:     annexB/                     # normative-optional web-legacy semantics; not required of a non-browser host
+dir:     built-ins/RegExp/property-escapes/generated/  # measured 66.31% (311/469) on JDK 26: a real per-code-point gap, see below
+keep:    built-ins/RegExp/property-escapes/generated/strings/  # properties of strings: our own gap, not the JDK's
+dir:     language/eval-code/indirect/  # indirect eval — written (0, eval)(…) or through an alias, so no source pattern catches it
+dir:     built-ins/eval/               # the descriptor surface of a global eval that deliberately does not exist
+dir:     language/statements/class/subclass/builtin-objects/Function/  # subclassing a constructor that deliberately throws: no runtime code generation
+dir:     language/statements/class/subclass/builtin-objects/GeneratorFunction/  # subclassing the derived generator constructor, which deliberately throws
+dir:     language/statements/class/subclass/builtin-objects/ArrayBuffer/regular-subclassing.js  # ArrayBuffer.prototype.slice's species construction needs Symbol.species (deliberately unimplemented)
+#
+# harness/wellKnownIntrinsicObjects.js populates every WellKnownIntrinsicObjects entry via
+# `new Function("return " + source)()` (see test262/harness/wellKnownIntrinsicObjects.js), so every
+# entry's value is silently undefined under this engine's disabled Function constructor. Most tests
+# that `includes: [wellKnownIntrinsicObjects.js]` only consult an optional/secondary intrinsic that
+# way (e.g. Function/prototype/caller/prop-desc.js's %ThrowTypeError% check is behind an
+# `if (throwTypeError)` guard) and still pass in full - an `include:` line would wrongly stop
+# measuring those too, so only the two tests that hard-require an intrinsic obtained exactly this
+# way (no fallback) are excluded by exact path.
+dir:     harness/wellKnownIntrinsicObjects.js  # its own self-test asserts getWellKnownIntrinsicObject('%Array%') unconditionally
+dir:     language/expressions/async-arrow-function/prototype.js  # asserts getWellKnownIntrinsicObject('%AsyncFunction%') unconditionally, no fallback
+#
+# language/comments/hashbang/use-strict.js (flags: [raw]) is a positive test that a hashbang line
+# is not mistaken for a real "use strict" Directive Prologue, proven by then running `with ({}) {}`
+# - legal only in sloppy mode. This engine has no sloppy mode at all (always-strict, matching
+# CLAUDE.md/docs/simplejs.md), so `with` always throws regardless of the hashbang; there is no
+# sloppy-mode code path left to prove the point with.
+dir:     language/comments/hashbang/use-strict.js  # always-strict engine: no sloppy mode for `with` to be legal in
+#
+# language/comments/hashbang/function-constructor.js asserts that `Function('#!\n_')`/`new Function(...)`
+# throw a SyntaxError specifically about a hashbang appearing where a parsed function body doesn't
+# allow one - which requires actually parsing the constructed source, i.e. real runtime code
+# generation. The Function/GeneratorFunction/AsyncFunction/AsyncGeneratorFunction constructors here
+# instead throw TypeError unconditionally (no codegen at all), so the SyntaxError this test expects
+# is unreachable regardless of hashbang handling.
+dir:     language/comments/hashbang/function-constructor.js  # needs the disabled Function-family codegen to parse the constructed body at all
+#
+# The property-escapes exclusion used to be justified by build-JDK portability: with no ICU
+# dependency our Unicode data is whatever the JDK ships, and the project built on both 25
+# (Unicode 16.0) and 26 (Unicode 17.0), so no single baseline could be green on both. That reason
+# is gone — the build now requires JDK 26, whose Unicode 17.0 matches the version this corpus was
+# generated against. It was re-measured on that footing rather than re-admitted on the assumption:
+# the subtree scores 66.31% (311/469), so what remains is a genuine per-code-point gap between our
+# resolution of a property name and the exhaustive set the corpus asserts, not a version mismatch.
+# It stays excluded until that gap is closed, and closing it is what would let ~469 tests join the
+# denominator. Measured either way: the hand-written property-escapes tests beside them
+# (grammar-extension, loose-matching, unsupported-property, non-existent-property), which exercise
+# the translator's own grammar and validation, and the generated/strings/ subtree kept above —
+# those fail because properties of strings (\p{RGI_Emoji} and friends) are unimplemented, which is
+# our gap to own.
+
+feature: SharedArrayBuffer           # deliberate: single-threaded per-request VM
+feature: Atomics                     # deliberate: ditto
+feature: Atomics.pause               # deliberate: ditto
+feature: WeakRef                     # deliberate: GC-observable behaviour
+feature: FinalizationRegistry        # deliberate: ditto
+feature: Symbol.species              # deliberate: JsArray/JsTypedArray are not subclassable
+feature: tail-call-optimization      # deliberate: no TCO
+feature: cross-realm                 # needs $262.createRealm, which the shim does not provide
+feature: IsHTMLDDA                   # host-specific exotic object
+feature: immutable-arraybuffer       # deliberate: not in the ES2026 snapshot, no third buffer state
+feature: dynamic-import              # deliberate: import() resolves only the args/db host built-ins
+feature: import-assertions           # deliberate: arbitrary module resolution is out of scope
+feature: import-attributes           # deliberate: ditto
+feature: json-modules                # deliberate: ditto
+feature: import-defer                # deliberate: ditto
+feature: source-phase-imports        # deliberate: ditto
+feature: arbitrary-module-namespace-names  # deliberate: ditto
+feature: ShadowRealm                 # deliberate: evaluate(sourceText) is runtime codegen from a string, like eval
+feature: joint-iteration             # deliberate: Iterator.zip/zipKeyed are not in the ES2026 snapshot
+feature: iterator-sequencing         # deliberate: Iterator.concat is not in the ES2026 snapshot
+feature: json-parse-with-source      # deliberate: JSON.rawJSON/isRawJSON are not in the ES2026 snapshot
+feature: await-dictionary            # deliberate: not in the ES2026 snapshot
+feature: decorators                  # deliberate: not in the ES2026 snapshot
+
+include: resizableArrayBufferUtils.js  # its subClass() helper builds every fixture with new Function, so the
+                                       # ctors array is full of holes before an assertion ever runs
+include: fnGlobalObject.js             # the helper returns Function("return this;")(), so it is runtime code generation
+
+pattern: \beval\s*\(                 # eval absent by design (sandbox boundary)
+pattern: \bFunction\s*\(             # Function constructor disabled by design (called or newed)
+pattern: \bnew\s+Function\s*;        # ditto, the bare `new Function;` form. Deliberately not the broader
+                                     # `\bnew\s+Function\b`, which also swallowed `new Function.prototype.apply()`
+                                     # — those measure [[Construct]], not the constructor we do not provide
+pattern: \b(?:AsyncFunction|GeneratorFunction|AsyncGeneratorFunction)\s*\(  # the same runtime code generation the
+                                     # Function constructor is, reached through the derived constructors. Only the
+                                     # call form is excluded, so the tests that merely inspect the intrinsics run
+pattern: \$262\.(createRealm|evalScript|agent|gc|IsHTMLDDA)  # host APIs the shim does not provide
+#
+# The four lines below reach the missing global by *reference* rather than by call, which is the one
+# spelling `\beval\s*\(` cannot see: an alias (`var s = eval; s(src)`), the comma form, an identity
+# comparison against it, or handing it to a Proxy as a callable that is not a constructor. Each is
+# pinned to the exact spelling the corpus uses instead of a bare `\beval\b`, which would also swallow
+# the several dozen *passing* tests that use `eval` as a binding name in a strict-mode early error.
+pattern: =\s*eval\s*;               # indirect eval through an alias: the global is absent by design
+pattern: \(\s*0\s*,\s*eval\s*\)     # indirect eval through an alias: the global is absent by design
+pattern: (?:===|!==)\s*eval\b|\beval\s*(?:===|!==)  # indirect eval through an alias: the global is absent by design
+pattern: new Proxy\(eval,           # indirect eval through an alias: the global is absent by design
+pattern: \.call\(eval\)             # a bare eval reference as an argument: the global is absent by design
+#
+# ... and the same for the Function constructor family reached without naming it: through
+# Function.prototype.call/apply (S15.3_A2/A3, S13.2.2_A8_T3 — a body that must be parsed, so the
+# disabled constructor is the only possible outcome), through the derived constructor of a live
+# function object (`Object.getPrototypeOf(async () => {}).constructor`, `f.constructor`), or through
+# an alias of the generator constructors.
+pattern: \bFunction\.(?:call|apply|bind)\s*\(  # the Function constructor through Function.prototype.call: no runtime code generation
+pattern: Object\.seal\(new \(Object\.getPrototypeOf  # the derived constructor of a live function object: no runtime code generation
+#
+# Temporal.ZonedDateTime's constructor / string grammar / property-bag `offset` field all accept a
+# UTC offset up to +/-23:59:59.999999999 as a fixed-offset "time zone" (an offset-only identifier with
+# no IANA name), but every such offset beyond +/-18:00 is unrepresentable through java.time: not just
+# a stricter validation range on java.time.ZoneOffset (whose own hard cap is +/-18:00, `ZoneOffset.of`
+# throws past that), but java.time.zone.ZoneRules — a `final` class with no public factory accepting a
+# raw offset outside ZoneOffset's own range — so there is no way to obtain a `ZoneRules`/`ZoneId` for
+# such an offset at all. Representing it would mean reimplementing the zone-arithmetic this file
+# performs via java.time.ZonedDateTime/ZoneId throughout (resolveLocal, epochNanosOf, hoursInDay,
+# round, add/subtract, toString, ...) against a hand-rolled fixed-offset abstraction instead - a full
+# parallel implementation for an offset magnitude no real IANA zone ever uses, disproportionate to the
+# handful of tests that exercise it.
+dir:     built-ins/Temporal/ZonedDateTime/compare/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/from/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/prototype/equals/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/prototype/round/rounded-date-time-outside-valid-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/prototype/since/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/prototype/toPlainDateTime/limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/ZonedDateTime/prototype/until/argument-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+# Temporal.Duration's relativeTo string accepts the same offset-only fixed-"time zone" bracket
+# annotation (e.g. "[+23:59]") as ZonedDateTime, hitting the identical java.time.ZoneOffset/ZoneRules
+# +/-18:00 hard cap documented above - same root cause, different entry point.
+dir:     built-ins/Temporal/Duration/compare/relativeto-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/Duration/prototype/round/relativeto-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+dir:     built-ins/Temporal/Duration/prototype/total/relativeto-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
+pattern: \b(?:Async)?Generator\s*\(\s*["']  # an alias of the (Async)Generator constructor: no runtime code generation

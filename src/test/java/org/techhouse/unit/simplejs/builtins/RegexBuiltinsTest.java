@@ -1,0 +1,697 @@
+package org.techhouse.unit.simplejs.builtins;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.Test;
+import org.techhouse.simplejs.exceptions.SyntaxErrorException;
+import org.techhouse.simplejs.internal.Interpreter;
+import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsNull;
+import org.techhouse.simplejs.values.JsNumber;
+import org.techhouse.simplejs.values.JsString;
+import org.techhouse.simplejs.values.JsUndefined;
+
+public class RegexBuiltinsTest {
+    private static boolean bool(String source) {
+        return ((JsBoolean) Interpreter.run(source)).getValue();
+    }
+
+    private static double num(String source) {
+        return ((JsNumber) Interpreter.run(source)).getValue();
+    }
+
+    private static String str(String source) {
+        return ((JsString) Interpreter.run(source)).getValue();
+    }
+
+    // RegExp constructor builds a regex from a string pattern and flags
+    @Test
+    public void test_constructor_from_string() {
+        assertTrue(bool("new RegExp('a.c').test('axc')"));
+        assertTrue(bool("RegExp('a', 'i').test('A')"));
+    }
+
+    // RegExp constructor clones another regex, optionally overriding flags
+    @Test
+    public void test_constructor_clone() {
+        assertEquals("i", str("new RegExp(/a/i).flags"));
+        assertEquals("g", str("new RegExp(/a/i, 'g').flags"));
+        assertEquals("a", str("new RegExp(/a/i).source"));
+    }
+
+    // test reports whether the pattern matches
+    @Test
+    public void test_test_method() {
+        assertTrue(bool("/\\d+/.test('abc123')"));
+        assertFalse(bool("/\\d+/.test('abc')"));
+    }
+
+    // exec returns the match with index and captured groups
+    @Test
+    public void test_exec_groups() {
+        assertEquals("2024", str("/(\\d+)-(\\d+)/.exec('2024-01')[1]"));
+        assertEquals("01", str("/(\\d+)-(\\d+)/.exec('2024-01')[2]"));
+        assertEquals(0, num("/(\\d+)/.exec('12ab').index"));
+    }
+
+    // exec exposes named capture groups under .groups
+    @Test
+    public void test_exec_named_groups() {
+        assertEquals("2024", str("/(?<year>\\d+)-(?<month>\\d+)/.exec('2024-01').groups.year"));
+        assertEquals("01", str("/(?<year>\\d+)-(?<month>\\d+)/.exec('2024-01').groups.month"));
+    }
+
+    // exec returns null when there is no match
+    @Test
+    public void test_exec_no_match() {
+        assertInstanceOf(JsNull.class, Interpreter.run("/z/.exec('abc')"));
+    }
+
+    // a global exec advances lastIndex across calls
+    @Test
+    public void test_exec_global_advances() {
+        final var source = """
+                const re = /\\d/g;
+                re.exec('a1b2');
+                re.exec('a1b2').index
+                """;
+        assertEquals(3, num(source));
+    }
+
+    // regex property accessors reflect the flags and lastIndex
+    @Test
+    public void test_flag_properties() {
+        assertTrue(bool("/a/g.global"));
+        assertTrue(bool("/a/i.ignoreCase"));
+        assertTrue(bool("/a/m.multiline"));
+        assertFalse(bool("/a/.sticky"));
+        assertEquals(0, num("/a/g.lastIndex"));
+    }
+
+    // assigning lastIndex resets the stateful matching position
+    @Test
+    public void test_last_index_assignable() {
+        final var source = """
+                const re = /\\d/g;
+                re.exec('a1b2');
+                re.lastIndex = 0;
+                re.exec('a1b2').index
+                """;
+        assertEquals(1, num(source));
+    }
+
+    // an invalid pattern in the RegExp constructor throws a SyntaxError
+    @Test
+    public void test_invalid_pattern_throws() {
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("new RegExp('(')"));
+    }
+
+    // a sticky regex anchors the match at lastIndex
+    @Test
+    public void test_sticky_exec() {
+        assertEquals(0, num("/a/y.exec('a').index"));
+        assertInstanceOf(JsNull.class, Interpreter.run("/a/y.exec('ba')"));
+    }
+
+    // the dotAll accessor and an unknown property resolve
+    @Test
+    public void test_dotall_and_unknown_property() {
+        assertTrue(bool("/a/s.dotAll"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("/a/.unknownProp"));
+    }
+
+    // RegExp with no arguments builds an empty-source regex
+    @Test
+    public void test_constructor_no_args() {
+        assertEquals("", str("new RegExp().source"));
+    }
+
+    // an optional group that does not participate is undefined
+    @Test
+    public void test_optional_group_undefined() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("/(a)(b)?/.exec('a')[2]"));
+    }
+
+    // test with no argument matches against the string "undefined"
+    @Test
+    public void test_test_no_arg() {
+        assertTrue(bool("/undefined/.test()"));
+    }
+
+    // a failed global exec resets lastIndex to zero
+    @Test
+    public void test_global_exec_no_match_resets() {
+        final var source = """
+                const re = /z/g;
+                re.exec('abc');
+                re.lastIndex
+                """;
+        assertEquals(0, num(source));
+    }
+
+    // RegExp.escape escapes syntax characters so the result matches the literal string
+    @Test
+    public void test_escape_syntax_characters() {
+        assertEquals("\\.\\*\\+", str("RegExp.escape('.*+')"));
+        assertTrue(bool("new RegExp(RegExp.escape('a.b')).test('a.b')"));
+        assertFalse(bool("new RegExp(RegExp.escape('a.b')).test('axb')"));
+    }
+
+    // RegExp.escape hex-escapes an alphanumeric first character so concatenation stays safe
+    @Test
+    public void test_escape_first_char() {
+        assertEquals("\\x61bc", str("RegExp.escape('abc')"));
+        assertTrue(bool("new RegExp(RegExp.escape('abc')).test('abc')"));
+    }
+
+    // ECMA-262 WhiteSpace is not java's: NBSP, NNBSP and the byte order mark are escaped too, and a
+    // surrogate that is not half of a well-formed pair has no printable spelling.
+    @Test
+    public void test_escape_whitespace_and_lone_surrogates() {
+        assertEquals("\\ufeff\\x20\\xa0\\u202f", str("RegExp.escape('\\ufeff\\u0020\\u00a0\\u202f')"));
+        assertEquals("\\ud800", str("RegExp.escape('\\ud800')"));
+        assertEquals("\\udfff", str("RegExp.escape('\\udfff')"));
+        assertEquals("2", str("String(RegExp.escape('\\ud800\\udc00').length)"));
+        assertEquals("\\u2028", str("RegExp.escape('\\u2028')"));
+    }
+
+    // RegExp(pattern) called (not constructed) with a regexp-like whose constructor is RegExp
+    // itself and no flags of its own returns that very object.
+    @Test
+    public void test_call_returns_a_matching_pattern_unchanged() {
+        assertTrue(bool("const re = /x/i; RegExp(re) === re"));
+        assertTrue(bool("const re = /x/i; RegExp(re, undefined) === re"));
+        assertFalse(bool("const re = /x/i; new RegExp(re) === re"));
+        assertFalse(bool("const re = /x/i; RegExp(re, 'g') === re"));
+        assertTrue(bool("const like = { constructor: RegExp, [Symbol.match]: true }; RegExp(like) === like"));
+        assertFalse(bool("const like = { constructor: Object, [Symbol.match]: true, source: 'a', flags: '' };"
+                + "RegExp(like) === like"));
+    }
+
+    // RegExp.escape rejects a non-string argument
+    @Test
+    public void test_escape_non_string_throws() {
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
+                () -> Interpreter.run("RegExp.escape(5)"));
+    }
+
+    // RegExp.escape emits named escapes for whitespace control characters
+    @Test
+    public void test_escape_whitespace() {
+        assertEquals("\\tx", str("RegExp.escape(String.fromCharCode(9) + 'x')"));
+    }
+
+    // the v (unicodeSets) flag compiles and matches
+    @Test
+    public void test_v_flag_matches() {
+        assertTrue(bool("/[a-z]+/v.test('abc')"));
+        assertEquals("v", str("/x/v.flags"));
+    }
+
+    // the u and v flags are mutually exclusive
+    @Test
+    public void test_u_and_v_flags_conflict() {
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("new RegExp('x', 'uv')"));
+    }
+
+    // general-category property escapes: short codes pass through, long names translate to short
+    @Test
+    public void test_unicode_property_general_category() {
+        assertTrue(bool("/\\p{L}/u.test('a')"));
+        assertFalse(bool("/\\p{L}/u.test('3')"));
+        assertTrue(bool("/\\p{Letter}/u.test('a')"));
+        assertTrue(bool("/\\p{Decimal_Number}/u.test('7')"));
+        assertTrue(bool("/\\p{gc=Nd}/u.test('5')"));
+    }
+
+    // Script= / sc= and binary properties are translated to their java.util.regex equivalents
+    @Test
+    public void test_unicode_property_scripts_and_binary() {
+        assertTrue(bool("/\\p{Script=Greek}/u.test('\\u03B1')"));
+        assertFalse(bool("/\\p{Script=Greek}/u.test('a')"));
+        assertTrue(bool("/\\p{sc=Latin}/u.test('a')"));
+        assertTrue(bool("/\\p{Alphabetic}/u.test('a')"));
+        assertTrue(bool("/\\p{White_Space}/u.test(' ')"));
+        assertTrue(bool("/\\p{L}/v.test('a')"));
+    }
+
+    // \P negates the property; the whole class still resolves
+    @Test
+    public void test_unicode_property_negation() {
+        assertTrue(bool("/\\P{L}/u.test('3')"));
+        assertFalse(bool("/\\P{L}/u.test('a')"));
+    }
+
+    // \d stays ASCII in u-mode (UNICODE_CHARACTER_CLASS deliberately not enabled)
+    @Test
+    public void test_predefined_classes_stay_ascii_in_unicode_mode() {
+        assertTrue(bool("/^\\d$/u.test('3')"));
+        assertFalse(bool("/^\\d$/u.test('\\u0663')"));
+    }
+
+    // unsupported or unknown Unicode properties are rejected with a SyntaxError
+    @Test
+    public void test_unsupported_unicode_property_throws() {
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("/\\p{Emoji}/u"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("/\\p{Foo=Bar}/u"));
+        assertThrows(SyntaxErrorException.class, () -> Interpreter.run("/\\p{Script=Nonsense}/u"));
+    }
+
+    // The d flag adds an indices array for numbered groups
+    @Test
+    public void test_indices_for_numbered_groups() {
+        assertEquals(1, num("/(b)/d.exec('abc').indices[0][0]"));
+        assertEquals(2, num("/(b)/d.exec('abc').indices[0][1]"));
+        assertEquals(1, num("/(b)/d.exec('abc').indices[1][0]"));
+        assertTrue(bool("/b/d.exec('abc').indices.groups === undefined"));
+        assertTrue(bool("/a/d.hasIndices"));
+        assertFalse(bool("/a/.hasIndices"));
+    }
+
+    // Named groups appear under indices.groups
+    @Test
+    public void test_indices_for_named_groups() {
+        assertEquals(1, num("/(?<w>b)/d.exec('abc').indices.groups.w[0]"));
+        assertEquals(2, num("/(?<w>b)/d.exec('abc').indices.groups.w[1]"));
+    }
+
+    // A non-participating group has an undefined entry
+    @Test
+    public void test_indices_for_non_participating_group() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("/b(z)?/d.exec('abc').indices[1]"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("/(?<w>z)?b/d.exec('abc').indices.groups.w"));
+    }
+
+    // Without the flag there is no indices array
+    @Test
+    public void test_no_indices_without_flag() {
+        assertInstanceOf(JsUndefined.class, Interpreter.run("/b/.exec('abc').indices"));
+        assertInstanceOf(JsUndefined.class, Interpreter.run("'abc'.match(/b/).indices"));
+    }
+
+    // match and matchAll carry indices when the flag is present
+    @Test
+    public void test_indices_through_string_methods() {
+        assertEquals(1, num("'abc'.match(/b/d).indices[0][0]"));
+        assertEquals(1, num("[...'abc'.matchAll(/b/dg)][0].indices[0][0]"));
+    }
+
+    // exec() returns a real Array (not just an array-like object)
+    @Test
+    public void test_exec_result_is_array() {
+        assertTrue(bool("/a/.exec('a') instanceof Array"));
+        assertEquals(1, num("/a/.exec('a').length"));
+    }
+
+    // unicode/unicodeSets accessors reflect the u/v flags
+    @Test
+    public void test_unicode_accessors() {
+        assertTrue(bool("/a/u.unicode"));
+        assertFalse(bool("/a/.unicode"));
+        assertTrue(bool("/a/v.unicodeSets"));
+    }
+
+    // RegExp.prototype[Symbol.match]/[Symbol.search]/[Symbol.replace]/[Symbol.split] are real,
+    // directly-callable methods
+    @Test
+    public void test_symbol_methods_are_functions() {
+        assertTrue(bool("typeof RegExp.prototype[Symbol.match] === 'function'"));
+        assertTrue(bool("typeof RegExp.prototype[Symbol.search] === 'function'"));
+        assertTrue(bool("typeof RegExp.prototype[Symbol.replace] === 'function'"));
+        assertTrue(bool("typeof RegExp.prototype[Symbol.split] === 'function'"));
+    }
+
+    @Test
+    public void test_symbol_match_non_global() {
+        assertEquals("a", str("/a/[Symbol.match]('abc')[0]"));
+        assertInstanceOf(JsNull.class, Interpreter.run("/z/[Symbol.match]('abc')"));
+    }
+
+    @Test
+    public void test_symbol_match_global_collects_all() {
+        assertEquals("a,a,a", str("/a/g[Symbol.match]('aaa').join(',')"));
+        assertInstanceOf(JsNull.class, Interpreter.run("/z/g[Symbol.match]('abc')"));
+    }
+
+    @Test
+    public void test_symbol_match_global_advances_past_empty_match() {
+        assertEquals(4, num("/(?:)/g[Symbol.match]('abc').length"));
+    }
+
+    @Test
+    public void test_symbol_search() {
+        assertEquals(1, num("/b/[Symbol.search]('abc')"));
+        assertEquals(-1, num("/z/[Symbol.search]('abc')"));
+    }
+
+    @Test
+    public void test_symbol_search_restores_lastindex() {
+        assertEquals(2, num("""
+                var r = /b/g;
+                r.lastIndex = 2;
+                var pos = r[Symbol.search]('abc');
+                r.lastIndex
+                """));
+    }
+
+    @Test
+    public void test_symbol_replace_literal_and_function() {
+        assertEquals("aXc", str("/b/[Symbol.replace]('abc', 'X')"));
+        assertEquals("aXcXe", str("/b/g[Symbol.replace]('abcbe', 'X')"));
+        assertEquals("a1c", str("/b/[Symbol.replace]('abc', (m) => '1')"));
+    }
+
+    @Test
+    public void test_symbol_replace_capture_groups_and_dollar_patterns() {
+        assertEquals("a-b-c", str("/(a)(b)(c)/[Symbol.replace]('abc', '$1-$2-$3')"));
+        assertEquals("[a]bc", str("/a/[Symbol.replace]('abc', '[$&]')"));
+        assertEquals("aabcc", str("/b/[Symbol.replace](\"abc\", \"$`$&$'\")"));
+    }
+
+    @Test
+    public void test_symbol_replace_named_groups() {
+        assertEquals("aX", str("/(?<x>a)/[Symbol.replace]('a', '$<x>X')"));
+    }
+
+    @Test
+    public void test_symbol_split_basic() {
+        assertEquals("a,b,c", str("/,/[Symbol.split]('a,b,c').join('|').replace(/\\|/g, ',')"));
+        assertEquals("3", str("String(/,/[Symbol.split]('a,b,c').length)"));
+    }
+
+    @Test
+    public void test_symbol_split_with_limit_and_captures() {
+        assertEquals(2, num("/,/[Symbol.split]('a,b,c', 2).length"));
+        assertEquals(0, num("/,/[Symbol.split]('a,b,c', 0).length"));
+        assertTrue(bool("/(,)/[Symbol.split]('a,b').includes(',')"));
+    }
+
+    // Symbol.match/replace/search/split dispatch through a user-overridden "exec" (RegExpExec)
+    @Test
+    public void test_symbol_methods_dispatch_through_custom_exec() {
+        assertEquals(1, num("""
+                var calls = 0;
+                class R extends RegExp {
+                  exec(s) { calls++; return null; }
+                }
+                new R('a')[Symbol.match]('a');
+                calls
+                """));
+    }
+
+    @Test
+    public void test_reg_exp_exec_rejects_non_object_non_null_result() {
+        assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class, () -> Interpreter.run("""
+                class R extends RegExp {
+                  exec(s) { return 5; }
+                }
+                new R('a')[Symbol.match]('a');
+                """));
+    }
+
+    // The flag accessors are real accessor properties on RegExp.prototype, not just a receiver-keyed
+    // special case, so getOwnPropertyDescriptor finds a getter for each
+    @Test
+    public void test_prototype_flag_accessors_are_real_properties() {
+        assertEquals("true", str(
+                "String(typeof Object.getOwnPropertyDescriptor(RegExp.prototype, 'global').get" + " === 'function')"));
+        assertEquals("true,false", str("String(/a/g.global) + ',' + /a/g.sticky"));
+        assertEquals("gi", str("/a/gi.flags"));
+    }
+
+    // Reading a flag off %RegExp.prototype% itself yields the spec placeholders rather than throwing
+    @Test
+    public void test_prototype_accessor_on_bare_prototype() {
+        assertEquals("(?:)", str("RegExp.prototype.source"));
+        assertEquals("undefined", str("String(RegExp.prototype.global)"));
+    }
+
+    // Any other non-RegExp receiver is an incompatible-receiver TypeError
+    @Test
+    public void test_prototype_accessor_on_foreign_receiver_throws() {
+        assertEquals("TypeError",
+                str("let caught = 'none';"
+                        + " try { Object.getOwnPropertyDescriptor(RegExp.prototype, 'global').get.call({}); }"
+                        + " catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // RegExp.prototype.toString renders the literal form
+    @Test
+    public void test_prototype_to_string() {
+        assertEquals("/ab+c/gi", str("/ab+c/gi.toString()"));
+    }
+
+    // String.prototype.match/replace/search/split have their own implementations, so the
+    // RegExpExec-based abstract operations are driven through the @@ methods directly.
+    private static final String RP = "RegExp.prototype";
+
+    @Test
+    public void escapeRendersControlCharactersInTheirNamedForm() {
+        assertEquals("\\t", str("RegExp.escape('\\t')"));
+        assertEquals("\\n", str("RegExp.escape('\\n')"));
+        assertEquals("\\v", str("RegExp.escape('\\v')"));
+        assertEquals("\\f", str("RegExp.escape('\\f')"));
+        assertEquals("\\r", str("RegExp.escape('\\r')"));
+    }
+
+    @Test
+    public void escapeHexEncodesPunctuatorsAndOtherWhitespace() {
+        assertEquals("\\x2c", str("RegExp.escape(',')"));
+        assertEquals("\\x20", str("RegExp.escape(' ')"));
+        assertEquals("\\u1680", str("RegExp.escape('\\u1680')"));
+        assertEquals("\\u2028", str("RegExp.escape('\\u2028')"));
+        assertEquals("\\u2029", str("RegExp.escape('\\u2029')"));
+    }
+
+    @Test
+    public void symbolReplaceExpandsEveryDollarToken() {
+        assertEquals("$", str(RP + "[Symbol.replace].call(/a/, 'a', '$$')"));
+        assertEquals("[a]", str(RP + "[Symbol.replace].call(/a/, 'a', '[$&]')"));
+        assertEquals("xy-xy", str(RP + "[Symbol.replace].call(/a/, 'xya', '-$`')"));
+        assertEquals("-xyzxyz", str(RP + "[Symbol.replace].call(/a/, 'axyz', '-$\\'')"));
+        assertEquals("$z", str(RP + "[Symbol.replace].call(/a/, 'a', '$z')"));
+        assertEquals("$", str(RP + "[Symbol.replace].call(/a/, 'a', '$')"));
+    }
+
+    @Test
+    public void symbolReplaceResolvesNumberedCaptureGroups() {
+        assertEquals("ba", str(RP + "[Symbol.replace].call(/(a)(b)/, 'ab', '$2$1')"));
+        assertEquals("$5", str(RP + "[Symbol.replace].call(/(a)(b)/, 'ab', '$5')"));
+        assertEquals("$0", str(RP + "[Symbol.replace].call(/(a)(b)/, 'ab', '$0')"));
+        assertEquals("a1", str(RP + "[Symbol.replace].call(/(a)(b)/, 'ab', '$11')"));
+    }
+
+    @Test
+    public void symbolReplaceResolvesNamedCaptureGroups() {
+        assertEquals("a", str(RP + "[Symbol.replace].call(/(?<x>a)b/, 'ab', '$<x>')"));
+        assertEquals("", str(RP + "[Symbol.replace].call(/(?<x>a)(?<y>z)?b/, 'ab', '$<y>')"));
+        assertEquals("$<x>", str(RP + "[Symbol.replace].call(/ab/, 'ab', '$<x>')"));
+    }
+
+    // a functional replacer receives the named-groups object as one extra trailing argument
+    @Test
+    public void symbolReplacePassesNamedGroupsToAFunctionReplacer() {
+        assertEquals("5", str(RP + "[Symbol.replace].call(/(?<x>a)b/, 'ab', (...args) => String(args.length))"));
+        assertEquals("a", str(RP + "[Symbol.replace].call(/(?<x>a)b/, 'ab', (...args) => args[args.length - 1].x)"));
+        assertEquals("4", str(RP + "[Symbol.replace].call(/(a)b/, 'ab', (...args) => String(args.length))"));
+    }
+
+    @Test
+    public void symbolReplaceAdvancesPastEmptyGlobalMatches() {
+        assertEquals("-a-b-", str(RP + "[Symbol.replace].call(/(?:)/g, 'ab', '-')"));
+        assertEquals(4, num(RP + "[Symbol.replace].call(/(?:)/gu, 'a\\u{1F600}', '-').split('-').length"));
+    }
+
+    @Test
+    public void symbolMatchCollectsEveryGlobalMatch() {
+        assertEquals("a,a", str(RP + "[Symbol.match].call(/a/g, 'aba').join(',')"));
+        assertEquals(3, num(RP + "[Symbol.match].call(/(?:)/g, 'ab').length"));
+        assertInstanceOf(JsNull.class, Interpreter.run(RP + "[Symbol.match].call(/z/g, 'abc')"));
+        assertEquals("b", str(RP + "[Symbol.match].call(/b/, 'abc')[0]"));
+    }
+
+    @Test
+    public void symbolSearchRestoresLastIndexAfterTheProbe() {
+        assertEquals(1, num(RP + "[Symbol.search].call(/b/g, 'abc')"));
+        assertEquals(5, num("const r = /b/g; r.lastIndex = 5; " + RP + "[Symbol.search].call(r, 'abc'); r.lastIndex"));
+        assertEquals(-1, num(RP + "[Symbol.search].call(/z/, 'abc')"));
+    }
+
+    @Test
+    public void symbolSplitHandlesEmptyInputAndUnmatchedRegions() {
+        assertEquals(1, num(RP + "[Symbol.split].call(/z/, '').length"));
+        assertEquals(0, num(RP + "[Symbol.split].call(/(?:)/, '').length"));
+        assertEquals("a,b,c", str(RP + "[Symbol.split].call(/[0-9]/, 'a1b2c').join(',')"));
+        assertEquals("a,1,b", str(RP + "[Symbol.split].call(/([0-9])/, 'a1b').join(',')"));
+        assertEquals(0, num(RP + "[Symbol.split].call(/b/, 'abc', 0).length"));
+        assertEquals("a,1", str(RP + "[Symbol.split].call(/([0-9])/, 'a1b', 2).join(',')"));
+        assertEquals("abc", str(RP + "[Symbol.split].call(/z/, 'abc').join(',')"));
+    }
+
+    // Symbol.split is generic: a plain object goes through SpeciesConstructor, so its undefined
+    // "flags" is what fails, not a receiver brand check.
+    @Test
+    public void symbolSplitOnAPlainObjectFailsOnItsFlags() {
+        assertEquals("SyntaxError", str("let caught = 'none';" + " try { " + RP + "[Symbol.split].call({}, 'abc'); }"
+                + " catch (e) { caught = e.constructor.name; } caught"));
+        assertEquals("TypeError", str("let caught = 'none';" + " try { " + RP + "[Symbol.split].call(1, 'abc'); }"
+                + " catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // Spec RegExpExec: match/replace/search/split/test all dispatch through the receiver's own
+    // `exec`, so a subclass that overrides it changes every one of them.
+    @Test
+    public void anOverriddenExecIsHonouredByTheWholeProtocol() {
+        final var subclass = "class R extends RegExp { exec(s) { return null; } } const r = new R('a');";
+        assertFalse(bool(subclass + " r.test('a')"));
+        assertInstanceOf(JsNull.class, Interpreter.run(subclass + " 'a'.match(r)"));
+        assertEquals(-1, num(subclass + " 'a'.search(r)"));
+        assertEquals("a", str(subclass + " 'a'.replace(r, 'X')"));
+    }
+
+    @Test
+    public void anOverriddenExecOnAPlainRegexpIsHonoured() {
+        final var overridden = "const r = /a/; r.exec = () => ['zz'];";
+        assertTrue(bool(overridden + " r.test('nope')"));
+        assertEquals("zz", str(overridden + " 'nope'.match(r)[0]"));
+    }
+
+    // lastIndex is a real own data property: writable, non-enumerable, non-configurable, and read
+    // and written through [[Get]]/[[Set]] rather than an internal slot.
+    @Test
+    public void lastIndexIsAnOwnDataProperty() {
+        assertEquals("lastIndex", str("Object.getOwnPropertyNames(/a/).join(',')"));
+        assertTrue(bool("Object.getOwnPropertyDescriptor(/a/, 'lastIndex').writable"));
+        assertFalse(bool("Object.getOwnPropertyDescriptor(/a/, 'lastIndex').enumerable"));
+        assertFalse(bool("Object.getOwnPropertyDescriptor(/a/, 'lastIndex').configurable"));
+        assertEquals(0, num("/a/.lastIndex"));
+    }
+
+    @Test
+    public void lastIndexIsStoredUncoercedAndCoercedOnlyByExec() {
+        assertEquals("1",
+                str("const r = /a/g; r.lastIndex = '1'; typeof r.lastIndex === 'string' ? r.lastIndex : 'no'"));
+        assertEquals(2, num("const r = /a/g; r.lastIndex = '1'; r.exec('aa'); r.lastIndex"));
+    }
+
+    @Test
+    public void aRefusedLastIndexWriteThrows() {
+        assertEquals("TypeError",
+                str("let caught = 'none'; const r = /a/y;"
+                        + " Object.defineProperty(r, 'lastIndex', { writable: false });"
+                        + " try { r.test('b'); } catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // lastIndex is non-configurable, so it can only ever be narrowed to non-writable.
+    @Test
+    public void lastIndexCannotBeRedefinedAsAnAccessor() {
+        assertEquals("TypeError",
+                str("let caught = 'none'; const r = /a/;"
+                        + " try { Object.defineProperty(r, 'lastIndex', { get() { return 0; } }); }"
+                        + " catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // RegExp.prototype.flags is derived from the individual flag getters, in dgimsuvy order.
+    @Test
+    public void flagsIsGenericAndCanonicallyOrdered() {
+        assertEquals("dgimsuy", str("new RegExp('', 'yusmigd').flags"));
+        assertEquals("dgimsuvy",
+                str("const get = Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags').get;"
+                        + " get.call({ hasIndices: 1, global: 1, ignoreCase: 1, multiline: 1, dotAll: 1, unicode: 1,"
+                        + " unicodeSets: 1, sticky: 1 })"));
+        assertEquals("dgimsuy",
+                str("let calls = ''; const re = {"
+                        + " get hasIndices() { calls += 'd'; return 1; }, get global() { calls += 'g'; return 1; },"
+                        + " get ignoreCase() { calls += 'i'; return 1; }, get multiline() { calls += 'm'; return 1; },"
+                        + " get dotAll() { calls += 's'; return 1; }, get unicode() { calls += 'u'; return 1; },"
+                        + " get sticky() { calls += 'y'; return 1; } };"
+                        + " Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags').get.call(re); calls"));
+    }
+
+    // `flags` is generic all the way down, so an own flag accessor is what @@match/@@replace observe.
+    @Test
+    public void flagsReadsTheFlagPropertiesOffTheReceiver() {
+        assertEquals("i",
+                str("const r = /a/; Object.defineProperty(r, 'ignoreCase', { get() { return true; } });" + " r.flags"));
+        assertEquals("TypeError",
+                str("let caught = 'none'; const r = /a/;"
+                        + " Object.defineProperty(r, 'global', { get() { throw new TypeError('boom'); } });"
+                        + " try { r[Symbol.match](''); } catch (e) { caught = e.constructor.name; } caught"));
+        assertEquals("/a/i", str("const r = /a/; Object.defineProperty(r, 'ignoreCase', { get() { return true; } });"
+                + " r.toString()"));
+    }
+
+    // The flag accessors have no setter, but an own property shadowing one is writable.
+    @Test
+    public void assigningAFlagIsRefusedUnlessShadowed() {
+        assertEquals("TypeError", str("let caught = 'none'; const r = /a/g;"
+                + " try { r.global = false; } catch (e) { caught = e.constructor.name; } caught"));
+        assertEquals("false", str("const r = /a/g; Object.defineProperty(r, 'global', { writable: true });"
+                + " r.global = false; String(r.global)"));
+    }
+
+    // Symbol.matchAll returns a %RegExpStringIteratorPrototype% iterator, not an array.
+    @Test
+    public void symbolMatchAllReturnsAnIterator() {
+        assertEquals("function", str("typeof RegExp.prototype[Symbol.matchAll]"));
+        assertEquals("[object RegExp String Iterator]", str("Object.prototype.toString.call('ab'.matchAll(/a/g))"));
+        assertEquals("a,b", str("[...'a1b'.matchAll(/[a-z]/g)].map(m => m[0]).join(',')"));
+        assertEquals("a", str("[...'ab'.matchAll(/(?<x>a)/g)][0].groups.x"));
+        assertEquals("1", str("String([...'aa'.matchAll(/a/g)].length - 1)"));
+    }
+
+    @Test
+    public void aMatchAllIteratorIsSelfIterableAndFinishes() {
+        assertTrue(bool("const it = 'ab'.matchAll(/./g); it[Symbol.iterator]() === it"));
+        assertTrue(bool("const it = 'a'.matchAll(/a/g); it.next(); it.next().done"));
+    }
+
+    @Test
+    public void stringIteratorNextRejectsAForeignReceiver() {
+        assertEquals("TypeError", str("let caught = 'none'; const proto = Object.getPrototypeOf('a'.matchAll(/a/g));"
+                + " try { proto.next.call({}); } catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    @Test
+    public void matchAllRejectsANonGlobalRegexp() {
+        assertEquals("TypeError", str("let caught = 'none';"
+                + " try { 'a'.matchAll(/a/); } catch (e) { caught = e.constructor.name; } caught"));
+    }
+
+    // Spec: the well-known symbol is read off an object argument, never off a primitive one.
+    @Test
+    public void aPrimitiveArgumentNeverExposesItsWellKnownSymbol() {
+        assertEquals("1", str("Object.defineProperty(Number.prototype, Symbol.match,"
+                + " { get() { throw new Error('read'); } }); 'a1b'.match(1)[0]"));
+    }
+
+    // %RegExp%[Symbol.species] is a real, discoverable getter accessor returning the receiver
+    // unchanged (test262 built-ins/Function/prototype/toString/symbol-named-builtins.js asserts the
+    // getter itself is a native function) - speciesConstructor's own fallback already produced this
+    // same result when the accessor was simply absent, so this only makes it observable via
+    // getOwnPropertyDescriptor, not a behavior change.
+    @Test
+    public void speciesIsADiscoverableGetterReturningTheReceiver() {
+        assertTrue(bool("typeof Object.getOwnPropertyDescriptor(RegExp, Symbol.species).get === 'function'"));
+        assertTrue(bool("RegExp[Symbol.species] === RegExp"));
+        assertFalse(bool("Object.getOwnPropertyDescriptor(RegExp, Symbol.species).enumerable"));
+        assertTrue(bool("Object.getOwnPropertyDescriptor(RegExp, Symbol.species).configurable"));
+    }
+
+    @Test
+    public void theSymbolMethodsAreNonEnumerableOnThePrototype() {
+        assertFalse(bool("Object.getOwnPropertyDescriptor(RegExp.prototype, Symbol.match).enumerable"));
+        assertFalse(bool("Object.getOwnPropertyDescriptor(RegExp.prototype, Symbol.matchAll).enumerable"));
+    }
+
+    // The RegExp constructor accepts a regexp-like object, taking source/flags through [[Get]].
+    @Test
+    public void constructorAcceptsARegexpLikeObject() {
+        assertEquals("a+", str("new RegExp({ source: 'a+', flags: 'g', [Symbol.match]: true }).source"));
+        assertEquals("g", str("new RegExp({ source: 'a+', flags: 'g', [Symbol.match]: true }).flags"));
+    }
+}

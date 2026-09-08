@@ -16,9 +16,10 @@ public class JsonNumber extends JsonPrimitive<Number> {
     public JsonNumber(String value) {
         if (value != null) {
             final var doubleNumber = Double.parseDouble(value);
-            if (doubleNumber % 1.0 == 0) {
+            if (doubleNumber % 1.0 == 0 && Math.abs(doubleNumber) <= Integer.MAX_VALUE) {
                 // Derive the int from the parsed double: Integer.valueOf(value) would throw
-                // NumberFormatException for whole-number double literals such as "2.0".
+                // NumberFormatException for whole-number double literals such as "2.0". Values past
+                // the int range stay doubles — an (int) cast would silently clamp them.
                 this.value = (int) doubleNumber;
             } else {
                 this.value = doubleNumber;
