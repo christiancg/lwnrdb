@@ -161,3 +161,13 @@ dir:     built-ins/Temporal/Duration/compare/relativeto-string-limits.js  # +/-2
 dir:     built-ins/Temporal/Duration/prototype/round/relativeto-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
 dir:     built-ins/Temporal/Duration/prototype/total/relativeto-string-limits.js  # +/-23:59 offset exceeds java.time.ZoneOffset's +/-18:00 hard cap
 pattern: \b(?:Async)?Generator\s*\(\s*["']  # an alias of the (Async)Generator constructor: no runtime code generation
+#
+# language/identifiers/{start,part}-unicode-17.0.0*.js assert that every identifier code point added
+# in Unicode 17.0 is accepted where an identifier may start or continue. ID_Start/ID_Continue are
+# answered from the build JDK's own Unicode data, and the build JDK is pinned at 25 - Unicode 16.0 -
+# because that is the newest release GraalVM builds a native image from (see the enforcer rule in
+# pom.xml). The unicode-16.0.0 siblings of these files are measured and pass, so what is excluded is
+# the version gap, not the identifier rule. Both lines go when the floor moves to a JDK carrying
+# Unicode 17.0.
+dir:     language/identifiers/start-unicode-17.0.0  # identifier code points added in Unicode 17.0; the build JDK (25) ships Unicode 16.0
+dir:     language/identifiers/part-unicode-17.0.0  # identifier code points added in Unicode 17.0; the build JDK (25) ships Unicode 16.0

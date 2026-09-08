@@ -56,6 +56,18 @@ FAIL = "\033[91mFAIL\033[0m"
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Server launch is configurable: by default the suite runs against the JAR, but
+# setting LWNRDB_SERVER_BIN to a path (e.g. the GraalVM native executable) makes
+# it launch that binary instead. Native images honor -Xmx as a runtime arg.
+SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
+
+
+def server_argv(xmx: str):
+    if SERVER_BIN:
+        return [SERVER_BIN, f"-Xmx{xmx}"]
+    return ["java", f"-Xmx{xmx}", "-jar", os.path.join(REPO_ROOT, JAR)]
+
+
 TICK_MS = 200
 SCHEDULE_TIMEOUT_MS = 10_000
 MAX_PER_DATABASE = 3
@@ -233,9 +245,8 @@ def port_open() -> bool:
 
 
 def start_server(work_dir: str, log_path: str):
-    jar = os.path.join(REPO_ROOT, JAR)
     log = open(log_path, "ab")
-    proc = subprocess.Popen(["java", "-Xmx512m", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
+    proc = subprocess.Popen(server_argv("512m"), stdout=log, stderr=log, cwd=work_dir)
     deadline = time.time() + 60.0
     while time.time() < deadline:
         if port_open():
@@ -620,10 +631,16 @@ def test_switch_off(conn: Conn):
 
 def main() -> int:
     global failures
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"jar not found at {jar}; run `mvn clean package -DskipTests` first", file=sys.stderr)
-        return 1
+    if SERVER_BIN:
+        if not os.path.isfile(SERVER_BIN):
+            print(f"server binary not found at {SERVER_BIN} (LWNRDB_SERVER_BIN); "
+                  f"run `mvn -Pnative package -DskipTests` first", file=sys.stderr)
+            return 1
+    else:
+        jar = os.path.join(REPO_ROOT, JAR)
+        if not os.path.isfile(jar):
+            print(f"jar not found at {jar}; run `mvn clean package -DskipTests` first", file=sys.stderr)
+            return 1
     if port_open():
         print(f"port {PORT} is already in use", file=sys.stderr)
         return 1

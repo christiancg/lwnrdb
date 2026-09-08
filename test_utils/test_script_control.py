@@ -69,6 +69,18 @@ FAIL = "\033[91mFAIL\033[0m"
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
+# Server launch is configurable: by default the suite runs against the JAR, but
+# setting LWNRDB_SERVER_BIN to a path (e.g. the GraalVM native executable) makes
+# it launch that binary instead. Native images honor -Xmx as a runtime arg.
+SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
+
+
+def server_argv(xmx: str):
+    if SERVER_BIN:
+        return [SERVER_BIN, f"-Xmx{xmx}"]
+    return ["java", f"-Xmx{xmx}", "-jar", os.path.join(REPO_ROOT, JAR)]
+
+
 # Long enough that no test's own patience can be mistaken for the sandbox giving up: every
 # run in this suite ends because it was cancelled, finished, or the test failed.
 TIMEOUT_MS = 600_000
@@ -311,9 +323,8 @@ def port_open() -> bool:
 
 
 def start_server(work_dir: str, log_path: str):
-    jar = os.path.join(REPO_ROOT, JAR)
     log = open(log_path, "ab")
-    proc = subprocess.Popen(["java", "-Xmx512m", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
+    proc = subprocess.Popen(server_argv("512m"), stdout=log, stderr=log, cwd=work_dir)
     deadline = time.time() + 60.0
     while time.time() < deadline:
         if port_open():
@@ -672,10 +683,16 @@ def main():
     print("  LWNRDB — script run visibility and cancellation e2e tests")
     print("═" * 70)
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
-        sys.exit(1)
+    if SERVER_BIN:
+        if not os.path.isfile(SERVER_BIN):
+            print(f"\n[ERROR] Server binary not found at {SERVER_BIN} (LWNRDB_SERVER_BIN). "
+                  f"Build it first: mvn -Pnative package -DskipTests\n")
+            sys.exit(1)
+    else:
+        jar = os.path.join(REPO_ROOT, JAR)
+        if not os.path.isfile(jar):
+            print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
+            sys.exit(1)
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-scriptcontrol-")
     log_path = os.path.join(work_dir, "server.log")

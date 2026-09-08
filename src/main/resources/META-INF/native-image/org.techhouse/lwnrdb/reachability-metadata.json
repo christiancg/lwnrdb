@@ -1259,6 +1259,9 @@
     {
       "module": "jdk.jfr",
       "glob": "jdk/jfr/internal/types/metadata.bin"
+    },
+    {
+      "glob": "simplejs/emoji-sequences.txt"
     }
   ]
 }
