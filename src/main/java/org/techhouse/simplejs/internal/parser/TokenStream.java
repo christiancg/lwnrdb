@@ -20,11 +20,6 @@ import org.techhouse.simplejs.elements.SourcePosition;
 import org.techhouse.simplejs.exceptions.UnexpectedEndOfInputException;
 import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 
-// A moving cursor over the token stream plus the low-level primitives every grammar production
-// relies on: navigation (current/peek/advance), the is/match/expect predicates for separators,
-// operators and keywords, the contextual-keyword helpers, the no-in production context stack,
-// and error construction. The recursive-descent parser subclasses this so its grammar methods
-// call the primitives directly.
 public abstract class TokenStream {
     protected final List<JsBaseElement> tokens;
     protected final List<SourcePosition> positions;
@@ -71,9 +66,6 @@ public abstract class TokenStream {
         return current().getType() == JsType.EOF;
     }
 
-    // Automatic Semicolon Insertion: a statement terminator is an explicit `;`, or is inserted
-    // before `}`, end-of-input, or a token that a line terminator precedes. Otherwise the missing
-    // terminator is a syntax error.
     protected void consumeSemicolon() {
         if (matchSeparator(';')) {
             return;
@@ -84,17 +76,10 @@ public abstract class TokenStream {
         throw error();
     }
 
-    // The one unconditional ASI rule (no line-terminator or `}`/EOF condition attached): a
-    // do-while statement's terminating semicolon is always inserted after its `)`, so `do; while
-    // (0) x = 1;` is two statements even with no newline between them.
     protected void consumeDoWhileSemicolon() {
         matchSeparator(';');
     }
 
-    // The for-header left-hand side is parsed under the no-in production: `in` is not a
-    // binary operator there, so `for (a in b)` reads `in` as the loop keyword. A bracketed
-    // sub-expression re-enters the [+In] grammar (innermost context wins via the stack),
-    // so the `in` in `for ((a in b); ;)` is still a binary operator.
     protected <T> T withNoIn(Supplier<T> parse) {
         return withInContext(Boolean.TRUE, parse);
     }
@@ -169,8 +154,6 @@ public abstract class TokenStream {
         }
     }
 
-    // A contextual keyword must be written literally: `n\u0065w.target` is a SyntaxError, not a
-    // meta property, so an escaped identifier never matches one.
     protected boolean isContextualKeyword(String word) {
         final var t = current();
         return t.getType() == JsType.IDENTIFIER && ((JsIdentifier) t).getValue().equals(word)

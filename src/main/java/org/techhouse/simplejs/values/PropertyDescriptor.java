@@ -1,8 +1,5 @@
 package org.techhouse.simplejs.values;
 
-// A property descriptor in the shape ToPropertyDescriptor produces: every field is nullable because
-// [[DefineOwnProperty]] has to tell an attribute that was absent from the descriptor object apart
-// from one explicitly set to undefined/false.
 public record PropertyDescriptor(JsValue value, JsValue getter, JsValue setter, Boolean writable, Boolean enumerable,
         Boolean configurable) {
     public static PropertyDescriptor data(JsValue value, JsObject.PropertyFlags flags) {

@@ -4,15 +4,11 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
-/**
- * An immutable set of Unicode code points, stored as sorted, non-overlapping inclusive ranges.
- */
 public final class CodePointSet {
     public static final int MAX_CODE_POINT = 0x10FFFF;
     public static final CodePointSet EMPTY = new CodePointSet(new int[0]);
     public static final CodePointSet ALL = CodePointSet.of(0, MAX_CODE_POINT);
 
-    // ranges[2i] = lo, ranges[2i+1] = hi (inclusive), sorted and non-overlapping/non-adjacent.
     private final int[] ranges;
 
     private CodePointSet(int[] ranges) {

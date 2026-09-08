@@ -1,5 +1,6 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNullish;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErrorValue;
@@ -22,11 +23,6 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-// The stack's registered disposers live under a module-private symbol key rather than a new JsValue
-// type or the JsObject primitive slot, which would leak the backing array's members onto the stack.
-// A second private symbol carries the hint, so [[DisposableState]] and [[AsyncDisposableState]] are
-// distinguishable brands: DisposableStack.prototype.dispose called on an AsyncDisposableStack is a
-// TypeError even though both classes register their resources the same way.
 public final class DisposableStackBuiltins {
     public static final List<String> NAMES = List.of("use", "defer", "adopt", "dispose", "move");
     public static final List<String> ASYNC_NAMES = List.of("use", "defer", "adopt", "disposeAsync", "move");
@@ -34,8 +30,6 @@ public final class DisposableStackBuiltins {
     private static final JsSymbol ENTRIES = new JsSymbol("DisposableStack.entries");
     private static final JsSymbol ASYNC_HINT = new JsSymbol("DisposableStack.asyncHint");
     private static final JsObject.PropertyFlags SLOT = new JsObject.PropertyFlags(true, false, false);
-    // A resource added with no dispose method (an async `use(null)`) records only that DisposeResources
-    // must still perform one Await(undefined) before it settles.
     private static final JsValue AWAIT_ONLY = JsNull.getInstance();
 
     private DisposableStackBuiltins() {
@@ -76,14 +70,11 @@ public final class DisposableStackBuiltins {
         };
     }
 
-    // `disposed` and @@dispose are installed here rather than through the shared prototype builder
-    // because the accessor is brand-checked and @@dispose must be the very same function object as
-    // `dispose`, which a script can compare, replace or delete.
     public static void installAccessors(JsObject proto, boolean async) {
         final var getter = new JsNativeFunction("get disposed", (thisArg, _) -> disposed(thisArg, async));
         getter.setLength(0);
         proto.defineAccessor("disposed", getter, null);
-        proto.setFlags("disposed", new JsObject.PropertyFlags(true, false, true));
+        proto.setFlags("disposed", JsObject.PropertyFlags.HIDDEN);
         final var disposer = proto.get(async ? "disposeAsync" : "dispose");
         if (disposer != null) {
             Intrinsics.installSymbolMethod(proto, async ? JsSymbol.ASYNC_DISPOSE : JsSymbol.DISPOSE, disposer);
@@ -106,8 +97,6 @@ public final class DisposableStackBuiltins {
         return stack.getSymbol(ASYNC_HINT) instanceof JsBoolean flag && flag.getValue();
     }
 
-    // A subclass's super() call arrives with the instance under construction as thisArg; the internal
-    // slots have to land on that object, since applyNativeSuper only copies string-keyed properties.
     private static JsObject newStack(JsObject proto, boolean async, JsValue thisArg, InterpreterOps ops) {
         final var stack = thisArg instanceof JsObject instance ? instance : new JsObject();
         if (stack.getProto() == null) {
@@ -117,9 +106,6 @@ public final class DisposableStackBuiltins {
         return stack;
     }
 
-    // OrdinaryCreateFromConstructor: Get(newTarget, "prototype") is an ordinary, observable property
-    // read (an accessor may throw, a proxy trap may run) that must happen exactly once, falling back
-    // to the shared intrinsic prototype when the result is not an object.
     private static JsObject resolvePrototype(JsObject fallback, InterpreterOps ops) {
         final var newTarget = JsNativeFunction.currentNewTarget();
         if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
@@ -146,9 +132,6 @@ public final class DisposableStackBuiltins {
     private static JsValue use(JsObject stack, JsValue resource, InterpreterOps ops, Invoker invoker, boolean async) {
         final var entries = liveEntries(stack);
         if (isNullish(resource)) {
-            // AddDisposableResource returns unused for a sync hint, but an async hint still records a
-            // resource whose dispose method is undefined - which forces one Await before disposeAsync
-            // settles.
             if (async) {
                 entries.push(AWAIT_ONLY);
             }
@@ -192,8 +175,6 @@ public final class DisposableStackBuiltins {
         return resource;
     }
 
-    // The moved-to stack is always an ordinary instance of the intrinsic class, never of the
-    // receiver's subclass: the proposal reads %DisposableStack.prototype% rather than the receiver's.
     private static JsValue move(JsObject stack, boolean async) {
         final var entries = liveEntries(stack);
         final var moved = new JsObject();
@@ -203,8 +184,6 @@ public final class DisposableStackBuiltins {
         return moved;
     }
 
-    // The receiver's prototype chain ends at whichever of the two intrinsic prototypes owns
-    // `disposed`, so a subclass instance still yields the intrinsic one.
     private static JsValue intrinsicProtoOf(JsObject stack) {
         var proto = stack.getProto();
         while (proto instanceof JsObject candidate) {
@@ -255,9 +234,6 @@ public final class DisposableStackBuiltins {
     private record AsyncDisposal(List<JsValue> disposers, JsPromise promise, Invoker invoker, EventLoop eventLoop) {
     }
 
-    // Each disposer may return a promise, so the next one only runs once the previous has settled.
-    // DisposeResources ends with one Await(undefined) when an async resource had no dispose method and
-    // nothing else has awaited, which is what keeps disposeAsync one microtask behind its caller.
     private static void step(AsyncDisposal disposal, int index, RuntimeException error, boolean hasAwaited) {
         if (index >= disposal.disposers().size()) {
             settle(disposal, error, hasAwaited);
@@ -310,7 +286,4 @@ public final class DisposableStackBuiltins {
                 "An error was suppressed during disposal"));
     }
 
-    private static JsValue arg(List<JsValue> args, int index) {
-        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
-    }
 }

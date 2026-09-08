@@ -23,11 +23,6 @@ import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveTriggerResponse;
 import org.techhouse.ops.resp.TestTriggerResponse;
 
-/**
- * Persists and removes a collection's triggers. All of a collection's triggers live in one file beside its
- * schema, so a save rewrites that list atomically and a DROP_COLLECTION removes them with the data. Callers
- * hold the collection write lock (taken in OperationProcessor, mirroring processSaveSchema).
- */
 public final class TriggerOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -69,8 +64,6 @@ public final class TriggerOperationHelper {
         if (timingError != null) {
             return timingError;
         }
-        // A trigger pointing at nothing is a configuration error worth failing loudly, not a run-time
-        // surprise on the first write.
         final var procedure = cache.getProcedure(dbName, request.getProcedureName());
         if (procedure == null || !procedure.isEnabled()) {
             return new OperationResponse(OperationType.SAVE_TRIGGER,
@@ -90,13 +83,6 @@ public final class TriggerOperationHelper {
         return new SaveTriggerResponse("Trigger saved successfully", definition.getVersion(), definition.getDefiner());
     }
 
-    // Every stamped field is computed once, by the coordinator, onto the request, so a peer re-executing
-    // this request under REPLICATE_ADMIN writes a byte-identical file. Re-saving re-stamps the definer to
-    // the saving user: keeping the original would leave a trigger running with a previous installer's
-    // authority after somebody else edited it.
-    // A BEFORE hook runs synchronously on the writer's thread with no db binding, so batch mode (an
-    // array-in/array-out contract) and allowCascade (there is nothing to cascade from) are not merely
-    // unused but meaningless; refusing them here beats silently ignoring them at dispatch.
     private static OperationResponse validateTiming(String timing, String mode, boolean allowCascade) {
         if (!TriggerDefinition.TIMING_AFTER.equals(timing) && !TriggerDefinition.TIMING_BEFORE.equals(timing)) {
             return new OperationResponse(OperationType.SAVE_TRIGGER,
@@ -138,10 +124,6 @@ public final class TriggerOperationHelper {
                 request.isAllowCascade(), request.isEnabled(), definer, version, createdAt, updatedAt, updatedBy);
     }
 
-    // The dry run: the same synchronous callable the write path uses, against a caller-supplied document,
-    // taking no locks and writing nothing. It is only possible at all because a before trigger is directly
-    // callable - an after trigger's dispatch (cascade depth, definer rights, its pending-run record) still
-    // has no dry run.
     public static OperationResponse executeTest(TestTriggerRequest request, String actingUser) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
@@ -205,8 +187,6 @@ public final class TriggerOperationHelper {
                         outcome.document(), null, hooks.logs(), false, null);
             }
             final var rejection = outcome.rejection();
-            // A hook that said no is an answer, not a failure; a hook that could not finish (a timeout, an
-            // exhausted budget) never made a decision, so it keeps the error the write itself would get.
             if (ErrorCode.BEFORE_HOOK_REJECTED.getCode().equals(rejection.getErrorCode())) {
                 return new TestTriggerResponse("Trigger tested successfully", TestTriggerResponse.DECISION_REJECT, null,
                         rejection.getMessage(), hooks.logs(), false, hooks.lastStack());
@@ -215,8 +195,6 @@ public final class TriggerOperationHelper {
         }
     }
 
-    // Idempotent: succeeds whether or not the trigger existed, so cluster re-execution on a peer that has
-    // already removed it does not fail replication.
     public static OperationResponse executeDelete(DeleteTriggerRequest request) throws IOException {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
@@ -250,8 +228,6 @@ public final class TriggerOperationHelper {
         return new ListTriggersResponse("Ok", result);
     }
 
-    // The name of a trigger in the database still pointing at the procedure, or null when none does. Only
-    // consulted on a procedure delete, so a scan of the database's collections is cheap enough.
     public static String triggerReferencing(String dbName, String procedureName) {
         for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
             for (final var trigger : cache.getTriggersFor(dbName, collName)) {

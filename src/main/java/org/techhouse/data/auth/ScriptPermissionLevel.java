@@ -9,7 +9,6 @@ public enum ScriptPermissionLevel {
         return ordinal() >= required.ordinal();
     }
 
-    // Anything unrecognised reads as NONE: a permission must never be widened by a parse guess.
     public static ScriptPermissionLevel parseOrNone(String name) {
         if (name == null) {
             return NONE;
@@ -34,8 +33,6 @@ public enum ScriptPermissionLevel {
         return false;
     }
 
-    // Written as a boolean before script management existed: true meant "may run". A level arrives as a
-    // string. Both encodings are accepted so pre-existing user records need no migration.
     public static ScriptPermissionLevel fromJson(JsonBaseElement element) {
         if (element == null || element.isJsonNull()) {
             return NONE;

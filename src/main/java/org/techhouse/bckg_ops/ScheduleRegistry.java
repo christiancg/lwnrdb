@@ -17,27 +17,14 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.schedule.CronExpression;
 
-/**
- * The in-memory table of every known schedule and the instant it is next due at. Held in memory and never
- * persisted: a persisted {@code lastRunAt} would mean an admin write per run and would churn the admin
- * epoch, and it is not needed — a node taking a schedule over computes the next <em>future</em> occurrence,
- * which is exactly what makes firing at-most-once per due instant rather than at-least-once.
- *
- * <p>
- * The DDL path updates one database's entries directly; {@code scheduleRefreshMs} rebuilds everything as the
- * safety net for schedules that arrived through cluster replication or admin anti-entropy.
- */
 public class ScheduleRegistry {
     private final Logger logger = Logger.logFor(ScheduleRegistry.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final Configuration configuration = Configuration.getInstance();
     private final Map<String, Entry> entries = new ConcurrentHashMap<>();
-    // Names already reported as unfirable, so an unsatisfiable cron is warned about once rather than
-    // once per tick.
     private final Map<String, Boolean> warned = new ConcurrentHashMap<>();
 
-    /** One schedule plus the derived state the scheduler needs: its parsed cron and its next due instant. */
     public static final class Entry {
         private final String dbName;
         private final ScheduleDefinition definition;
@@ -124,11 +111,6 @@ public class ScheduleRegistry {
         return entries.size();
     }
 
-    /**
-     * The instant this schedule is next due at, or 0 when it can never fire again (an unsatisfiable cron).
-     * Computed strictly after {@code from}, which is what keeps a handed-over schedule from replaying an
-     * instant the previous owner may already have run.
-     */
     public long nextRunAfter(Entry entry, long from) {
         if (entry.getCron() == null) {
             return from + Math.max(1L, entry.getDefinition().getIntervalMs());
@@ -160,8 +142,6 @@ public class ScheduleRegistry {
                     ? null
                     : CronExpression.parse(definition.getCron());
         } catch (InvalidCronException e) {
-            // A save parses the cron first, so this only happens for a file edited or replicated from a
-            // version that accepted something this one does not. Skipping beats firing on a guess.
             warnOnce(key, e.getMessage());
             entries.remove(key);
             return;

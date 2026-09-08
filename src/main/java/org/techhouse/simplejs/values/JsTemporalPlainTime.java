@@ -3,12 +3,6 @@ package org.techhouse.simplejs.values;
 import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 
-/**
- * A JavaScript {@code Temporal.PlainTime} value: a wall-clock time with no date or time zone
- * component. Backed by T0's {@link IsoTimeFields} record, following the same shape as
- * {@link JsDate} (a bare data carrier; all arithmetic/formatting logic lives in
- * {@code TemporalPlainTimeBuiltins}).
- */
 public final class JsTemporalPlainTime extends JsValue {
     private PropertyTable table;
 

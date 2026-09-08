@@ -1,5 +1,7 @@
 package org.techhouse.ops;
 
+import static org.techhouse.simplejs.host.ScriptErrorNames.RESULT_TOO_LARGE;
+
 import java.io.IOException;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
@@ -13,8 +15,6 @@ import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.simplejs.values.EJsonInterop;
 
-// Folds the whole upstream stream into one document, exactly as COUNT collapses it to {count:N}: a step
-// after a REDUCE is legal and operates on the single document it emits.
 public final class ReduceOperatorHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final Configuration configuration = Configuration.getInstance();
@@ -41,14 +41,12 @@ public final class ReduceOperatorHelper {
         return Stream.of(resultDocument(step, accumulator));
     }
 
-    // A fold that accumulates every document into one value can outgrow anything the per-document
-    // charge sees, so the value that actually leaves the pipeline is measured before it is emitted.
     private static JsonObject resultDocument(ReduceAggregationStep step, JsonBaseElement accumulator) {
         final var max = configuration.getScriptMaxResultBytes();
         if (max >= 0) {
             final var size = EJsonInterop.estimatedBytes(accumulator);
             if (size > max) {
-                throw new ScriptCallableException("ScriptResultTooLargeError",
+                throw new ScriptCallableException(RESULT_TOO_LARGE,
                         "Reduced value of about " + size + " bytes exceeds the maximum of " + max + " bytes");
             }
         }

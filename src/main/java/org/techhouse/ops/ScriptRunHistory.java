@@ -31,19 +31,6 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ResponseParser;
 
-/**
- * Writes the history of finished script runs into the reserved {@code script_runs} collection of the
- * database each run touched, and prunes it.
- *
- * <p>
- * Three properties are load-bearing. The write is <em>asynchronous and best-effort</em>: it rides the
- * background queue and a failure is logged and dropped, because history is diagnostics and a run that
- * already committed its effects must not fail for want of a record. It goes through the <em>ordinary
- * request path</em> ({@link ClusterRouter} then {@link OperationProcessor}), so ownership, quorum,
- * replication and page metadata are the ones every other write gets rather than a second implementation.
- * And the collection is created <em>lazily</em>, on the first row: creating it with the database would
- * change what {@code LIST_COLLECTIONS} answers for every database that never runs a script.
- */
 public class ScriptRunHistory {
     private static final long SWEEP_INTERVAL_SECONDS = 3600L;
     private static final long SHUTDOWN_TIMEOUT_SECONDS = 3L;
@@ -60,15 +47,12 @@ public class ScriptRunHistory {
     private static final EJson eJson = IocContainer.get(EJson.class);
     private static final Configuration configuration = Configuration.getInstance();
 
-    // Databases whose history collection this node has already created or observed, so the lazy creation
-    // costs one admin lookup per database per process rather than one per row.
     private static final Set<String> knownDatabases = ConcurrentHashMap.newKeySet();
     private static final LongAdder recorded = new LongAdder();
     private static final LongAdder dropped = new LongAdder();
 
     private ScheduledExecutorService sweeper;
 
-    /** Queues a finished run for recording. Returns without doing any I/O. */
     public static void record(ScriptRunRecord runRecord) {
         if (runRecord == null || !isEnabled() || !recordsKind(runRecord.kind())) {
             return;
@@ -93,7 +77,6 @@ public class ScriptRunHistory {
         return false;
     }
 
-    /** Called by the background worker. Never throws: a history row is not worth failing a queue entry for. */
     public static void write(ScriptRunRecord runRecord) {
         if (runRecord == null || !isEnabled()) {
             return;
@@ -105,8 +88,6 @@ public class ScriptRunHistory {
                 return;
             }
             final var document = toDocument(runRecord);
-            // The id has to travel on the document: DbEntry.fromJsonObject reads it from there and
-            // generates one when it is absent, so setting it only on the request would store a stranger.
             if (runRecord.runId() != null) {
                 document.addProperty(Globals.PK_FIELD, runRecord.runId());
             }
@@ -127,10 +108,6 @@ public class ScriptRunHistory {
         }
     }
 
-    /**
-     * Deletes the rows older than the configured retention. Runs only where this node owns the collection,
-     * so a cluster does not issue the same deletes from every member.
-     */
     public static void sweepOnce() {
         if (!isEnabled()) {
             return;
@@ -148,8 +125,6 @@ public class ScriptRunHistory {
         }
     }
 
-    // Standalone there is no ring to consult and this node is trivially the owner, which is the same rule
-    // ScheduleExecutor applies before firing a schedule.
     private static boolean ownsHistoryOf(String dbName) {
         return !clusterConfig.isEnabled() || ownershipManager.isOwner(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME);
     }
@@ -163,7 +138,6 @@ public class ScriptRunHistory {
             thread.setDaemon(true);
             return thread;
         });
-        // scheduleAtFixedRate silently cancels a periodic task that throws, so nothing may escape.
         sweeper.scheduleAtFixedRate(ScriptRunHistory::sweepQuietly, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
                 TimeUnit.SECONDS);
     }
@@ -193,16 +167,12 @@ public class ScriptRunHistory {
         return dropped.sum();
     }
 
-    // Testing seam: the known-database memo outlives a test's data directory otherwise.
     public static void reset() {
         knownDatabases.clear();
         recorded.reset();
         dropped.reset();
     }
 
-    // Public so a test can drive the wrapper itself, and so an operator tool can run a sweep out of band:
-    // scheduleAtFixedRate silently cancels a periodic task that throws, so the swallowing here is what
-    // keeps the sweep alive.
     public static void sweepQuietly() {
         try {
             sweepOnce();
@@ -263,8 +233,6 @@ public class ScriptRunHistory {
         return true;
     }
 
-    // The same routing every other write gets: forwarded to the collection's owner (or, for the collection
-    // creation, to the admin coordinator) when clustering is on, run locally when it is off.
     private static OperationResponse dispatch(OperationRequest request, String actingUser) {
         final var clientId = clientTracker.registerForwardedClient(actingUser == null ? "" : actingUser);
         try {
@@ -324,7 +292,6 @@ public class ScriptRunHistory {
 
     private static String nodeAddress() {
         final var self = membershipService.getSelf();
-        return self == null ? "local" : self.address().toString();
+        return self == null ? Globals.STANDALONE_NODE_ID : self.address().toString();
     }
-
 }

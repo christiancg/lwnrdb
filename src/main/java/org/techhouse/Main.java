@@ -211,15 +211,14 @@ public class Main {
     // sum of the two. Warned about together because an operator sizing -Xmx from maxMemory alone undercounts.
     static void warnIfCachesExceedHeap() {
         final var xmx = Runtime.getRuntime().maxMemory();
-        final var metadataCap = config.getProcedureCacheMaxBytes() + config.getSchemaCacheMaxBytes()
-                + config.getScheduleCacheMaxBytes();
+        final var metadataCap = config.getMetadataCacheMaxBytes();
         final var userCap = config.isCachingDisabled() || config.isCacheUnlimited() ? 0L : config.getMaxMemoryBytes();
         final var scriptCap = scriptBudgetBytes();
         final var total = userCap + metadataCap + scriptCap;
         if (total > xmx) {
             logger.warning("The configured memory budgets total " + total + " bytes (maxMemory " + userCap
-                    + " + procedureCacheMaxBytes/schemaCacheMaxBytes/scheduleCacheMaxBytes " + metadataCap
-                    + " + concurrent script budgets " + scriptCap + ") but JVM -Xmx is only " + xmx
+                    + " + metadataCacheMaxBytes " + metadataCap + " + concurrent script budgets " + scriptCap
+                    + ") but JVM -Xmx is only " + xmx
                     + " bytes. Lower the budgets or raise -Xmx, otherwise a fully-warm node cannot fit in heap.");
         }
     }

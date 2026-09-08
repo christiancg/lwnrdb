@@ -7,8 +7,6 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
-// Unlike the other response subclasses this one also models a failure: SimpleJs captures console
-// output on every exit path, and a failed run is exactly when those lines matter to the caller.
 public class RunScriptResponse extends OperationResponse {
     private JsonBaseElement result;
     private List<String> logs;

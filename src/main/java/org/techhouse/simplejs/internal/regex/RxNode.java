@@ -2,12 +2,6 @@ package org.techhouse.simplejs.internal.regex;
 
 import java.util.List;
 
-/**
- * AST for a compiled ECMA-262 {@code Pattern}, matched directly by {@link RegexMatcher} (no
- * translation to {@code java.util.regex} syntax). A non-capturing group {@code (?:...)} is not a
- * node at all - the parser folds its body straight into the surrounding structure - so every
- * {@link Group} is capturing.
- */
 sealed interface RxNode {
     record Sequence(List<RxNode> terms) implements RxNode {
     }
@@ -36,10 +30,6 @@ sealed interface RxNode {
     record Group(int number, RxNode body) implements RxNode {
     }
 
-    // nestedGroups: every capturing group number inside `atom`, computed once at construction time.
-    // ECMA-262's RepeatMatcher resets exactly these to undefined before each new iteration attempt -
-    // without it, a group from an earlier iteration that doesn't participate in a later one keeps
-    // reporting its stale value instead of undefined.
     record Quantifier(RxNode atom, int min, int max, boolean greedy, int[] nestedGroups) implements RxNode {
         static final int UNBOUNDED = -1;
 
@@ -80,7 +70,6 @@ sealed interface RxNode {
             }
             case Lookaround(var _, var _, var body) -> collectGroups(body, out);
             default -> {
-                // CharClass, Literal, Assertion, WordBoundary, Backreference: no nested groups.
             }
         }
     }

@@ -22,17 +22,8 @@ public final class SymbolBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        // The Symbol.for registry is per-realm (one instance per Symbol namespace, i.e. per
-        // Interpreter run) rather than JVM-global: a static map would grow unbounded across
-        // script runs and would leak symbol identities between different users' scripts.
         final Map<String, JsSymbol> registry = new ConcurrentHashMap<>();
         final var symbol = new JsNativeFunction("Symbol", (thisArg, args) -> {
-            // The Symbol constructor is not intended to be subclassed: any invocation via `new`
-            // must throw before a symbol is ever created. A direct `new Symbol()` carries a
-            // new.target; a subclass's `super()` call instead arrives with the instance under
-            // construction as `thisArg` (the applyNativeSuper convention every other constructible
-            // builtin here relies on, since new.target is deliberately not threaded through that
-            // path - see ClassEvaluator.applyNativeSuper).
             if (JsNativeFunction.currentNewTarget() != null || !(thisArg instanceof JsUndefined)) {
                 throw new TypeErrorException("Symbol is not a constructor");
             }
@@ -65,8 +56,6 @@ public final class SymbolBuiltins {
         return symbol;
     }
 
-    // A well-known symbol is { [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: false },
-    // unlike every other own property of a builtin constructor.
     private static void wellKnown(JsNativeFunction symbol, String name, JsSymbol value) {
         final var table = symbol.ownProperties();
         table.defineValue(name, value);

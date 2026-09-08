@@ -1222,11 +1222,8 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scriptTextImportEnabled` | `true` or `false` (default `false`). Whether a script may evaluate a string as a module through the `script` module's `importText` |
 | `scriptProcedureImportEnabled` | `true` or `false` (default `true`). Whether a script may import a stored procedure of its own database as a module with `import … from "procedures/<name>"`. On by default, unlike `scriptTextImportEnabled`: `importText` evaluates a caller-supplied string, whereas a procedure import evaluates code only `SAVE_PROCEDURE` could have installed |
 | `procedureCacheSize` | Compiled stored procedures retained per node (>= 0, default `128`); keyed by procedure version, so a save can never serve a stale entry. `0` compiles on every call |
-| `scriptCompiledCacheSize` | Parsed ad-hoc `RUN_SCRIPT` programs retained per node (>= 0, default `128`); keyed by a hash of the source, so an entry can never go stale. A syntax error is cached too and replayed as the same `400-9`. `0` parses on every call |
-| `procedureCacheMaxBytes` | Human-readable size > 0 (default `32Mb`). Memory bound on cached procedure **source**. Separate from `maxMemory`, which bounds the user document/index cache only |
-| `schemaCacheMaxBytes` | Human-readable size > 0 (default `32Mb`). Same contract, for cached collection schemas |
-| `triggerCacheMaxEntries` | Collections whose trigger list is kept in memory (>= 0, default `4096`). Bounded by count, not bytes — a trigger list is small and read on every committed write. `0` reads from disk every time |
-| `metadataMissCacheMaxEntries` | Remembered “no such procedure/schema” answers (>= 0, default `4096`). Kept apart from the caches above so a caller naming thousands of nonexistent procedures cannot evict the ones in use |
+| `metadataCacheMaxBytes` | Human-readable size > 0 (default `72Mb`). One memory bound shared by the byte-budgeted metadata caches: stored-procedure sources, collection schemas and schedule definitions. Separate from `maxMemory`, which bounds the user document/index cache only |
+| `metadataCacheMaxEntries` | Entries in the count-budgeted metadata caches (>= 0, default `4096`): the per-collection trigger lists, and the remembered "no such procedure/schema" answers. Bounded by count, not bytes — both are small and read on a hot path. `0` reads from disk every time |
 | `triggersEnabled` | `true` or `false` (default `false`). Whether committed writes fire triggers. Separate from `scriptsEnabled` because a trigger runs code with no client asking for it; trigger DDL works either way |
 | `triggerThreads` | Workers on the trigger executor (>= 1, default `2`). Its own pool, not the background index queue, so a slow trigger cannot stall field-index maintenance |
 | `triggerQueueSize` | Bounded trigger queue (>= 1, default `10000`). On overflow the oldest queued event is dropped with a warning and counted in `GET_DATABASE_STATS` |
@@ -1243,7 +1240,6 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scheduleRefreshMs` | Valid number ≥ 1 (default `60000`). How often the whole schedule registry is rebuilt from disk. The DDL path updates it directly; this is the safety net for schedules that arrived through cluster replication or admin anti-entropy |
 | `scheduleTimeoutMs` | Valid number ≥ 1 (default `30000`). Default wall clock for one scheduled run; a schedule may override it with its own `timeoutMs` |
 | `scheduleMaxPerDatabase` | Valid number ≥ 1 (default `100`). Cap on schedules per database, so a `SAVE_SCHEDULE` loop cannot make the per-tick scan unbounded |
-| `scheduleCacheMaxBytes` | Human-readable size > 0 (default `8Mb`). Memory bound on the cached schedule definitions. Same contract as `procedureCacheMaxBytes`: derived from disk, LRU-evicted, and budgeted **separately** from `maxMemory` |
 
 ```
 # the port the server listens on
@@ -1297,10 +1293,8 @@ scriptRunHistoryMaxErrorChars=2000
 # stored procedures and triggers; triggers are off by default and gated separately
 procedureCacheSize=128
 # metadata cache bounds - budgeted SEPARATELY from maxMemory (see below)
-procedureCacheMaxBytes=32Mb
-schemaCacheMaxBytes=32Mb
-triggerCacheMaxEntries=4096
-metadataMissCacheMaxEntries=4096
+metadataCacheMaxBytes=72Mb
+metadataCacheMaxEntries=4096
 triggersEnabled=false
 triggerThreads=2
 triggerQueueSize=10000
@@ -1330,8 +1324,8 @@ process (Docker's default is 10s, so lower it or raise `--stop-timeout`).
 **Two cache budgets, not one.** `maxMemory` bounds the *user* document/index cache
 only. The admin metadata caches — stored procedure sources, per-collection JSON
 Schemas, trigger lists and schedule definitions — are bounded separately by
-`procedureCacheMaxBytes`, `schemaCacheMaxBytes`, `triggerCacheMaxEntries` and
-`scheduleCacheMaxBytes`, and sit on top of it. All of them
+`metadataCacheMaxBytes` (the byte-budgeted ones) and `metadataCacheMaxEntries` (the
+count-budgeted ones), and sit on top of it. All of them
 are LRU-evicted and backed by disk, so lowering them only costs a re-read. Size
 `-Xmx` against the sum: the server logs a warning at startup when the budgets total
 more than the heap. `GET_DATABASE_STATS` reports the live footprint under

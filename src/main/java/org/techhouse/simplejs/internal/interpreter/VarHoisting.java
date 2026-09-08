@@ -18,10 +18,6 @@ import org.techhouse.simplejs.nodes.TryStatement;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
 
-// Spec VarScopedDeclarations: a `var` belongs to the enclosing function (or script) scope no matter
-// how deeply it is nested in blocks, loops, `try` or `switch`, and its binding exists from entry
-// even when the statement holding it never runs. Recursion stops at a function or class boundary,
-// which starts its own variable scope.
 public final class VarHoisting {
     private VarHoisting() {
     }

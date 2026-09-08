@@ -12,7 +12,6 @@ import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.ConfigurationValidator;
 
 public class ConfigurationValidatorTest {
-
     private static Map<String, String> baseValid(Path writablePath) {
         final var map = new HashMap<String, String>();
         map.put("port", "8989");
@@ -72,10 +71,6 @@ public class ConfigurationValidatorTest {
         map.put("triggerMaxDepth", "3");
         map.put("triggerTimeoutMs", "1000");
         map.put("shutdownTimeoutMs", "15000");
-        map.put("procedureCacheMaxBytes", "32Mb");
-        map.put("schemaCacheMaxBytes", "32Mb");
-        map.put("triggerCacheMaxEntries", "4096");
-        map.put("metadataMissCacheMaxEntries", "4096");
         map.put("triggerRunLogEnabled", "true");
         map.put("triggerRunRetentionMs", "86400000");
         map.put("beforeHookInstructionBudget", "200000");
@@ -87,7 +82,6 @@ public class ConfigurationValidatorTest {
         map.put("scheduleRefreshMs", "60000");
         map.put("scheduleTimeoutMs", "30000");
         map.put("scheduleMaxPerDatabase", "100");
-        map.put("scheduleCacheMaxBytes", "8Mb");
         map.put("scriptTextImportEnabled", "false");
         map.put("scriptProcedureImportEnabled", "true");
         return map;
@@ -191,7 +185,6 @@ public class ConfigurationValidatorTest {
         assertTrue(readOnly.mkdirs());
         try {
             assertTrue(readOnly.setWritable(false));
-            // setWritable can be a no-op when running as root; only assert when it took effect.
             if (!readOnly.canWrite()) {
                 final var config = baseValid(tempDir);
                 config.put("filePath", readOnly.toString());
@@ -286,11 +279,13 @@ public class ConfigurationValidatorTest {
                 + expectedFragment + "' for " + key + "=" + value + ", got: " + errors);
     }
 
+    // An absent key resolves to the default ConfigKey carries, so it validates; what must never
+    // drift is default.cfg against the registry, and ConfigKeyTest asserts exactly that.
     private void assertMissingKeyFails(Path tempDir) {
         final var config = baseValid(tempDir);
         config.remove("port");
         final var errors = ConfigurationValidator.validate(config);
-        assertFalse(errors.isEmpty());
+        assertTrue(errors.isEmpty());
     }
 
     @Test
@@ -355,7 +350,6 @@ public class ConfigurationValidatorTest {
         assertHasError(tempDir, "aggregationScriptMaxSourceBytes", "0", "aggregationScriptMaxSourceBytes");
     }
 
-    // 0 is legal for both: it means "no cap" and "reject immediately" respectively.
     @Test
     public void test_invalid_script_admission_bounds(@TempDir Path tempDir) {
         assertHasError(tempDir, "maxConcurrentScripts", "-1", "maxConcurrentScripts");
@@ -364,7 +358,6 @@ public class ConfigurationValidatorTest {
         assertHasError(tempDir, "scriptQueueWaitMs", "not-a-number", "scriptQueueWaitMs");
     }
 
-    // The weight is a percentage of the load ratio: 0 restores load-only placement, 100 is the cap.
     @Test
     public void test_script_locality_weight_bounds(@TempDir Path tempDir) {
         final var zero = baseValid(tempDir);

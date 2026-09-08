@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -18,16 +20,6 @@ import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-/**
- * The {@code crypto} namespace: enough of the WHATWG surface for a stored procedure to mint ids and
- * hash content, installed the same way {@code Math}/{@code JSON}/{@code Reflect} are.
- *
- * <p>Two deliberate divergences from WHATWG: {@code hash} is synchronous and Node-shaped rather than
- * the promise-returning {@code crypto.subtle.digest} (the digest is CPU-bound and in-process, and a
- * stored procedure computing a content hash wants a value, not a microtask), and an oversized
- * {@code getRandomValues} request is a {@code RangeError} rather than a {@code QuotaExceededError}
- * (which would need a {@code DOMException} the engine does not have).
- */
 public final class CryptoBuiltins {
     private static final SecureRandom RANDOM = new SecureRandom();
     private static final int MAX_RANDOM_BYTES = 65_536;
@@ -108,7 +100,4 @@ public final class CryptoBuiltins {
         return out.toString();
     }
 
-    private static JsValue arg(List<JsValue> args, int index) {
-        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
-    }
 }

@@ -4,15 +4,7 @@ import java.util.Arrays;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 
-/**
- * A JavaScript {@code ArrayBuffer}: a raw byte store shared by typed-array views and
- * {@code DataView}s. All views hold a reference to the same buffer, so writes through one view are
- * visible through the others. A resizable buffer may {@code resize} up to {@code maxByteLength};
- * {@code transfer} detaches this buffer and hands its bytes to a new one.
- */
 public final class JsArrayBuffer extends JsValue {
-    // A Data Block is a Java byte[], so a request past the JVM array limit is one CreateByteDataBlock
-    // reports as impossible (a RangeError) rather than one it attempts.
     public static final long MAX_BYTE_LENGTH = Integer.MAX_VALUE - 8L;
 
     private PropertyTable table;

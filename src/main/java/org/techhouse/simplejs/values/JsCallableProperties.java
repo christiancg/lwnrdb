@@ -1,31 +1,45 @@
 package org.techhouse.simplejs.values;
 
+import java.util.ArrayList;
 import java.util.List;
 
-// Own data properties on a callable. Functions are ordinary objects, so `f.helper = …` must stick.
-// Builtin statics are installed through setProperty (non-enumerable, matching the spec and
-// Environment.declareBuiltin); script assignments go through setEnumerableProperty, so
-// Object.keys(f) reports what a script added without leaking the builtin surface.
 public interface JsCallableProperties {
-    // Builtin statics are non-enumerable but writable and configurable, the spec shape for a
-    // function's own builtin surface.
-    JsObject.PropertyFlags HIDDEN = new JsObject.PropertyFlags(true, false, true);
+    CallableMetadata callableMetadata();
 
-    void setProperty(String key, JsValue value);
+    default void setProperty(String key, JsValue value) {
+        callableMetadata().setProperty(key, value);
+    }
 
-    void setEnumerableProperty(String key, JsValue value);
+    default void setEnumerableProperty(String key, JsValue value) {
+        callableMetadata().setEnumerableProperty(key, value);
+    }
 
-    JsValue getProperty(String key);
+    default JsValue getProperty(String key) {
+        return callableMetadata().getProperty(key);
+    }
 
-    boolean hasProperty(String key);
+    default boolean hasProperty(String key) {
+        return callableMetadata().hasProperty(key);
+    }
 
-    boolean deleteProperty(String key);
+    default boolean deleteProperty(String key) {
+        return callableMetadata().deleteProperty(key);
+    }
 
-    void markMetadataDeleted(String key);
+    default void markMetadataDeleted(String key) {
+        callableMetadata().markDeleted(key);
+    }
 
-    boolean isMetadataDeleted(String key);
+    default boolean isMetadataDeleted(String key) {
+        return callableMetadata().isDeleted(key);
+    }
 
-    List<String> propertyKeys();
+    default List<String> propertyKeys() {
+        return new ArrayList<>(callableMetadata().table().keys());
+    }
 
-    List<String> enumerablePropertyKeys();
+    default List<String> enumerablePropertyKeys() {
+        final var table = callableMetadata().table();
+        return table.keys().stream().filter(table::isEnumerable).toList();
+    }
 }

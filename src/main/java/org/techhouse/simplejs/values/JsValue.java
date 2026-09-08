@@ -12,20 +12,15 @@ public abstract class JsValue {
         return internalGetType(this);
     }
 
-    // The ordinary-object substrate every non-primitive value type carries. A primitive answers
-    // null, which is what distinguishes it from an object at every property choke point.
     public PropertyTable ownProperties() {
         return null;
     }
 
-    // [[Prototype]] is any object-like value, not just a plain JsObject: `foo.prototype = [1, 2]`
-    // and Object.setPrototypeOf(o, someArray) both link a chain that has to stay walkable.
     public JsValue getProto() {
         return null;
     }
 
     public void setProto(JsValue proto) {
-        // A value type without a [[Prototype]] slot silently ignores the link.
     }
 
     public boolean isExtensible() {
@@ -33,10 +28,6 @@ public abstract class JsValue {
         return properties != null && properties.isExtensible();
     }
 
-    // The five ordinary-object operations. Every default answers from ownProperties(), so a value
-    // type whose keys live elsewhere (an array's indices, the global object's Environment) overrides
-    // the ones it owns instead of the choke points special-casing it. A proxy never reaches these:
-    // ProxyDispatch intercepts in front of them.
     public List<JsValue> ownPropertyKeys() {
         final var table = ownProperties();
         if (table == null) {
@@ -80,8 +71,6 @@ public abstract class JsValue {
                 : null;
     }
 
-    // Rejections are raised as a TypeError with the offending key rather than reported through the
-    // return value, which says only whether this value owns the definition at all.
     public boolean defineOwnProperty(JsValue key, PropertyDescriptor descriptor) {
         final var table = ownProperties();
         if (table == null) {
@@ -99,12 +88,6 @@ public abstract class JsValue {
         return true;
     }
 
-    // [[Delete]] of a property that isn't there succeeds, which is why a primitive answers true. A
-    // lazily-materialised metadata property (a callable's non-configurable "name"/"length", a
-    // builtin's "prototype", ...) is absent from the table until defineOwnProperty first touches it,
-    // so `table.delete` alone would see nothing there and trivially succeed - materialising it first
-    // (as defineOwnProperty already does) makes the real, possibly non-configurable flags the ones
-    // consulted.
     public boolean deleteOwnProperty(JsValue key) {
         final var table = ownProperties();
         if (table == null) {

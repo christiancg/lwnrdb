@@ -7,10 +7,6 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.TextStyle;
 import java.util.Locale;
 
-/**
- * A JavaScript {@code Date} value backed by an epoch-millis {@code double}. {@code NaN} models an
- * invalid date. All component access is in UTC (the sandbox has no local time zone).
- */
 public final class JsDate extends JsValue {
     private PropertyTable table;
 

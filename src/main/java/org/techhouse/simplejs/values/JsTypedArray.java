@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.values;
 
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
+
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -11,15 +13,7 @@ import org.techhouse.simplejs.builtins.NumberBuiltins;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 
-/**
- * A typed-array view over a {@link JsArrayBuffer}. Elements are read/written through the buffer's
- * shared bytes in little-endian order (the platform endianness JS exposes for typed arrays), coerced
- * to and from the view's {@link Kind}. BigInt kinds surface {@link JsBigInt} elements; all others
- * surface {@link JsNumber}.
- */
 public final class JsTypedArray extends JsValue {
-    // An integer-indexed element is writable, enumerable and configurable: the spec made these
-    // configurable so a shrinking resizable buffer can drop them.
     private static final JsObject.PropertyFlags INDEX_FLAGS = new JsObject.PropertyFlags(true, true, true);
 
     private PropertyTable table;
@@ -67,8 +61,6 @@ public final class JsTypedArray extends JsValue {
         this.lengthTracking = lengthTracking;
     }
 
-    // The realm's ops, so an element write reached through a seam that carries none (a member
-    // assignment, [[DefineOwnProperty]]) still runs the value's user-defined valueOf.
     public JsTypedArray withOps(InterpreterOps ops) {
         this.ops = ops;
         return this;
@@ -82,12 +74,10 @@ public final class JsTypedArray extends JsValue {
         return buffer;
     }
 
-    /** The observable {@code byteOffset}, which the spec reports as 0 once the view is out of bounds. */
     public int byteOffset() {
         return isOutOfBounds() ? 0 : byteOffset;
     }
 
-    /** The view's own offset regardless of bounds, for deriving a new view's geometry from this one. */
     public int rawByteOffset() {
         return byteOffset;
     }
@@ -96,11 +86,6 @@ public final class JsTypedArray extends JsValue {
         return lengthTracking;
     }
 
-    /**
-     * IsTypedArrayOutOfBounds: a view whose window no longer fits inside its buffer. A detached buffer
-     * makes every view out of bounds; a shrunk resizable buffer makes only the views that no longer
-     * fit out of bounds (a length-tracking view just gets shorter, unless its very offset is gone).
-     */
     public boolean isOutOfBounds() {
         if (buffer.isDetached()) {
             return true;
@@ -159,17 +144,10 @@ public final class JsTypedArray extends JsValue {
         setElement(index, value, coercingOps(index));
     }
 
-    // [[Set]] coerces the value before validating the index, but only when the receiver is this very
-    // typed array; the receiver-less member seam cannot tell the two apart, so coercion is skipped
-    // for an index merely out of range on a healthy view - the shape a foreign receiver produces.
     private InterpreterOps coercingOps(int index) {
         return isValidIndex(index) || isOutOfBounds() ? ops : null;
     }
 
-    // IntegerIndexedElementSet coerces the value *before* checking the index, so a valueOf that
-    // detaches or shrinks the buffer still runs and only then is the write dropped. Without an ops
-    // seam there is no user code to run, so an already-invalid index skips the coercion rather than
-    // raising a TypeError the spec would never reach.
     public void setElement(int index, JsValue value, InterpreterOps ops) {
         if (ops == null && !isValidIndex(index)) {
             return;
@@ -208,9 +186,6 @@ public final class JsTypedArray extends JsValue {
         return Float.floatToFloat16(toOddFloat(value));
     }
 
-    // Narrowing a double to a half through an intermediate float rounds twice, which turns a value a
-    // hair above the halfway point into the wrong half. Round-to-odd on the first step makes the
-    // second one land where a single correctly-rounded conversion would.
     private static float toOddFloat(double value) {
         final var narrowed = (float) value;
         if (narrowed == value || Double.isNaN(value) || Float.isInfinite(narrowed)
@@ -220,9 +195,6 @@ public final class JsTypedArray extends JsValue {
         return Math.nextAfter(narrowed, value);
     }
 
-    // ToNumber on an object runs OrdinaryToPrimitive, but JsCoercion only recognises a plain
-    // JsObject as one; an element written from another exotic (a typed array, an array, a function)
-    // needs the same treatment.
     private static JsValue elementPrimitive(JsValue value, InterpreterOps ops) {
         if (ops == null || value instanceof JsObject || value.ownProperties() == null) {
             return value;
@@ -248,10 +220,6 @@ public final class JsTypedArray extends JsValue {
             throw new TypeErrorException("Cannot convert object to primitive value");
         }
         return result;
-    }
-
-    private static boolean isCallable(JsValue value) {
-        return value instanceof JsFunction || value instanceof JsNativeFunction;
     }
 
     private static long reduce(double d, int bits) {
@@ -284,10 +252,6 @@ public final class JsTypedArray extends JsValue {
         return table;
     }
 
-    // A typed array's [[Prototype]] is an ordinary, settable slot (only [[Get]]/[[Set]]/
-    // [[HasProperty]]/[[OwnPropertyKeys]]/[[DefineOwnProperty]]/[[Delete]] are exotic); the default
-    // `null` means "unset" and every choke point that reads it already falls back to the realm's
-    // per-kind intrinsic prototype in that case.
     @Override
     public JsValue getProto() {
         return proto;
@@ -298,11 +262,6 @@ public final class JsTypedArray extends JsValue {
         this.proto = proto;
     }
 
-    /**
-     * CanonicalNumericIndexString: the number a property key denotes when it is exactly what
-     * {@code Number::toString} would produce for it, else null. {@code "-0"} is canonical by fiat;
-     * {@code "1.0"}, {@code "+1"} and {@code " 1"} are not, and stay ordinary property keys.
-     */
     public static Double canonicalNumericIndex(String key) {
         if ("-0".equals(key)) {
             return -0.0;
@@ -316,8 +275,6 @@ public final class JsTypedArray extends JsValue {
         return NumberFormatter.toJsString(parsed).equals(key) ? parsed : null;
     }
 
-    // IsValidIntegerIndex: a canonical numeric key only addresses an element when it is a
-    // non-negative integer inside the live window; -0 never is.
     public boolean isValidIntegerIndex(double index) {
         if (isOutOfBounds() || index != Math.floor(index) || Double.isInfinite(index)) {
             return false;
@@ -373,14 +330,6 @@ public final class JsTypedArray extends JsValue {
         return index == null ? super.deleteOwnProperty(key) : !isValidIntegerIndex(index);
     }
 
-    /**
-     * The integer-indexed arm of {@code [[Set]]}. Writing through the typed array itself coerces the
-     * value and then writes it (dropping an index the buffer no longer covers); a foreign receiver
-     * with an index this view does not hold is answered {@code true} without coercing the value and
-     * without ever reaching a setter the receiver inherits. Answers false only when the key is
-     * ordinary and {@code OrdinarySet} should take over, so the receiver-aware member choke point has
-     * to try this before it does anything else.
-     */
     public boolean setExoticIndex(JsValue key, JsValue value, JsValue receiver) {
         final var index = exoticIndex(key);
         if (index == null) {
@@ -393,9 +342,6 @@ public final class JsTypedArray extends JsValue {
         return !isValidIntegerIndex(index);
     }
 
-    // The slot the coerced value will be written to, resolved *before* coercion but validated after
-    // it: a valueOf that resizes the buffer can turn an out-of-bounds index into a live one. A
-    // fractional or negative index (-0 included) can never name a slot, so it is dropped outright.
     private static int elementSlot(double index) {
         if (index != Math.floor(index) || index < 0 || index > Integer.MAX_VALUE || Double.compare(index, -0.0) == 0) {
             return -1;

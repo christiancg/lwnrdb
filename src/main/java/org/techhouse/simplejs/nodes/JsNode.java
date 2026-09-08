@@ -3,14 +3,7 @@ package org.techhouse.simplejs.nodes;
 import org.techhouse.simplejs.elements.SourcePosition;
 
 public abstract class JsNode {
-    // The construct's verbatim source text, retained by the parser only for the function-like and
-    // class nodes whose runtime value has an observable [[SourceText]] (Function.prototype.toString).
-    // Null wherever there was no source to slice - the token-list-only parse entry point and a
-    // template substitution's nested token stream - which is what makes the callable report the
-    // NativeFunction form instead.
     private String sourceText;
-    // Where the construct starts, for the interpreter's call stack. Null on the same parse paths
-    // that leave sourceText null, so a frame degrades to a name without a position.
     private SourcePosition position;
 
     public enum NodeType {

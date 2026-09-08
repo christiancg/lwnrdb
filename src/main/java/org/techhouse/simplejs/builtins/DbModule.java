@@ -60,9 +60,6 @@ public final class DbModule {
         return EJsonInterop.fromEjson(document);
     }
 
-    // Charged per element inside the loop, not once at the end: the point is to abort a runaway result
-    // partway rather than after the whole JS copy already exists. What the script passed in is never
-    // charged - it was charged when the script allocated it.
     private static JsValue aggregate(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
         final var pipeline = (JsonArray) EJsonInterop.toHostEjson(args.get(2), ops);
         final var results = database.aggregate(arg(args, 0), arg(args, 1), pipeline);
@@ -98,9 +95,6 @@ public final class DbModule {
         return outcome(result);
     }
 
-    // A paged cursor over the live collection, not a snapshot: each batch is an ordinary AGGREGATE with
-    // SKIP/LIMIT appended, so it is authorized, schema-checked and cluster-routed like a hand-written
-    // db.aggregate, and a concurrent write between two batches is observable.
     private static JsValue cursor(DatabaseAccess database, InterpreterOps ops, Intrinsics intrinsics,
             ResourceLimits limits, List<JsValue> args) {
         final var converted = args.size() > 2 ? EJsonInterop.toHostEjson(args.get(2), ops) : null;
@@ -109,7 +103,7 @@ public final class DbModule {
         }
         final var iterator = JsIterators
                 .of(new BatchIterator(database, ops, arg(args, 0), arg(args, 1), steps, batchSize(args, limits)));
-        return JsIterators.linkPrototype(iterator, intrinsics == null ? null : intrinsics.dbCursorProto());
+        return JsIterators.linkPrototype(iterator, intrinsics == null ? null : intrinsics.dbCursorProto);
     }
 
     private static int batchSize(List<JsValue> args, ResourceLimits limits) {
@@ -168,8 +162,6 @@ public final class DbModule {
             return buffer.removeFirst();
         }
 
-        // The previous batch is drained before the next is fetched, so its charge is credited back
-        // first: streaming a collection costs one batch of the memory budget, not all of it.
         private void fetch() {
             InterpreterOps.release(ops, batchBytes);
             batchBytes = 0;
@@ -207,10 +199,6 @@ public final class DbModule {
         return object;
     }
 
-    // The scoped-callback form is what makes a script transaction safe: a non-async, non-generator
-    // body cannot contain `await`, so the transaction can never hop off the thread owning its locks.
-    // The Java catch is outside the interpreter, so even a ScriptAbortException (not catchable by user
-    // `try/catch`, skips `finally`) still rolls back and releases them.
     private static JsValue transaction(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
         final var callback = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         requireSynchronousCallable(callback);

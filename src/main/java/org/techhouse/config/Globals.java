@@ -6,7 +6,6 @@ public final class Globals {
     private Globals() {
     }
     public static final String PK_FIELD = "_id";
-    public static final String PK_FIELD_TYPE = "String";
     public static final String INDEX_TYPE_NUMBER = "Number";
     public static final String INDEX_TYPE_STRING = "String";
     public static final String INDEX_TYPE_BOOLEAN = "Boolean";
@@ -15,23 +14,24 @@ public final class Globals {
     public static final String INDEX_TYPE_ARRAY = "Array";
     public static final int BUFFER_SIZE = 32768;
     public static final String DB_FILE_EXTENSION = ".dat";
+    public static final String JSON_FILE_EXTENSION = ".json";
     public static final String INDEX_FILE_EXTENSION = ".idx";
     // Per-collection JSON Schema file: {coll}-schema.json holds the single validation schema for the
     // collection (user data, stored in the collection folder). Absent = the collection is unconstrained.
     public static final String SCHEMA_FILE_NAME = "schema";
-    public static final String SCHEMA_FILE_EXTENSION = ".json";
+    public static final String SCHEMA_FILE_EXTENSION = JSON_FILE_EXTENSION;
     // Per-database stored procedures live in a folder beside the database's collection folders. The
     // leading '.' cannot appear in a collection name, so the folder can never collide with one.
     public static final String PROCEDURES_FOLDER = ".procedures";
-    public static final String PROCEDURE_FILE_EXTENSION = ".json";
+    public static final String PROCEDURE_FILE_EXTENSION = JSON_FILE_EXTENSION;
     // Per-database schedules live beside the procedures folder, and cannot collide with a collection name
     // for the same reason: a leading '.' is unrepresentable in one.
     public static final String SCHEDULES_FOLDER = ".schedules";
-    public static final String SCHEDULE_FILE_EXTENSION = ".json";
+    public static final String SCHEDULE_FILE_EXTENSION = JSON_FILE_EXTENSION;
     // Per-collection trigger file infix: {coll}-triggers.json holds every trigger on the collection,
     // stored in the collection folder beside its schema so a DROP_COLLECTION removes it with the data.
     public static final String TRIGGERS_FILE_NAME = "triggers";
-    public static final String TRIGGERS_FILE_EXTENSION = ".json";
+    public static final String TRIGGERS_FILE_EXTENSION = JSON_FILE_EXTENSION;
     public static final String RW_PERMISSIONS = "rwd";
     public static final String R_PERMISSIONS = "r";
     public static final char COLL_IDENTIFIER_SEPARATOR = '|';
@@ -82,6 +82,7 @@ public final class Globals {
     public static final String TLS_CERT_DNAME = "lwnrdb";
     public static final String TLS_KEYSTORE_TYPE = "PKCS12";
     public static final String TLS_PROTOCOL = "TLS";
+    public static final String STANDALONE_NODE_ID = "local";
     public static final String CLUSTER_FOLDER = "cluster";
     public static final String CLUSTER_NODE_ID_FILE = "node.id";
     public static final String CLUSTER_ADMIN_EPOCH_FILE = "admin.epoch";

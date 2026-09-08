@@ -63,8 +63,6 @@ public final class JsAsyncGenerator extends JsValue {
         return table;
     }
 
-    // An async generator instance's [[Prototype]] is the async generator function's own
-    // `.prototype` (%AsyncGeneratorPrototype%-derived), one level below the shared realm intrinsic.
     @Override
     public JsValue getProto() {
         return proto;

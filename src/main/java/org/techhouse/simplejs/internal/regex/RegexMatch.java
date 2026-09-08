@@ -1,10 +1,5 @@
 package org.techhouse.simplejs.internal.regex;
 
-/**
- * The result of a successful {@link RegexMatcher#exec}. Mirrors the small subset of
- * {@code java.util.regex.Matcher}'s read API that {@code builtins.RegexBuiltins} needs, so building
- * a match-result array/indices object from it is unchanged from before this engine existed.
- */
 public final class RegexMatch {
     private final int[] starts;
     private final int[] ends;

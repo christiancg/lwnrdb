@@ -13,6 +13,7 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsLimits;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
@@ -240,15 +241,15 @@ public class JsArrayLengthTest {
     // Formerly a documented restriction (see Hard blocker on 100%,
     // plans/simplejs-test262-100-percent.md): JsArray used to store one dense slot per index and
     // refused any length beyond MAX_DENSE_LENGTH. It now backs an index at or past that cap with a
-    // sparse map instead, so a length up to the spec's own 2^32-1 ceiling (JsArray.MAX_ARRAY_LENGTH)
+    // sparse map instead, so a length up to the spec's own 2^32-1 ceiling (JsLimits.MAX_ARRAY_LENGTH)
     // is representable without allocating a matching number of real elements.
     @Test
     public void test_length_beyond_dense_capacity_now_succeeds_via_the_sparse_representation() {
         final var array = new JsArray();
         assertTrue(array.setLength(Integer.MAX_VALUE));
         assertEquals(Integer.MAX_VALUE, array.length());
-        assertTrue(array.setLength(JsArray.MAX_ARRAY_LENGTH));
-        assertEquals(JsArray.MAX_ARRAY_LENGTH, array.length());
+        assertTrue(array.setLength(JsLimits.MAX_ARRAY_LENGTH));
+        assertEquals(JsLimits.MAX_ARRAY_LENGTH, array.length());
     }
 
     // A read/write at an index at or past the dense cap round-trips through the sparse overflow map,
@@ -274,7 +275,7 @@ public class JsArrayLengthTest {
         final var hugeIndex = "4294967294"; // 2^32 - 2, the largest legal array index
         array.defineOwnProperty(new JsString(hugeIndex),
                 new PropertyDescriptor(new JsNumber(100), null, null, true, true, true));
-        assertEquals(JsArray.MAX_ARRAY_LENGTH, array.length());
+        assertEquals(JsLimits.MAX_ARRAY_LENGTH, array.length());
         assertTrue(array.hasProperty(hugeIndex));
     }
 
@@ -284,7 +285,7 @@ public class JsArrayLengthTest {
     public void test_define_length_past_spec_ceiling_is_still_a_range_error() {
         final var array = new JsArray();
         assertThrows(RangeErrorException.class, () -> array.defineOwnProperty(new JsString("length"),
-                new PropertyDescriptor(new JsNumber(JsArray.MAX_ARRAY_LENGTH + 1), null, null, null, null, null)));
+                new PropertyDescriptor(new JsNumber(JsLimits.MAX_ARRAY_LENGTH + 1), null, null, null, null, null)));
     }
 
     // getElements() returns a view, not the bare backing list: ExpressionEvaluator's array-literal

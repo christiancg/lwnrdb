@@ -16,11 +16,6 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-// GetIterator(obj, async) plus the step loop it feeds, shared by `for await` and async `yield*`.
-// A real async iterator returns a promise *of* the step object; a sync iterator is wrapped in the
-// spec's %AsyncFromSyncIteratorPrototype% behaviour, where the step object is produced synchronously
-// and AsyncFromSyncIteratorContinuation awaits only its `value` (closing the sync iterator when that
-// await rejects on a not-done step).
 public final class AsyncIteration {
     private final Interpreter interp;
     private final EventLoop eventLoop;
@@ -37,8 +32,6 @@ public final class AsyncIteration {
         this.fromSync = fromSync;
     }
 
-    // GetMethod is not the same as a plain member read: a present-but-non-callable @@asyncIterator
-    // is a TypeError, and @@iterator must not be touched at all when @@asyncIterator is present.
     public static AsyncIteration open(Interpreter interp, JsValue source) {
         final var asyncMethod = interp.getMemberByKey(source, JsSymbol.ASYNC_ITERATOR);
         if (!isNullish(asyncMethod)) {
@@ -67,8 +60,6 @@ public final class AsyncIteration {
     public record Step(boolean done, JsValue value) {
     }
 
-    // `for await` runs AsyncIteratorStepValue, which calls `next` with no argument at all — a `next`
-    // counting its arguments can observe the difference from the delegating form below.
     public Step step(Coroutine coroutine, JsValue sent) {
         return step(coroutine, sent instanceof JsUndefined ? List.of() : List.of(sent));
     }
@@ -98,17 +89,6 @@ public final class AsyncIteration {
         return new Step(complete, interp.getMember(settled, "value"));
     }
 
-    // AsyncFromSyncIteratorContinuation, PLUS the outer `Await(nextResult)` that ForIn/OfBodyEvaluation
-    // (13.7.5.13) applies unconditionally whenever iteratorKind is async. These are two distinct
-    // promises: `%AsyncFromSyncIteratorPrototype%.next()` always returns a freshly constructed
-    // promise capability (`nextResult` below) *before* anything about `value` is awaited, wrapping
-    // (once the inner `value` wrapper settles) a genuine IterResultObject - it is that wrapper
-    // promise, not `value` itself, that the loop's own Await(nextResult) awaits a second time. Both
-    // `constructor` Gets (PromiseResolve on `value` if it is itself a promise, and PromiseResolve on
-    // `nextResult` - always a real Promise - from the outer Await) happen synchronously, back to
-    // back, before either promise's settlement queues its first microtask; building `nextResult` only
-    // *after* the inner value-wrapper await had already parked (a prior version of this method did
-    // that) interleaved one tick between the two `constructor` reads instead of keeping them adjacent.
     private Step continuation(Coroutine coroutine, JsValue raw) {
         if (!isObjectLike(raw)) {
             done = true;
@@ -125,10 +105,6 @@ public final class AsyncIteration {
         }
         done = done || complete;
 
-        // PerformPromiseThen(valueWrapper, onFulfilled, onRejected, nextResultCapability): chains
-        // nextResult's settlement to valueWrapper's without parking the coroutine here - only the
-        // outer Await(nextResult) below parks, matching the single await point the driving loop
-        // itself performs per the spec.
         final var nextResult = new JsPromise(eventLoop);
         try {
             final var valueWrapper = interp.toPromise(value);
@@ -136,10 +112,6 @@ public final class AsyncIteration {
                     awaitedValue -> nextResult.resolve(InterpreterUtils.stepResult(awaitedValue, complete)),
                     nextResult::reject);
         } catch (SimpleJsRuntimeException error) {
-            // IfAbruptRejectPromise(valueWrapper, promiseCapability): computing the value wrapper
-            // itself threw (e.g. a poisoned `constructor` getter on an already-a-promise `value`) -
-            // nextResult, already a real promise capability, is rejected directly with that reason
-            // instead of needing a synthetic poisoned-thenable stand-in.
             nextResult.reject(InterpreterUtils.toErrorValue(error, interp.intrinsics()));
         }
 
@@ -158,8 +130,6 @@ public final class AsyncIteration {
         }
     }
 
-    // AsyncIteratorClose under a normal completion: GetMethod rejects a present-but-non-callable
-    // `return`, and that TypeError is the caller's.
     public void close() {
         if (done) {
             return;
@@ -182,7 +152,6 @@ public final class AsyncIteration {
                 interp.callValue(returnFn, iterator, List.of());
             }
         } catch (SimpleJsRuntimeException ignored) {
-            // the original completion wins over anything the iterator's `return` throws
         }
     }
 }

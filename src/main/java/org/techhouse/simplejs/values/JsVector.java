@@ -2,11 +2,6 @@ package org.techhouse.simplejs.values;
 
 import org.techhouse.ejson.custom_types.JsonVector;
 
-/**
- * The EJson {@code #vector(v0,...,vn)} custom type as a JavaScript value: a bare data carrier around
- * the component array, shaped like {@link JsTemporalPlainTime} (all behaviour lives in
- * {@code VectorBuiltins}).
- */
 public final class JsVector extends JsValue {
     private PropertyTable table;
 

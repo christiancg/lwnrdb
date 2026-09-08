@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.internal.interpreter;
 
+import static org.techhouse.simplejs.values.JsLimits.MAX_ARRAY_LENGTH;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -47,10 +49,6 @@ import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-// State-free helpers lifted out of the tree-walking Interpreter: small predicates, coercions,
-// key/name derivations, binding-name collection, array/object shape helpers and error mapping.
-// These depend only on their arguments plus static builtins, so they carry none of the
-// interpreter's execution state and are pulled back in via a static import.
 public final class InterpreterUtils {
     public static final Set<String> LOGICAL_ASSIGN = Set.of("&&=", "||=", "??=");
     public static final Set<String> LEXICAL_KINDS = Set.of("let", "const");
@@ -67,10 +65,6 @@ public final class InterpreterUtils {
         return value instanceof JsFunction || value instanceof JsNativeFunction;
     }
 
-    // IsAnonymousFunctionDefinition: only a function/class *expression* without its own binding
-    // identifier takes the name of what it is assigned to. A parenthesized expression parses to the
-    // inner node (so it still qualifies), while `(0, function(){})` parses to a SequenceExpression
-    // and must not.
     public static boolean isAnonymousFunctionDefinition(JsNode node) {
         return switch (node) {
             case null -> false;
@@ -96,8 +90,6 @@ public final class InterpreterUtils {
         }
     }
 
-    // The single source of truth for [[Construct]]: Interpreter.constructValue guards on it, so a
-    // value that answers false here is never reachable via `new`.
     public static boolean isConstructor(JsValue value) {
         return switch (value) {
             case JsProxy proxy -> proxy.isConstructor();
@@ -108,8 +100,6 @@ public final class InterpreterUtils {
         };
     }
 
-    // A deny-list, not an allow-list: every non-primitive JsValue subtype is an object to the spec,
-    // so a value type added later must not silently regress iteration or construction.
     public static boolean isObjectLike(JsValue value) {
         return !(value instanceof JsUndefined || value instanceof JsNull || value instanceof JsBoolean
                 || value instanceof JsNumber || value instanceof JsString || value instanceof JsBigInt
@@ -135,13 +125,6 @@ public final class InterpreterUtils {
         }
     }
 
-    // The full-width counterpart to arrayIndex: a canonical array index per the spec is any value in
-    // [0, 2^32-2] (ToString(ToUint32(P)) === P and ToUint32(P) !== 2^32-1), which overflows arrayIndex's
-    // `int` well before the spec's own ceiling - "2147483648" is a perfectly legal array index that
-    // Integer.parseInt rejects. This widened lookup is used only by JsArray itself (for
-    // Object.defineProperty/defineProperties, which reach it directly rather than through the
-    // int-bounded fast paths every other array-index consumer in the interpreter still uses), so
-    // widening it here carries none of the blast radius changing arrayIndex's own return type would.
     public static Long canonicalArrayIndexWide(String key) {
         if (key.isEmpty()) {
             return null;
@@ -156,16 +139,12 @@ public final class InterpreterUtils {
         }
         try {
             final var value = Long.parseLong(key);
-            return value >= 0 && value < 4_294_967_295L ? value : null;
+            return value >= 0 && value < MAX_ARRAY_LENGTH ? value : null;
         } catch (NumberFormatException ignored) {
             return null;
         }
     }
 
-    // Spec CanonicalNumericIndexString: a key that round-trips through Number->String is an
-    // "integer-indexed" access on a typed array even when it isn't a valid array index (e.g.
-    // "1.1", "-1", "-0", "NaN") - such keys must resolve via the exotic [[Get]]/[[Set]] (returning
-    // undefined / no-op) and never fall through to the prototype chain, unlike an ordinary object.
     public static boolean isCanonicalNumericIndexString(String key) {
         if ("-0".equals(key)) {
             return true;
@@ -220,7 +199,6 @@ public final class InterpreterUtils {
         };
     }
 
-    // An accessor's value is only reachable by invoking its getter, which JsObject cannot do by design.
     public static JsValue ownValue(JsObject object, String key, InterpreterOps ops) {
         if (ops != null && object.hasAccessor(key)) {
             return ops.getMember(object, new JsString(key));
@@ -248,10 +226,6 @@ public final class InterpreterUtils {
         throw new TypeErrorException(JsCoercion.toStr(value) + " is not iterable");
     }
 
-    // A generic array-like is snapshotted by reading `length` then every index through the member
-    // seam, so getters and inherited index properties are honoured; a missing index is a hole. A
-    // method that iterates backwards reads the indices in descending order (`fromEnd`) so a throwing
-    // getter is observed in the same order as the spec's lazy walk.
     public static List<JsValue> arrayLikeElements(JsValue value, InterpreterOps ops, boolean fromEnd) {
         if (ops == null || !(value instanceof JsObject || value instanceof JsProxy)) {
             return arrayLikeElements(value);
@@ -271,12 +245,6 @@ public final class InterpreterUtils {
         return elements;
     }
 
-    // Array.from and the %TypedArray% constructor/from check for a callable @@iterator first and
-    // only fall back to array-like (length + indexed Get) semantics when it is absent — unlike a
-    // plain iterableToList.drain, which requires a true iterable. A throwing @@iterator getter still
-    // propagates here, since the lookup itself runs through the member seam. A generator or an
-    // arguments object is iterated structurally by Iteration (not via a real @@iterator member), so
-    // both are treated as having a callable iterator without consulting the member seam.
     public static List<JsValue> arrayLikeOrIterableToList(JsValue source, IterableToList iterableToList,
             InterpreterOps ops) {
         if (source instanceof JsGenerator || source instanceof JsArguments
@@ -286,8 +254,6 @@ public final class InterpreterUtils {
         return arrayLikeElements(source, ops, false);
     }
 
-    // A length past the int range cannot be materialised by the snapshot model, and every spec path
-    // that would need one throws anyway ("integer limit exceeded"), so report that rather than hang.
     private static int toLength(JsValue value, InterpreterOps ops) {
         final var number = JsCoercion.toNumber(value, ops);
         if (Double.isNaN(number) || number <= 0) {
@@ -311,8 +277,6 @@ public final class InterpreterUtils {
         return points;
     }
 
-    // The iterator protocol walks a string by code point, while its indexed properties (and every
-    // generic array-like path built on them) stay code units — arrayLikeElements is deliberately unchanged.
     public static List<JsValue> iterableElements(JsValue value) {
         if (value instanceof JsString string) {
             return stringCodePoints(string.getValue());
@@ -358,8 +322,6 @@ public final class InterpreterUtils {
         return array.deleteOwnProperty(new JsString(key));
     }
 
-    // HasProperty's per-link test. A [[Prototype]] may be any object-like value, so only a plain
-    // JsObject takes the direct-table fast path; anything else answers through [[GetOwnProperty]].
     public static boolean protoOwnsKey(JsValue proto, String key) {
         return proto instanceof JsObject object
                 ? object.has(key) || object.hasAccessor(key)

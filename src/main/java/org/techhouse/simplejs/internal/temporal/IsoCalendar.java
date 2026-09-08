@@ -1,8 +1,10 @@
 package org.techhouse.simplejs.internal.temporal;
 
+import static org.techhouse.simplejs.internal.temporal.TemporalLimits.MAX_EPOCH_DAY;
+import static org.techhouse.simplejs.internal.temporal.TemporalLimits.MIN_EPOCH_DAY;
+
 import java.time.DateTimeException;
 import java.time.LocalDate;
-import java.time.Period;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.WeekFields;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -35,12 +37,6 @@ public final class IsoCalendar {
         return result;
     }
 
-    // Calendar validity only (month range, day-in-month), without PlainDate's own representable-day-
-    // range check - for callers whose value isn't itself a PlainDate day (PlainYearMonth/PlainMonthDay
-    // string parsing, where a year can genuinely be far outside PlainDate's range while the resulting
-    // year-month/month-day is still perfectly valid - see PlainYearMonth/from/limits.js and
-    // PlainMonthDay/from/iso-year-used-only-for-overflow.js). Every other caller should keep using
-    // regulateDate.
     public static Iso8601Fields regulateCalendarDate(int year, int month, int day, RegulateOverflow overflow) {
         if (overflow == RegulateOverflow.CONSTRAIN) {
             final var constrainedMonth = Math.clamp(month, 1, 12);
@@ -57,13 +53,6 @@ public final class IsoCalendar {
         return new Iso8601Fields(year, month, day);
     }
 
-    // ISODateWithinLimits: every ISO date type (PlainDate, and by extension PlainDateTime/
-    // ZonedDateTime's date part) is representable only within +-10**8 days of the epoch, with one
-    // extra day of headroom on the negative side (matching the exact published PlainDate range
-    // -271821-04-19 .. +275760-09-13). Applied here - the single choke point every regulated/balanced
-    // ISO date passes through - rather than duplicated per Temporal type.
-    private static final long EPOCH_DAYS_LIMIT = 100_000_000L;
-
     private static void requireWithinRepresentableRange(Iso8601Fields date) {
         final long epochDay;
         try {
@@ -71,17 +60,11 @@ public final class IsoCalendar {
         } catch (DateTimeException e) {
             throw new RangeErrorException("date value is outside the representable range");
         }
-        if (epochDay < -EPOCH_DAYS_LIMIT - 1 || epochDay > EPOCH_DAYS_LIMIT) {
+        if (epochDay < MIN_EPOCH_DAY || epochDay > MAX_EPOCH_DAY) {
             throw new RangeErrorException("date value is outside the representable range: " + date);
         }
     }
 
-    /**
-     * Carries month overflow/underflow into year and day overflow/underflow into month/year, e.g.
-     * (2023, 13, 45) balances into a valid calendar date. Delegates to {@link LocalDate} since
-     * Temporal's "iso8601" calendar is exactly the proleptic Gregorian calendar java.time already
-     * implements, rather than reimplementing epoch-day arithmetic.
-     */
     public static Iso8601Fields balanceIsoDate(long year, long month, long day) {
         try {
             final var firstOfMonth = LocalDate.of(Math.toIntExact(year), 1, 1).plusMonths(month - 1);
@@ -105,7 +88,6 @@ public final class IsoCalendar {
         return Integer.compare(a.day(), b.day());
     }
 
-    /** ISO 8601 day of week: 1 = Monday .. 7 = Sunday. */
     public static int dayOfWeek(Iso8601Fields date) {
         return toLocalDate(date).getDayOfWeek().getValue();
     }
@@ -114,7 +96,6 @@ public final class IsoCalendar {
         return toLocalDate(date).getDayOfYear();
     }
 
-    /** ISO 8601 week-numbering week: week 1 is the week containing the year's first Thursday. */
     public static int weekOfYear(Iso8601Fields date) {
         return toLocalDate(date).get(ISO_WEEK_FIELDS.weekOfWeekBasedYear());
     }
@@ -131,18 +112,11 @@ public final class IsoCalendar {
         }
     }
 
-    /**
-     * AddISODate: adds a calendar-aware years/months delta first (regulating the day against the
-     * resulting year/month via {@code overflow}), then balances in the day-granular weeks/days
-     * delta. The two-phase order matters - balancing everything through {@link #balanceIsoDate} in
-     * one shot would resolve e.g. "Jan 31 + 1 month" by walking 31 raw days from Feb 1st instead of
-     * constraining/rejecting against February's real length.
-     */
     public static Iso8601Fields addDate(Iso8601Fields date, double years, double months, double weeks, double days,
             RegulateOverflow overflow) {
         final long totalMonths = (date.month() - 1L) + (long) months;
         final long yearCarry = Math.floorDiv(totalMonths, 12);
-        final int balancedMonth = (int) Math.floorMod(totalMonths, 12) + 1;
+        final int balancedMonth = Math.floorMod(totalMonths, 12) + 1;
         final long balancedYear = date.year() + (long) years + yearCarry;
         final int intYear;
         try {
@@ -154,19 +128,6 @@ public final class IsoCalendar {
         return balanceIsoDate(regulated.year(), regulated.month(), regulated.day() + (long) weeks * 7 + (long) days);
     }
 
-    /**
-     * DifferenceISODate: the calendar difference from {@code date1} to {@code date2} (i.e. the
-     * duration that {@link #addDate} would apply to {@code date1} to reach {@code date2}), broken
-     * down greedily into units no larger than {@code largestUnit}. The week/day cases delegate to
-     * {@link ChronoUnit#DAYS} (an exact, direction-symmetric day count - negating it is always
-     * correct). The year/month cases are NOT simply {@link Period#between} on the smaller/larger pair
-     * negated when {@code date1 > date2}: month length varies, so a period computed forward from the
-     * earlier date and then negated does not generally land back on the later date when re-applied
-     * from it (e.g. the month-end/leap-day boundary cases {@link #monthDayDifference} exists to get
-     * right) - {@link #monthDayDifference} instead searches directly from {@code date1} in the actual
-     * sign direction, verified against {@link LocalDate#plusMonths} (the same CONSTRAIN semantics
-     * {@link #addDate} uses), so the result always round-trips via {@link #addDate}.
-     */
     public static DurationFields differenceISODate(Iso8601Fields date1, Iso8601Fields date2, Unit largestUnit) {
         final var start = toLocalDate(date1);
         final var end = toLocalDate(date2);
@@ -206,10 +167,6 @@ public final class IsoCalendar {
     private record MonthDayDiff(long totalMonths, long days) {
     }
 
-    // Searches for the whole-month count (signed, anchored at `start`) such that start.plusMonths(...)
-    // lands as close to `end` as possible without passing it (in the actual start->end direction),
-    // then measures the exact day remainder from that landing point - the direct, round-trip-safe
-    // replacement for a smaller/larger Period.between negated post hoc.
     private static MonthDayDiff monthDayDifference(LocalDate start, LocalDate end) {
         final var sign = start.isBefore(end) ? 1 : -1;
         var totalMonths = (end.getYear() - start.getYear()) * 12L + (end.getMonthValue() - start.getMonthValue());
@@ -223,14 +180,10 @@ public final class IsoCalendar {
         return new MonthDayDiff(totalMonths, ChronoUnit.DAYS.between(landing, end));
     }
 
-    // True once `candidate` has gone past `target` in the `sign` direction of travel.
     private static boolean overshoots(LocalDate candidate, LocalDate target, int sign) {
         return sign > 0 ? candidate.isAfter(target) : candidate.isBefore(target);
     }
 
-    // A zero component must stay +0 after applying `sign`, not become -0 (a Duration field is never
-    // observably signed-zero per spec) - plain `sign * value` produces -0 in IEEE 754 whenever value
-    // is 0 and sign is negative.
     private static double signed(int sign, long value) {
         return value == 0 ? 0.0 : sign * (double) value;
     }

@@ -27,8 +27,6 @@ public final class Coroutine {
     public record StepResult(JsValue value, boolean done) {
     }
 
-    // A `return` completion injected at a suspended yield. `yield*` catches it to forward the
-    // completion to the inner iterator and re-raises it with the inner iterator's return value.
     public static final class ReturnSignal extends RuntimeException {
         private final transient JsValue value;
 
@@ -51,8 +49,6 @@ public final class Coroutine {
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition turn = lock.newCondition();
     private boolean bodyTurn;
-    // Claimed exactly while the body owns the turn. The only way the claim can fail is a re-entrant
-    // drive from the body's own thread, which would otherwise block on a hand-off that can never come.
     private final AtomicBoolean running = new AtomicBoolean();
     private volatile boolean started;
     private volatile boolean done;
@@ -162,9 +158,6 @@ public final class Coroutine {
         resume();
     }
 
-    // `yield*` over an async iterator must hand the delegated value through untouched, while a plain
-    // `yield x` in an async generator awaits its operand. The delegating step marks the coroutine so
-    // the very next yieldOut is reported as delegated and the driver skips that await.
     public void markDelegatedYield() {
         this.delegatedYield = true;
     }
@@ -201,8 +194,6 @@ public final class Coroutine {
         resume();
     }
 
-    // The interpreter uses this to give a coroutine its own call-stack segment for the duration of a
-    // resumption: a suspended generator's frames must not show up in the trace of whoever resumed it.
     @FunctionalInterface
     public interface AroundResume {
         void around(Runnable resume);
@@ -308,7 +299,6 @@ public final class Coroutine {
         } catch (ReturnSignal signal) {
             result = signal.value();
         } catch (CancelSignal ignored) {
-            // cancellation unwinds the body silently; the result stays undefined
         } catch (RuntimeException runtime) {
             escapedError = runtime;
         }

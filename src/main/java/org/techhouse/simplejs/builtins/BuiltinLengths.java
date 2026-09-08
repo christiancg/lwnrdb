@@ -4,15 +4,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-// The spec-declared `length` of every intrinsic prototype method, keyed "Label.method" so one table
-// covers every family the Intrinsics wrappers build. A builtin's length is observable
-// (verifyProperty(Array.prototype, "join", {value: 1})) and cannot be derived from the Java lambda,
-// which always takes a single varargs list. An unlisted name falls back to 1, the commonest arity.
 public final class BuiltinLengths {
     private static final int DEFAULT_LENGTH = 1;
     private static final Map<String, Integer> LENGTHS = new HashMap<>();
-    // The namespace/constructor objects whose own function properties are static builtins. Their
-    // lengths come from the same table (keyed by the owner's global name), defaulting to 1.
     private static final List<String> STATIC_OWNERS = List.of("Object", "Array", "String", "Number", "Boolean", "Math",
             "JSON", "Promise", "RegExp", "Symbol", "Map", "Set", "WeakMap", "WeakSet", "Date", "Reflect", "Proxy",
             "ArrayBuffer", "DataView", "BigInt", "Iterator", "AsyncIterator", "DisposableStack", "AsyncDisposableStack",

@@ -15,19 +15,6 @@ import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
-/**
- * Re-queues the trigger runs that were pending when this node stopped.
- *
- * <p>
- * A record only survives if the transaction that would have consumed it never committed, so replaying one
- * cannot double-apply a run that already landed — which is what lets recovery be automatic here rather than
- * something an operator has to adjudicate.
- *
- * <p>
- * Must run <em>after</em> {@code TransactionOperationHelper.cleanupOrphansAtStartup}: a run whose commit was
- * in flight when the process died is finished by that pass, which removes its record, and only what is left
- * afterwards is genuinely un-applied.
- */
 public final class TriggerRunRecovery {
     private static final Logger logger = Logger.logFor(TriggerRunRecovery.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
@@ -61,12 +48,6 @@ public final class TriggerRunRecovery {
         }
     }
 
-    /**
-     * Warns about runs that have been pending far longer than a run should take. A record that lingers is
-     * either stranded (its node never came back, or its collection was dropped) or evidence that the trigger
-     * queue is not keeping up; either way an operator wants to know before the retention window silently
-     * collects it.
-     */
     public static void warnAboutStrandedRuns() {
         if (!configuration.isTriggersEnabled() || !TriggerRunLog.isEnabled()) {
             return;
@@ -118,8 +99,6 @@ public final class TriggerRunRecovery {
             String nodeId) {
         final var byRun = new LinkedHashMap<String, List<AdminTriggerRunEntry>>();
         for (final var entry : pending) {
-            // A dead letter has exhausted its attempts and is waiting for an operator, so replaying it at
-            // startup would re-run the very thing that was given up on.
             if (!nodeId.equals(entry.getNodeId()) || entry.getStatus() == TriggerRunStatus.DEAD) {
                 continue;
             }
@@ -128,9 +107,6 @@ public final class TriggerRunRecovery {
         return byRun;
     }
 
-    // Rebuilds the event from its chunks. A CREATED/UPDATED run carries ids and re-reads the committed
-    // documents at dispatch time, so it sees what is stored now; a DELETED run carries the documents, which
-    // no longer exist to be read.
     static TriggerEvent toEvent(List<AdminTriggerRunEntry> chunks) throws Exception {
         final var first = chunks.getFirst();
         final var entries = new ArrayList<DbEntry>();

@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.values;
 
+import static org.techhouse.simplejs.values.JsLimits.MAX_ARRAY_INDEX;
+
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
@@ -9,25 +11,14 @@ import java.util.Map;
 import java.util.Set;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 
-// The ordinary-object substrate: own data properties, accessors, per-key attribute flags and
-// extensibility, shared by every value type that has an own-property surface. Exotic types keep
-// their own behaviour (array indices, typed-array canonical numeric indices, the global
-// Environment) in front of this and delegate everything else to it.
 public final class PropertyTable {
-    private static final long MAX_ARRAY_INDEX = 4294967294L;
     private static final int MAX_INDEX_KEY_LENGTH = 10;
 
     private final Map<String, JsValue> properties = new LinkedHashMap<>();
-    // Data properties and accessors live in separate maps, so their relative insertion order is only
-    // recoverable from this single own-key list.
     private final Set<String> keyOrder = new LinkedHashSet<>();
     private boolean extensible = true;
     private Map<String, JsValue> accessorGetters;
     private Map<String, JsValue> accessorSetters;
-    // The source of truth for "is this key an accessor property", independent of whether either
-    // side actually holds a function - a descriptor like {get: undefined, set: undefined} is still
-    // a genuine accessor property per spec (reads as undefined, rejects writes), not a data
-    // property, even though neither accessor map above ever gets an entry for it.
     private Set<String> accessorKeys;
     private Map<String, PropertyFlags> descriptors;
     private Set<JsSymbol> symbolKeyOrder;
@@ -43,8 +34,6 @@ public final class PropertyTable {
     }
 
     public boolean set(String key, JsValue value) {
-        // An accessor key has no value slot: writing one here would install a data property that
-        // shadows the getter/setter pair for every later read.
         if (hasAccessor(key)) {
             return false;
         }
@@ -228,8 +217,6 @@ public final class PropertyTable {
         if (isNew && !extensible) {
             return false;
         }
-        // A symbol-keyed data property honours [[Writable]] exactly like a string-keyed one, so
-        // Object.freeze(o) rejects `o[sym] = v` rather than silently letting it through.
         if (!isNew && !getSymbolFlags(key).writable()) {
             return false;
         }
@@ -241,8 +228,6 @@ public final class PropertyTable {
         return true;
     }
 
-    // [[DefineOwnProperty]]'s counterpart to setSymbol: a definition is not an assignment, so it is
-    // not subject to [[Writable]] (a non-writable but configurable symbol property can be redefined).
     public void defineSymbolValue(JsSymbol key, JsValue value) {
         if (symbolProperties == null) {
             symbolProperties = new LinkedHashMap<>();
@@ -298,13 +283,6 @@ public final class PropertyTable {
     }
 
     public void defineAccessor(String key, JsValue getter, JsValue setter) {
-        // Always registers the key as a genuine accessor property, even when both getter and
-        // setter are null (e.g. a defineProperty descriptor of {get: undefined, set: undefined}):
-        // per spec that is still an accessor, not a data property, just one whose sides both read
-        // as undefined and reject writes. A key transitioning from a data property to an accessor
-        // (e.g. a class installing `static set length(_) {}` over the constructor's own default
-        // "length" value) must drop the stale data value - has()/get() and the accessor registry
-        // are meant to be mutually exclusive for one key.
         keyOrder.add(key);
         properties.remove(key);
         registerAccessorKey(key);
@@ -330,8 +308,6 @@ public final class PropertyTable {
         return accessorSetters == null ? null : accessorSetters.get(key);
     }
 
-    // Used when a redefine converts an accessor property into a data property: the accessor
-    // entries must not linger, or a later read would still find the stale getter/setter.
     public void clearAccessor(String key) {
         clearAccessorGetter(key);
         clearAccessorSetter(key);
@@ -340,10 +316,6 @@ public final class PropertyTable {
         }
     }
 
-    // defineAccessor is intentionally additive (a null side is "leave as-is", relied on by object
-    // literals installing a getter and setter via two separate calls) - these let a caller that
-    // means "explicitly remove this side" (e.g. a defineProperty redefine with `get: undefined`)
-    // say so without also wiping the side it isn't touching.
     public void clearAccessorGetter(String key) {
         if (accessorGetters != null) {
             accessorGetters.remove(key);
@@ -357,8 +329,6 @@ public final class PropertyTable {
     }
 
     public void defineSymbolAccessor(JsSymbol key, JsValue getter, JsValue setter) {
-        // Mirrors defineAccessor's string-key behaviour: always registers the symbol as a genuine
-        // accessor, even when both sides are null.
         registerSymbolKey(key);
         registerSymbolAccessorKey(key);
         if (getter != null) {

@@ -1,5 +1,8 @@
 package org.techhouse.ops;
 
+import static org.techhouse.simplejs.host.ScriptErrorNames.TIMED_OUT_MESSAGE;
+import static org.techhouse.simplejs.host.ScriptErrorNames.TIMEOUT;
+
 import java.util.HashMap;
 import java.util.Map;
 import org.techhouse.config.Configuration;
@@ -10,12 +13,6 @@ import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.simplejs.host.PipelineHostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
 
-/**
- * The script state of one AGGREGATE request: a callable per distinct source, opened on first use and closed
- * when the pipeline is done. A source repeated across steps (or inside a conjunction) is opened once, and the
- * wall-clock deadline is the request's, not each callable's, so a pipeline carrying several different scripts
- * cannot outlive {@code aggregationScriptTimeoutMs} by opening more of them.
- */
 public final class PipelineScriptContext implements AutoCloseable {
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
     private static final Configuration configuration = Configuration.getInstance();
@@ -30,7 +27,7 @@ public final class PipelineScriptContext implements AutoCloseable {
         }
         final var remaining = deadline - System.currentTimeMillis();
         if (remaining <= 0) {
-            throw new ScriptCallableException("ScriptTimeoutError", "Script exceeded its time limit");
+            throw new ScriptCallableException(TIMEOUT, TIMED_OUT_MESSAGE);
         }
         final var opened = simpleJs.openCallable(source, PipelineHostBindings.of(limits(remaining)));
         callables.put(source, opened);

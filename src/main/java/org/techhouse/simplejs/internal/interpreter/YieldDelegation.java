@@ -14,17 +14,7 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-// The `yield*` loop: it drives the inner iterator entirely through the iterator protocol (the `next`
-// read once at GetIterator time, `throw` and `return` looked up with GetMethod semantics) and
-// forwards whichever completion the outer generator was resumed with. A throw arrives as a
-// JsThrowException out of the suspended yield and a return as a Coroutine.ReturnSignal; the loop
-// turns both into the matching call on the inner iterator, and the return completion is re-raised
-// carrying the inner iterator's own return value.
 public final class YieldDelegation {
-    // A synchronous generator hands its consumer the inner iterator's result object untouched, so
-    // `done`/`value` are read exactly once. The object travels through the coroutine wrapped in this
-    // marker, which the generator's `next`/`return`/`throw` wrappers unwrap instead of building a
-    // fresh result object.
     public static final class PassThrough extends JsValue {
         private final JsValue result;
 
@@ -120,10 +110,6 @@ public final class YieldDelegation {
     private JsValue returnInto(JsValue sent) {
         final var returner = method("return");
         if (returner instanceof JsUndefined) {
-            // Spec: the await here is gated on the *outer* generator's kind (GetGeneratorKind()),
-            // not on whether the inner iterable happened to be sync-adapted - `fromSync` answers a
-            // different question (AsyncFromSyncIteratorContinuation's own extra await) and was
-            // wrong here, skipping the await whenever the inner iterator was genuinely async.
             throw new Coroutine.ReturnSignal(async ? awaited(sent) : sent);
         }
         return step(returner, sent);
@@ -141,8 +127,6 @@ public final class YieldDelegation {
         return result;
     }
 
-    // AsyncFromSyncIteratorContinuation awaits only the step's `value`, and on a rejection of a
-    // not-done step it closes the wrapped synchronous iterator before the rejection propagates.
     private JsValue resultValue(JsValue result, boolean closeOnRejection) {
         final var value = interp.getMember(result, "value");
         if (!fromSync) {
@@ -165,7 +149,6 @@ public final class YieldDelegation {
                 interp.callValue(returner, iterator, List.of());
             }
         } catch (JsThrowException | TypeErrorException ignored) {
-            // the original rejection wins over anything the iterator's `return` throws
         }
     }
 

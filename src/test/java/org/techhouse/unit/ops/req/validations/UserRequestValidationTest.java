@@ -260,7 +260,7 @@ public class UserRequestValidationTest {
         rawCollPerms.add("valid_db|valid_coll", new org.techhouse.ejson.elements.JsonString("NOT_A_VALID_LEVEL"));
         // inject via reflection to bypass the setter (which only accepts valid PermissionLevel)
         try {
-            final var field = CreateUserRequest.class.getDeclaredField("collectionPermissions");
+            final var field = CreateUserRequest.class.getSuperclass().getDeclaredField("collectionPermissions");
             field.setAccessible(true);
             field.set(req, rawCollPerms);
         } catch (Exception e) {

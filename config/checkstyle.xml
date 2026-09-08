@@ -20,6 +20,16 @@
         <property name="eachLine" value="true"/>
     </module>
 
+    <!-- A file nobody can read is a file nobody can review. Everything over the limit is
+         listed in config/checkstyle-suppressions.xml with a reason; that list only shrinks. -->
+    <module name="FileLength">
+        <property name="max" value="500"/>
+    </module>
+
+    <module name="SuppressionFilter">
+        <property name="file" value="${config_loc}/checkstyle-suppressions.xml"/>
+    </module>
+
     <module name="TreeWalker">
         <!-- Imports. Static member wildcard imports are allowed: test classes
              use `import static org.junit.jupiter.api.Assertions.*` and
@@ -34,6 +44,12 @@
             <property name="processJavadoc" value="true"/>
         </module>
         <module name="IllegalImport"/>
+
+        <!-- Tightened to 100 once the lexer/parser splits land. -->
+        <module name="MethodLength">
+            <property name="max" value="200"/>
+            <property name="countEmpty" value="false"/>
+        </module>
 
         <!-- Coding problems -->
         <module name="EqualsHashCode"/>
@@ -66,7 +82,12 @@
         <module name="ArrayTypeStyle"/>
         <module name="EmptyBlock">
             <property name="option" value="text"/>
-            <property name="tokens" value="LITERAL_TRY, LITERAL_CATCH, LITERAL_FINALLY, LITERAL_IF, LITERAL_ELSE, LITERAL_FOR, LITERAL_WHILE, LITERAL_DO, INSTANCE_INIT, STATIC_INIT"/>
+            <property name="tokens" value="LITERAL_TRY, LITERAL_FINALLY, LITERAL_IF, LITERAL_ELSE, LITERAL_FOR, LITERAL_WHILE, LITERAL_DO, INSTANCE_INIT, STATIC_INIT"/>
+        </module>
+
+        <!-- A deliberately empty catch says so by naming its variable, not by carrying prose. -->
+        <module name="EmptyCatchBlock">
+            <property name="exceptionVariableName" value="ignored|expected"/>
         </module>
 
         <!--

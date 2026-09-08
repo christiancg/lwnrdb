@@ -1,5 +1,9 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg;
+import static org.techhouse.simplejs.builtins.NewTargetSupport.requireNewTarget;
+import static org.techhouse.simplejs.builtins.NewTargetSupport.withNewTargetPrototype;
+
 import java.time.DateTimeException;
 import java.time.LocalDateTime;
 import java.util.List;
@@ -20,12 +24,6 @@ import org.techhouse.simplejs.values.JsTemporalPlainDateTime;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-/**
- * The {@code DbDateTime} global: constructor + prototype for the EJson {@code #datetime(...)} custom
- * type, shaped like {@link GeoBuiltins}. {@code toTemporal()} bridges to
- * {@code Temporal.PlainDateTime} so the calendar arithmetic already shipped is reachable from a
- * stored {@code datetime} field.
- */
 public final class DbDateTimeBuiltins {
     public static final List<String> NAMES = List.of("toString", "toJSON", "toTemporal");
     public static final List<String> FIELD_ACCESSORS = List.of("year", "month", "day", "hour", "minute", "second");
@@ -37,7 +35,7 @@ public final class DbDateTimeBuiltins {
 
     public static JsNativeFunction create(InterpreterOps ops) {
         final var ctor = new JsNativeFunction("DbDateTime", (thisArg, args) -> {
-            requireNewTarget(thisArg);
+            requireNewTarget("DbDateTime", thisArg);
             return withNewTargetPrototype(new JsDbDateTime(construct(args, ops)), ops);
         });
         final var from = new JsNativeFunction("from",
@@ -45,28 +43,6 @@ public final class DbDateTimeBuiltins {
         from.setLength(1);
         ctor.setProperty("from", from);
         return ctor;
-    }
-
-    private static void requireNewTarget(JsValue thisArg) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
-            throw new TypeErrorException("Constructor DbDateTime requires 'new'");
-        }
-    }
-
-    private static JsValue withNewTargetPrototype(JsDbDateTime constructed, InterpreterOps ops) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
-            return constructed;
-        }
-        final var proto = ops.getMember(newTarget, new JsString("prototype"));
-        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
-            return constructed;
-        }
-        final var wrapper = new JsObject();
-        wrapper.setPrimitive(constructed);
-        wrapper.setProto(requested);
-        return wrapper;
     }
 
     private static LocalDateTime construct(List<JsValue> args, InterpreterOps ops) {
@@ -94,8 +70,6 @@ public final class DbDateTimeBuiltins {
         return (int) (number < 0 ? Math.ceil(number) : Math.floor(number));
     }
 
-    // Accepts a DbDateTime, a Temporal.PlainDateTime/PlainDate, the "#datetime(...)" wire string or a
-    // bare ISO-8601 local date-time string, or a {year, month, day, hour, minute, second} bag.
     private static LocalDateTime toLocalDateTime(JsValue value, InterpreterOps ops) {
         if (value instanceof JsDbDateTime dateTime) {
             return dateTime.getValue();
@@ -149,17 +123,13 @@ public final class DbDateTimeBuiltins {
         return ops.getMember(target, new JsString(name));
     }
 
-    private static JsValue arg(List<JsValue> args, int index) {
-        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
-    }
-
     public static void installAccessors(JsObject proto) {
         for (final var name : FIELD_ACCESSORS) {
             final var getter = new JsNativeFunction("get " + name,
                     (thisArg, _) -> fieldAccessor(requireReceiver(thisArg, name), name));
             getter.setLength(0);
             proto.defineAccessor(name, getter, null);
-            proto.setFlags(name, new JsObject.PropertyFlags(true, false, true));
+            proto.setFlags(name, JsObject.PropertyFlags.HIDDEN);
         }
     }
 

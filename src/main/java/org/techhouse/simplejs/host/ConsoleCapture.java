@@ -4,11 +4,6 @@ import java.util.ArrayDeque;
 import java.util.List;
 import java.util.function.Consumer;
 
-/**
- * Bounded, ring-buffered capture of a script's console output. Retains the most recent
- * {@code maxLines} lines, evicting the oldest on overflow, and clips any single line to
- * {@code maxLineChars} so one huge write cannot exhaust the buffer on its own.
- */
 public final class ConsoleCapture implements Consumer<String> {
     private final ArrayDeque<String> lines = new ArrayDeque<>();
     private final int maxLines;
@@ -20,8 +15,6 @@ public final class ConsoleCapture implements Consumer<String> {
         this.maxLineChars = maxLineChars;
     }
 
-    // Synchronized because a fetch settlement and a coroutine body reach this from different virtual
-    // threads, and this is the one piece of interpreter-adjacent state not covered by the coroutine lock.
     @Override
     public synchronized void accept(String line) {
         if (maxLines <= 0) {

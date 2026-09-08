@@ -1,5 +1,13 @@
 package org.techhouse.simplejs;
 
+import static org.techhouse.simplejs.host.ScriptErrorNames.CANCELLED;
+import static org.techhouse.simplejs.host.ScriptErrorNames.EXHAUSTED_MEMORY_MESSAGE;
+import static org.techhouse.simplejs.host.ScriptErrorNames.LIMIT;
+import static org.techhouse.simplejs.host.ScriptErrorNames.MEMORY;
+import static org.techhouse.simplejs.host.ScriptErrorNames.PENDING_RESULT;
+import static org.techhouse.simplejs.host.ScriptErrorNames.RESULT_TOO_LARGE;
+import static org.techhouse.simplejs.host.ScriptErrorNames.TIMEOUT;
+
 import java.util.LinkedHashSet;
 import java.util.List;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -36,6 +44,7 @@ import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.Lexer;
 import org.techhouse.simplejs.internal.Parser;
+import org.techhouse.simplejs.internal.Session;
 import org.techhouse.simplejs.nodes.ExportAllDeclaration;
 import org.techhouse.simplejs.nodes.ExportNamedDeclaration;
 import org.techhouse.simplejs.nodes.ImportDeclaration;
@@ -50,20 +59,11 @@ import org.techhouse.simplejs.values.JsValue;
 import org.techhouse.utils.JsonUtils;
 
 public final class SimpleJs {
-    // Parses once, so a stored script can be compiled at save time and re-run without re-parsing. Throws
-    // the parse failures run(String, HostBindings) reports as a "SyntaxError" ScriptResult, which is what
-    // lets a caller reject an unparseable procedure before it is ever persisted.
     public CompiledScript compile(String source, boolean strictScriptGoal) {
         final var program = Parser.parse(Lexer.lexWithPositions(source), strictScriptGoal);
         return new CompiledScript(program, source, strictScriptGoal, JsonUtils.sha256(source));
     }
 
-    /**
-     * The distinct specifiers a compiled program imports or re-exports from, in source order. Only the static
-     * forms are visible: a dynamic {@code import(expr)} is an arbitrary expression and cannot be resolved
-     * without running the program. Callers use this to report an unresolvable import when a script is
-     * installed rather than on somebody else's first call; the AST stays inside this package.
-     */
     public List<String> moduleSpecifiers(CompiledScript compiled) {
         final var specifiers = new LinkedHashSet<String>();
         for (final var statement : compiled.program().getBody()) {
@@ -100,10 +100,6 @@ public final class SimpleJs {
         }
     }
 
-    /**
-     * Reports a failure that happened before a run could start - a parse error a caller compiled ahead of
-     * time - with the same name and message a run of that source would have produced.
-     */
     public ScriptResult failure(RuntimeException failure) {
         final var error = describe(failure);
         if (error == null) {
@@ -116,10 +112,6 @@ public final class SimpleJs {
         return run(compiled, host, null);
     }
 
-    /**
-     * Runs a compiled program with {@code around} wrapping the module body, so a caller can enclose the whole
-     * script in a transaction that begins and commits on the body's own thread.
-     */
     public ScriptResult run(CompiledScript compiled, HostBindings host, Interpreter.ModuleBodyWrapper around) {
         final var limits = host.limits();
         final var capture = new ConsoleCapture(
@@ -128,8 +120,6 @@ public final class SimpleJs {
         final var capturing = CapturingHostBindings.wrap(host, capture);
         final var metrics = new Interpreter.RunMetrics();
         try {
-            // The two goals differ in which early errors are raised, so a program parsed under the other
-            // one is simply the wrong program - parse again rather than run it.
             final var program = compiled.strictScriptGoal() == capturing.strictScriptGoal()
                     ? compiled.program()
                     : Parser.parse(Lexer.lexWithPositions(compiled.source()), capturing.strictScriptGoal());
@@ -144,22 +134,11 @@ public final class SimpleJs {
         }
     }
 
-    // The holder is filled by the interpreter's own finally, so an aborted run reports what it burned
-    // before it aborted rather than nothing at all.
     private static ScriptRunMetrics measured(Interpreter.RunMetrics metrics) {
         return new ScriptRunMetrics(metrics.instructions(), metrics.instructionBudget(), metrics.peakMemoryBytes(),
                 metrics.memoryBudget(), 0L, 0L);
     }
 
-    /**
-     * Opens a callable a pipeline step invokes once per document. The module body is evaluated here, once, and
-     * the interpreter stays alive until {@link ScriptCallable#close()} - so the whole sequence of calls shares
-     * one instruction budget, deadline and memory budget rather than getting a fresh one per row.
-     *
-     * <p>
-     * The callable is the module's {@code export default}, else its top-level {@code return} value. An async or
-     * generator function is refused: the call must not hop off the thread holding the collection read locks.
-     */
     public ScriptCallable openCallable(String source, HostBindings host) {
         try {
             return openCallable(compile(source, host.strictScriptGoal()), host);
@@ -213,7 +192,7 @@ public final class SimpleJs {
         return new ScriptCallableException(error.name(), error.message(), error.stack());
     }
 
-    private record SessionCallable(Interpreter.Session session, JsValue function) implements ScriptCallable {
+    private record SessionCallable(Session session, JsValue function) implements ScriptCallable {
         @Override
         public JsonBaseElement apply(JsonObject document) {
             return invoke(List.of(EJsonInterop.fromEjson(document)), document, null);
@@ -231,8 +210,6 @@ public final class SimpleJs {
                     context);
         }
 
-        // The document (and the fold's accumulator) is charged before the call and released after it, so a
-        // scan of a million documents costs one document of the memory budget rather than a million.
         private JsonBaseElement invoke(List<JsValue> args, JsonObject document, JsonBaseElement accumulator) {
             final var charged = EJsonInterop.estimatedBytes(document)
                     + (accumulator == null ? 0 : EJsonInterop.estimatedBytes(accumulator));
@@ -258,14 +235,12 @@ public final class SimpleJs {
         }
     }
 
-    // The one place a failure becomes a reportable name+message, shared by run(), openCallable() and every
-    // per-document call. A null means the throwable is not the engine's to report, so it propagates.
     private static ScriptError describe(Throwable failure) {
         return switch (failure) {
-            case ScriptCancelledException cancelled -> new ScriptError("ScriptCancelledError", cancelled.getMessage());
-            case ScriptTimeoutException timeout -> new ScriptError("ScriptTimeoutError", timeout.getMessage());
-            case ScriptMemoryException memory -> new ScriptError("ScriptMemoryError", memory.getMessage());
-            case ScriptAbortException limit -> new ScriptError("ScriptLimitError", limit.getMessage());
+            case ScriptCancelledException cancelled -> new ScriptError(CANCELLED, cancelled.getMessage());
+            case ScriptTimeoutException timeout -> new ScriptError(TIMEOUT, timeout.getMessage());
+            case ScriptMemoryException memory -> new ScriptError(MEMORY, memory.getMessage());
+            case ScriptAbortException limit -> new ScriptError(LIMIT, limit.getMessage());
             case JsThrowException thrown -> throwName(thrown);
             case TypeErrorException error -> new ScriptError("TypeError", error.getMessage(), error.getCapturedStack());
             case ReferenceErrorException error ->
@@ -284,18 +259,11 @@ public final class SimpleJs {
             case UnsupportedNodeException error ->
                 new ScriptError("SyntaxError", "Unsupported syntax: " + error.getMessage());
             case ScriptPendingResultException error ->
-                new ScriptError("ScriptPendingResultError", error.getMessage(), error.getCapturedStack());
+                new ScriptError(PENDING_RESULT, error.getMessage(), error.getCapturedStack());
             case SimpleJsRuntimeException error ->
                 new ScriptError("InternalError", error.getMessage(), error.getCapturedStack());
-            // A deliberate, narrow exception to "never catch these": the throw originates at one
-            // script-driven allocation (or one runaway recursion in the regex matcher / JSON parser,
-            // neither of which passes through the interpreter's depth counter), the oversized object
-            // becomes garbage on the way out, and the alternative is an unhandled error killing the
-            // connection's thread. The budget is what should make this unreachable; reaching it
-            // may also mean the JVM was already under pressure from something other than this script,
-            // which is why ScriptOperationHelper logs it at WARN rather than treating it as routine.
-            case OutOfMemoryError _ -> new ScriptError("ScriptMemoryError", "Script exhausted available memory");
-            case StackOverflowError _ -> new ScriptError("ScriptMemoryError", "Script exhausted available memory");
+            case OutOfMemoryError _ -> new ScriptError(MEMORY, EXHAUSTED_MEMORY_MESSAGE);
+            case StackOverflowError _ -> new ScriptError(MEMORY, EXHAUSTED_MEMORY_MESSAGE);
             default -> null;
         };
     }
@@ -308,15 +276,13 @@ public final class SimpleJs {
         return new ScriptError("Error", JsCoercion.toStr(value));
     }
 
-    // The cap belongs with the other sandbox limits rather than with the caller, so CALL_PROCEDURE
-    // inherits it; an unlimited budget skips the estimation walk entirely.
     private ScriptResult resultOf(JsonBaseElement value, ConsoleCapture capture, ResourceLimits limits) {
         final var element = value == null ? JsonNull.INSTANCE : value;
         final var max = limits == null ? -1 : limits.maxResultBytes();
         if (max >= 0) {
             final var size = EJsonInterop.estimatedBytes(element);
             if (size > max) {
-                return failed("ScriptResultTooLargeError",
+                return failed(RESULT_TOO_LARGE,
                         "Script result of about " + size + " bytes exceeds the maximum of " + max + " bytes", null,
                         capture);
             }
@@ -332,8 +298,6 @@ public final class SimpleJs {
         return ScriptResult.error(name, message, stack, capture.lines(), capture.isTruncated());
     }
 
-    // Runs while the interpreter is still alive so an accessor-valued property is read through its getter
-    // rather than dropped, and so the getter's own work is charged to the run's budgets.
     private JsonBaseElement convertResult(Interpreter.ProgramOutcome outcome, InterpreterOps ops) {
         return EJsonInterop.toHostEjson(contractResult(outcome), ops);
     }
@@ -353,8 +317,6 @@ public final class SimpleJs {
         return JsUndefined.getInstance();
     }
 
-    // The event loop has already drained, so a promise at the top level is normally settled; one that is
-    // still pending can never settle, which is an error rather than a null result.
     private static JsValue settled(JsValue value) {
         if (!(value instanceof JsPromise promise)) {
             return value;
@@ -367,9 +329,6 @@ public final class SimpleJs {
         };
     }
 
-    // A thrown value may have no "name" anywhere on its prototype chain (e.g. the test262 harness's
-    // Test262Error, a plain function constructor whose prototype only defines `toString`); fall back
-    // to the constructor function's own name before defaulting to "Error".
     private static String errorName(JsObject object) {
         var current = object;
         while (current != null) {
@@ -404,8 +363,6 @@ public final class SimpleJs {
         return null;
     }
 
-    // An error instance carries only the properties the constructor set: `name` normally lives on
-    // the intrinsic prototype, so the chain has to be walked to report it.
     private static String field(JsObject object) {
         var current = object;
         while (current != null) {

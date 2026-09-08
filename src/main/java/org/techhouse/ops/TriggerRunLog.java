@@ -7,6 +7,7 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
@@ -14,21 +15,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
-/**
- * Durable log of trigger runs that have been queued but not yet applied, stored in {@code admin/trigger_runs}.
- *
- * <p>
- * A record is written before the run's events are queued and consumed inside the very transaction that
- * applies the run's effects (see {@code TriggerDispatcher}), so the two commit or roll back together: a run
- * whose effects landed leaves no record to replay, and a run that left a record did not land. That is what
- * makes replay after a crash exactly-once rather than at-least-once.
- */
 public final class TriggerRunLog {
-    // Recovery only replays records this node wrote. A standalone node has no cluster identity, so it uses a
-    // fixed id that is stable across restarts, which is all the filter needs.
-    private static final String STANDALONE_NODE_ID = "local";
-    // Headroom for the fixed fields of a record, so a chunk sized against maxEntrySize still fits once the
-    // metadata around the id/document list is serialized.
     private static final int CHUNK_OVERHEAD_BYTES = 2048;
 
     private static final Logger logger = Logger.logFor(TriggerRunLog.class);
@@ -47,11 +34,6 @@ public final class TriggerRunLog {
         return configuration.isTriggerRunLogEnabled();
     }
 
-    /**
-     * Persists the run and returns its id, or {@code null} when nothing was persisted — the log is disabled,
-     * or a single DELETED document is too large to store, in which case the caller submits the run
-     * non-durably rather than failing a write that has already committed.
-     */
     public static String record(TriggerRunDescriptor descriptor) {
         if (!isEnabled()) {
             return null;
@@ -90,10 +72,6 @@ public final class TriggerRunLog {
         return result;
     }
 
-    /**
-     * Rewrites the run's records with the outcome of one attempt. A dead run keeps its payload - that is what
-     * makes it replayable by an operator - so this is an update in place rather than a move to another store.
-     */
     public static void markAttempt(String runId, TriggerRunStatus status, int attempts, String error,
             long nextAttemptAt) {
         if (runId == null || !isEnabled()) {
@@ -114,10 +92,6 @@ public final class TriggerRunLog {
         return AdminOperationHelper.readTriggerRuns(new ArrayList<>(cache.getTriggerRunPkIndexes().keySet()));
     }
 
-    // Drops records left behind by a run that can never complete - its collection was dropped, or the node
-    // that owned it never came back - so the log cannot grow without bound. A dead-lettered run is kept for
-    // its own, longer retention: it is waiting for a human, so sweeping it on the pending clock would
-    // discard the evidence before anybody saw it.
     public static void garbageCollect(long retentionMs) throws Exception {
         garbageCollect(retentionMs, retentionMs);
     }
@@ -142,7 +116,7 @@ public final class TriggerRunLog {
 
     public static String currentNodeId() {
         final var self = membershipService.getSelf();
-        return self == null ? STANDALONE_NODE_ID : self.getNodeId();
+        return self == null ? Globals.STANDALONE_NODE_ID : self.getNodeId();
     }
 
     private record Chunk(List<String> ids, List<JsonObject> documents) {
@@ -173,8 +147,6 @@ public final class TriggerRunLog {
         return chunks;
     }
 
-    // A DELETED run stores the documents themselves, since they are already gone from the collection and
-    // cannot be re-read at replay time. Returns null when one document alone cannot fit in a record.
     private static List<Chunk> documentChunks(List<DbEntry> entries) {
         final var budget = chunkBudget();
         final var chunks = new ArrayList<Chunk>();

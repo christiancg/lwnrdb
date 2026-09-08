@@ -7,8 +7,6 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
-// Models a failure as well as a success, for the reason RunScriptResponse does: SimpleJs captures console
-// output on every exit path, and a failed call is exactly when those lines matter to the caller.
 public class CallProcedureResponse extends OperationResponse {
     private JsonBaseElement result;
     private List<String> logs;

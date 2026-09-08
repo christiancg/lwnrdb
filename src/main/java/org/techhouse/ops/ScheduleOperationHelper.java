@@ -23,11 +23,6 @@ import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveScheduleResponse;
 import org.techhouse.ops.schedule.CronExpression;
 
-/**
- * Persists and removes a database's schedules. A schedule lives with its database
- * ({@code {db}/.schedules/{name}.json}) exactly as a stored procedure does, so a DROP_DATABASE removes it
- * with the data and no admin collection is involved.
- */
 public final class ScheduleOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -40,8 +35,6 @@ public final class ScheduleOperationHelper {
     private ScheduleOperationHelper() {
     }
 
-    // The ring key a schedule is hashed onto, so schedules spread across the cluster and hand off on a
-    // membership change through the same machinery a collection's ownership uses.
     public static String ringKey(String name) {
         return Globals.SCHEDULES_FOLDER + Globals.COLL_IDENTIFIER_SEPARATOR + name;
     }
@@ -60,8 +53,6 @@ public final class ScheduleOperationHelper {
         if (timingError != null) {
             return timingError;
         }
-        // A schedule pointing at nothing is a configuration error worth failing loudly, the same rule
-        // SAVE_TRIGGER follows.
         final var procedure = cache.getProcedure(dbName, request.getProcedureName());
         if (procedure == null) {
             return new OperationResponse(OperationType.SAVE_SCHEDULE,
@@ -88,8 +79,6 @@ public final class ScheduleOperationHelper {
         }
     }
 
-    // Exactly one of cron and intervalMs, and a cron that parses. Refused here rather than warned about
-    // per tick: a schedule that never resolves to an instant is a configuration error.
     private static OperationResponse validateTiming(SaveScheduleRequest request) {
         final var hasCron = request.getCron() != null && !request.getCron().isBlank();
         final var hasInterval = request.getIntervalMs() > 0;
@@ -114,10 +103,6 @@ public final class ScheduleOperationHelper {
                 ErrorCode.INVALID_SCHEDULE.getDefaultMessage() + ": " + reason, ErrorCode.INVALID_SCHEDULE);
     }
 
-    // Every derived field is computed once, by the coordinator, onto the request, so a peer re-executing it
-    // under REPLICATE_ADMIN writes a byte-identical file. Re-saving re-stamps the definer to the saving
-    // user, mirroring SAVE_TRIGGER: keeping the original would leave a job running with a previous
-    // installer's authority after somebody else edited it.
     private static ScheduleDefinition stampedDefinition(SaveScheduleRequest request, ScheduleDefinition existing,
             String actingUser) {
         final var alreadyStamped = request.getStampedVersion() > 0;
@@ -137,8 +122,6 @@ public final class ScheduleOperationHelper {
                 request.getDescription(), version, createdAt, updatedAt, updatedBy);
     }
 
-    // Idempotent: succeeds whether the schedule existed, so cluster re-execution on a peer that is already
-    // schedule-less does not fail replication.
     public static OperationResponse executeDelete(DeleteScheduleRequest request) throws InterruptedException {
         if (!configuration.isSchedulesEnabled()) {
             return new OperationResponse(OperationType.DELETE_SCHEDULE, ErrorCode.SCRIPTS_DISABLED);
@@ -178,8 +161,6 @@ public final class ScheduleOperationHelper {
         return new ListSchedulesResponse("Ok", result);
     }
 
-    // nextRunAt and owner are computed by the answering node: the registry is in-memory and per-node, so
-    // both describe this node's view rather than a cluster-wide fact.
     private static JsonObject summaryOf(String dbName, ScheduleDefinition definition) {
         final var json = definition.toSummaryJson();
         final var entry = registry.get(dbName, definition.getName());
@@ -193,8 +174,6 @@ public final class ScheduleOperationHelper {
         return json;
     }
 
-    // The name of a schedule in the database still pointing at the procedure, or null when none does. Only
-    // consulted on a procedure delete, mirroring TriggerOperationHelper.triggerReferencing.
     public static String scheduleReferencing(String dbName, String procedureName) {
         for (final var name : fs.listScheduleNames(dbName)) {
             final var definition = cache.getSchedule(dbName, name);

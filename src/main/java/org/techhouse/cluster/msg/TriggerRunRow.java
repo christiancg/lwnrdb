@@ -1,9 +1,5 @@
 package org.techhouse.cluster.msg;
 
-/**
- * One recorded trigger run as reported over LIST_TRIGGER_RUNS(_ACK): what it was, which node holds its
- * record, how many attempts it has had and why the last one failed.
- */
 public class TriggerRunRow {
     private String runId;
     private String status;
@@ -17,9 +13,6 @@ public class TriggerRunRow {
     private long firedAt;
     private long nextAttemptAt;
 
-    // EJson's ReflectionUtils.createInstance looks for a public no-arg constructor before anything else,
-    // so this is what deserializes a LIST_TRIGGER_RUNS_ACK; without it the wire class would fall through
-    // to UnsafeAllocator. Called only reflectively, hence the suppression.
     @SuppressWarnings("unused")
     public TriggerRunRow() {
     }

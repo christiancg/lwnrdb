@@ -2,6 +2,7 @@ package org.techhouse.simplejs.internal.interpreter;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isNullish;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
+import static org.techhouse.simplejs.values.JsLimits.MAX_LIST_LENGTH;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -22,14 +23,7 @@ import org.techhouse.simplejs.values.JsValue;
 import org.techhouse.simplejs.values.OrdinaryProperties;
 import org.techhouse.simplejs.values.PropertyDescriptor;
 
-// Proxy trap dispatch: for each intercepted operation, look up the handler's trap and either call
-// it or fall back to the raw operation on the target. Every fallback and re-entry routes through
-// the interpreter's InterpreterOps seam, so this carries no interpreter state of its own - and so a
-// target that is itself a proxy dispatches its own traps. Each trap's result is then checked against
-// the target's real descriptor: those checks are the proxy invariants, and violating one is a
-// TypeError even though the trap already returned.
 public final class ProxyDispatch {
-    private static final double MAX_KEYS = Integer.MAX_VALUE;
 
     private final InterpreterOps ops;
 
@@ -298,7 +292,6 @@ public final class ProxyDispatch {
         }
     }
 
-    // CreateListFromArrayLike(result, « String, Symbol »).
     private List<JsValue> keyList(JsValue result) {
         if (!isObjectLike(result)) {
             throw new TypeErrorException("proxy [[OwnPropertyKeys]] must return an array-like object");
@@ -308,7 +301,7 @@ public final class ProxyDispatch {
             keys.addAll(array.getElements());
         } else {
             final var length = JsCoercion.toNumber(ops.getMember(result, new JsString("length")), ops);
-            if (length > MAX_KEYS) {
+            if (length > MAX_LIST_LENGTH) {
                 throw new TypeErrorException("proxy [[OwnPropertyKeys]] result length exceeds the supported maximum");
             }
             for (var i = 0; i < (int) Math.max(0, Double.isNaN(length) ? 0 : length); i++) {
@@ -332,8 +325,6 @@ public final class ProxyDispatch {
         return isObjectLike(descriptor) ? readDescriptor(descriptor) : null;
     }
 
-    // ToPropertyDescriptor: a field is absent unless HasProperty says so, which is what tells a
-    // {writable: false} redefine apart from one that never mentioned writability at all.
     private PropertyDescriptor readDescriptor(JsValue descriptor) {
         if (!isObjectLike(descriptor)) {
             return new PropertyDescriptor(null, null, null, null, null, null);
@@ -360,7 +351,6 @@ public final class ProxyDispatch {
                 descriptor.enumerableOr(false), descriptor.configurableOr(false));
     }
 
-    // IsCompatiblePropertyDescriptor, i.e. ValidateAndApplyPropertyDescriptor reduced to its verdict.
     private static boolean isNotCompatible(boolean extensible, PropertyDescriptor descriptor,
             PropertyDescriptor current) {
         if (current == null) {

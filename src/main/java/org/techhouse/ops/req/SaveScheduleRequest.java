@@ -3,7 +3,7 @@ package org.techhouse.ops.req;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.OperationType;
 
-public class SaveScheduleRequest extends OperationRequest {
+public class SaveScheduleRequest extends VersionedDefinitionRequest {
     private String name;
     private String procedureName;
     private String cron;
@@ -11,13 +11,6 @@ public class SaveScheduleRequest extends OperationRequest {
     private JsonObject args;
     private long timeoutMs;
     private String description;
-    private Boolean enabled;
-    private Long ifVersion;
-    // Stamped by the coordinator during local execution so a peer re-executing this request writes a
-    // byte-identical file. Never supplied by a client - the handler overwrites whatever arrived.
-    private long stampedVersion;
-    private long stampedUpdatedAt;
-    private String stampedUpdatedBy;
     private String stampedDefiner;
 
     public SaveScheduleRequest() {
@@ -84,46 +77,6 @@ public class SaveScheduleRequest extends OperationRequest {
 
     public void setDescription(String description) {
         this.description = description;
-    }
-
-    public boolean isEnabled() {
-        return enabled == null || enabled;
-    }
-
-    public void setEnabled(Boolean enabled) {
-        this.enabled = enabled;
-    }
-
-    public Long getIfVersion() {
-        return ifVersion;
-    }
-
-    public void setIfVersion(Long ifVersion) {
-        this.ifVersion = ifVersion;
-    }
-
-    public long getStampedVersion() {
-        return stampedVersion;
-    }
-
-    public void setStampedVersion(long stampedVersion) {
-        this.stampedVersion = stampedVersion;
-    }
-
-    public long getStampedUpdatedAt() {
-        return stampedUpdatedAt;
-    }
-
-    public void setStampedUpdatedAt(long stampedUpdatedAt) {
-        this.stampedUpdatedAt = stampedUpdatedAt;
-    }
-
-    public String getStampedUpdatedBy() {
-        return stampedUpdatedBy;
-    }
-
-    public void setStampedUpdatedBy(String stampedUpdatedBy) {
-        this.stampedUpdatedBy = stampedUpdatedBy;
     }
 
     public String getStampedDefiner() {

@@ -11,7 +11,6 @@ import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.config.ConfigurationValidator;
 
 public class ClusterConfigurationValidatorTest {
-
     private static Map<String, String> baseValid(Path writablePath) {
         final var map = new HashMap<String, String>();
         map.put("port", "8989");
@@ -71,10 +70,6 @@ public class ClusterConfigurationValidatorTest {
         map.put("triggerMaxDepth", "3");
         map.put("triggerTimeoutMs", "1000");
         map.put("shutdownTimeoutMs", "15000");
-        map.put("procedureCacheMaxBytes", "32Mb");
-        map.put("schemaCacheMaxBytes", "32Mb");
-        map.put("triggerCacheMaxEntries", "4096");
-        map.put("metadataMissCacheMaxEntries", "4096");
         map.put("triggerRunLogEnabled", "true");
         map.put("triggerRunRetentionMs", "86400000");
         map.put("beforeHookInstructionBudget", "200000");
@@ -86,7 +81,6 @@ public class ClusterConfigurationValidatorTest {
         map.put("scheduleRefreshMs", "60000");
         map.put("scheduleTimeoutMs", "30000");
         map.put("scheduleMaxPerDatabase", "100");
-        map.put("scheduleCacheMaxBytes", "8Mb");
         map.put("scriptTextImportEnabled", "false");
         map.put("scriptProcedureImportEnabled", "true");
         return map;

@@ -5,13 +5,6 @@ import org.techhouse.simplejs.internal.temporal.IsoCalendar;
 import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 
-/**
- * A JavaScript {@code Temporal.PlainDateTime} value: a calendar date composed with a wall-clock
- * time, no time zone. Composes T3's {@link Iso8601Fields} with T2's {@link IsoTimeFields} -
- * "iso8601" calendar only (see the feature plan's scope-defining finding). All arithmetic/option
- * handling lives in {@code builtins/TemporalPlainDateTimeBuiltins}, mirroring the
- * {@link JsDate}/{@code DateBuiltins} split every other Temporal type already follows.
- */
 public final class JsTemporalPlainDateTime extends JsValue {
     private PropertyTable table;
     private final Iso8601Fields date;

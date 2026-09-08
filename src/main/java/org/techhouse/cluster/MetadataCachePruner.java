@@ -7,16 +7,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ScheduleOperationHelper;
 
-/**
- * Drops the cached trigger lists of collections, and the cached schedules, this node no longer owns, so
- * those caches are partitioned across the cluster rather than duplicated on every node.
- *
- * <p>
- * Safe because a trigger only ever fires on its collection's owner: {@code ops.TriggerHelper.afterWrite} is
- * called from OperationProcessor's write handlers, and writes route to the owner. Registered immediately
- * after {@link OwnershipManager} in {@code Main.startClusterIfEnabled}, since listeners are notified in
- * registration order and this one must read the rebuilt ring.
- */
 public class MetadataCachePruner implements MembershipListener {
     private final Logger logger = Logger.logFor(MetadataCachePruner.class);
     private final Cache cache = IocContainer.get(Cache.class);
@@ -32,8 +22,6 @@ public class MetadataCachePruner implements MembershipListener {
         }
     }
 
-    // A schedule is hashed onto the ring under the ".schedules|{name}" key, not its own name, so pruning
-    // has to ask the same question the scheduler's tick asks.
     private boolean isNotOwnedSchedule(String scheduleIdentifier) {
         final var parts = scheduleIdentifier.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
         if (parts.length < 2) {

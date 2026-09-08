@@ -1,5 +1,8 @@
 package org.techhouse.ops;
 
+import static org.techhouse.simplejs.host.ScriptErrorNames.TIMED_OUT_MESSAGE;
+import static org.techhouse.simplejs.host.ScriptErrorNames.TIMEOUT;
+
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -24,21 +27,6 @@ import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.simplejs.host.HookHostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
 
-/**
- * The before-write hooks of one request. Every matching trigger runs synchronously on the calling thread,
- * inside the collection write lock, before the document reaches the write helpers - so a hook can veto a
- * write or replace the document, which an after trigger cannot do because its write has already committed.
- *
- * <p>
- * One callable per procedure per <em>request</em>, not per document, mirroring {@code PipelineScriptContext}:
- * a BULK_SAVE of N documents evaluates each module body once and shares one instruction budget, one deadline
- * and one memory budget across all N invocations, so a runaway hook aborts the request instead of getting a
- * fresh budget on every row.
- *
- * <p>
- * Every failure rejects the write. A hook that could not run must never let a write through, or the
- * guarantee this exists to provide would be best-effort.
- */
 public final class BeforeHookContext implements AutoCloseable {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
@@ -59,8 +47,6 @@ public final class BeforeHookContext implements AutoCloseable {
     private final Map<String, ScriptCallable> callables = new HashMap<>();
     private final long deadline;
     private final List<String> logs;
-    // One run per request, not per document: the budgets are per request, and the module body is evaluated
-    // inside openCallable, so a per-invocation registration would leave that window uncancellable.
     private final ScriptRun scriptRun;
     private List<String> lastStack;
 
@@ -86,8 +72,6 @@ public final class BeforeHookContext implements AutoCloseable {
         return new BeforeHookContext(dbName, collName, event, actingUser, hooksFor(dbName, collName, event), false);
     }
 
-    // The TEST_TRIGGER path: one named hook, and console output kept rather than discarded. The live path
-    // discards it because a hook runs once per document, which makes this the window that replaces it.
     public static BeforeHookContext openForTest(String dbName, String collName, EventType event, String actingUser,
             TriggerDefinition hook) {
         return new BeforeHookContext(dbName, collName, event, actingUser, List.of(hook), true);
@@ -101,11 +85,7 @@ public final class BeforeHookContext implements AutoCloseable {
         return lastStack;
     }
 
-    // Ascending name order rather than the file's insertion order, so a chain of hooks is stable and
-    // predictable from what LIST_TRIGGERS shows regardless of the order the rows were installed in.
     private static List<TriggerDefinition> hooksFor(String dbName, String collName, EventType event) {
-        // The reserved history collection is written by the server, not by a client, so no hook may veto
-        // or rewrite a row - the same exclusion TriggerHelper applies on the after side.
         if (!configuration.isTriggersEnabled() || Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName)) {
             return List.of();
         }
@@ -136,9 +116,6 @@ public final class BeforeHookContext implements AutoCloseable {
         return BeforeHookOutcome.accepted(current);
     }
 
-    // The callable is deliberately not closed here: its lifetime is the context's, not this call's. It is
-    // cached in `callables` and closed by close(), which is what lets one module evaluation and one budget
-    // serve every document in the request - closing it per document would defeat the whole design.
     @SuppressWarnings("resource")
     private BeforeHookOutcome runOne(TriggerDefinition hook, JsonObject document, String id, OperationType type) {
         final var procedure = cache.getProcedure(dbName, hook.getProcedureName());
@@ -191,8 +168,6 @@ public final class BeforeHookContext implements AutoCloseable {
         return BeforeHookOutcome.accepted(replacement);
     }
 
-    // The _id is the primary key the write is addressed by; letting a hook change it would relocate the
-    // document rather than modify it, silently turning an update into an insert somewhere else.
     private static String checkId(JsonObject document, JsonObject replacement) {
         final var original = document.has(Globals.PK_FIELD) ? document.get(Globals.PK_FIELD).toString() : null;
         final var returned = replacement.has(Globals.PK_FIELD) ? replacement.get(Globals.PK_FIELD).toString() : null;
@@ -213,7 +188,7 @@ public final class BeforeHookContext implements AutoCloseable {
         }
         final var remaining = deadline - System.currentTimeMillis();
         if (remaining <= 0) {
-            throw new ScriptCallableException("ScriptTimeoutError", "Script exceeded its time limit");
+            throw new ScriptCallableException(TIMEOUT, TIMED_OUT_MESSAGE);
         }
         final var compiled = compiledProcedures.get(dbName, hook.getProcedureName(), version, source);
         final var bindings = logs == null
@@ -264,8 +239,6 @@ public final class BeforeHookContext implements AutoCloseable {
                         ErrorCode.BEFORE_HOOK_REJECTED));
     }
 
-    // Only a refused write is recorded: a hook runs once per document on the write path, so recording every
-    // acceptance would multiply the write amplification of the collection it guards.
     private void recordRefusal(TriggerDefinition hook, String outcome, String errorName, String reason) {
         ScriptRunHistory.record(
                 new ScriptRunRecord(scriptRun == null ? null : scriptRun.runId(), ScriptRunKind.BEFORE_HOOK, dbName,
@@ -273,9 +246,6 @@ public final class BeforeHookContext implements AutoCloseable {
                         System.currentTimeMillis(), 0L, 1, outcome, errorName, reason, lastStack, null, null, false));
     }
 
-    // A hook that threw decided no, and reads as a rejection (400-21). A sandbox abort keeps its own code
-    // (408-1, 400-11, 400-12) so an operator can tell a hook that said no from one that never finished.
-    // Both stop the write: a hook that could not run must never let a write through.
     private BeforeHookOutcome failure(OperationType type, TriggerDefinition hook, ScriptCallableException e) {
         final var code = ScriptOperationHelper.errorCodeFor(e.getErrorName());
         if (code == ErrorCode.SCRIPT_FAILED) {

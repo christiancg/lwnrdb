@@ -6,15 +6,6 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Predicate;
 import java.util.function.ToLongFunction;
 
-/**
- * An LRU cache bounded by both an entry count and an approximate byte weight, used for the admin metadata
- * caches whose contents are derived from disk and can therefore be dropped at any time.
- *
- * <p>
- * Follows {@code ops.CompiledProcedureCache}'s idiom: an access-ordered {@link LinkedHashMap} guarded by a
- * {@link ReentrantLock}. The weight of a value is computed once at insert, because the weighers serialize or
- * measure their value and puts are far rarer than gets.
- */
 public class BoundedLruCache<V> {
     private record Weighted<V>(V value, long bytes) {
     }
@@ -119,9 +110,6 @@ public class BoundedLruCache<V> {
         }
     }
 
-    // The map is in access order, so the iterator's first entry is the least recently used. A single entry
-    // heavier than maxBytes is kept rather than evicted on sight, so a cache whose bound is smaller than one
-    // value still serves that value instead of thrashing it in and out on every access.
     private void evictDownToBounds() {
         final var iterator = cache.entrySet().iterator();
         while (iterator.hasNext() && (cache.size() > maxEntries || (maxBytes > 0 && bytes > maxBytes))) {

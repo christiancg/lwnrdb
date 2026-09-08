@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg;
+
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -36,10 +38,6 @@ public final class ScriptModule {
                 ? "text:" + sha256(source)
                 : JsCoercion.toStr(explicitId);
         return importer.importText(moduleId, source);
-    }
-
-    private static JsValue arg(List<JsValue> args, int index) {
-        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
     }
 
     private static String sha256(String source) {

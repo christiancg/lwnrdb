@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.values;
 
-import java.math.BigInteger;
+import static org.techhouse.simplejs.values.JsLimits.MAX_SAFE_INTEGER_BIG;
+
 import java.util.IdentityHashMap;
 import java.util.Map;
 import org.techhouse.ejson.custom_types.JsonDateTime;
@@ -19,9 +20,6 @@ import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 
 public final class EJsonInterop {
-    private static final BigInteger MAX_EXACT_INTEGER = BigInteger.valueOf(9007199254740991L);
-    // Mirrors InterpreterOps.BYTES_PER_ELEMENT / STRING_BYTES_PER_CHAR: the same cost model as the
-    // allocation budget, restated here because values/ does not depend on builtins/.
     private static final long BYTES_PER_ELEMENT = 32L;
     private static final long BYTES_PER_CHAR = 2L;
     private static final long BYTES_PER_NUMBER = 8L;
@@ -30,23 +28,14 @@ public final class EJsonInterop {
     private EJsonInterop() {
     }
 
-    // The spec path, shared with JSON.stringify: a BigInt has no JSON representation and must throw.
     public static JsonBaseElement toEjson(JsValue value) {
         return convert(value, new Conversion(false, new IdentityHashMap<>(), null), "");
     }
 
-    // The host path, used by the script result contract and by everything heading into the database:
-    // a BigInt that is exactly representable becomes a number, anything larger throws naming the
-    // property path, because the error fires at the boundary rather than where the value was produced.
     public static JsonBaseElement toHostEjson(JsValue value) {
         return toHostEjson(value, null);
     }
 
-    /**
-     * The host path with the interpreter still in scope, so an accessor-valued property is read through its
-     * getter rather than skipped. A null {@code ops} keeps the data-property-only behaviour, which is what an
-     * embedding with no live interpreter gets.
-     */
     public static JsonBaseElement toHostEjson(JsValue value, InterpreterOps ops) {
         return convert(value, new Conversion(true, new IdentityHashMap<>(), ops), "");
     }
@@ -78,8 +67,6 @@ public final class EJsonInterop {
             case JsTemporalPlainMonthDay monthDay -> new JsonString(monthDay.toString());
             case JsTemporalPlainDateTime dt -> new JsonString(dt.toString());
             case JsTemporalZonedDateTime zdt -> new JsonString(zdt.toString());
-            // The four EJson custom types cross back as their real JsonCustom instance, so EJson emits
-            // "#geo(...)" and the storage/index layers see the type they already handle.
             case JsGeo geo -> geo.toJsonGeo();
             case JsVector vector -> vector.toJsonVector();
             case JsDbDateTime dateTime -> dateTime.toJsonDateTime();
@@ -98,7 +85,7 @@ public final class EJsonInterop {
         if (!mode.hostMode()) {
             throw new TypeErrorException("Do not know how to serialize a BigInt");
         }
-        if (value.getValue().abs().compareTo(MAX_EXACT_INTEGER) > 0) {
+        if (value.getValue().abs().compareTo(MAX_SAFE_INTEGER_BIG) > 0) {
             throw new TypeErrorException(
                     "Cannot serialize BigInt" + at(path) + ": value exceeds the exact integer range");
         }
@@ -167,8 +154,6 @@ public final class EJsonInterop {
         }
     }
 
-    // What a converted value costs, used both by the script result cap and by the charging the host
-    // boundary does before it materialises a database result as JS values.
     public static long estimatedBytes(JsonBaseElement element) {
         if (element == null) {
             return 0;
@@ -210,8 +195,6 @@ public final class EJsonInterop {
         if (element == null) {
             return JsNull.getInstance();
         }
-        // JsonCustom extends JsonString, so getJsonType() answers STRING for it and the CUSTOM arm
-        // below is unreachable: the custom types have to be recognised by their Java type instead.
         if (element instanceof JsonCustom<?> custom) {
             return customFromEjson(custom);
         }
@@ -226,8 +209,6 @@ public final class EJsonInterop {
         };
     }
 
-    // A custom type registered later than these four degrades to its wire text rather than silently
-    // vanishing as undefined, which is the bug the CUSTOM arm exists to fix.
     private static JsValue customFromEjson(JsonCustom<?> element) {
         return switch (element.getCustomTypeName()) {
             case JsonGeo.CUSTOM_TYPE_NAME -> new JsGeo(((JsonGeo) element).point());

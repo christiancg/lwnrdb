@@ -1,5 +1,8 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg;
+import static org.techhouse.simplejs.values.JsLimits.MAX_LIST_LENGTH;
+
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -16,7 +19,6 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class ReflectBuiltins {
-    private static final double MAX_ARGUMENTS = Integer.MAX_VALUE;
 
     private ReflectBuiltins() {
     }
@@ -65,8 +67,6 @@ public final class ReflectBuiltins {
                 : ops.setMember(target, key, value));
     }
 
-    // OrdinarySetPrototypeOf answers false rather than throwing; only Object.setPrototypeOf turns
-    // that into a TypeError, so the ordinary checks live here instead of behind the shared seam.
     private static JsValue setPrototypeOf(InterpreterOps ops, List<JsValue> args) {
         final var target = target(args, "setPrototypeOf");
         final var proto = arg(args, 1);
@@ -112,8 +112,6 @@ public final class ReflectBuiltins {
         return ops.construct(target, argumentsList(ops, arg(args, 1)), newTarget);
     }
 
-    // CreateListFromArrayLike: any object is walked by length + indexed Get; a primitive is a
-    // TypeError rather than the empty list a literal-JsArray-only check would silently produce.
     private static List<JsValue> argumentsList(InterpreterOps ops, JsValue value) {
         if (!InterpreterUtils.isObjectLike(value)) {
             throw new TypeErrorException("CreateListFromArrayLike called on non-object");
@@ -125,7 +123,7 @@ public final class ReflectBuiltins {
         if (Double.isNaN(length) || length <= 0) {
             return new ArrayList<>();
         }
-        if (length > MAX_ARGUMENTS) {
+        if (length > MAX_LIST_LENGTH) {
             throw new TypeErrorException("Arguments list length exceeds the supported maximum");
         }
         final var list = new ArrayList<JsValue>((int) length);
@@ -135,14 +133,6 @@ public final class ReflectBuiltins {
         return list;
     }
 
-    // A proxy's own [[DefineOwnProperty]] reports a refusing trap through its return value and
-    // reserves the throw for a violated invariant (checked against the trap's result once the trap
-    // itself has run) - that throw must always propagate. But per spec, a trap-less proxy's
-    // [[DefineOwnProperty]] is a pure passthrough to the target's own [[DefineOwnProperty]] (no
-    // invariant check at all), and *that* ordinary path is where our engine's own divergence lives:
-    // it throws instead of returning false for an ordinary (non-invariant) rejection, which Reflect
-    // must turn back into false. So only a proxy target with no "defineProperty" trap gets the
-    // catch-and-convert treatment; one with a real trap lets a TypeError propagate untouched.
     private static JsValue defineProperty(InterpreterOps ops, List<JsValue> args) {
         final var target = target(args, "defineProperty");
         final var key = key(ops, args);
@@ -173,7 +163,4 @@ public final class ReflectBuiltins {
         return JsCoercion.toPropertyKey(arg(args, 1), ops);
     }
 
-    private static JsValue arg(List<JsValue> args, int index) {
-        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
-    }
 }

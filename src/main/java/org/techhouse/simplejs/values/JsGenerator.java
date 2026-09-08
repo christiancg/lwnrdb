@@ -24,8 +24,6 @@ public final class JsGenerator extends JsValue {
         return table;
     }
 
-    // A generator instance's [[Prototype]] is the generator function's own `.prototype`
-    // (%GeneratorPrototype%-derived), one level below the shared realm intrinsic.
     @Override
     public JsValue getProto() {
         return proto;

@@ -8,6 +8,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.InDoubtTx;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
@@ -46,7 +47,7 @@ public class Tx2pcDirectory {
         final var byDtx = new LinkedHashMap<String, Aggregate>();
         final var selfAddress = membershipService.getSelf() != null
                 ? membershipService.getSelf().address().toString()
-                : "local";
+                : Globals.STANDALONE_NODE_ID;
         for (final var tx : localInDoubt()) {
             merge(byDtx, selfAddress, tx);
         }

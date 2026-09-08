@@ -10,6 +10,8 @@ import org.techhouse.simplejs.internal.interpreter.StackCapture;
 public final class JsObject extends JsValue {
     public record PropertyFlags(boolean writable, boolean enumerable, boolean configurable) {
         public static final PropertyFlags DEFAULT = new PropertyFlags(true, true, true);
+        public static final PropertyFlags HIDDEN = new PropertyFlags(true, false, true);
+        public static final PropertyFlags TAG = new PropertyFlags(false, false, true);
     }
 
     private final PropertyTable table = new PropertyTable();
@@ -100,8 +102,6 @@ public final class JsObject extends JsValue {
         return errorStack;
     }
 
-    // Every error object is branded here, so the trace is taken here too rather than at each of the
-    // three construction sites: it has to be captured before the Java stack it was thrown on unwinds.
     public void markErrorData() {
         errorData = true;
         errorStack = StackCapture.current();
@@ -126,8 +126,6 @@ public final class JsObject extends JsValue {
         privateFields.put(key, value);
     }
 
-    // PrivateFieldAdd: a name already present, or a non-extensible receiver, is a TypeError, which the
-    // caller raises from a false return.
     public boolean addPrivate(PrivateName key, JsValue value) {
         if (hasPrivate(key) || !isExtensible()) {
             return false;
@@ -168,10 +166,6 @@ public final class JsObject extends JsValue {
         return table.isNotDeleteSymbol(key);
     }
 
-    public Set<JsSymbol> symbolKeys() {
-        return table.symbolKeys();
-    }
-
     public void setSymbolFlags(JsSymbol key, PropertyFlags flags) {
         table.setSymbolFlags(key, flags);
     }
@@ -180,9 +174,6 @@ public final class JsObject extends JsValue {
         return primitive;
     }
 
-    // A String wrapper's code units and its length are exotic own data properties. They are
-    // materialised into the ordinary table here so every own-property path - reads, `in`, keys,
-    // descriptors, freeze - sees them without each one re-deriving the exotic shape.
     public void setPrimitive(JsValue primitive) {
         this.primitive = primitive;
         if (primitive instanceof JsString string) {
@@ -202,14 +193,6 @@ public final class JsObject extends JsValue {
         return proto;
     }
 
-    // A plain JsObject's proto field is Java null in two distinct situations that every reader has
-    // to be able to tell apart: never explicitly linked (the common case - a plain function's own
-    // auto-created "prototype" object, a freshly-built helper/result object - where the correct
-    // reading is "not yet resolved, fall back to the realm's intrinsic default") versus deliberately
-    // nulled out (Object.create(null), Object.setPrototypeOf(o, null), `{ __proto__: null }`, where
-    // null is the real, terminal answer). setProto is the single choke point every one of those call
-    // sites already goes through, so recording whether the last call passed null is enough to
-    // disambiguate without auditing every "new JsObject()" site in the codebase.
     @Override
     public void setProto(JsValue proto) {
         this.proto = proto;

@@ -1,5 +1,8 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg;
+import static org.techhouse.simplejs.values.JsObject.PropertyFlags.HIDDEN;
+
 import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Environment;
@@ -16,14 +19,7 @@ import org.techhouse.simplejs.values.JsValue;
 public final class ErrorBuiltins {
     private static final List<String> NAMES = List.of("Error", "TypeError", "RangeError", "SyntaxError", "URIError",
             "ReferenceError", "EvalError");
-    private static final JsObject.PropertyFlags ERROR_PROPERTY = new JsObject.PropertyFlags(true, false, true);
 
-    // makeSuppressedError is called from the using/await-using disposal path (StatementEvaluator,
-    // DisposableStackBuiltins), which has no Intrinsics parameter to pass through. Threading one in
-    // would touch those foreign files, so the realm's Intrinsics is instead recorded here at
-    // install() time on an inheritable thread-local: async disposal runs on a Coroutine's own
-    // virtual thread, and InheritableThreadLocal is what lets that thread see the value its parent
-    // (ultimately the thread that ran install()) set before any coroutine existed.
     private static final ThreadLocal<Intrinsics> CURRENT_INTRINSICS = new InheritableThreadLocal<>();
 
     private ErrorBuiltins() {
@@ -33,8 +29,6 @@ public final class ErrorBuiltins {
         return makeError(name, message, null);
     }
 
-    // An error instance's own message/name/cause are {w:true, e:false, c:true}, so Object.keys(err)
-    // and JSON.stringify(err) report nothing while the values stay readable and replaceable.
     public static JsObject makeError(String name, String message, JsObject proto) {
         final var error = new JsObject();
         defineErrorProperty(error, "name", new JsString(name));
@@ -46,7 +40,7 @@ public final class ErrorBuiltins {
 
     public static void defineErrorProperty(JsObject error, String key, JsValue value) {
         error.defineValue(key, value);
-        error.setFlags(key, ERROR_PROPERTY);
+        error.setFlags(key, HIDDEN);
     }
 
     public static JsObject makeSuppressedError(JsValue error, JsValue suppressed, String message) {
@@ -58,9 +52,6 @@ public final class ErrorBuiltins {
         return result;
     }
 
-    // `stack` is an accessor pair on Error.prototype, not an own data property of each instance: the
-    // getter is brand-checked on [[ErrorData]] and the setter installs an own property on whatever
-    // receiver it is handed (SetterThatIgnoresPrototypeProperties).
     public static void installStackAccessor(JsObject errorProto, InterpreterOps ops) {
         final var getter = new JsNativeFunction("get stack", (thisArg, _) -> stackOf(thisArg));
         getter.setLength(0);
@@ -68,7 +59,7 @@ public final class ErrorBuiltins {
                 (thisArg, args) -> setStack(errorProto, thisArg, arg(args, 0), ops));
         setter.setLength(1);
         errorProto.defineAccessor("stack", getter, setter);
-        errorProto.setFlags("stack", new JsObject.PropertyFlags(true, false, true));
+        errorProto.setFlags("stack", JsObject.PropertyFlags.HIDDEN);
     }
 
     private static JsValue stackOf(JsValue thisArg) {
@@ -83,7 +74,6 @@ public final class ErrorBuiltins {
         return new JsString(name + ": " + message + renderFrames(error.getErrorStack()));
     }
 
-    // An error built with no interpreter in scope keeps the single synthetic frame this used to be.
     private static String renderFrames(List<String> frames) {
         if (frames == null || frames.isEmpty()) {
             return "\n    at <script>";
@@ -102,8 +92,6 @@ public final class ErrorBuiltins {
         if (!(value instanceof JsString)) {
             throw new TypeErrorException("Error.prototype.stack setter requires a string");
         }
-        // SetterThatIgnoresPrototypeProperties: assigning through the home object itself is the
-        // spec's stand-in for writing a non-writable data property in strict code.
         if (thisArg == home) {
             throw new TypeErrorException("Cannot assign to read only property 'stack' of Error.prototype");
         }
@@ -141,7 +129,6 @@ public final class ErrorBuiltins {
                         new JsNativeFunction("isError", (_, args) -> JsBoolean.of(isError(arg(args, 0)))));
                 errorConstructor = constructor;
             } else {
-                // Each NativeError constructor's [[Prototype]] is %Error%, not %Function.prototype%.
                 constructor.setOwnProto(errorConstructor);
             }
             constructor.setLength(1);
@@ -194,8 +181,6 @@ public final class ErrorBuiltins {
         return errors instanceof JsArray array ? array.getElements() : List.of();
     }
 
-    // The message own property exists only when the argument is not undefined; the prototype's
-    // inherited empty string stands in otherwise.
     private static JsObject newError(Intrinsics intrinsics, String name, JsValue message, InterpreterOps ops) {
         final var error = new JsObject();
         error.markErrorData();
@@ -206,8 +191,6 @@ public final class ErrorBuiltins {
         return error;
     }
 
-    // OrdinaryCreateFromConstructor: Reflect.construct(Error, [], Other) links the instance to
-    // Other.prototype rather than to the intrinsic error prototype.
     private static JsObject newTargetProto(Intrinsics intrinsics, String name, InterpreterOps ops) {
         final var newTarget = JsNativeFunction.currentNewTarget();
         if (newTarget != null && ops != null
@@ -236,7 +219,7 @@ public final class ErrorBuiltins {
     private static void link(JsNativeFunction constructor, Intrinsics intrinsics, String name) {
         final var proto = intrinsics.errorProto(name);
         proto.defineValue("constructor", constructor);
-        proto.setFlags("constructor", new JsObject.PropertyFlags(true, false, true));
+        proto.setFlags("constructor", JsObject.PropertyFlags.HIDDEN);
         constructor.setPrototype(proto);
         constructor.markConstructor();
     }
@@ -245,7 +228,4 @@ public final class ErrorBuiltins {
         return value instanceof JsObject object && object.isErrorData();
     }
 
-    private static JsValue arg(List<JsValue> args, int index) {
-        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
-    }
 }

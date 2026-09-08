@@ -6,18 +6,12 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.RunningScript;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ScriptRunRegistry;
 
-/**
- * Cluster-wide visibility and cancellation of running scripts, for the admin LIST_SCRIPTS and CANCEL_SCRIPT
- * operations. Both fan out because a script has no owner to route to: {@code ScriptPlacement} sends a run to
- * whichever live node is least loaded, so the run an operator is looking for is usually not on the node they
- * connected to. The node handling the request collects its own runs and queries every other live member, the
- * same pattern {@link Tx2pcDirectory} uses for LIST_TRANSACTIONS.
- */
 public class ScriptRunDirectory {
     private final Logger logger = Logger.logFor(ScriptRunDirectory.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
@@ -25,7 +19,6 @@ public class ScriptRunDirectory {
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final ScriptRunRegistry registry = IocContainer.get(ScriptRunRegistry.class);
 
-    // This node's own runs, as reported over LIST_SCRIPTS.
     public List<RunningScript> localRuns() {
         final var rows = new ArrayList<RunningScript>();
         for (final var run : registry.list()) {
@@ -35,9 +28,7 @@ public class ScriptRunDirectory {
         return rows;
     }
 
-    // Every run executing on this node and on each live peer, one JSON row per run.
     public List<JsonObject> listClusterWide() {
-        // One `now` for the whole listing, so two rows that started together report the same age.
         final var now = System.currentTimeMillis();
         final var selfAddress = selfAddress();
         final var rows = new ArrayList<JsonObject>();
@@ -60,12 +51,6 @@ public class ScriptRunDirectory {
         return rows;
     }
 
-    /**
-     * Cancels the run wherever it is executing.
-     *
-     * @return {@code true} when some node was running it and has asked it to stop; {@code false} when no live
-     *         node has it, which is also the answer for a run that has already finished.
-     */
     public boolean cancelClusterWide(String runId) {
         if (registry.cancel(runId)) {
             return true;
@@ -85,7 +70,9 @@ public class ScriptRunDirectory {
     }
 
     private String selfAddress() {
-        return membershipService.getSelf() != null ? membershipService.getSelf().address().toString() : "local";
+        return membershipService.getSelf() != null
+                ? membershipService.getSelf().address().toString()
+                : Globals.STANDALONE_NODE_ID;
     }
 
     private JsonObject toJson(RunningScript run, String nodeAddress, long now) {
@@ -110,7 +97,6 @@ public class ScriptRunDirectory {
             }
             return List.of();
         } catch (Exception e) {
-            // An unreachable peer costs the operator its rows, not the whole listing.
             logger.warning("LIST_SCRIPTS request to " + address + " failed: " + e.getMessage());
             return List.of();
         }

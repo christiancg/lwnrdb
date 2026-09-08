@@ -99,7 +99,6 @@ public class ConfigReaderTest {
         expectedConfig.put("scriptQueueWaitMs", "250");
         expectedConfig.put("maxConcurrentScriptsPerUser", "0");
         expectedConfig.put("maxConcurrentScriptsPerDatabase", "0");
-        expectedConfig.put("scriptCompiledCacheSize", "128");
         expectedConfig.put("scriptRunHistoryEnabled", "true");
         expectedConfig.put("scriptRunHistoryKinds", "CALL_PROCEDURE,TRIGGER,SCHEDULE");
         expectedConfig.put("scriptRunHistoryRetentionMs", "604800000");
@@ -109,6 +108,8 @@ public class ConfigReaderTest {
         expectedConfig.put("scriptFetchAllowlist", "*");
         expectedConfig.put("scriptFetchTimeoutMs", "5000");
         expectedConfig.put("scriptFetchMaxResponseBytes", "1Mb");
+        expectedConfig.put("metadataCacheMaxBytes", "72Mb");
+        expectedConfig.put("metadataCacheMaxEntries", "4096");
         expectedConfig.put("procedureCacheSize", "128");
         expectedConfig.put("triggersEnabled", "false");
         expectedConfig.put("triggerThreads", "2");
@@ -116,10 +117,6 @@ public class ConfigReaderTest {
         expectedConfig.put("triggerMaxDepth", "3");
         expectedConfig.put("triggerTimeoutMs", "1000");
         expectedConfig.put("shutdownTimeoutMs", "15000");
-        expectedConfig.put("procedureCacheMaxBytes", "32Mb");
-        expectedConfig.put("schemaCacheMaxBytes", "32Mb");
-        expectedConfig.put("triggerCacheMaxEntries", "4096");
-        expectedConfig.put("metadataMissCacheMaxEntries", "4096");
         expectedConfig.put("triggerRunLogEnabled", "true");
         expectedConfig.put("triggerRunRetentionMs", "86400000");
         expectedConfig.put("triggerMaxAttempts", "3");
@@ -135,7 +132,6 @@ public class ConfigReaderTest {
         expectedConfig.put("scheduleRefreshMs", "60000");
         expectedConfig.put("scheduleTimeoutMs", "30000");
         expectedConfig.put("scheduleMaxPerDatabase", "100");
-        expectedConfig.put("scheduleCacheMaxBytes", "8Mb");
         expectedConfig.put("scriptTextImportEnabled", "false");
         expectedConfig.put("scriptProcedureImportEnabled", "true");
         expectedConfig.put("aggregationScriptInstructionBudget", "1000000");

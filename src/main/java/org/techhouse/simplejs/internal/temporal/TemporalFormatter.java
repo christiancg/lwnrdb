@@ -5,12 +5,6 @@ import java.time.ZoneOffset;
 import java.util.Locale;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 
-/**
- * Canonical string serializers for the ISO 8601 fields/duration records. Rounding is owned by
- * {@link DurationMath}; this class only renders already-computed field values, handling
- * digit-count/truncation display concerns ({@code fractionalSecondDigits}) and the
- * calendar/time-zone annotation options.
- */
 public final class TemporalFormatter {
     public enum CalendarName {
         AUTO, ALWAYS, NEVER, CRITICAL;
@@ -62,15 +56,10 @@ public final class TemporalFormatter {
         return formatDate(date) + formatCalendarAnnotation(calendarName);
     }
 
-    // TemporalYearMonthToString: the "iso8601" calendar never appends the reference day, unlike a
-    // non-ISO calendar (out of scope for this engine - see the feature plan's scope-defining finding).
     public static String formatYearMonth(Iso8601Fields yearMonth) {
         return formatYear(yearMonth.year()) + "-" + pad2(yearMonth.month());
     }
 
-    // TemporalYearMonthToString: the reference ISO day is only shown when the calendar annotation
-    // is forced on (showCalendar "always"/"critical") - otherwise it stays hidden, mirroring
-    // formatMonthDay's symmetric treatment of the reference year.
     public static String formatYearMonth(Iso8601Fields yearMonth, CalendarName calendarName) {
         final var withDay = calendarName == CalendarName.ALWAYS || calendarName == CalendarName.CRITICAL
                 ? formatYearMonth(yearMonth) + "-" + pad2(yearMonth.day())
@@ -78,9 +67,6 @@ public final class TemporalFormatter {
         return withDay + formatCalendarAnnotation(calendarName);
     }
 
-    // TemporalMonthDayToString: the reference year is only shown when the calendar annotation is
-    // forced on (showCalendar "always"/"critical") - otherwise (including "never") it stays hidden,
-    // since for the "iso8601" calendar the year plays no role in round-tripping a bare month-day.
     public static String formatMonthDay(Iso8601Fields monthDay, CalendarName calendarName) {
         final var monthDayText = pad2(monthDay.month()) + "-" + pad2(monthDay.day());
         final var withYear = calendarName == CalendarName.ALWAYS || calendarName == CalendarName.CRITICAL
@@ -89,8 +75,6 @@ public final class TemporalFormatter {
         return withYear + formatCalendarAnnotation(calendarName);
     }
 
-    // A "minute" smallestUnit/rounding target omits the seconds field entirely (rather than
-    // formatting ":00"), per the Instant/PlainTime toString grammar.
     public static String formatTimeMinutePrecision(IsoTimeFields time) {
         return pad2(time.hour()) + ":" + pad2(time.minute());
     }
@@ -135,14 +119,8 @@ public final class TemporalFormatter {
         return formatDuration(duration, null);
     }
 
-    // fractionalSecondDigits forces an exact digit count on the seconds fraction (0..9, or null for
-    // the default "trim trailing zeros, omit if empty" behavior) - the same option every other
-    // Temporal type's toString accepts, restricted here to the fractional-second units since Duration
-    // has no smallestUnit coarser than seconds (day/hour/minute are never truncated away).
     public static String formatDuration(DurationFields duration, Integer fractionalSecondDigits) {
         final var sign = DurationMath.sign(duration);
-        // An explicit (non-"auto") precision forces the seconds unit to be shown even at 0 digits
-        // (e.g. fractionalSecondDigits: 0 still renders "T0S"), not just a nonzero digit count.
         final var forcesFraction = fractionalSecondDigits != null;
         if (sign == 0 && !forcesFraction) {
             return "PT0S";
@@ -192,12 +170,6 @@ public final class TemporalFormatter {
         sb.append(designator);
     }
 
-    // BigInteger throughout, not double multiplication: milliseconds/microseconds/nanoseconds can
-    // individually be as large as ~2**53 * their unit's fraction of a second (a Duration bounds only
-    // the combined total, not each field), so `milliseconds * 1_000_000L` in double arithmetic can
-    // already exceed 2**53's exact-integer precision - and Math.round() of a double past
-    // Long.MAX_VALUE silently clamps to Long.MAX_VALUE rather than throwing, corrupting the result
-    // instead of failing loudly. All four inputs are non-negative (callers pass Math.abs values).
     private static long[] combineSecondsFraction(double seconds, double milliseconds, double microseconds,
             double nanoseconds) {
         final var totalNanos = wholeNanos(milliseconds).multiply(BigInteger.valueOf(1_000_000L))
@@ -207,9 +179,6 @@ public final class TemporalFormatter {
         return new long[]{wholeSeconds.longValueExact(), dm[1].longValueExact()};
     }
 
-    // BigDecimal(double), not BigDecimal.valueOf/a String literal: this must preserve the double's
-    // exact binary value (a round-trip through Double.toString could drop digits of a large
-    // exact-integer double), matching the same intentional choice in TemporalInstantBuiltins.exact.
     @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
     private static BigInteger wholeNanos(double value) {
         return new java.math.BigDecimal(value).toBigInteger();
@@ -241,8 +210,6 @@ public final class TemporalFormatter {
         return digits.substring(0, end);
     }
 
-    // Shared by every Temporal type that renders a UTC offset (Instant, PlainDateTime, ZonedDateTime),
-    // replacing what used to be an identically duplicated private helper in each builtins class.
     public static String formatOffset(ZoneOffset offset) {
         final var totalSeconds = offset.getTotalSeconds();
         final var sign = totalSeconds < 0 ? "-" : "+";

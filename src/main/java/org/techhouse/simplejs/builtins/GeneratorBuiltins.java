@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg0;
+
 import java.util.List;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.internal.interpreter.MemberEvaluator;
@@ -7,7 +9,6 @@ import org.techhouse.simplejs.values.JsAsyncGenerator;
 import org.techhouse.simplejs.values.JsGenerator;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsObject;
-import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class GeneratorBuiltins {
@@ -37,8 +38,6 @@ public final class GeneratorBuiltins {
         };
     }
 
-    // InterpreterUtils.stepResult builds a plain {value, done} object with no [[Prototype]]; the
-    // realm's Object.prototype has to be linked in here since the helper itself is realm-agnostic.
     private static JsValue linkResultProto(JsValue result, JsObject objectProto) {
         if (result instanceof JsObject object && object.getProto() == null) {
             object.setProto(objectProto);
@@ -56,9 +55,5 @@ public final class GeneratorBuiltins {
                     (_, args) -> driver.drive(generator, MemberEvaluator.AsyncStep.THROW, arg0(args)));
             default -> null;
         };
-    }
-
-    private static JsValue arg0(List<JsValue> args) {
-        return args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
     }
 }

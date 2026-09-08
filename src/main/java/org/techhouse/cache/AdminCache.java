@@ -58,17 +58,17 @@ public class AdminCache {
     // reloaded, while the rest of this cache is the only in-memory copy of the admin records. Misses are kept
     // apart so a caller naming thousands of nonexistent procedures cannot evict the ones actually in use.
     private final BoundedLruCache<JsonObject> collectionSchemas = new BoundedLruCache<>(Integer.MAX_VALUE,
-            configuration.getSchemaCacheMaxBytes(), schema -> (long) eJson.toJson(schema).length() * 2L);
+            configuration.getMetadataCacheMaxBytes() / 3, schema -> (long) eJson.toJson(schema).length() * 2L);
     private final BoundedLruCache<ProcedureDefinition> procedures = new BoundedLruCache<>(Integer.MAX_VALUE,
-            configuration.getProcedureCacheMaxBytes(),
+            configuration.getMetadataCacheMaxBytes() / 3,
             definition -> (long) definition.getSource().length() * 2L + 512L);
     private final BoundedLruCache<List<TriggerDefinition>> triggers = new BoundedLruCache<>(
-            configuration.getTriggerCacheMaxEntries(), 0L, definitions -> definitions.size() * 512L + 128L);
+            configuration.getMetadataCacheMaxEntries(), 0L, definitions -> definitions.size() * 512L + 128L);
     private final BoundedLruCache<ScheduleDefinition> schedules = new BoundedLruCache<>(Integer.MAX_VALUE,
-            configuration.getScheduleCacheMaxBytes(),
+            configuration.getMetadataCacheMaxBytes() / 3,
             definition -> (long) eJson.toJson(definition.toJsonObject()).length() * 2L);
     private final BoundedLruCache<Boolean> metadataMisses = new BoundedLruCache<>(
-            configuration.getMetadataMissCacheMaxEntries(), 0L, _ -> 1L);
+            configuration.getMetadataCacheMaxEntries(), 0L, _ -> 1L);
 
     public void loadAdminData() throws IOException {
         loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);

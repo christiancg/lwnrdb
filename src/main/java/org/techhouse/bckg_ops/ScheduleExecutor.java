@@ -17,17 +17,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ScheduleOperationHelper;
 
-/**
- * Owns the clock: one scheduler thread wakes every {@code scheduleTickMs}, walks the registry, and submits
- * whatever this node owns and is due onto a bounded queue that its own workers drain.
- *
- * <p>
- * Deliberately not on {@link BackgroundTaskManager}'s queue nor on {@link TriggerExecutor}'s, for the reason
- * already documented for triggers: a scheduled run is arbitrary user code holding a worker for up to its
- * timeout, and sharing either queue would let one slow job stall field-index maintenance or trigger dispatch.
- * On overflow the oldest queued run is dropped and counted — unlike a trigger there is no client waiting, and
- * the schedule fires again at its next occurrence.
- */
 public class ScheduleExecutor {
     private static final long SHUTDOWN_TIMEOUT_SECONDS = 3L;
     private final Logger logger = Logger.logFor(ScheduleExecutor.class);
@@ -42,8 +31,6 @@ public class ScheduleExecutor {
     private final LongAdder dropped = new LongAdder();
     private final AtomicInteger inFlight = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
-    // Keyed db|name and held outside the registry, which is rebuilt by every refresh: a run in flight must
-    // still block the next tick from queueing the same schedule twice.
     private final Set<String> running = ConcurrentHashMap.newKeySet();
     private volatile boolean draining;
     private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
@@ -68,15 +55,11 @@ public class ScheduleExecutor {
         });
         final var tick = Math.max(1L, configuration.getScheduleTickMs());
         final var refresh = Math.max(1L, configuration.getScheduleRefreshMs());
-        // Two periodic tasks on one thread, so a refresh and a tick can never overlap - the same
-        // arrangement AdminAntiEntropyService's sweep uses.
         scheduler.scheduleAtFixedRate(this::tickOnce, tick, tick, TimeUnit.MILLISECONDS);
         scheduler.scheduleAtFixedRate(this::refreshRegistry, refresh, refresh, TimeUnit.MILLISECONDS);
         logger.info("Started the scheduler");
     }
 
-    // scheduleAtFixedRate silently cancels a periodic task that throws, so nothing may escape either of
-    // the two bodies below: one bad tick must not stop the clock for good.
     private void tickOnce() {
         if (draining) {
             return;
@@ -96,8 +79,6 @@ public class ScheduleExecutor {
         }
     }
 
-    // One pass over the registry. Everything that decides not to run is counted as a skip, so an operator
-    // reading GET_DATABASE_STATS can tell "nothing was due" from "something was due and never ran".
     public void tick(long now) {
         for (final var entry : registry.entries()) {
             final var definition = entry.getDefinition();
@@ -111,8 +92,6 @@ public class ScheduleExecutor {
             if (nextRunAt <= 0 || now < nextRunAt) {
                 continue;
             }
-            // Advanced before the run, not after it: the next occurrence is computed from now, so a job
-            // that overruns its interval falls back to one run per tick instead of building a backlog.
             entry.setNextRunAt(registry.nextRunAfter(entry, now));
             if (!running.add(entry.key())) {
                 skipped.increment();
@@ -123,9 +102,6 @@ public class ScheduleExecutor {
         }
     }
 
-    // In standalone there is no ring, so every schedule is this node's. Under clustering a schedule is
-    // hashed onto the ring like a collection, which spreads schedules across nodes and hands them off on a
-    // membership change.
     private boolean isOwner(ScheduleRegistry.Entry entry) {
         return !clusterConfig.isEnabled()
                 || ownershipManager.isOwner(entry.getDbName(), ScheduleOperationHelper.ringKey(entry.getName()));
@@ -171,12 +147,6 @@ public class ScheduleExecutor {
         }
     }
 
-    /**
-     * Lets the queued runs finish before stopping, up to {@code timeoutMillis}. A run abandoned here is
-     * simply not made up: schedules are at-most-once and the next occurrence fires normally.
-     *
-     * @return true when everything queued ran within the budget
-     */
     public boolean drain(long timeoutMillis) {
         draining = true;
         try {

@@ -24,13 +24,13 @@ public class CompiledScriptCacheTest {
 
     @AfterAll
     static void tearDown() throws Exception {
-        TestUtils.setPrivateField(configuration, "scriptCompiledCacheSize", 128);
+        TestUtils.setPrivateField(configuration, "procedureCacheSize", 128);
         TestUtils.standardTearDown();
     }
 
     @BeforeEach
     void resetSize() throws Exception {
-        TestUtils.setPrivateField(configuration, "scriptCompiledCacheSize", 128);
+        TestUtils.setPrivateField(configuration, "procedureCacheSize", 128);
     }
 
     @Test
@@ -65,7 +65,7 @@ public class CompiledScriptCacheTest {
 
     @Test
     public void test_evicts_least_recently_used() throws Exception {
-        TestUtils.setPrivateField(configuration, "scriptCompiledCacheSize", 2);
+        TestUtils.setPrivateField(configuration, "procedureCacheSize", 2);
         final var cache = new CompiledScriptCache();
         final var oldest = cache.get("return 1;");
         cache.get("return 2;");
@@ -76,7 +76,7 @@ public class CompiledScriptCacheTest {
 
     @Test
     public void test_touching_an_entry_keeps_it() throws Exception {
-        TestUtils.setPrivateField(configuration, "scriptCompiledCacheSize", 2);
+        TestUtils.setPrivateField(configuration, "procedureCacheSize", 2);
         final var cache = new CompiledScriptCache();
         final var first = cache.get("return 1;");
         cache.get("return 2;");
@@ -87,7 +87,7 @@ public class CompiledScriptCacheTest {
 
     @Test
     public void test_zero_size_disables_caching() throws Exception {
-        TestUtils.setPrivateField(configuration, "scriptCompiledCacheSize", 0);
+        TestUtils.setPrivateField(configuration, "procedureCacheSize", 0);
         final var cache = new CompiledScriptCache();
         assertNotSame(cache.get("return 1;"), cache.get("return 1;"));
         assertEquals(0, cache.size());

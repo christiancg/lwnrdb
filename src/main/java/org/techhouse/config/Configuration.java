@@ -1,6 +1,7 @@
 package org.techhouse.config;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import org.techhouse.ex.InvalidConfigurationException;
@@ -8,514 +9,323 @@ import org.techhouse.log.Logger;
 
 public final class Configuration {
     private static final Configuration config = new Configuration();
+    private final Map<ConfigKey, String> values = new EnumMap<>(ConfigKey.class);
+    private boolean loading;
     private static final Logger logger = Logger.logFor(Configuration.class);
-
-    private int port;
-    private int maxConnections;
-    private String filePath;
-    private int backgroundProcessingThreads;
-    private String logPath;
-    private int maxLogFiles;
-    private long maxPageSize;
-    private long maxEntrySize;
-    private String defaultAdminUsername;
-    private String defaultAdminPassword;
-    private long maxMemoryBytes;
-    private long transactionLockTimeoutMs;
-    private long shutdownTimeoutMs;
-    private boolean tlsEnabled;
-    private String tlsKeystorePath;
-    private String tlsKeystorePassword;
-    private boolean clusterEnabled;
-    private int clusterPort;
-    private String clusterBindAddress;
-    private String clusterAdvertisedAddress;
-    private String clusterSeeds;
-    private String nodeId;
-    private int clusterExpectedSize;
-    private long gossipIntervalMs;
-    private long suspectTimeoutMs;
-    private long deadTimeoutMs;
-    private long replicationAckTimeoutMs;
-    private int virtualNodesPerNode;
-    private boolean readFallbackToLocal;
-    private boolean scriptRoutingEnabled;
-    private int scriptLocalityWeight;
-    private boolean clusterTlsEnabled;
-    private String clusterSecret;
-    private long antiEntropyIntervalMs;
-    private long tombstoneRetentionMs;
-    private String scriptTimeZone;
-    private String scriptLocale;
-    private boolean scriptsEnabled;
-    private long scriptInstructionBudget;
-    private long scriptTimeoutMs;
-    private int scriptMaxDepth;
-    private long scriptMaxSourceBytes;
-    private int scriptMaxLogLines;
-    private int scriptMaxLogLineChars;
-    private boolean scriptTextImportEnabled;
-    private boolean scriptProcedureImportEnabled;
-    private long scriptMaxMemoryBytes;
-    private long scriptMaxResultBytes;
-    private int scriptCursorBatchSize;
-    private int scriptCursorMaxBatchSize;
-    private long aggregationScriptInstructionBudget;
-    private long aggregationScriptTimeoutMs;
-    private long aggregationScriptMaxSourceBytes;
-    private int maxConcurrentScripts;
-    private long scriptQueueWaitMs;
-    private int maxConcurrentScriptsPerUser;
-    private int maxConcurrentScriptsPerDatabase;
-    private int scriptCompiledCacheSize;
-    private boolean scriptRunHistoryEnabled;
-    private String scriptRunHistoryKinds;
-    private long scriptRunHistoryRetentionMs;
-    private boolean scriptRunHistoryIncludeLogs;
-    private int scriptRunHistoryMaxErrorChars;
-    private boolean scriptFetchEnabled;
-    private String scriptFetchAllowlistRaw;
-    private long scriptFetchTimeoutMs;
-    private long scriptFetchMaxResponseBytes;
-    private int procedureCacheSize;
-    private long procedureCacheMaxBytes;
-    private long schemaCacheMaxBytes;
-    private int triggerCacheMaxEntries;
-    private int metadataMissCacheMaxEntries;
-    private boolean triggersEnabled;
-    private int triggerThreads;
-    private int triggerQueueSize;
-    private int triggerMaxDepth;
-    private long triggerTimeoutMs;
-    private boolean triggerRunLogEnabled;
-    private long triggerRunRetentionMs;
-    private int triggerMaxAttempts;
-    private long triggerRetryBackoffMs;
-    private long triggerRetryMaxBackoffMs;
-    private long triggerDeadLetterRetentionMs;
-    private long beforeHookInstructionBudget;
-    private long beforeHookTimeoutMs;
-    private boolean schedulesEnabled;
-    private int scheduleThreads;
-    private int scheduleQueueSize;
-    private long scheduleTickMs;
-    private long scheduleRefreshMs;
-    private long scheduleTimeoutMs;
-    private int scheduleMaxPerDatabase;
-    private long scheduleCacheMaxBytes;
 
     private Configuration() {
     }
 
+    // The flag is read by getInstance, which PMD's per-method dataflow cannot see.
+    @SuppressWarnings("PMD.UnusedAssignment")
     private void load() {
-        final var configs = ConfigReader.loadConfiguration();
-        final var errors = ConfigurationValidator.validate(configs);
-        if (!errors.isEmpty()) {
-            logger.fatal("Configuration validation failed, the application will not start:" + Globals.NEWLINE
-                    + String.join(Globals.NEWLINE, errors));
-            throw new InvalidConfigurationException(errors);
+        loading = true;
+        try {
+            final var configs = ConfigReader.loadConfiguration();
+            final var errors = ConfigurationValidator.validate(configs);
+            if (!errors.isEmpty()) {
+                logger.fatal("Configuration validation failed, the application will not start:" + Globals.NEWLINE
+                        + String.join(Globals.NEWLINE, errors));
+                throw new InvalidConfigurationException(errors);
+            }
+            for (final var key : ConfigKey.all()) {
+                values.put(key, configs.getOrDefault(key.key(), key.defaultValue()));
+            }
+        } finally {
+            loading = false;
         }
-        apply(configs);
     }
 
-    // One unconditional assignment per field, read straight out of the merged map, rather than a
-    // switch inside a loop over the entries: a per-key case can only be reached on the iteration that
-    // happens to carry that key, so every write reads as a possibly-dead store and the field's value
-    // silently depends on iteration order. A key absent from both the bundled defaults and the config
-    // file leaves the field at its Java default, exactly as the unmatched-case arm used to.
-    private void apply(Map<String, String> configs) {
-        port = intOf(configs, "port");
-        maxConnections = intOf(configs, "maxConnections");
-        filePath = configs.get("filePath");
-        backgroundProcessingThreads = intOf(configs, "backgroundProcessingThreads");
-        logPath = configs.get("logPath");
-        maxLogFiles = intOf(configs, "maxLogFiles");
-        maxPageSize = sizeOf(configs, "maxPageSize");
-        maxEntrySize = sizeOf(configs, "maxEntrySize");
-        defaultAdminUsername = configs.get("defaultAdminUsername");
-        defaultAdminPassword = configs.get("defaultAdminPassword");
-        maxMemoryBytes = sizeOf(configs, "maxMemory");
-        transactionLockTimeoutMs = longOf(configs, "transactionLockTimeoutMs");
-        shutdownTimeoutMs = longOf(configs, "shutdownTimeoutMs");
-        tlsEnabled = booleanOf(configs, "tlsEnabled");
-        tlsKeystorePath = configs.get("tlsKeystorePath");
-        tlsKeystorePassword = configs.get("tlsKeystorePassword");
-        clusterEnabled = booleanOf(configs, "clusterEnabled");
-        clusterPort = intOf(configs, "clusterPort");
-        clusterBindAddress = configs.get("clusterBindAddress");
-        clusterAdvertisedAddress = configs.get("clusterAdvertisedAddress");
-        clusterSeeds = configs.get("clusterSeeds");
-        nodeId = configs.get("nodeId");
-        clusterExpectedSize = intOf(configs, "clusterExpectedSize");
-        gossipIntervalMs = longOf(configs, "gossipIntervalMs");
-        suspectTimeoutMs = longOf(configs, "suspectTimeoutMs");
-        deadTimeoutMs = longOf(configs, "deadTimeoutMs");
-        replicationAckTimeoutMs = longOf(configs, "replicationAckTimeoutMs");
-        virtualNodesPerNode = intOf(configs, "virtualNodesPerNode");
-        readFallbackToLocal = booleanOf(configs, "readFallbackToLocal");
-        scriptRoutingEnabled = booleanOf(configs, "scriptRoutingEnabled");
-        scriptLocalityWeight = intOf(configs, "scriptLocalityWeight");
-        clusterTlsEnabled = booleanOf(configs, "clusterTlsEnabled");
-        clusterSecret = configs.get("clusterSecret");
-        antiEntropyIntervalMs = longOf(configs, "antiEntropyIntervalMs");
-        tombstoneRetentionMs = longOf(configs, "tombstoneRetentionMs");
-        scriptTimeZone = configs.get("scriptTimeZone");
-        scriptLocale = configs.get("scriptLocale");
-        scriptsEnabled = booleanOf(configs, "scriptsEnabled");
-        scriptInstructionBudget = longOf(configs, "scriptInstructionBudget");
-        scriptTimeoutMs = longOf(configs, "scriptTimeoutMs");
-        scriptMaxDepth = intOf(configs, "scriptMaxDepth");
-        scriptMaxSourceBytes = sizeOf(configs, "scriptMaxSourceBytes");
-        scriptMaxLogLines = intOf(configs, "scriptMaxLogLines");
-        scriptMaxLogLineChars = intOf(configs, "scriptMaxLogLineChars");
-        scriptTextImportEnabled = booleanOf(configs, "scriptTextImportEnabled");
-        scriptProcedureImportEnabled = booleanOf(configs, "scriptProcedureImportEnabled");
-        scriptMaxMemoryBytes = sizeOf(configs, "scriptMaxMemoryBytes");
-        scriptMaxResultBytes = sizeOf(configs, "scriptMaxResultBytes");
-        scriptCursorBatchSize = intOf(configs, "scriptCursorBatchSize");
-        scriptCursorMaxBatchSize = intOf(configs, "scriptCursorMaxBatchSize");
-        aggregationScriptInstructionBudget = longOf(configs, "aggregationScriptInstructionBudget");
-        aggregationScriptTimeoutMs = longOf(configs, "aggregationScriptTimeoutMs");
-        aggregationScriptMaxSourceBytes = sizeOf(configs, "aggregationScriptMaxSourceBytes");
-        maxConcurrentScripts = intOf(configs, "maxConcurrentScripts");
-        scriptQueueWaitMs = longOf(configs, "scriptQueueWaitMs");
-        maxConcurrentScriptsPerUser = intOf(configs, "maxConcurrentScriptsPerUser");
-        maxConcurrentScriptsPerDatabase = intOf(configs, "maxConcurrentScriptsPerDatabase");
-        scriptCompiledCacheSize = intOf(configs, "scriptCompiledCacheSize");
-        scriptRunHistoryEnabled = booleanOf(configs, "scriptRunHistoryEnabled");
-        scriptRunHistoryKinds = configs.get("scriptRunHistoryKinds");
-        scriptRunHistoryRetentionMs = longOf(configs, "scriptRunHistoryRetentionMs");
-        scriptRunHistoryIncludeLogs = booleanOf(configs, "scriptRunHistoryIncludeLogs");
-        scriptRunHistoryMaxErrorChars = intOf(configs, "scriptRunHistoryMaxErrorChars");
-        scriptFetchEnabled = booleanOf(configs, "scriptFetchEnabled");
-        scriptFetchAllowlistRaw = configs.get("scriptFetchAllowlist");
-        scriptFetchTimeoutMs = longOf(configs, "scriptFetchTimeoutMs");
-        scriptFetchMaxResponseBytes = sizeOf(configs, "scriptFetchMaxResponseBytes");
-        procedureCacheSize = intOf(configs, "procedureCacheSize");
-        procedureCacheMaxBytes = sizeOf(configs, "procedureCacheMaxBytes");
-        schemaCacheMaxBytes = sizeOf(configs, "schemaCacheMaxBytes");
-        triggerCacheMaxEntries = intOf(configs, "triggerCacheMaxEntries");
-        metadataMissCacheMaxEntries = intOf(configs, "metadataMissCacheMaxEntries");
-        triggersEnabled = booleanOf(configs, "triggersEnabled");
-        triggerThreads = intOf(configs, "triggerThreads");
-        triggerQueueSize = intOf(configs, "triggerQueueSize");
-        triggerMaxDepth = intOf(configs, "triggerMaxDepth");
-        triggerTimeoutMs = longOf(configs, "triggerTimeoutMs");
-        triggerRunLogEnabled = booleanOf(configs, "triggerRunLogEnabled");
-        triggerRunRetentionMs = longOf(configs, "triggerRunRetentionMs");
-        triggerMaxAttempts = intOf(configs, "triggerMaxAttempts");
-        triggerRetryBackoffMs = longOf(configs, "triggerRetryBackoffMs");
-        triggerRetryMaxBackoffMs = longOf(configs, "triggerRetryMaxBackoffMs");
-        triggerDeadLetterRetentionMs = longOf(configs, "triggerDeadLetterRetentionMs");
-        beforeHookInstructionBudget = longOf(configs, "beforeHookInstructionBudget");
-        beforeHookTimeoutMs = longOf(configs, "beforeHookTimeoutMs");
-        schedulesEnabled = booleanOf(configs, "schedulesEnabled");
-        scheduleThreads = intOf(configs, "scheduleThreads");
-        scheduleQueueSize = intOf(configs, "scheduleQueueSize");
-        scheduleTickMs = longOf(configs, "scheduleTickMs");
-        scheduleRefreshMs = longOf(configs, "scheduleRefreshMs");
-        scheduleTimeoutMs = longOf(configs, "scheduleTimeoutMs");
-        scheduleMaxPerDatabase = intOf(configs, "scheduleMaxPerDatabase");
-        scheduleCacheMaxBytes = sizeOf(configs, "scheduleCacheMaxBytes");
+    private int intValue(ConfigKey key) {
+        return Integer.parseInt(values.get(key).trim());
     }
 
-    private static int intOf(Map<String, String> configs, String key) {
-        final var value = configs.get(key);
-        return value == null ? 0 : Integer.parseInt(value);
+    private long longValue(ConfigKey key) {
+        return Long.parseLong(values.get(key).trim());
     }
 
-    private static long longOf(Map<String, String> configs, String key) {
-        final var value = configs.get(key);
-        return value == null ? 0L : Long.parseLong(value);
+    private long sizeValue(ConfigKey key) {
+        return SizeParser.parse(values.get(key));
     }
 
-    private static long sizeOf(Map<String, String> configs, String key) {
-        final var value = configs.get(key);
-        return value == null ? 0L : SizeParser.parse(value);
-    }
-
-    private static boolean booleanOf(Map<String, String> configs, String key) {
-        return Boolean.parseBoolean(configs.get(key));
+    private boolean booleanValue(ConfigKey key) {
+        return Boolean.parseBoolean(values.get(key).trim());
     }
 
     public static Configuration getInstance() {
-        if (config.port == 0) {
+        if (!config.loading && (config.values.isEmpty() || "0".equals(config.values.get(ConfigKey.PORT)))) {
             config.load();
         }
         return config;
     }
 
     public int getPort() {
-        return port;
+        return intValue(ConfigKey.PORT);
     }
 
     public int getMaxConnections() {
-        return maxConnections;
+        return intValue(ConfigKey.MAX_CONNECTIONS);
     }
 
     public String getFilePath() {
-        return filePath;
+        return values.get(ConfigKey.FILE_PATH);
     }
 
     public int getBackgroundProcessingThreads() {
-        return backgroundProcessingThreads;
+        return intValue(ConfigKey.BACKGROUND_PROCESSING_THREADS);
     }
 
     public String getLogPath() {
-        return logPath;
+        return values.get(ConfigKey.LOG_PATH);
     }
 
     public int getMaxLogFiles() {
-        return maxLogFiles;
+        return intValue(ConfigKey.MAX_LOG_FILES);
     }
 
     public long getMaxPageSize() {
-        return maxPageSize;
+        return sizeValue(ConfigKey.MAX_PAGE_SIZE);
     }
 
     public long getMaxEntrySize() {
-        return maxEntrySize;
+        return sizeValue(ConfigKey.MAX_ENTRY_SIZE);
     }
 
     public String getDefaultAdminUsername() {
-        return defaultAdminUsername;
+        return values.get(ConfigKey.DEFAULT_ADMIN_USERNAME);
     }
 
     public String getDefaultAdminPassword() {
-        return defaultAdminPassword;
+        return values.get(ConfigKey.DEFAULT_ADMIN_PASSWORD);
     }
 
     public long getMaxMemoryBytes() {
-        return maxMemoryBytes;
+        return sizeValue(ConfigKey.MAX_MEMORY);
     }
 
     public long getTransactionLockTimeoutMs() {
-        return transactionLockTimeoutMs;
+        return longValue(ConfigKey.TRANSACTION_LOCK_TIMEOUT_MS);
     }
 
     public boolean isCachingDisabled() {
-        return maxMemoryBytes == Globals.CACHE_DISABLED;
+        return getMaxMemoryBytes() == Globals.CACHE_DISABLED;
     }
 
     public boolean isCacheUnlimited() {
-        return maxMemoryBytes == Globals.CACHE_UNLIMITED;
+        return getMaxMemoryBytes() == Globals.CACHE_UNLIMITED;
     }
 
     public long getShutdownTimeoutMs() {
-        return shutdownTimeoutMs;
+        return longValue(ConfigKey.SHUTDOWN_TIMEOUT_MS);
     }
 
     public boolean isTlsEnabled() {
-        return tlsEnabled;
+        return booleanValue(ConfigKey.TLS_ENABLED);
     }
 
     public String getTlsKeystorePath() {
-        return tlsKeystorePath;
+        return values.get(ConfigKey.TLS_KEYSTORE_PATH);
     }
 
     public String getTlsKeystorePassword() {
-        return tlsKeystorePassword;
+        return values.get(ConfigKey.TLS_KEYSTORE_PASSWORD);
     }
 
     public boolean isClusterEnabled() {
-        return clusterEnabled;
+        return booleanValue(ConfigKey.CLUSTER_ENABLED);
     }
 
     public int getClusterPort() {
-        return clusterPort;
+        return intValue(ConfigKey.CLUSTER_PORT);
     }
 
     public String getClusterBindAddress() {
-        return clusterBindAddress;
+        return values.get(ConfigKey.CLUSTER_BIND_ADDRESS);
     }
 
     public String getClusterAdvertisedAddress() {
-        return clusterAdvertisedAddress;
+        return values.get(ConfigKey.CLUSTER_ADVERTISED_ADDRESS);
     }
 
     public String getClusterSeeds() {
-        return clusterSeeds;
+        return values.get(ConfigKey.CLUSTER_SEEDS);
     }
 
     public String getNodeId() {
-        return nodeId;
+        return values.get(ConfigKey.NODE_ID);
     }
 
     public int getClusterExpectedSize() {
-        return clusterExpectedSize;
+        return intValue(ConfigKey.CLUSTER_EXPECTED_SIZE);
     }
 
     public long getGossipIntervalMs() {
-        return gossipIntervalMs;
+        return longValue(ConfigKey.GOSSIP_INTERVAL_MS);
     }
 
     public long getSuspectTimeoutMs() {
-        return suspectTimeoutMs;
+        return longValue(ConfigKey.SUSPECT_TIMEOUT_MS);
     }
 
     public long getDeadTimeoutMs() {
-        return deadTimeoutMs;
+        return longValue(ConfigKey.DEAD_TIMEOUT_MS);
     }
 
     public long getReplicationAckTimeoutMs() {
-        return replicationAckTimeoutMs;
+        return longValue(ConfigKey.REPLICATION_ACK_TIMEOUT_MS);
     }
 
     public int getVirtualNodesPerNode() {
-        return virtualNodesPerNode;
+        return intValue(ConfigKey.VIRTUAL_NODES_PER_NODE);
     }
 
     public boolean isReadFallbackToLocal() {
-        return readFallbackToLocal;
+        return booleanValue(ConfigKey.READ_FALLBACK_TO_LOCAL);
     }
 
     public boolean isScriptRoutingEnabled() {
-        return scriptRoutingEnabled;
+        return booleanValue(ConfigKey.SCRIPT_ROUTING_ENABLED);
     }
 
     public int getScriptLocalityWeight() {
-        return scriptLocalityWeight;
+        return intValue(ConfigKey.SCRIPT_LOCALITY_WEIGHT);
     }
 
     public boolean isClusterTlsEnabled() {
-        return clusterTlsEnabled;
+        return booleanValue(ConfigKey.CLUSTER_TLS_ENABLED);
     }
 
     public String getClusterSecret() {
-        return clusterSecret;
+        return values.get(ConfigKey.CLUSTER_SECRET);
     }
 
     public long getAntiEntropyIntervalMs() {
-        return antiEntropyIntervalMs;
+        return longValue(ConfigKey.ANTI_ENTROPY_INTERVAL_MS);
     }
 
     public long getTombstoneRetentionMs() {
-        return tombstoneRetentionMs;
+        return longValue(ConfigKey.TOMBSTONE_RETENTION_MS);
     }
 
     public String getScriptTimeZone() {
-        return scriptTimeZone;
+        return values.get(ConfigKey.SCRIPT_TIME_ZONE);
     }
 
     public String getScriptLocale() {
-        return scriptLocale;
+        return values.get(ConfigKey.SCRIPT_LOCALE);
     }
 
     public boolean isScriptsEnabled() {
-        return scriptsEnabled;
+        return booleanValue(ConfigKey.SCRIPTS_ENABLED);
     }
 
     public long getScriptInstructionBudget() {
-        return scriptInstructionBudget;
+        return longValue(ConfigKey.SCRIPT_INSTRUCTION_BUDGET);
     }
 
     public long getScriptTimeoutMs() {
-        return scriptTimeoutMs;
+        return longValue(ConfigKey.SCRIPT_TIMEOUT_MS);
     }
 
     public int getScriptMaxDepth() {
-        return scriptMaxDepth;
+        return intValue(ConfigKey.SCRIPT_MAX_DEPTH);
     }
 
     public long getScriptMaxSourceBytes() {
-        return scriptMaxSourceBytes;
+        return sizeValue(ConfigKey.SCRIPT_MAX_SOURCE_BYTES);
     }
 
     public int getScriptMaxLogLines() {
-        return scriptMaxLogLines;
+        return intValue(ConfigKey.SCRIPT_MAX_LOG_LINES);
     }
 
     public int getScriptMaxLogLineChars() {
-        return scriptMaxLogLineChars;
+        return intValue(ConfigKey.SCRIPT_MAX_LOG_LINE_CHARS);
     }
 
     public boolean isScriptTextImportEnabled() {
-        return scriptTextImportEnabled;
+        return booleanValue(ConfigKey.SCRIPT_TEXT_IMPORT_ENABLED);
     }
 
     public boolean isScriptProcedureImportEnabled() {
-        return scriptProcedureImportEnabled;
+        return booleanValue(ConfigKey.SCRIPT_PROCEDURE_IMPORT_ENABLED);
     }
 
     public long getScriptMaxMemoryBytes() {
-        return scriptMaxMemoryBytes;
+        return sizeValue(ConfigKey.SCRIPT_MAX_MEMORY_BYTES);
     }
 
     public long getScriptMaxResultBytes() {
-        return scriptMaxResultBytes;
+        return sizeValue(ConfigKey.SCRIPT_MAX_RESULT_BYTES);
     }
 
     public int getScriptCursorBatchSize() {
-        return scriptCursorBatchSize;
+        return intValue(ConfigKey.SCRIPT_CURSOR_BATCH_SIZE);
     }
 
     public long getAggregationScriptInstructionBudget() {
-        return aggregationScriptInstructionBudget;
+        return longValue(ConfigKey.AGGREGATION_SCRIPT_INSTRUCTION_BUDGET);
     }
 
     public long getAggregationScriptTimeoutMs() {
-        return aggregationScriptTimeoutMs;
+        return longValue(ConfigKey.AGGREGATION_SCRIPT_TIMEOUT_MS);
     }
 
     public long getAggregationScriptMaxSourceBytes() {
-        return aggregationScriptMaxSourceBytes;
+        return sizeValue(ConfigKey.AGGREGATION_SCRIPT_MAX_SOURCE_BYTES);
     }
 
     public int getScriptCursorMaxBatchSize() {
-        return scriptCursorMaxBatchSize;
+        return intValue(ConfigKey.SCRIPT_CURSOR_MAX_BATCH_SIZE);
     }
 
     public int getMaxConcurrentScripts() {
-        return maxConcurrentScripts;
+        return intValue(ConfigKey.MAX_CONCURRENT_SCRIPTS);
     }
 
     public long getScriptQueueWaitMs() {
-        return scriptQueueWaitMs;
+        return longValue(ConfigKey.SCRIPT_QUEUE_WAIT_MS);
     }
 
     public int getMaxConcurrentScriptsPerUser() {
-        return maxConcurrentScriptsPerUser;
+        return intValue(ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_USER);
     }
 
     public int getMaxConcurrentScriptsPerDatabase() {
-        return maxConcurrentScriptsPerDatabase;
-    }
-
-    public int getScriptCompiledCacheSize() {
-        return scriptCompiledCacheSize;
+        return intValue(ConfigKey.MAX_CONCURRENT_SCRIPTS_PER_DATABASE);
     }
 
     public boolean isScriptRunHistoryEnabled() {
-        return scriptRunHistoryEnabled;
+        return booleanValue(ConfigKey.SCRIPT_RUN_HISTORY_ENABLED);
     }
 
     public String getScriptRunHistoryKinds() {
-        return scriptRunHistoryKinds;
+        return values.get(ConfigKey.SCRIPT_RUN_HISTORY_KINDS);
     }
 
     public long getScriptRunHistoryRetentionMs() {
-        return scriptRunHistoryRetentionMs;
+        return longValue(ConfigKey.SCRIPT_RUN_HISTORY_RETENTION_MS);
     }
 
     public boolean isScriptRunHistoryIncludeLogs() {
-        return scriptRunHistoryIncludeLogs;
+        return booleanValue(ConfigKey.SCRIPT_RUN_HISTORY_INCLUDE_LOGS);
     }
 
     public int getScriptRunHistoryMaxErrorChars() {
-        return scriptRunHistoryMaxErrorChars;
+        return intValue(ConfigKey.SCRIPT_RUN_HISTORY_MAX_ERROR_CHARS);
     }
 
     public boolean isScriptFetchEnabled() {
-        return scriptFetchEnabled;
+        return booleanValue(ConfigKey.SCRIPT_FETCH_ENABLED);
     }
 
-    /** The configured hosts, parsed. An empty list denies every host - see the key's documentation. */
     public List<String> getScriptFetchAllowlist() {
-        if (scriptFetchAllowlistRaw == null || scriptFetchAllowlistRaw.isBlank()) {
+        if (values.get(ConfigKey.SCRIPT_FETCH_ALLOWLIST) == null
+                || values.get(ConfigKey.SCRIPT_FETCH_ALLOWLIST).isBlank()) {
             return List.of();
         }
         final var hosts = new ArrayList<String>();
-        for (final var entry : scriptFetchAllowlistRaw.split(",")) {
+        for (final var entry : values.get(ConfigKey.SCRIPT_FETCH_ALLOWLIST).split(",")) {
             final var trimmed = entry.trim();
             if (!trimmed.isEmpty()) {
                 hosts.add(trimmed);
@@ -525,114 +335,103 @@ public final class Configuration {
     }
 
     public long getScriptFetchTimeoutMs() {
-        return scriptFetchTimeoutMs;
+        return longValue(ConfigKey.SCRIPT_FETCH_TIMEOUT_MS);
     }
 
     public long getScriptFetchMaxResponseBytes() {
-        return scriptFetchMaxResponseBytes;
+        return sizeValue(ConfigKey.SCRIPT_FETCH_MAX_RESPONSE_BYTES);
     }
 
     public int getProcedureCacheSize() {
-        return procedureCacheSize;
+        return intValue(ConfigKey.PROCEDURE_CACHE_SIZE);
     }
 
-    public long getProcedureCacheMaxBytes() {
-        return procedureCacheMaxBytes;
+    public long getMetadataCacheMaxBytes() {
+        return sizeValue(ConfigKey.METADATA_CACHE_MAX_BYTES);
     }
 
-    public long getSchemaCacheMaxBytes() {
-        return schemaCacheMaxBytes;
-    }
-
-    public int getTriggerCacheMaxEntries() {
-        return triggerCacheMaxEntries;
-    }
-
-    public int getMetadataMissCacheMaxEntries() {
-        return metadataMissCacheMaxEntries;
+    public int getMetadataCacheMaxEntries() {
+        return intValue(ConfigKey.METADATA_CACHE_MAX_ENTRIES);
     }
 
     public boolean isTriggersEnabled() {
-        return triggersEnabled;
+        return booleanValue(ConfigKey.TRIGGERS_ENABLED);
     }
 
     public int getTriggerThreads() {
-        return triggerThreads;
+        return intValue(ConfigKey.TRIGGER_THREADS);
     }
 
     public int getTriggerQueueSize() {
-        return triggerQueueSize;
+        return intValue(ConfigKey.TRIGGER_QUEUE_SIZE);
     }
 
     public int getTriggerMaxDepth() {
-        return triggerMaxDepth;
+        return intValue(ConfigKey.TRIGGER_MAX_DEPTH);
     }
 
     public long getTriggerTimeoutMs() {
-        return triggerTimeoutMs;
+        return longValue(ConfigKey.TRIGGER_TIMEOUT_MS);
     }
 
     public boolean isTriggerRunLogEnabled() {
-        return triggerRunLogEnabled;
+        return booleanValue(ConfigKey.TRIGGER_RUN_LOG_ENABLED);
     }
 
     public int getTriggerMaxAttempts() {
-        return triggerMaxAttempts;
+        return intValue(ConfigKey.TRIGGER_MAX_ATTEMPTS);
     }
 
     public long getTriggerRetryBackoffMs() {
-        return triggerRetryBackoffMs;
+        return longValue(ConfigKey.TRIGGER_RETRY_BACKOFF_MS);
     }
 
     public long getTriggerRetryMaxBackoffMs() {
-        return triggerRetryMaxBackoffMs;
+        return longValue(ConfigKey.TRIGGER_RETRY_MAX_BACKOFF_MS);
     }
 
     public long getTriggerDeadLetterRetentionMs() {
-        return triggerDeadLetterRetentionMs;
+        return longValue(ConfigKey.TRIGGER_DEAD_LETTER_RETENTION_MS);
     }
 
     public long getTriggerRunRetentionMs() {
-        return triggerRunRetentionMs;
+        return longValue(ConfigKey.TRIGGER_RUN_RETENTION_MS);
     }
 
     public long getBeforeHookInstructionBudget() {
-        return beforeHookInstructionBudget;
+        return longValue(ConfigKey.BEFORE_HOOK_INSTRUCTION_BUDGET);
     }
 
     public long getBeforeHookTimeoutMs() {
-        return beforeHookTimeoutMs;
+        return longValue(ConfigKey.BEFORE_HOOK_TIMEOUT_MS);
     }
 
     public boolean isSchedulesEnabled() {
-        return schedulesEnabled;
+        return booleanValue(ConfigKey.SCHEDULES_ENABLED);
     }
 
     public int getScheduleThreads() {
-        return scheduleThreads;
+        return intValue(ConfigKey.SCHEDULE_THREADS);
     }
 
     public int getScheduleQueueSize() {
-        return scheduleQueueSize;
+        return intValue(ConfigKey.SCHEDULE_QUEUE_SIZE);
     }
 
     public long getScheduleTickMs() {
-        return scheduleTickMs;
+        return longValue(ConfigKey.SCHEDULE_TICK_MS);
     }
 
     public long getScheduleRefreshMs() {
-        return scheduleRefreshMs;
+        return longValue(ConfigKey.SCHEDULE_REFRESH_MS);
     }
 
     public long getScheduleTimeoutMs() {
-        return scheduleTimeoutMs;
+        return longValue(ConfigKey.SCHEDULE_TIMEOUT_MS);
     }
 
     public int getScheduleMaxPerDatabase() {
-        return scheduleMaxPerDatabase;
+        return intValue(ConfigKey.SCHEDULE_MAX_PER_DATABASE);
     }
 
-    public long getScheduleCacheMaxBytes() {
-        return scheduleCacheMaxBytes;
-    }
 }

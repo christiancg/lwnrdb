@@ -1,19 +1,16 @@
 package org.techhouse.simplejs.values;
 
+import static org.techhouse.simplejs.values.JsObject.PropertyFlags.HIDDEN;
+
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.internal.Environment;
 import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 
-// An arguments exotic object: every own property lives in the PropertyTable, with the spec's
-// [[ParameterMap]] layered over the canonical index keys. A mapped index reads and writes the
-// activation binding of its formal parameter; defining it as an accessor or as non-writable, or
-// deleting it, detaches the mapping so the ordinary property takes over from then on.
 public final class JsArguments extends JsValue {
     private static final String LENGTH = "length";
     private static final PropertyFlags ARGUMENT_FLAGS = new PropertyFlags(true, true, true);
-    private static final PropertyFlags LENGTH_FLAGS = new PropertyFlags(true, false, true);
 
     private final PropertyTable table = new PropertyTable();
     private final List<String> mappedNames;
@@ -28,11 +25,9 @@ public final class JsArguments extends JsValue {
             table.setFlags(key, ARGUMENT_FLAGS);
         }
         table.defineValue(LENGTH, new JsNumber(args.size()));
-        table.setFlags(LENGTH, LENGTH_FLAGS);
+        table.setFlags(LENGTH, HIDDEN);
     }
 
-    // A formal parameter that was never passed has no argument slot to map, so the map stops at the
-    // number of arguments actually supplied.
     private static List<String> parameterMap(int count, List<String> names) {
         if (names == null) {
             return null;
@@ -143,8 +138,6 @@ public final class JsArguments extends JsValue {
         return true;
     }
 
-    // A redefine that only clears [[Writable]] leaves the ordinary property holding whatever the
-    // binding says right now, since the mapping is about to be detached and cannot supply it later.
     private PropertyDescriptor ordinaryPart(PropertyDescriptor descriptor, String name) {
         if (descriptor.isAccessorDescriptor() || descriptor.value() != null
                 || !Boolean.FALSE.equals(descriptor.writable())) {

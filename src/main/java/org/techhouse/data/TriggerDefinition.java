@@ -12,16 +12,6 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
-/**
- * A trigger on one collection, persisted with every other trigger on that collection in
- * {@code {db}/{coll}/{coll}-triggers.json} beside the collection's schema. The database and collection are
- * the file's location rather than fields, so a record cannot disagree with where it lives, and a
- * DROP_COLLECTION removes it with the data.
- *
- * <p>
- * {@code events} reuses the {@link EventType} the write path already emits, so a trigger's filter and the
- * event that fires it cannot drift apart. {@code definer} is the user whose authority a run has.
- */
 public class TriggerDefinition {
     public static final String MODE_DOCUMENT = "document";
     public static final String MODE_BATCH = "batch";
@@ -132,8 +122,6 @@ public class TriggerDefinition {
         return json;
     }
 
-    // The on-disk shape is an object wrapping the list rather than a bare array: EJson's reader parses a
-    // top-level object, not a top-level array, and the wrapper leaves room for file-level metadata later.
     public static JsonObject toFileJson(List<TriggerDefinition> definitions) {
         final var array = new JsonArray();
         definitions.forEach(definition -> array.add(definition.toJsonObject()));

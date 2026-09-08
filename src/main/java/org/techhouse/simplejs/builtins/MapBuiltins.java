@@ -1,5 +1,8 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg;
+import static org.techhouse.simplejs.builtins.NewTargetSupport.requireNewTarget;
+
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
@@ -40,15 +43,6 @@ public final class MapBuiltins {
         return constructor;
     }
 
-    // Reached without `new` there is no new.target; a subclass's super() call arrives with the
-    // instance under construction as thisArg, which is what keeps `class M extends Map {}` working.
-    private static void requireNewTarget(String name, JsValue thisArg) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
-            throw new TypeErrorException("Constructor " + name + " requires 'new'");
-        }
-    }
-
     private static JsValue groupBy(List<JsValue> args, IterableToList iterableToList, Invoker invoker) {
         final var source = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
         final var callback = args.size() > 1 ? args.get(1) : JsUndefined.getInstance();
@@ -71,9 +65,6 @@ public final class MapBuiltins {
         return map;
     }
 
-    // AddEntriesFromIterable: the entries are pulled one at a time (the iterable may be endless), the
-    // adder is read off the receiver so a patched `set` is honoured, and every abrupt completion after
-    // the step closes the iterator before it propagates.
     private static JsValue construct(List<JsValue> args, InterpreterOps ops, boolean weak) {
         final var map = new JsMap(weak);
         final var iterable = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
@@ -95,8 +86,6 @@ public final class MapBuiltins {
         return map;
     }
 
-    // `size` is an accessor on the prototype, not a data method, so reading its descriptor off
-    // Map.prototype has to yield a getter and a foreign receiver has to throw rather than answer 0.
     public static void installSizeAccessor(JsObject proto, boolean weak) {
         final var label = weak ? "WeakMap" : "Map";
         final var getter = new JsNativeFunction("get size", (thisArg, _) -> {
@@ -107,7 +96,7 @@ public final class MapBuiltins {
         });
         getter.setLength(0);
         proto.defineAccessor("size", getter, null);
-        proto.setFlags("size", new JsObject.PropertyFlags(true, false, true));
+        proto.setFlags("size", JsObject.PropertyFlags.HIDDEN);
     }
 
     public static JsValue getMethod(JsMap receiver, String name, Invoker invoker) {
@@ -177,8 +166,6 @@ public final class MapBuiltins {
         map.set(key, value);
     }
 
-    // The three iterators and forEach all walk a live [[MapData]] cursor rather than a snapshot, so an
-    // entry added, deleted or re-added by the consumer is observed exactly as the spec prescribes.
     public static JsObject entriesIterator(JsMap map) {
         final var cursor = map.cursor();
         return JsIterators.lazy(_ -> {
@@ -216,9 +203,6 @@ public final class MapBuiltins {
         return JsUndefined.getInstance();
     }
 
-    // CanBeHeldWeakly: an object is always valid; a Symbol is valid unless it was minted through
-    // Symbol.for (that registry keeps it alive for the process's lifetime, so holding it weakly
-    // would be meaningless); every other primitive is never valid.
     private static boolean isNotObjectKey(JsValue value) {
         if (value instanceof JsSymbol symbol) {
             return symbol.isRegistered();
@@ -234,7 +218,4 @@ public final class MapBuiltins {
         };
     }
 
-    private static JsValue arg(List<JsValue> args, int index) {
-        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
-    }
 }

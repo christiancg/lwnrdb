@@ -1,15 +1,18 @@
 package org.techhouse.simplejs.internal.temporal;
 
+import java.util.Arrays;
+import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 
-/**
- * Ordered largest-to-smallest so duration balancing/rounding can iterate by ordinal.
- */
 public enum Unit {
     YEAR("year", "years"), MONTH("month", "months"), WEEK("week", "weeks"), DAY("day", "days"), HOUR("hour",
             "hours"), MINUTE("minute", "minutes"), SECOND("second", "seconds"), MILLISECOND("millisecond",
                     "milliseconds"), MICROSECOND("microsecond",
                             "microseconds"), NANOSECOND("nanosecond", "nanoseconds");
+
+    public static final List<String> PLURAL_NAMES = Arrays.stream(values()).map(Unit::plural).toList();
+    public static final List<String> TIME_UNIT_SINGULARS = Arrays.stream(values())
+            .filter(u -> u.ordinal() >= HOUR.ordinal()).map(Unit::singular).toList();
 
     private final String singular;
     private final String plural;

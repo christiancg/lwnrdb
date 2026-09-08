@@ -11,8 +11,6 @@ import java.time.Duration;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-// The single place in the SimpleJS engine that performs real network I/O. A host wires this into its
-// HostBindings.network() to opt scripts into `fetch`; it is never installed by default.
 public final class JdkNetworkAccess implements NetworkAccess {
     private final HttpClient client;
 

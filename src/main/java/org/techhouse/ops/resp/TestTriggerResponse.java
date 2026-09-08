@@ -5,11 +5,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
-/**
- * The verdict of a before trigger run against a caller-supplied document, with nothing written. A hook that
- * says no is reported as {@code decision: "reject"} on an OK response - the operation succeeded in telling
- * the caller the answer - while a hook that could not run at all is an error response.
- */
 public class TestTriggerResponse extends OperationResponse {
     public static final String DECISION_ACCEPT = "accept";
     public static final String DECISION_REPLACE = "replace";

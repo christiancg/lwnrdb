@@ -13,18 +13,6 @@ import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 
-/**
- * Runs the before triggers a write fires, the counterpart of {@link TriggerHelper}'s after-write queueing.
- * Each method returns null to let the write proceed - having rewritten the request's document if a hook
- * replaced it - or the response that refuses it.
- *
- * <p>
- * Called from OperationProcessor's write handlers only, never from SaveOperationHelper or
- * DeleteOperationHelper, for the reason TriggerHelper documents: {@code ReplicatedApplyHelper} and
- * {@code ReplicatedTxApplyHelper} reach those helpers directly, and a hook there would transform a document
- * the owner has already transformed. Unlike TriggerHelper this runs user code, so the caller must already
- * hold the collection write lock - which is what makes a rejection stop the write rather than undo it.
- */
 public final class BeforeHookHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
 
@@ -47,8 +35,6 @@ public final class BeforeHookHelper {
         }
     }
 
-    // A bulk save cannot classify each document as an insert or an update before it is written, so a
-    // document is offered to whichever hooks watch the event its presence in the PK index implies.
     public static OperationResponse beforeBulkSave(BulkSaveRequest request, String actingUser) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();

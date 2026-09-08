@@ -4,8 +4,6 @@ import java.util.HashMap;
 import java.util.Map;
 import org.techhouse.simplejs.values.JsValue;
 
-// One registry per script run: an evaluated module instance carries mutable state, so sharing it
-// across runs would leak one caller's writes into another's.
 public final class ModuleRegistry {
     public enum State {
         EVALUATING, EVALUATED, FAILED
@@ -25,8 +23,6 @@ public final class ModuleRegistry {
         return entries.get(moduleId).namespace();
     }
 
-    // A module that threw stays failed for the rest of the run and rethrows the original error, so a
-    // retry can never re-run its side effects.
     public RuntimeException failureOf(String moduleId) {
         return entries.get(moduleId).failure();
     }

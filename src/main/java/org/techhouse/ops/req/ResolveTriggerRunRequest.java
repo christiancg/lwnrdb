@@ -2,10 +2,6 @@ package org.techhouse.ops.req;
 
 import org.techhouse.ops.OperationType;
 
-/**
- * Replays or discards one dead-lettered trigger run. {@code replay} resets its attempt count and re-queues it
- * on the node holding it; {@code discard} consumes its record, giving up on the run for good.
- */
 public class ResolveTriggerRunRequest extends OperationRequest {
     public static final String DECISION_REPLAY = "replay";
     public static final String DECISION_DISCARD = "discard";

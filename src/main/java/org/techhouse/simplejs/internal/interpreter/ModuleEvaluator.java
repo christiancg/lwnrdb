@@ -47,12 +47,6 @@ import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-// The module system: resolving the host-provided built-ins ("args"/"db"/"script") and any specifier
-// the host's ModuleResolver claims, binding static import declarations, dynamic import()/import.meta,
-// and collecting the named/default/re-exports. Every resolution funnels through the Interpreter's
-// module registry, so a module evaluates at most once per run and a cycle is detected rather than
-// recursed into. Declaration evaluation and class building route through the Interpreter and
-// ClassEvaluator seams.
 public final class ModuleEvaluator {
     private final Interpreter interp;
     private final ClassEvaluator classes;
@@ -66,9 +60,6 @@ public final class ModuleEvaluator {
         this.eventLoop = eventLoop;
     }
 
-    // A built-in is the object a default import binds directly (`import db from "db"` binds the db object,
-    // which has no `default` member); a real module is a namespace whose `default` member is its default
-    // export. Conflating the two would bind `{default: fn}` where the script asked for `fn`.
     private record ResolvedBinding(JsValue value, boolean moduleNamespace) {
     }
 
@@ -126,9 +117,6 @@ public final class ModuleEvaluator {
         return namespaceObject(resolveModule(source));
     }
 
-    // A module namespace object. A real module already is one, carrying its named exports and its own
-    // `default`; a built-in is wrapped so both `ns.default` and `ns.member` work - and so the static and
-    // dynamic namespace-import forms agree on the shape.
     private JsValue namespaceObject(ResolvedBinding resolved) {
         if (resolved.moduleNamespace()) {
             return resolved.value();
@@ -206,8 +194,6 @@ public final class ModuleEvaluator {
             }
             return;
         }
-        // `export { x } from 'mod'` re-exports mod's binding; only a sourceless `export { x }` reads the
-        // local scope. Resolved once, so the module evaluates once however many names are taken from it.
         final var source = declaration.getSource();
         final var resolved = source == null ? null : resolveModule(source.getValue());
         for (final var specifier : declaration.getSpecifiers()) {
@@ -217,8 +203,6 @@ public final class ModuleEvaluator {
         }
     }
 
-    // A built-in has no `default` member of its own, so `export { default as x } from 'db'` takes the
-    // built-in itself - the same rule a default import follows.
     private JsValue reexportedMember(ResolvedBinding resolved, String local) {
         if (!resolved.moduleNamespace() && "default".equals(local)) {
             return resolved.value();
@@ -232,7 +216,6 @@ public final class ModuleEvaluator {
             exports.put(declaration.getExported().getName(), namespace);
         } else if (namespace instanceof JsObject object) {
             for (final var key : object.keys()) {
-                // A star re-export carries the named exports only; `default` is deliberately not one.
                 if (!"default".equals(key)) {
                     exports.put(key, object.get(key));
                 }
@@ -250,7 +233,6 @@ public final class ModuleEvaluator {
             case FunctionDeclaration functionDeclaration -> names.add(functionDeclaration.getName().getName());
             case ClassDeclaration classDeclaration -> names.add(classDeclaration.getId().getName());
             default -> {
-                // no exported bindings
             }
         }
     }

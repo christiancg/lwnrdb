@@ -1,5 +1,9 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg;
+import static org.techhouse.simplejs.builtins.NewTargetSupport.requireNewTarget;
+import static org.techhouse.simplejs.builtins.NewTargetSupport.withNewTargetPrototype;
+
 import java.time.DateTimeException;
 import java.time.LocalTime;
 import java.util.List;
@@ -18,10 +22,6 @@ import org.techhouse.simplejs.values.JsTemporalPlainTime;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-/**
- * The {@code DbTime} global: constructor + prototype for the EJson {@code #time(...)} custom type,
- * shaped like {@link GeoBuiltins}. {@code toTemporal()} bridges to {@code Temporal.PlainTime}.
- */
 public final class DbTimeBuiltins {
     public static final List<String> NAMES = List.of("toString", "toJSON", "toTemporal");
     public static final List<String> FIELD_ACCESSORS = List.of("hour", "minute", "second");
@@ -31,35 +31,13 @@ public final class DbTimeBuiltins {
 
     public static JsNativeFunction create(InterpreterOps ops) {
         final var ctor = new JsNativeFunction("DbTime", (thisArg, args) -> {
-            requireNewTarget(thisArg);
+            requireNewTarget("DbTime", thisArg);
             return withNewTargetPrototype(new JsDbTime(construct(args, ops)), ops);
         });
         final var from = new JsNativeFunction("from", (_, args) -> new JsDbTime(toLocalTime(arg(args, 0), ops)));
         from.setLength(1);
         ctor.setProperty("from", from);
         return ctor;
-    }
-
-    private static void requireNewTarget(JsValue thisArg) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
-            throw new TypeErrorException("Constructor DbTime requires 'new'");
-        }
-    }
-
-    private static JsValue withNewTargetPrototype(JsDbTime constructed, InterpreterOps ops) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
-            return constructed;
-        }
-        final var proto = ops.getMember(newTarget, new JsString("prototype"));
-        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
-            return constructed;
-        }
-        final var wrapper = new JsObject();
-        wrapper.setPrimitive(constructed);
-        wrapper.setProto(requested);
-        return wrapper;
     }
 
     private static LocalTime construct(List<JsValue> args, InterpreterOps ops) {
@@ -86,8 +64,6 @@ public final class DbTimeBuiltins {
         return (int) (number < 0 ? Math.ceil(number) : Math.floor(number));
     }
 
-    // Accepts a DbTime, a Temporal.PlainTime, the "#time(...)" wire string or a bare ISO-8601 local
-    // time string, or a {hour, minute, second} bag.
     private static LocalTime toLocalTime(JsValue value, InterpreterOps ops) {
         if (value instanceof JsDbTime time) {
             return time.getValue();
@@ -129,15 +105,11 @@ public final class DbTimeBuiltins {
         return (int) (number < 0 ? Math.ceil(number) : Math.floor(number));
     }
 
-    private static JsValue member(JsValue target, String name, InterpreterOps ops) {
+    public static JsValue member(JsValue target, String name, InterpreterOps ops) {
         if (ops == null) {
             return target instanceof JsObject object ? object.get(name) : JsUndefined.getInstance();
         }
         return ops.getMember(target, new JsString(name));
-    }
-
-    private static JsValue arg(List<JsValue> args, int index) {
-        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
     }
 
     public static void installAccessors(JsObject proto) {
@@ -146,7 +118,7 @@ public final class DbTimeBuiltins {
                     (thisArg, _) -> fieldAccessor(requireReceiver(thisArg, name), name));
             getter.setLength(0);
             proto.defineAccessor(name, getter, null);
-            proto.setFlags(name, new JsObject.PropertyFlags(true, false, true));
+            proto.setFlags(name, JsObject.PropertyFlags.HIDDEN);
         }
     }
 

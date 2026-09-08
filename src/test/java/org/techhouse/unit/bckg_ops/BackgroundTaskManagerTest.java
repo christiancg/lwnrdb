@@ -55,9 +55,7 @@ public class BackgroundTaskManagerTest {
         poolField.set(manager, pool);
 
         final var configInstance = Configuration.getInstance();
-        final var configField = Configuration.class.getDeclaredField("backgroundProcessingThreads");
-        configField.setAccessible(true);
-        configField.set(configInstance, 3);
+        TestUtils.setPrivateField(configInstance, "backgroundProcessingThreads", 3);
 
         manager.startBackgroundWorkers();
 
@@ -79,9 +77,7 @@ public class BackgroundTaskManagerTest {
         poolField.set(manager, pool);
 
         var configInstance = Configuration.getInstance();
-        var configField = Configuration.class.getDeclaredField("backgroundProcessingThreads");
-        configField.setAccessible(true);
-        configField.set(configInstance, 0);
+        TestUtils.setPrivateField(configInstance, "backgroundProcessingThreads", 0);
 
         manager.startBackgroundWorkers();
 

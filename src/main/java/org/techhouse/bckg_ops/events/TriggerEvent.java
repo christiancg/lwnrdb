@@ -4,12 +4,6 @@ import java.util.List;
 import java.util.Objects;
 import org.techhouse.data.DbEntry;
 
-/**
- * One trigger firing, queued by {@code ops.TriggerHelper} after a write committed and dispatched by
- * {@code ops.TriggerDispatcher}. Carries both identities: {@code actingUser} is who performed the write
- * (what the trigger's args report and what explains why it fired), while the authority the script runs
- * under comes from the trigger record's definer.
- */
 public class TriggerEvent extends Event {
     private final String dbName;
     private final String collName;
@@ -21,8 +15,6 @@ public class TriggerEvent extends Event {
     private final int depth;
     private final long firedAt;
     private final String runId;
-    // 1 for a first delivery; raised by TriggerDispatcher when a failed run is re-queued, so a retry is
-    // distinguishable from the original in the history and in the log.
     private final int attempt;
 
     public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,

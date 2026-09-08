@@ -7,9 +7,6 @@ import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.internal.JsOperators;
 import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 
-// ValidateAndApplyPropertyDescriptor and its neighbours, shared by every value type that carries a
-// PropertyTable. A Slot is one key's storage, so string keys and symbol keys run the same algorithm;
-// an exotic type's own arms (array indices, the global Environment) are handled before this.
 public final class OrdinaryProperties {
     private OrdinaryProperties() {
     }
@@ -157,7 +154,6 @@ public final class OrdinaryProperties {
 
             @Override
             public void removeValue() {
-                // A symbol data slot is only ever replaced, never emptied on its own.
             }
 
             @Override
@@ -204,9 +200,6 @@ public final class OrdinaryProperties {
         if (descriptor.isAccessorDescriptor()) {
             applyAccessorFields(slot, descriptor);
         } else if (descriptor.value() != null || descriptor.writable() != null || !exists || !slot.hasAccessor()) {
-            // Converting an accessor property into a data property must drop the stale
-            // getter/setter, or a later read would still find the old accessor entry. A generic
-            // descriptor over an existing accessor takes neither arm, so the accessor survives.
             slot.clearAccessor();
             slot.defineValue(descriptor.value() != null
                     ? descriptor.value()
@@ -216,27 +209,18 @@ public final class OrdinaryProperties {
     }
 
     private static void applyAccessorFields(Slot slot, PropertyDescriptor descriptor) {
-        // A field absent from the new descriptor keeps the property's current getter/setter
-        // (only meaningful if it was already an accessor) rather than defaulting to none, so a
-        // {get: fn2} redefine doesn't silently drop an untouched existing setter.
         final var wasAccessor = slot.hasAccessor();
         final var existingGetter = wasAccessor ? slot.getter() : null;
         final var existingSetter = wasAccessor ? slot.setter() : null;
         final var getter = descriptor.getter() == null ? existingGetter : callableOrNull(descriptor.getter());
         final var setter = descriptor.setter() == null ? existingSetter : callableOrNull(descriptor.setter());
         slot.removeValue();
-        // defineAccessor only ever adds a non-null side, so a field the new descriptor names
-        // but resolves to null (e.g. an explicit `get: undefined`) must be cleared separately.
         if (descriptor.getter() != null && getter == null) {
             slot.clearGetter();
         }
         if (descriptor.setter() != null && setter == null) {
             slot.clearSetter();
         }
-        // Reaching this method already means descriptor.isAccessorDescriptor() (the guard in
-        // validateAndApply), so it always installs a genuine accessor - even when both resolved
-        // sides are null, e.g. {get: undefined, set: undefined}: per spec that is still an
-        // accessor property (reads as undefined, rejects writes), not a data property.
         slot.defineAccessor(getter, setter);
     }
 
@@ -292,8 +276,6 @@ public final class OrdinaryProperties {
                 : PropertyDescriptor.data(slot.value(), flags);
     }
 
-    // name/length/prototype are synthesised at lookup time rather than stored, so a redefine has to
-    // see the real existing property (and its real flags) instead of treating the key as absent.
     static void materialiseMetadata(JsValue target, PropertyTable table, String key) {
         if (!(target instanceof JsCallableProperties callable) || table.has(key) || !metadataKey(callable, key)) {
             return;
@@ -304,7 +286,7 @@ public final class OrdinaryProperties {
             return;
         }
         table.defineValue(key, FunctionProtoBuiltins.metadata(target, key));
-        table.setFlags(key, new PropertyFlags(false, false, true));
+        table.setFlags(key, PropertyFlags.TAG);
     }
 
     static PropertyDescriptor metadataDescriptor(JsValue target, JsCallableProperties callable, String key) {
@@ -312,11 +294,9 @@ public final class OrdinaryProperties {
             return PropertyDescriptor.data(prototypeValue(callable),
                     new PropertyFlags(isPrototypeWritable(callable), false, false));
         }
-        return PropertyDescriptor.data(FunctionProtoBuiltins.metadata(target, key),
-                new PropertyFlags(false, false, true));
+        return PropertyDescriptor.data(FunctionProtoBuiltins.metadata(target, key), PropertyFlags.TAG);
     }
 
-    // A builtin constructor's `prototype` is non-writable; an ordinary function's is writable.
     private static boolean isPrototypeWritable(JsCallableProperties callable) {
         return !(callable instanceof JsNativeFunction nativeFunction) || !nativeFunction.isConstructor();
     }
@@ -336,8 +316,6 @@ public final class OrdinaryProperties {
         return candidates.stream().filter(key -> metadataKey(callable, key)).toList();
     }
 
-    // Deliberately not InterpreterUtils.isConstructor: a generator function is not a constructor
-    // but does own a `prototype` property (the object its instances are linked to).
     private static boolean hasPrototypeProperty(JsCallableProperties callable) {
         if (callable instanceof JsFunction function) {
             return function.isConstructor() || function.isGenerator();
@@ -360,8 +338,6 @@ public final class OrdinaryProperties {
 
     public static boolean isNotSameValue(JsValue a, JsValue b) {
         if (a instanceof JsNumber na && b instanceof JsNumber nb) {
-            // Double.compare implements SameValue for numbers: it distinguishes +0/-0 and treats
-            // NaN as equal to NaN.
             return Double.compare(na.getValue(), nb.getValue()) != 0;
         }
         return !JsOperators.strictEquals(a, b);

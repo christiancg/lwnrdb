@@ -136,9 +136,6 @@ public final class GlobalFunctionsBuiltins {
         return pos;
     }
 
-    // The spec's Decode rejects anything that is not a well-formed UTF-8 octet sequence, which rules
-    // out an overlong encoding, a surrogate code point and anything above U+10FFFF - all of which
-    // java.nio's decoder would happily replace with U+FFFD instead.
     private static boolean isWellFormedUtf8(byte[] bytes) {
         for (var k = 1; k < bytes.length; k++) {
             if ((bytes[k] & 0xC0) != 0x80) {
@@ -179,7 +176,6 @@ public final class GlobalFunctionsBuiltins {
         return (high << 4) | low;
     }
 
-    // Character.digit(c, 16) also accepts the Unicode decimal digits; a HexDigit is ASCII only.
     private static int asciiHex(char c) {
         if (c >= '0' && c <= '9') {
             return c - '0';

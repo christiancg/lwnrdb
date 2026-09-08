@@ -12,6 +12,7 @@ import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsLimits;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -250,6 +251,6 @@ public class JsArrayHoleTest {
         assertEquals(33554433, num("const a = []; a.length = 33554433; a.length"));
         assertEquals(33554434, num("const a = []; a[33554433] = 1; a.length"));
         assertThrows(RangeErrorException.class,
-                () -> Interpreter.run("const a = []; a.length = " + JsArray.MAX_ARRAY_LENGTH + " + 1"));
+                () -> Interpreter.run("const a = []; a.length = " + JsLimits.MAX_ARRAY_LENGTH + " + 1"));
     }
 }

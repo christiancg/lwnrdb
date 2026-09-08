@@ -1121,7 +1121,7 @@ public class FileSystemTest {
         final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
                 + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
                 + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR
-                + Globals.PK_FIELD_TYPE + Globals.INDEX_FILE_EXTENSION);
+                + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
         Files.writeString(indexFile.toPath(), "\nthis is not a valid pk index line", StandardCharsets.UTF_8,
                 java.nio.file.StandardOpenOption.APPEND);
 
@@ -1155,7 +1155,7 @@ public class FileSystemTest {
         final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
                 + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
                 + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR
-                + Globals.PK_FIELD_TYPE + Globals.INDEX_FILE_EXTENSION);
+                + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
         // Append a second line for the same id with a different (later) position.
         Files.writeString(indexFile.toPath(), "\ndup|172|172|0|0", StandardCharsets.UTF_8,
                 java.nio.file.StandardOpenOption.APPEND);

@@ -5,11 +5,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
-// [[MapData]] is a list whose deleted records become EMPTY instead of being spliced out, which is
-// what makes a live iterator observe an entry added behind it, skip one deleted ahead of it, and
-// revisit a key that was deleted and re-added. The list is modelled as a forward-linked chain of
-// nodes: a tombstoned node keeps its `next` pointer, so a cursor parked on it can still advance,
-// while `prune` unlinks it from the chain so a set/delete loop does not grow without bound.
 public final class JsMap extends JsValue {
     private static final int PRUNE_THRESHOLD = 32;
 
@@ -123,8 +118,6 @@ public final class JsMap extends JsValue {
         deadCount++;
     }
 
-    // Unlinks every tombstone from the chain while leaving each one's own `next` pointing at the
-    // surviving successor, so a cursor still holding a pruned node walks forward to a live entry.
     private void prune() {
         Node previous = null;
         var node = head;
@@ -144,8 +137,6 @@ public final class JsMap extends JsValue {
         deadCount = 0;
     }
 
-    // A %MapIteratorPrototype% position: `null` from `next` means the list is exhausted, and the
-    // spec's [[Map]]-set-to-undefined step makes that terminal even if entries are appended later.
     public final class Cursor {
         private Node node;
         private boolean started;

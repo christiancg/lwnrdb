@@ -4,11 +4,6 @@ import org.techhouse.simplejs.internal.temporal.Iso8601Fields;
 import org.techhouse.simplejs.internal.temporal.IsoCalendar;
 import org.techhouse.simplejs.internal.temporal.TemporalFormatter;
 
-/**
- * A JavaScript {@code Temporal.PlainDate} value: a calendar date with no time-of-day or time zone,
- * "iso8601" calendar only (see the feature plan's scope-defining finding — every non-ISO-calendar
- * test262 case lives under the already-excluded {@code intl402/} tree).
- */
 public final class JsTemporalPlainDate extends JsValue {
     private PropertyTable table;
     private final Iso8601Fields fields;

@@ -35,9 +35,6 @@ public final class FunctionProtoBuiltins {
         };
     }
 
-    // A function-like value parsed from real source reports its own text verbatim; everything else
-    // (a builtin, a bound function, a function parsed from a bare token list) falls back to the
-    // NativeFunction shape the spec allows when HostHasSourceTextAvailable is false.
     public static String sourceText(JsValue target) {
         final var retained = retainedSource(target);
         return retained == null ? nativeFunctionForm(target) : retained;
@@ -53,8 +50,6 @@ public final class FunctionProtoBuiltins {
         return null;
     }
 
-    // The synthesised form has to parse as the NativeFunction production, so a name that is not an
-    // IdentifierName (an anonymous function, `bound f`, a computed key) is dropped.
     public static String nativeFunctionForm(JsValue target) {
         final var name = nameOf(target);
         final var accessor = name.startsWith("get ") || name.startsWith("set ");
@@ -95,9 +90,6 @@ public final class FunctionProtoBuiltins {
         if (!(target instanceof JsFunction fn)) {
             return 0;
         }
-        // ExpectedArgumentCount: a plain BindingPattern parameter (no initializer) still counts - only
-        // a parameter carrying a default value (AssignmentPattern) or the rest parameter stops the
-        // count, per FormalParameterList's HasInitializer-driven recursion.
         var count = 0;
         for (final var param : fn.getParams()) {
             if (param instanceof AssignmentPattern || param instanceof RestElement) {
@@ -120,8 +112,6 @@ public final class FunctionProtoBuiltins {
         return invoker.call(target, thisArg, createListFromArrayLike(argArray, ops));
     }
 
-    // CreateListFromArrayLike: any object with a `length` works, not just a literal array; a
-    // non-object (other than the elided/undefined/null argument) is a TypeError.
     private static List<JsValue> createListFromArrayLike(JsValue argArray, InterpreterOps ops) {
         if (argArray instanceof JsUndefined || argArray instanceof JsNull) {
             return new ArrayList<>();
@@ -160,17 +150,11 @@ public final class FunctionProtoBuiltins {
         return bound;
     }
 
-    // IsCallable(Target): InterpreterUtils.isCallable is a JsFunction/JsNativeFunction-only check,
-    // but a class constructor and a proxy wrapping a callable target both have a [[Call]] internal
-    // slot too (bind itself never invokes it, so a class's "cannot be called without new" throw is
-    // deferred to whenever the bound function is actually called).
     private static boolean isFunctionLike(JsValue target) {
         return InterpreterUtils.isCallable(target) || target instanceof JsClass
                 || (target instanceof JsProxy proxy && proxy.isCallable());
     }
 
-    // Both come from Get(Target, ...) rather than the internal slots, so a script-installed own
-    // `name`/`length` on the target is what the bound function inherits.
     private static String targetName(JsValue target, InterpreterOps ops) {
         if (ops == null) {
             return nameOf(target);
@@ -179,8 +163,6 @@ public final class FunctionProtoBuiltins {
         return name instanceof JsString string ? string.getValue() : "";
     }
 
-    // BoundFunctionLength: an absent or non-Number own `length` on the target gives 0 without any
-    // coercion, and +Infinity survives the subtraction rather than saturating.
     private static double boundLength(JsValue target, int argCount, InterpreterOps ops) {
         if (ops == null) {
             return Math.max(0, declaredLength(target) - (double) argCount);
@@ -202,9 +184,6 @@ public final class FunctionProtoBuiltins {
         return Math.max(0, truncated - argCount);
     }
 
-    // OrdinaryHasInstance, reached through Function.prototype[Symbol.hasInstance]. The prototype
-    // comes from Get(C, "prototype"), so an accessor-valued `prototype` runs and a non-object
-    // result is a TypeError rather than a silent false.
     public static JsValue ordinaryHasInstance(JsValue target, JsValue value, InterpreterOps ops) {
         if (!InterpreterUtils.isCallable(target)) {
             return JsBoolean.FALSE;

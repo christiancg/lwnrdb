@@ -17,10 +17,6 @@ import org.techhouse.simplejs.nodes.RestElement;
 import org.techhouse.simplejs.nodes.SpreadElement;
 import org.techhouse.simplejs.nodes.VariableDeclaration;
 
-// Cover-grammar reinterpretation: an array/object expression parsed on an assignment LHS (or a
-// for-in/for-of target) is turned into the equivalent binding pattern once the `=` / `in` / `of`
-// proves the intent. Pure AST transforms; the only parser state consulted is the shared
-// TokenStream, used to raise a positioned error on a non-reinterpretable node.
 public final class PatternConverter {
     private final TokenStream stream;
 
@@ -98,8 +94,6 @@ public final class PatternConverter {
         }
     }
 
-    // AssignmentRestElement/AssignmentRestProperty is the final element of its pattern, and a trailing
-    // comma after it is an elision the grammar has no production for.
     private void checkRestIsLast(JsNode element, int index, int total, boolean trailingComma) {
         if (element instanceof SpreadElement && (index != total - 1 || trailingComma)) {
             throw stream.error();
@@ -149,8 +143,6 @@ public final class PatternConverter {
         return toAssignmentPattern(expr);
     }
 
-    // An assignment LHS may already be a reinterpreted pattern (e.g. `{a: [x] = d}`); only a raw
-    // array/object expression still needs converting.
     private JsNode toBindingTarget(JsNode node) {
         if (node instanceof Expression expr) {
             return toAssignmentPattern(expr);

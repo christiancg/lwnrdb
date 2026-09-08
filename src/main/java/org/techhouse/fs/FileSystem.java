@@ -605,7 +605,7 @@ public class FileSystem {
     }
 
     private void bulkIndexNewPKValues(String dbName, String collName, List<PkIndexEntry> pkEntries) throws IOException {
-        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
+        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
         final var lock = fileLock(indexFile).writeLock();
         lock.lock();
         try (var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
@@ -641,7 +641,7 @@ public class FileSystem {
 
     private PkIndexEntry indexNewPKValue(String dbName, String collectionName, String value, long position, int length,
             long page, long version) throws IOException {
-        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
+        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
         final var lock = fileLock(indexFile).writeLock();
         lock.lock();
         try (var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
@@ -807,7 +807,7 @@ public class FileSystem {
 
     private void internalUpdatePKIndex(String dbName, String collectionName, String value, PkIndexEntry newPkIndexEntry)
             throws IOException {
-        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
+        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
         final var lock = fileLock(indexFile).writeLock();
         lock.lock();
         try {
@@ -1205,7 +1205,7 @@ public class FileSystem {
     }
 
     public List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
-        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
+        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
         if (!indexFile.exists()) {
             return new ArrayList<>();
         }
@@ -1317,7 +1317,7 @@ public class FileSystem {
     }
 
     public PkIndexEntry findPkIndexEntry(String dbName, String collName, String id) throws IOException {
-        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.PK_FIELD_TYPE);
+        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
         if (!indexFile.exists()) {
             return null;
         }

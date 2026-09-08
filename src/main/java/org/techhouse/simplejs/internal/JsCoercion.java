@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.internal;
 
+import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
+
 import java.math.BigInteger;
 import java.util.List;
 import org.techhouse.ejson.internal.NumberFormatter;
@@ -62,10 +64,6 @@ public final class JsCoercion {
         };
     }
 
-    // The data-only pair below never runs user code: no Symbol.toPrimitive, no valueOf/toString. It
-    // exists for EJsonInterop and the console sink, which run after the event loop has drained and
-    // therefore cannot re-enter the interpreter. Everything reachable from a script must use the
-    // ops-aware overloads instead, so a poisoned valueOf is observed and a Symbol throws.
     public static double toNumberDataOnly(JsValue value) {
         return switch (value) {
             case JsNumber n -> n.getValue();
@@ -123,8 +121,6 @@ public final class JsCoercion {
             case JsVector vector -> vector.toString();
             case JsDbDateTime dateTime -> dateTime.toString();
             case JsDbTime time -> time.toString();
-            // A proxy has no [[SourceText]] of its own, so a callable target's retained text must not
-            // leak through it: Function.prototype.toString on a proxy is the NativeFunction form.
             case JsProxy proxy when proxy.isCallable() -> FunctionProtoBuiltins.nativeFunctionForm(proxy.getTarget());
             case JsProxy proxy -> toStrDataOnly(proxy.getTarget());
             case JsArguments ignored -> "[object Arguments]";
@@ -150,15 +146,11 @@ public final class JsCoercion {
         return toStrDataOnly(value);
     }
 
-    // ToNumeric: unlike ToNumber a BigInt survives as a BigInt, which is what lets the arithmetic,
-    // bitwise and relational operators decide on the *coerced* types rather than the raw operands.
     public static JsValue toNumeric(JsValue value, InterpreterOps ops) {
         final var primitive = toPrimitive(value, "number", ops);
         return primitive instanceof JsBigInt ? primitive : new JsNumber(toNumberDataOnly(primitive));
     }
 
-    // ToPropertyKey: a symbol stays a symbol, everything else goes through ToPrimitive(string) then
-    // ToString - so an object key invokes the user's toString/valueOf rather than stringifying flatly.
     public static JsValue toPropertyKey(JsValue value, InterpreterOps ops) {
         final var primitive = isObject(value) ? toPrimitive(value, "string", ops) : value;
         return primitive instanceof JsSymbol ? primitive : new JsString(toStr(primitive, ops));
@@ -174,12 +166,7 @@ public final class JsCoercion {
         return value;
     }
 
-    // A wrapper is deliberately not short-circuited to its primitive slot here: OrdinaryToPrimitive
-    // has to run so a script that redefines valueOf/toString on the wrapper (or on the intrinsic
-    // prototype it inherits them from) wins over the boxed value.
     public static JsValue toPrimitive(JsValue value, String hint, InterpreterOps ops) {
-        // A proxy keeps the target-based coercion: routing it through OrdinaryToPrimitive would reach
-        // the intrinsic Function.prototype.toString, which rejects a proxy receiver.
         if (ops == null || !isObject(value) || value instanceof JsProxy) {
             return toPrimitive(value);
         }
@@ -191,8 +178,6 @@ public final class JsCoercion {
             }
             throw new TypeErrorException("Cannot convert object to primitive value");
         }
-        // GetMethod: anything other than undefined/null that is not callable is an error here, it
-        // must not silently fall through to OrdinaryToPrimitive.
         if (!(exotic instanceof JsUndefined) && !(exotic instanceof JsNull)) {
             throw new TypeErrorException("Symbol.toPrimitive is not a function");
         }
@@ -210,17 +195,10 @@ public final class JsCoercion {
                 }
             }
         }
-        // An exotic value type whose intrinsic prototype chain does not reach Object.prototype (an
-        // arguments object, globalThis) resolves neither method; its built-in string form stands in
-        // rather than becoming a spurious TypeError.
         if (!resolvedAny && !(value instanceof JsObject)) {
             return new JsString(toStrDataOnly(value));
         }
         throw new TypeErrorException("Cannot convert object to primitive value");
-    }
-
-    private static boolean isCallable(JsValue value) {
-        return value instanceof JsFunction || value instanceof JsNativeFunction;
     }
 
     private static boolean isPrimitive(JsValue value) {
@@ -275,8 +253,6 @@ public final class JsCoercion {
         return sb.toString();
     }
 
-    // StrWhiteSpace is not Character.isWhitespace: it additionally covers NBSP and ZWNBSP (which Java
-    // does not treat as whitespace) and excludes the ASCII separators Java folds in.
     public static boolean isJsWhitespace(char c) {
         return c == '\t' || c == '\n' || c == 0x0B || c == '\f' || c == '\r' || c == ' ' || c == 0x00A0 || c == 0x2028
                 || c == 0x2029 || c == 0xFEFF || Character.getType(c) == Character.SPACE_SEPARATOR;
@@ -348,8 +324,6 @@ public final class JsCoercion {
         };
     }
 
-    // StringToBigInt: an invalid literal is `undefined`, not NaN, and the callers must distinguish
-    // the two - `1n >= "0."` is false rather than a numeric comparison against 0.
     public static BigInteger stringToBigInt(String raw) {
         final var s = stripJs(raw);
         if (s.isEmpty()) {

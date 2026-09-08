@@ -10,16 +10,6 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
-/**
- * One pending trigger run, persisted in {@code admin/trigger_runs} before its events are queued and consumed
- * inside the transaction that applies the run's effects, so a run cannot be both applied and replayed.
- *
- * <p>
- * The {@code _id} is {@code runId|chunkSeq}: a run whose id list would not fit in one record under
- * {@code maxEntrySize} is split across chunks that share the runId. {@code ids} is stored for CREATED/UPDATED
- * (the dispatcher re-reads the committed documents, as {@code TriggerHelper.afterWriteIds} does) and
- * {@code documents} for DELETED, where the document no longer exists to re-read.
- */
 public class AdminTriggerRunEntry extends DbEntry {
     private static final String RUN_ID_FIELD = "runId";
     private static final String NODE_ID_FIELD = "nodeId";
@@ -126,8 +116,6 @@ public class AdminTriggerRunEntry extends DbEntry {
                 result.documents.add(element.asJsonObject());
             }
         }
-        // A record written before retries existed carries none of these fields and reads as a first,
-        // still-pending attempt - which is exactly what it is.
         result.status = statusOf(readString(object, STATUS_FIELD));
         result.attempts = intOrZero(readString(object, ATTEMPTS_FIELD));
         result.lastError = readString(object, LAST_ERROR_FIELD);
@@ -147,7 +135,6 @@ public class AdminTriggerRunEntry extends DbEntry {
         }
     }
 
-    // An unauthenticated write has no acting user, so a field can legitimately round-trip as JSON null.
     private static String readString(JsonObject object, String field) {
         if (!object.has(field) || !(object.get(field) instanceof JsonString value)) {
             return null;
@@ -155,8 +142,6 @@ public class AdminTriggerRunEntry extends DbEntry {
         return value.getValue();
     }
 
-    // A record written by an older node - or a torn one - can be missing a numeric field; a run replayed at
-    // depth 0 with an unknown fire time is better than one that cannot be read back at all.
     private static int intOrZero(String value) {
         return value == null ? 0 : Integer.parseInt(value);
     }
@@ -198,7 +183,6 @@ public class AdminTriggerRunEntry extends DbEntry {
         data.addProperty(NEXT_ATTEMPT_AT_FIELD, Long.toString(nextAttemptAt));
     }
 
-    /** Records the outcome of one attempt, leaving the run replayable or marking it dead. */
     public void markAttempt(TriggerRunStatus newStatus, int attemptCount, String error, long nextAttempt) {
         this.status = newStatus;
         this.attempts = attemptCount;

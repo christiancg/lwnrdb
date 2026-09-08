@@ -11,13 +11,6 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
-/**
- * Rebuilds a typed {@link OperationResponse} from the response JSON a peer node returned, mirroring
- * {@code ops/req/RequestParser} on the response side. Each subclass is constructed through its public
- * constructor rather than by reflection: the four fields inherited from {@link OperationResponse} are
- * final with no matching constructor arity, so the reflective path would fall through to unsafe
- * allocation.
- */
 public final class ResponseParser {
     private ResponseParser() {
     }

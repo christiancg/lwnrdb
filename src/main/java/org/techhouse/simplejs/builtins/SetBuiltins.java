@@ -1,5 +1,8 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg;
+import static org.techhouse.simplejs.builtins.NewTargetSupport.requireNewTarget;
+
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -37,18 +40,6 @@ public final class SetBuiltins {
         });
     }
 
-    // Reached without `new` there is no new.target; a subclass's super() call arrives with the
-    // instance under construction as thisArg, which is what keeps `class S extends Set {}` working.
-    private static void requireNewTarget(String name, JsValue thisArg) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
-            throw new TypeErrorException("Constructor " + name + " requires 'new'");
-        }
-    }
-
-    // The values are pulled one at a time (the iterable may be endless), the adder is read off the
-    // receiver so a patched `add` is honoured, and an abrupt completion from it closes the iterator
-    // before it propagates.
     private static JsValue construct(List<JsValue> args, InterpreterOps ops, boolean weak) {
         final var set = new JsSet(weak);
         final var iterable = args.isEmpty() ? JsUndefined.getInstance() : args.getFirst();
@@ -63,8 +54,6 @@ public final class SetBuiltins {
         return set;
     }
 
-    // `size` is an accessor on the prototype rather than a data method, and `keys` is not a method of
-    // its own at all: it is the very same function object as `values`, which a script can compare.
     public static void installAccessors(JsObject proto, boolean weak) {
         final var label = weak ? "WeakSet" : "Set";
         final var getter = new JsNativeFunction("get size", (thisArg, _) -> {
@@ -75,7 +64,7 @@ public final class SetBuiltins {
         });
         getter.setLength(0);
         proto.defineAccessor("size", getter, null);
-        proto.setFlags("size", new JsObject.PropertyFlags(true, false, true));
+        proto.setFlags("size", JsObject.PropertyFlags.HIDDEN);
         final var values = proto.get("values");
         if (values != null) {
             Intrinsics.installMethod(proto, "keys", values);
@@ -115,8 +104,6 @@ public final class SetBuiltins {
         };
     }
 
-    // The spec's GetSetRecord: any object exposing a numeric `size` plus callable `has` and `keys`
-    // is a valid argument, not just a real Set.
     private static SetRecord record(List<JsValue> args, InterpreterOps ops) {
         final var other = arg(args, 0);
         if (!InterpreterUtils.isObjectLike(other) || ops == null) {
@@ -245,8 +232,6 @@ public final class SetBuiltins {
         return result;
     }
 
-    // The receiver's [[SetData]] is walked live: the argument's `has` may delete an entry this loop
-    // has not reached yet, and the spec re-reads the list length after every call.
     private static boolean isSubsetOf(JsSet receiver, SetRecord other) {
         if (receiver.size() > other.size()) {
             return false;
@@ -301,8 +286,6 @@ public final class SetBuiltins {
         set.add(value);
     }
 
-    // Both iterators and forEach walk a live [[SetData]] cursor, so a member added, deleted or
-    // re-added by the consumer is observed exactly as the spec prescribes.
     public static JsObject valuesIterator(JsSet set) {
         final var cursor = set.cursor();
         return JsIterators.lazy(_ -> cursor.next());
@@ -329,9 +312,6 @@ public final class SetBuiltins {
         return JsUndefined.getInstance();
     }
 
-    // CanBeHeldWeakly: an object is always valid; a Symbol is valid unless it was minted through
-    // Symbol.for (that registry keeps it alive for the process's lifetime, so holding it weakly
-    // would be meaningless); every other primitive is never valid.
     private static boolean isObjectKey(JsValue value) {
         if (value instanceof JsSymbol symbol) {
             return !symbol.isRegistered();
@@ -347,7 +327,4 @@ public final class SetBuiltins {
         };
     }
 
-    private static JsValue arg(List<JsValue> args, int index) {
-        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
-    }
 }

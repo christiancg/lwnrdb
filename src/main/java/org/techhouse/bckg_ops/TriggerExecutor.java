@@ -13,17 +13,6 @@ import org.techhouse.config.Configuration;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.TriggerDispatcher;
 
-/**
- * Runs queued triggers on its own workers, deliberately not on {@link BackgroundTaskManager}'s queue: a
- * trigger runs arbitrary user code for up to {@code triggerTimeoutMs}, and sharing the index/admin queue
- * would let one slow trigger stall field-index maintenance for every collection, turning the index layer's
- * documented "eventually consistent" into indefinitely stale.
- *
- * <p>
- * The queue is bounded. On overflow the oldest queued event is dropped: an unbounded queue of retained
- * documents is a heap risk of exactly the kind {@code ConsoleCapture}'s ring buffer already guards against,
- * and dropping beats blocking the write that fired it. Drops are counted so GET_DATABASE_STATS can show them.
- */
 public class TriggerExecutor {
     private static final long SHUTDOWN_TIMEOUT_SECONDS = 3L;
     private final Logger logger = Logger.logFor(TriggerExecutor.class);
@@ -34,16 +23,11 @@ public class TriggerExecutor {
     private final LongAdder retried = new LongAdder();
     private final LongAdder deadLettered = new LongAdder();
     private final AtomicInteger inFlight = new AtomicInteger();
-    // Retries waiting out their backoff. Counted in pending() so a drain does not declare the queue empty
-    // while a retry is still due; one still waiting when the process stops is left to startup recovery,
-    // which is safe because its durable record is still PENDING.
     private final AtomicInteger scheduled = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
     private volatile boolean draining;
     private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
     private ScheduledExecutorService retryScheduler;
-    // Set by start(); a null dispatcher means nothing consumes the queue yet, so submit() is a no-op that
-    // does not silently accumulate events.
     private Consumer<TriggerEvent> dispatcher;
 
     public TriggerExecutor() {
@@ -60,8 +44,6 @@ public class TriggerExecutor {
                 continue;
             }
             dropped.increment();
-            // Overflow is deliberate back-pressure, so a dropped event is terminal: its pending record is
-            // consumed too, otherwise a restart would resurrect exactly the work the queue chose to shed.
             TriggerDispatcher.consumeQuietly(evicted.getRunId(), evicted.getTriggerName());
             logger.warning(
                     "Trigger queue full; dropped the oldest queued trigger '" + evicted.getTriggerName() + "' for "
@@ -69,11 +51,6 @@ public class TriggerExecutor {
         }
     }
 
-    /**
-     * Re-queues a failed run once its backoff has elapsed. A delay of zero submits immediately. A retry
-     * still waiting when the node stops is not lost: its record stays PENDING, so startup recovery replays
-     * it.
-     */
     public void submitAfter(TriggerEvent event, long delayMillis) {
         if (dispatcher == null || draining) {
             return;
@@ -140,13 +117,6 @@ public class TriggerExecutor {
         }
     }
 
-    /**
-     * Lets the queued triggers run before stopping, up to {@code timeoutMillis}. A trigger abandoned here is
-     * not lost - its pending run record is on disk and replays at the next startup - but finishing now is far
-     * better than replaying later, and it is the only way a node being decommissioned runs them at all.
-     *
-     * @return true when everything queued ran within the budget
-     */
     public boolean drain(long timeoutMillis) {
         draining = true;
         try {

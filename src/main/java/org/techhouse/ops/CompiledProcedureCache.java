@@ -10,14 +10,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.simplejs.CompiledScript;
 import org.techhouse.simplejs.SimpleJs;
 
-/**
- * Keeps the parsed form of a stored procedure so a repeated call does not re-lex and re-parse its source.
- *
- * <p>
- * The key carries the procedure's version, which is what makes the cache correct with no invalidation hook on
- * any write path: a save bumps the version, so a stale entry can never be served, including when the save
- * happened on another node and arrived by replication or by an admin anti-entropy conform.
- */
 public class CompiledProcedureCache {
     private final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
     private final Configuration configuration = Configuration.getInstance();
@@ -73,7 +65,6 @@ public class CompiledProcedureCache {
         }
     }
 
-    // The map is in access order, so the iterator's first entry is the least recently used.
     private void evictDownTo(int maxSize) {
         final var iterator = cache.keySet().iterator();
         while (cache.size() > maxSize && iterator.hasNext()) {

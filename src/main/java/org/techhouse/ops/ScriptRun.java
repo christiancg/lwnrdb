@@ -4,12 +4,6 @@ import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.LockSupport;
 
-/**
- * One script run executing on this node right now. The {@code cancelled} flag is the backing store of the
- * {@code CancellationToken} the interpreter polls, so cancelling is a plain volatile write; the thread
- * reference exists only so a run parked in the event loop wakes at once instead of waiting out its poll
- * interval.
- */
 public final class ScriptRun {
     private final String runId = UUID.randomUUID().toString();
     private final ScriptRunKind kind;

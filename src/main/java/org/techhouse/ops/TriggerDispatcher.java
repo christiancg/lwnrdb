@@ -1,5 +1,7 @@
 package org.techhouse.ops;
 
+import static org.techhouse.simplejs.host.ScriptErrorNames.CANCELLED;
+
 import java.util.List;
 import java.util.UUID;
 import org.techhouse.bckg_ops.TriggerExecutor;
@@ -20,10 +22,6 @@ import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
 import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.ScriptResult;
 
-/**
- * Runs one queued trigger. A failure here never reaches the write that fired it - that already committed -
- * so every outcome is reported to the log and the counters instead of to a client.
- */
 public final class TriggerDispatcher {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
@@ -32,7 +30,6 @@ public final class TriggerDispatcher {
     private static final ScriptRunRegistry runRegistry = IocContainer.get(ScriptRunRegistry.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TriggerDispatcher.class);
-    private static final String CANCELLED_ERROR = "ScriptCancelledError";
 
     private TriggerDispatcher() {
     }
@@ -46,8 +43,6 @@ public final class TriggerDispatcher {
             recordSkip(event, reason);
             return;
         }
-        // Both may have been dropped while the event was queued - the staleness EventProcessorHelper
-        // already guards against for a dropped collection.
         final var trigger = findTrigger(event);
         if (trigger == null || !trigger.isEnabled() || trigger.isBefore()) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
@@ -59,9 +54,6 @@ public final class TriggerDispatcher {
             return;
         }
         final var definer = trigger.getDefiner();
-        // A definer who no longer exists disables the trigger. Deliberately no fallback: falling back to
-        // the writer would silently reinstate invoker rights, and falling back to an admin would let
-        // deleting a user widen a trigger's authority.
         if (definer == null || cache.getAdminUserEntry(definer) == null) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             triggerExecutor.countFailure();
@@ -81,15 +73,9 @@ public final class TriggerDispatcher {
                 null);
         final var start = System.currentTimeMillis();
         final var runId = event.getRunId();
-        // A logged run executes inside a transaction that also consumes its record, so the effects and the
-        // record that would replay them commit together and a replay can never double-apply. Begin and commit
-        // both happen inside the body wrapper because the interpreter runs the module on its own thread and
-        // the collection locks a transactional write takes are owned by the thread that acquired them.
         final var committed = new java.util.concurrent.atomic.AtomicBoolean(runId == null);
         final ScriptResult result;
         try {
-            // Unlike CALL_PROCEDURE the console sink is non-null: nobody is waiting on a response, so the
-            // server log is the only place a trigger's console output can go.
             final var host = DatabaseHostBindings.of(argsFor(event, definer), database, logger::info, limits(),
                     scriptRun::isCancelled);
             result = runId == null
@@ -108,9 +94,7 @@ public final class TriggerDispatcher {
             logger.warning(line + " outcome=" + result.getErrorName() + ": " + result.getErrorMessage()
                     + ScriptOperationHelper.renderStack(result.getErrorStack())
                     + (result.getLogs().isEmpty() ? "" : " logs=" + result.getLogs()));
-            // A cancellation is the operator saying stop, so it is terminal however many attempts remain -
-            // the one place the exactly-once guarantee is deliberately waived.
-            final var retryable = !CANCELLED_ERROR.equals(result.getErrorName());
+            final var retryable = !CANCELLED.equals(result.getErrorName());
             handleFailure(event, trigger, definer, scriptRun.runId(), start, result.getErrorName(),
                     result.getErrorMessage(), result.getErrorStack(), result, retryable);
             return;
@@ -127,15 +111,6 @@ public final class TriggerDispatcher {
                 result);
     }
 
-    /**
-     * Decides what a failed run becomes: another attempt after a backoff, or a dead letter.
-     *
-     * <p>
-     * The pending record is the state machine - a retry leaves it PENDING with a raised attempt count, and a
-     * dead letter marks it DEAD with its last error while keeping the payload, which is what lets an operator
-     * replay it later. Only a run that is out of attempts (or was never retryable) consumes its record, so
-     * the exactly-once property is unchanged: a record still present is still un-applied.
-     */
     private static void handleFailure(TriggerEvent event, TriggerDefinition trigger, String definer, String runId,
             long start, String errorName, String errorMessage, List<String> stack, ScriptResult result,
             boolean retryable) {
@@ -168,8 +143,6 @@ public final class TriggerDispatcher {
                 result);
     }
 
-    // Doubling from the configured base, clamped: the point is to outlast a transient lock or an unreachable
-    // peer, not to schedule a run beyond the operator's patience.
     public static long backoffFor(int attempt) {
         final var base = Math.max(0L, configuration.getTriggerRetryBackoffMs());
         final var ceiling = Math.max(0L, configuration.getTriggerRetryMaxBackoffMs());
@@ -196,8 +169,6 @@ public final class TriggerDispatcher {
                 result.getMetrics(), result.getLogs(), result.isLogsTruncated()));
     }
 
-    // A trigger that never ran leaves no other trace than a log line, which is exactly the outcome an
-    // operator is most likely to be hunting for.
     private static void recordSkip(TriggerEvent event, String reason) {
         ScriptRunHistory.record(new ScriptRunRecord(UUID.randomUUID().toString(), ScriptRunKind.TRIGGER,
                 event.getDbName(), event.getTriggerName(), event.getProcedureName(), event.getCollName(),
@@ -205,8 +176,6 @@ public final class TriggerDispatcher {
                 ScriptRunRecord.OUTCOME_SKIPPED, null, reason, null, null, null, false));
     }
 
-    // Runs the script body between a begin and a commit that also consumes the pending run. A body failure
-    // propagates after the rollback, so SimpleJs reports it as the run's error.
     private static void runInTransaction(EnforcingDatabaseAccess database, String runId, String triggerName,
             Runnable body, java.util.concurrent.atomic.AtomicBoolean committed) {
         database.beginTransaction();
@@ -236,7 +205,6 @@ public final class TriggerDispatcher {
         }
     }
 
-    // Consumes a run outside any transaction, for the terminal outcomes that apply no effects at all.
     public static void consumeQuietly(String runId, String triggerName) {
         if (runId == null) {
             return;
@@ -248,8 +216,6 @@ public final class TriggerDispatcher {
         }
     }
 
-    // maxResultBytes stays -1: a trigger's result is discarded, so capping it would fail a run for a
-    // value nobody reads.
     private static ResourceLimits limits() {
         final var base = DatabaseHostBindings.limitsFromConfiguration();
         return new ResourceLimits(base.instructionBudget(), configuration.getTriggerTimeoutMs(), base.maxDepth(),

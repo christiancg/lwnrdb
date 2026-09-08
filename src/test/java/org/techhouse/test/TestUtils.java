@@ -13,7 +13,10 @@ import org.techhouse.cache.BoundedLruCache;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.UserCache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.SizeParser;
+import org.techhouse.config.ValueType;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -25,9 +28,7 @@ import org.techhouse.utils.ReflectionUtils;
 public class TestUtils {
     public static void standardInitialSetup() throws NoSuchFieldException, IllegalAccessException, IOException {
         final var config = Configuration.getInstance();
-        final var field = Configuration.class.getDeclaredField("filePath");
-        field.setAccessible(true);
-        field.set(config, TestGlobals.PATH);
+        setPrivateField(config, "filePath", TestGlobals.PATH);
         final var fs = IocContainer.get(FileSystem.class);
         fs.createBaseDbPath();
         fs.createAdminDatabase();
@@ -113,16 +114,66 @@ public class TestUtils {
 
     public static <U, T> T getPrivateField(U object, String fieldName, Class<T> fieldType)
             throws NoSuchFieldException, IllegalAccessException {
+        if (object instanceof Configuration configuration) {
+            final var key = configKey(fieldName);
+            if (key != null) {
+                return fieldType.cast(configValue(configuration, key, fieldType));
+            }
+        }
         final var field = object.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         return fieldType.cast(field.get(object));
     }
 
+    // Configuration keeps its values in one ConfigKey map rather than a field per key, so a test
+    // naming a key still reads and writes it the way it always did.
     public static <U, T> void setPrivateField(U object, String fieldName, T fieldValue)
             throws NoSuchFieldException, IllegalAccessException {
+        if (object instanceof Configuration configuration) {
+            final var key = configKey(fieldName);
+            if (key != null) {
+                configValues(configuration).put(key, fieldValue == null ? null : String.valueOf(fieldValue));
+                return;
+            }
+        }
         final var field = object.getClass().getDeclaredField(fieldName);
         field.setAccessible(true);
         field.set(object, fieldValue);
+    }
+
+    private static ConfigKey configKey(String fieldName) {
+        final var name = switch (fieldName) {
+            case "maxMemoryBytes" -> "maxMemory";
+            case "scriptFetchAllowlistRaw" -> "scriptFetchAllowlist";
+            default -> fieldName;
+        };
+        return ConfigKey.all().stream().filter(candidate -> candidate.key().equals(name)).findFirst().orElse(null);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<ConfigKey, String> configValues(Configuration configuration)
+            throws NoSuchFieldException, IllegalAccessException {
+        final var field = Configuration.class.getDeclaredField("values");
+        field.setAccessible(true);
+        return (Map<ConfigKey, String>) field.get(configuration);
+    }
+
+    private static Object configValue(Configuration configuration, ConfigKey key, Class<?> fieldType)
+            throws NoSuchFieldException, IllegalAccessException {
+        final var raw = configValues(configuration).get(key);
+        if (raw == null) {
+            return null;
+        }
+        if (fieldType == int.class || fieldType == Integer.class) {
+            return Integer.valueOf(raw.trim());
+        }
+        if (fieldType == long.class || fieldType == Long.class) {
+            return key.type() == ValueType.SIZE ? SizeParser.parse(raw) : Long.parseLong(raw.trim());
+        }
+        if (fieldType == boolean.class || fieldType == Boolean.class) {
+            return Boolean.valueOf(raw.trim());
+        }
+        return raw;
     }
 
     public static <T> T getPrivateStaticField(Class<?> clazz, String fieldName, Class<T> fieldType)

@@ -3,33 +3,22 @@ package org.techhouse.cluster;
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.cluster.membership.MembershipService;
-
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.TriggerRunRow;
+import org.techhouse.config.Globals;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.TriggerRunResolution;
 
-/**
- * Cluster-wide visibility and resolution of recorded trigger runs, for the admin LIST_TRIGGER_RUNS and
- * RESOLVE_TRIGGER_RUN operations.
- *
- * <p>
- * Both fan out for the reason {@link ScriptRunDirectory} does, with a different cause: {@code
- * admin/trigger_runs} is deliberately <em>not</em> replicated - a node that never returns must lose its
- * pending runs rather than have another node double-apply them - so a run's record exists on exactly one
- * node, and it is rarely the one the operator connected to.
- */
 public class TriggerRunDirectory {
     private final Logger logger = Logger.logFor(TriggerRunDirectory.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
 
-    /** Every recorded run on this node, optionally narrowed to one status. */
     public List<TriggerRunRow> localRuns(TriggerRunStatus filter) {
         return TriggerRunResolution.localRows(filter);
     }
@@ -57,12 +46,6 @@ public class TriggerRunDirectory {
         return rows;
     }
 
-    /**
-     * Replays or discards the run wherever its record lives.
-     *
-     * @return {@code true} when some node held the record and acted on it; {@code false} when no live node
-     *         has it, which is also the answer for a run that already completed.
-     */
     public boolean resolveClusterWide(String runId, String decision) {
         if (TriggerRunResolution.resolveLocal(runId, decision)) {
             return true;
@@ -83,7 +66,9 @@ public class TriggerRunDirectory {
     }
 
     private String selfAddress() {
-        return membershipService.getSelf() != null ? membershipService.getSelf().address().toString() : "local";
+        return membershipService.getSelf() != null
+                ? membershipService.getSelf().address().toString()
+                : Globals.STANDALONE_NODE_ID;
     }
 
     private JsonObject toJson(TriggerRunRow run, String nodeAddress, long now) {
@@ -114,7 +99,6 @@ public class TriggerRunDirectory {
             }
             return List.of();
         } catch (Exception e) {
-            // An unreachable peer costs the operator its rows, not the whole listing.
             logger.warning("LIST_TRIGGER_RUNS request to " + address + " failed: " + e.getMessage());
             return List.of();
         }

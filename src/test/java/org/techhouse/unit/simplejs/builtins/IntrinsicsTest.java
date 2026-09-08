@@ -33,6 +33,9 @@ import org.techhouse.simplejs.builtins.StringBuiltins;
 import org.techhouse.simplejs.builtins.SymbolBuiltins;
 import org.techhouse.simplejs.builtins.TypedArrayBuiltins;
 import org.techhouse.simplejs.builtins.VectorBuiltins;
+import org.techhouse.simplejs.builtins.typedarray.ArrayBufferBuiltins;
+import org.techhouse.simplejs.builtins.typedarray.DataViewBuiltins;
+import org.techhouse.simplejs.builtins.typedarray.TypedArrayIteration;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.RegexTranslator;
@@ -82,22 +85,21 @@ public class IntrinsicsTest {
     public void test_proto_for_every_value_type() {
         final var realm = intrinsics();
         final var buffer = new JsArrayBuffer(8);
-        final Map<JsValue, JsObject> expected = Map.ofEntries(Map.entry(new JsArray(), realm.arrayProto()),
-                Map.entry(new JsString("a"), realm.stringProto()), Map.entry(new JsNumber(1), realm.numberProto()),
-                Map.entry(JsBoolean.of(true), realm.booleanProto()),
-                Map.entry(new JsBigInt(BigInteger.ONE), realm.bigintProto()),
-                Map.entry(new JsSymbol("s"), realm.symbolProto()),
-                Map.entry(RegexTranslator.compile("a", ""), realm.regexpProto()),
-                Map.entry(new JsMap(false), realm.mapProto()), Map.entry(new JsSet(false), realm.setProto()),
-                Map.entry(new JsDate(0), realm.dateProto()), Map.entry(buffer, realm.arrayBufferProto()),
-                Map.entry(new JsDataView(buffer, 0, 8), realm.dataViewProto()),
-                Map.entry(new JsNativeFunction("f", (_, _) -> JsUndefined.getInstance()), realm.functionProto()),
-                Map.entry(new JsGeo(new GeoPoint(1, 2)), realm.geoProto()),
-                Map.entry(new JsVector(new double[]{1, 2}), realm.vectorProto()),
-                Map.entry(new JsDbDateTime(LocalDateTime.of(2020, 1, 2, 3, 4, 5)), realm.dbDateTimeProto()),
-                Map.entry(new JsDbTime(LocalTime.of(3, 4, 5)), realm.dbTimeProto()),
-                Map.entry(new JsObject(), realm.objectProto()),
-                Map.entry(JsUndefined.getInstance(), realm.objectProto()));
+        final Map<JsValue, JsObject> expected = Map.ofEntries(Map.entry(new JsArray(), realm.arrayProto),
+                Map.entry(new JsString("a"), realm.stringProto), Map.entry(new JsNumber(1), realm.numberProto),
+                Map.entry(JsBoolean.of(true), realm.booleanProto),
+                Map.entry(new JsBigInt(BigInteger.ONE), realm.bigintProto),
+                Map.entry(new JsSymbol("s"), realm.symbolProto),
+                Map.entry(RegexTranslator.compile("a", ""), realm.regexpProto),
+                Map.entry(new JsMap(false), realm.mapProto), Map.entry(new JsSet(false), realm.setProto),
+                Map.entry(new JsDate(0), realm.dateProto), Map.entry(buffer, realm.arrayBufferProto),
+                Map.entry(new JsDataView(buffer, 0, 8), realm.dataViewProto),
+                Map.entry(new JsNativeFunction("f", (_, _) -> JsUndefined.getInstance()), realm.functionProto),
+                Map.entry(new JsGeo(new GeoPoint(1, 2)), realm.geoProto),
+                Map.entry(new JsVector(new double[]{1, 2}), realm.vectorProto),
+                Map.entry(new JsDbDateTime(LocalDateTime.of(2020, 1, 2, 3, 4, 5)), realm.dbDateTimeProto),
+                Map.entry(new JsDbTime(LocalTime.of(3, 4, 5)), realm.dbTimeProto),
+                Map.entry(new JsObject(), realm.objectProto), Map.entry(JsUndefined.getInstance(), realm.objectProto));
         for (final var entry : expected.entrySet()) {
             assertSame(entry.getValue(), realm.protoFor(entry.getKey()),
                     () -> entry.getKey().getClass().getSimpleName());
@@ -137,27 +139,27 @@ public class IntrinsicsTest {
     @Test
     public void test_names_match_prototype_keys() {
         final var realm = intrinsics();
-        assertKeys(realm.arrayProto(), ArrayBuiltins.NAMES);
-        assertKeys(realm.stringProto(),
+        assertKeys(realm.arrayProto, ArrayBuiltins.NAMES);
+        assertKeys(realm.stringProto,
                 Stream.concat(StringBuiltins.NAMES.stream(), Stream.of("toString", "valueOf")).toList());
-        assertKeys(realm.numberProto(), NumberBuiltins.NAMES);
-        assertKeys(realm.bigintProto(), BigIntBuiltins.NAMES);
-        assertKeys(realm.symbolProto(), SymbolBuiltins.NAMES, SymbolBuiltins.PROTO_ACCESSORS);
-        assertKeys(realm.regexpProto(), RegexBuiltins.NAMES, RegexBuiltins.PROTO_ACCESSORS);
-        assertKeys(realm.dateProto(), DateBuiltins.NAMES);
-        assertKeys(realm.objectProto(), ObjectProtoBuiltins.NAMES, List.of("__proto__"));
-        assertKeys(realm.functionProto(), FunctionProtoBuiltins.NAMES, List.of("caller", "arguments"));
-        assertKeys(realm.promiseProto(), org.techhouse.simplejs.builtins.PromiseBuiltins.PROTO_NAMES);
-        assertKeys(realm.iteratorProto(), org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
-        assertKeys(realm.asyncIteratorProto(), org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
-        assertKeys(realm.arrayBufferProto(), TypedArrayBuiltins.BUFFER_NAMES, TypedArrayBuiltins.bufferAccessorNames());
-        assertKeys(realm.dataViewProto(), TypedArrayBuiltins.VIEW_NAMES, TypedArrayBuiltins.viewAccessorNames());
-        assertKeys(realm.mapProto(), MapBuiltins.NAMES, List.of("size"));
-        assertKeys(realm.setProto(), SetBuiltins.NAMES, List.of("size"));
-        assertKeys(realm.geoProto(), GeoBuiltins.NAMES, GeoBuiltins.FIELD_ACCESSORS);
-        assertKeys(realm.vectorProto(), VectorBuiltins.NAMES, VectorBuiltins.FIELD_ACCESSORS);
-        assertKeys(realm.dbDateTimeProto(), DbDateTimeBuiltins.NAMES, DbDateTimeBuiltins.FIELD_ACCESSORS);
-        assertKeys(realm.dbTimeProto(), DbTimeBuiltins.NAMES, DbTimeBuiltins.FIELD_ACCESSORS);
+        assertKeys(realm.numberProto, NumberBuiltins.NAMES);
+        assertKeys(realm.bigintProto, BigIntBuiltins.NAMES);
+        assertKeys(realm.symbolProto, SymbolBuiltins.NAMES, SymbolBuiltins.PROTO_ACCESSORS);
+        assertKeys(realm.regexpProto, RegexBuiltins.NAMES, RegexBuiltins.PROTO_ACCESSORS);
+        assertKeys(realm.dateProto, DateBuiltins.NAMES);
+        assertKeys(realm.objectProto, ObjectProtoBuiltins.NAMES, List.of("__proto__"));
+        assertKeys(realm.functionProto, FunctionProtoBuiltins.NAMES, List.of("caller", "arguments"));
+        assertKeys(realm.promiseProto, org.techhouse.simplejs.builtins.PromiseBuiltins.PROTO_NAMES);
+        assertKeys(realm.iteratorProto, org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
+        assertKeys(realm.asyncIteratorProto, org.techhouse.simplejs.builtins.GeneratorBuiltins.PROTO_NAMES);
+        assertKeys(realm.arrayBufferProto, TypedArrayBuiltins.BUFFER_NAMES, ArrayBufferBuiltins.bufferAccessorNames());
+        assertKeys(realm.dataViewProto, TypedArrayBuiltins.VIEW_NAMES, DataViewBuiltins.viewAccessorNames());
+        assertKeys(realm.mapProto, MapBuiltins.NAMES, List.of("size"));
+        assertKeys(realm.setProto, SetBuiltins.NAMES, List.of("size"));
+        assertKeys(realm.geoProto, GeoBuiltins.NAMES, GeoBuiltins.FIELD_ACCESSORS);
+        assertKeys(realm.vectorProto, VectorBuiltins.NAMES, VectorBuiltins.FIELD_ACCESSORS);
+        assertKeys(realm.dbDateTimeProto, DbDateTimeBuiltins.NAMES, DbDateTimeBuiltins.FIELD_ACCESSORS);
+        assertKeys(realm.dbTimeProto, DbTimeBuiltins.NAMES, DbTimeBuiltins.FIELD_ACCESSORS);
     }
 
     private static void assertKeys(JsObject proto, List<String> names) {
@@ -218,13 +220,13 @@ public class IntrinsicsTest {
                     name);
         }
         for (final var name : TypedArrayBuiltins.BUFFER_NAMES) {
-            assertNotNull(TypedArrayBuiltins.bufferMethod(buffer, name), name);
+            assertNotNull(ArrayBufferBuiltins.bufferMethod(buffer, name), name);
         }
         for (final var name : TypedArrayBuiltins.VIEW_NAMES) {
-            assertNotNull(TypedArrayBuiltins.dataViewMethod(new JsDataView(buffer, 0, 8), name), name);
+            assertNotNull(DataViewBuiltins.dataViewMethod(new JsDataView(buffer, 0, 8), name), name);
         }
         for (final var name : TypedArrayBuiltins.NAMES) {
-            assertNotNull(TypedArrayBuiltins.getMethod(new JsTypedArray(JsTypedArray.Kind.INT8, buffer, 0, 0), name,
+            assertNotNull(TypedArrayIteration.getMethod(new JsTypedArray(JsTypedArray.Kind.INT8, buffer, 0, 0), name,
                     null, null), name);
         }
         for (final var name : MapBuiltins.NAMES) {
@@ -256,13 +258,13 @@ public class IntrinsicsTest {
     @Test
     public void test_wrong_receiver_throws_type_error() {
         final var realm = intrinsics();
-        final var push = (JsNativeFunction) realm.arrayProto().get("push");
+        final var push = (JsNativeFunction) realm.arrayProto.get("push");
         final var error = assertThrows(TypeErrorException.class,
                 () -> push.invoke(JsUndefined.getInstance(), List.of(new JsNumber(2))));
         assertTrue(error.getMessage().startsWith("Array.prototype.push"), error.getMessage());
-        final var toFixed = (JsNativeFunction) realm.numberProto().get("toFixed");
+        final var toFixed = (JsNativeFunction) realm.numberProto.get("toFixed");
         assertThrows(TypeErrorException.class, () -> toFixed.invoke(new JsString("a"), List.of()));
-        final var mapGet = (JsNativeFunction) realm.mapProto().get("get");
+        final var mapGet = (JsNativeFunction) realm.mapProto.get("get");
         assertThrows(TypeErrorException.class, () -> mapGet.invoke(new JsObject(), List.of()));
     }
 
@@ -270,11 +272,10 @@ public class IntrinsicsTest {
     @Test
     public void test_prototype_chain_roots_at_object_proto() {
         final var realm = intrinsics();
-        final List<JsObject> protos = List.of(realm.arrayProto(), realm.stringProto(), realm.numberProto(),
-                realm.booleanProto(), realm.bigintProto(), realm.symbolProto(), realm.regexpProto(), realm.mapProto(),
-                realm.setProto(), realm.dateProto(), realm.promiseProto(), realm.iteratorProto(),
-                realm.asyncIteratorProto(), realm.arrayBufferProto(), realm.dataViewProto(), realm.functionProto(),
-                realm.errorProto("TypeError"));
+        final List<JsObject> protos = List.of(realm.arrayProto, realm.stringProto, realm.numberProto,
+                realm.booleanProto, realm.bigintProto, realm.symbolProto, realm.regexpProto, realm.mapProto,
+                realm.setProto, realm.dateProto, realm.promiseProto, realm.iteratorProto, realm.asyncIteratorProto,
+                realm.arrayBufferProto, realm.dataViewProto, realm.functionProto, realm.errorProto("TypeError"));
         for (final var proto : protos) {
             var current = (JsValue) proto;
             var depth = 0;
@@ -282,9 +283,9 @@ public class IntrinsicsTest {
                 current = current.getProto();
                 depth++;
             }
-            assertSame(realm.objectProto(), current);
+            assertSame(realm.objectProto, current);
         }
-        assertNull(realm.objectProto().getProto());
+        assertNull(realm.objectProto.getProto());
     }
 
     // Error prototypes share Error.prototype as their base and an unknown name falls back to it
@@ -618,9 +619,9 @@ public class IntrinsicsTest {
         final var realm = intrinsics();
         final var object = new JsObject();
         assertSame(object, realm.toObject(object));
-        final Map<JsValue, JsObject> expected = Map.of(new JsString("ab"), realm.stringProto(), new JsNumber(1),
-                realm.numberProto(), JsBoolean.TRUE, realm.booleanProto(), new JsBigInt(BigInteger.ONE),
-                realm.bigintProto(), new JsSymbol("s"), realm.symbolProto());
+        final Map<JsValue, JsObject> expected = Map.of(new JsString("ab"), realm.stringProto, new JsNumber(1),
+                realm.numberProto, JsBoolean.TRUE, realm.booleanProto, new JsBigInt(BigInteger.ONE), realm.bigintProto,
+                new JsSymbol("s"), realm.symbolProto);
         for (final var entry : expected.entrySet()) {
             final var wrapper = (JsObject) realm.toObject(entry.getKey());
             assertSame(entry.getKey(), wrapper.getPrimitive());

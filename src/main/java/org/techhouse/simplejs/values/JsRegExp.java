@@ -1,11 +1,12 @@
 package org.techhouse.simplejs.values;
 
+import static org.techhouse.simplejs.internal.regex.RegexFlags.LAST_INDEX;
+
 import java.util.List;
 import java.util.Map;
 import org.techhouse.simplejs.internal.regex.RegexProgram;
 
 public final class JsRegExp extends JsValue {
-    private static final String LAST_INDEX = "lastIndex";
 
     private PropertyTable table;
 
@@ -17,15 +18,11 @@ public final class JsRegExp extends JsValue {
         this.source = source;
         this.flags = flags;
         this.program = program;
-        // lastIndex is an ordinary own data property, not an internal slot behind an accessor: a
-        // script may redefine it non-writable, and RegExpBuiltinExec's Set must then throw.
         final var table = ownProperties();
         table.defineValue(LAST_INDEX, new JsNumber(0));
         table.setFlags(LAST_INDEX, new JsObject.PropertyFlags(true, false, false));
     }
 
-    // Original group name -> the capturing group numbers it was compiled to; more than one when
-    // ES2025 duplicate named groups appear in different alternatives.
     public Map<String, List<Integer>> getGroupAliases() {
         return program.groupAliases();
     }

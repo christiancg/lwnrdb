@@ -5,16 +5,16 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.builtins.Intrinsics;
-import org.techhouse.simplejs.builtins.ObjectBuiltins;
+import org.techhouse.simplejs.builtins.object.ObjectDescriptors;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.EventLoop;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
+import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
@@ -1718,14 +1718,14 @@ public class ObjectBuiltinsTest {
     @Test
     public void trySetPrototypeOfValidatesArgumentsAndHandlesNoOps() {
         assertThrows(TypeErrorException.class,
-                () -> ObjectBuiltins.trySetPrototypeOf(JsUndefined.getInstance(), new JsObject(), null));
+                () -> ObjectDescriptors.trySetPrototypeOf(JsUndefined.getInstance(), new JsObject(), null));
         assertThrows(TypeErrorException.class,
-                () -> ObjectBuiltins.trySetPrototypeOf(new JsObject(), new JsNumber(1), null));
-        assertTrue(ObjectBuiltins.trySetPrototypeOf(new JsNumber(1), new JsObject(), null));
+                () -> ObjectDescriptors.trySetPrototypeOf(new JsObject(), new JsNumber(1), null));
+        assertTrue(ObjectDescriptors.trySetPrototypeOf(new JsNumber(1), new JsObject(), null));
         final var proto = new JsObject();
         final var target = new JsObject();
         target.setProto(proto);
-        assertTrue(ObjectBuiltins.trySetPrototypeOf(target, proto, null));
+        assertTrue(ObjectDescriptors.trySetPrototypeOf(target, proto, null));
     }
 
     // A genuine, non-cyclic, extensible target actually gets re-linked (the real mutation path, as
@@ -1734,7 +1734,7 @@ public class ObjectBuiltinsTest {
     public void trySetPrototypeOfMutatesAnOrdinaryExtensibleTarget() {
         final var target = new JsObject();
         final var newProto = new JsObject();
-        assertTrue(ObjectBuiltins.trySetPrototypeOf(target, newProto, null));
+        assertTrue(ObjectDescriptors.trySetPrototypeOf(target, newProto, null));
         assertEquals(newProto, target.getProto());
     }
 
@@ -1745,12 +1745,12 @@ public class ObjectBuiltinsTest {
     public void trySetPrototypeOfReturnsFalseForNonExtensibleOrCyclicTargets() {
         final var target = new JsObject();
         target.preventExtensions();
-        assertFalse(ObjectBuiltins.trySetPrototypeOf(target, new JsObject(), null));
+        assertFalse(ObjectDescriptors.trySetPrototypeOf(target, new JsObject(), null));
 
         final var grandparent = new JsObject();
         final var parent = new JsObject();
         parent.setProto(grandparent);
-        assertFalse(ObjectBuiltins.trySetPrototypeOf(grandparent, parent, null));
+        assertFalse(ObjectDescriptors.trySetPrototypeOf(grandparent, parent, null));
     }
 
     // 9.4.7.1: %Object.prototype% is an immutable-prototype exotic object - [[SetPrototypeOf]]
@@ -1759,16 +1759,16 @@ public class ObjectBuiltinsTest {
     // above shows an ordinary extensible object accepts the same kind of change).
     @Test
     public void trySetPrototypeOfRejectsAnyChangeToTheImmutableObjectPrototype() {
-        final var objectProto = new JsObject();
-        final var intrinsics = mock(Intrinsics.class);
-        when(intrinsics.objectProto()).thenReturn(objectProto);
+        final var intrinsics = new Intrinsics((fn, thisArg, args) -> ((JsNativeFunction) fn).invoke(thisArg, args),
+                null, new EventLoop(), (_, _, _) -> JsUndefined.getInstance());
+        final var objectProto = intrinsics.objectProto;
 
         final var anotherProto = new JsObject();
-        assertFalse(ObjectBuiltins.trySetPrototypeOf(objectProto, new JsObject(), intrinsics));
-        assertFalse(ObjectBuiltins.trySetPrototypeOf(objectProto, anotherProto, intrinsics));
+        assertFalse(ObjectDescriptors.trySetPrototypeOf(objectProto, new JsObject(), intrinsics));
+        assertFalse(ObjectDescriptors.trySetPrototypeOf(objectProto, anotherProto, intrinsics));
         // SameValue(V, current) still short-circuits to true even for the immutable-prototype object
         // (objectProto's own [[Prototype]] is null here, i.e. JsNull from a script's point of view).
-        assertTrue(ObjectBuiltins.trySetPrototypeOf(objectProto, JsNull.getInstance(), intrinsics));
+        assertTrue(ObjectDescriptors.trySetPrototypeOf(objectProto, JsNull.getInstance(), intrinsics));
     }
 
     // Object.assign ToObjects a primitive target (typeof becomes "object") and copies a String

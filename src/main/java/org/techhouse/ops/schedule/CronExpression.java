@@ -8,20 +8,8 @@ import java.util.Locale;
 import java.util.Map;
 import org.techhouse.ex.InvalidCronException;
 
-/**
- * A standard five-field cron expression ({@code minute hour day-of-month month day-of-week}) and the
- * next instant it fires at. Hand-written because the project carries no runtime dependencies.
- *
- * <p>
- * Supports the wildcard, a single value, a range, a step (on the wildcard or on a range), comma lists, and
- * three-letter month and day names. When both day-of-month and day-of-week are restricted they are OR-ed, which is the
- * conventional cron rule rather than the intersection the field layout suggests.
- */
 public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, BitSet months, BitSet daysOfWeek,
         boolean domRestricted, boolean dowRestricted) {
-    // Four years covers every leap-year cycle, so an expression that has not matched by now never will
-    // (February 30th being the canonical example). Bounded so an unsatisfiable expression answers null
-    // instead of spinning.
     private static final int SEARCH_HORIZON_YEARS = 4;
     private static final Map<String, Integer> MONTH_NAMES = Map.ofEntries(Map.entry("JAN", 1), Map.entry("FEB", 2),
             Map.entry("MAR", 3), Map.entry("APR", 4), Map.entry("MAY", 5), Map.entry("JUN", 6), Map.entry("JUL", 7),
@@ -41,9 +29,7 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
         final var hours = parseField(text, fields[1], 0, 23, null);
         final var daysOfMonth = parseField(text, fields[2], 1, 31, null);
         final var months = parseField(text, fields[3], 1, 12, MONTH_NAMES);
-        // Parsed with 7 as an accepted maximum because it is the conventional alias for Sunday.
         final var daysOfWeek = parseField(text, fields[4], 0, 7, DAY_NAMES);
-        // 7 is a legal alias for Sunday in the day-of-week field.
         if (daysOfWeek.get(7)) {
             daysOfWeek.clear(7);
             daysOfWeek.set(0);
@@ -52,17 +38,6 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
                 isRestricted(fields[4]));
     }
 
-    /**
-     * The first instant strictly after {@code from} that this expression matches, truncated to the minute,
-     * or null when no occurrence falls within the four-year search horizon.
-     *
-     * <p>
-     * Candidates are walked as local date-times and only then resolved against the zone, which is what
-     * makes a daily schedule fire once across a DST transition: a local time inside a spring-forward gap
-     * resolves to the instant just after it, and a local time inside a fall-back overlap resolves to the
-     * earlier of its two instants. The resolved instant is still checked to be after {@code from}, so the
-     * repeated hour cannot hand back a moment that has already passed.
-     */
     public ZonedDateTime nextAfter(ZonedDateTime from) {
         final var zone = from.getZone();
         var candidate = from.toLocalDateTime().truncatedTo(ChronoUnit.MINUTES).plusMinutes(1);
@@ -93,8 +68,6 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
         return null;
     }
 
-    // The conventional OR: with both fields restricted a day matches if either does, so "0 0 1 * MON" is
-    // the first of the month and every Monday, not their intersection.
     private boolean matchesDay(LocalDateTime candidate) {
         final var domMatch = daysOfMonth.get(candidate.getDayOfMonth());
         final var dowMatch = daysOfWeek.get(candidate.getDayOfWeek().getValue() % 7);
@@ -142,8 +115,6 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
                 to = parseValue(text, range.substring(dash + 1), min, max, names);
             } else {
                 from = parseValue(text, range, min, max, names);
-                // A bare value with a step means "from here to the end of the range", the conventional
-                // reading of "5/15"; a bare value alone is just itself.
                 to = slash >= 0 ? max : from;
             }
         }

@@ -38,8 +38,6 @@ public interface InterpreterOps {
 
     JsValue getOwnPropertyDescriptor(JsValue target, JsValue key);
 
-    // The single seam the static builtins families reach the host's locale/time zone through, so a
-    // Date/Temporal/toLocaleString answer is the host's choice rather than the JVM's.
     default java.time.ZoneId timeZone() {
         return java.time.ZoneId.systemDefault();
     }
@@ -48,22 +46,15 @@ public interface InterpreterOps {
         return java.util.Locale.getDefault();
     }
 
-    // Bulk-allocation metering. tick() bounds allocation costing an instruction per unit; these charge
-    // the allocations that are O(N) in one instruction, which it cannot see. The cost model is these
-    // two constants and nothing else, so it stays auditable in one place.
     long STRING_BYTES_PER_CHAR = 2L;
     long BYTES_PER_ELEMENT = 32L;
 
     default void charge(long bytes) {
     }
 
-    // Credits back a charge whose allocation the engine knows has been discarded (a db.cursor batch
-    // replaced by the next one), so streaming a collection costs one batch of budget rather than all of it.
     default void release(long bytes) {
     }
 
-    // A native loop bounded by a script-supplied length allocates little but can run to 2^53, which
-    // neither the instruction budget (no tick inside a builtin) nor the memory budget can see.
     default void tick() {
     }
 
@@ -93,8 +84,6 @@ public interface InterpreterOps {
         charge(ops, count * BYTES_PER_ELEMENT);
     }
 
-    // Several getMethod overloads are reachable with a null seam (the no-ops convenience variants),
-    // so the two readers below are the single place that decides what "no host" means.
     static java.time.ZoneId timeZone(InterpreterOps ops) {
         return ops == null ? java.time.ZoneId.systemDefault() : ops.timeZone();
     }

@@ -6,7 +6,6 @@ import java.util.function.Consumer;
 import org.techhouse.ejson.elements.JsonObject;
 
 public record CapturingHostBindings(HostBindings delegate, ConsoleCapture capture) implements HostBindings {
-
     public static HostBindings wrap(HostBindings delegate, ConsoleCapture capture) {
         return new CapturingHostBindings(delegate, capture);
     }

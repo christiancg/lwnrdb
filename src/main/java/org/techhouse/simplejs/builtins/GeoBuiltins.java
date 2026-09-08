@@ -1,5 +1,9 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.BuiltinArgs.arg;
+import static org.techhouse.simplejs.builtins.NewTargetSupport.requireNewTarget;
+import static org.techhouse.simplejs.builtins.NewTargetSupport.withNewTargetPrototype;
+
 import java.util.List;
 import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -16,12 +20,6 @@ import org.techhouse.simplejs.values.JsValue;
 import org.techhouse.utils.GeoPoint;
 import org.techhouse.utils.GeoUtils;
 
-/**
- * The {@code Geo} global: constructor + prototype for the EJson {@code #geo(lat,lng)} custom type,
- * shaped like {@code TemporalPlainTimeBuiltins} ({@link #create(InterpreterOps)} builds the
- * constructor/statics, {@link #getMethod} dispatches prototype methods, {@link #fieldAccessor} backs
- * the per-instance accessor properties {@code Intrinsics} installs from {@link #FIELD_ACCESSORS}).
- */
 public final class GeoBuiltins {
     public static final List<String> NAMES = List.of("toString", "toJSON");
     public static final List<String> FIELD_ACCESSORS = List.of("lat", "lng", "geoHash");
@@ -33,35 +31,13 @@ public final class GeoBuiltins {
 
     public static JsNativeFunction create(InterpreterOps ops) {
         final var ctor = new JsNativeFunction("Geo", (thisArg, args) -> {
-            requireNewTarget(thisArg);
+            requireNewTarget("Geo", thisArg);
             return withNewTargetPrototype(new JsGeo(construct(args, ops)), ops);
         });
         final var from = new JsNativeFunction("from", (_, args) -> new JsGeo(toGeoPoint(arg(args, 0), ops)));
         from.setLength(1);
         ctor.setProperty("from", from);
         return ctor;
-    }
-
-    private static void requireNewTarget(JsValue thisArg) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
-            throw new TypeErrorException("Constructor Geo requires 'new'");
-        }
-    }
-
-    private static JsValue withNewTargetPrototype(JsGeo constructed, InterpreterOps ops) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
-            return constructed;
-        }
-        final var proto = ops.getMember(newTarget, new JsString("prototype"));
-        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
-            return constructed;
-        }
-        final var wrapper = new JsObject();
-        wrapper.setPrimitive(constructed);
-        wrapper.setProto(requested);
-        return wrapper;
     }
 
     private static GeoPoint construct(List<JsValue> args, InterpreterOps ops) {
@@ -78,7 +54,6 @@ public final class GeoBuiltins {
         return new GeoPoint(lat, lng);
     }
 
-    // Accepts a Geo, the "#geo(lat,lng)" wire string, or a {lat, lng} property bag.
     private static GeoPoint toGeoPoint(JsValue value, InterpreterOps ops) {
         if (value instanceof JsGeo geo) {
             return geo.getPoint();
@@ -112,17 +87,13 @@ public final class GeoBuiltins {
         return ops.getMember(target, new JsString(name));
     }
 
-    private static JsValue arg(List<JsValue> args, int index) {
-        return index < args.size() ? args.get(index) : JsUndefined.getInstance();
-    }
-
     public static void installAccessors(JsObject proto) {
         for (final var name : FIELD_ACCESSORS) {
             final var getter = new JsNativeFunction("get " + name,
                     (thisArg, _) -> fieldAccessor(requireReceiver(thisArg, name), name));
             getter.setLength(0);
             proto.defineAccessor(name, getter, null);
-            proto.setFlags(name, new JsObject.PropertyFlags(true, false, true));
+            proto.setFlags(name, JsObject.PropertyFlags.HIDDEN);
         }
     }
 

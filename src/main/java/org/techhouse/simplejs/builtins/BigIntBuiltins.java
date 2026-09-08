@@ -1,6 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
 import static org.techhouse.simplejs.builtins.InterpreterOps.locale;
+import static org.techhouse.simplejs.values.JsLimits.MAX_SAFE_INTEGER;
 
 import java.math.BigInteger;
 import java.util.List;
@@ -20,10 +21,6 @@ public final class BigIntBuiltins {
 
     private static final int MIN_RADIX = 2;
     private static final int MAX_RADIX = 36;
-    private static final double MAX_SAFE_INTEGER = 9007199254740991d;
-    // BigInteger cannot represent a value wider than Integer.MAX_VALUE bits, so a bit count the spec
-    // would accept but this implementation cannot allocate is reported the way engines report their
-    // own width limit rather than crashing out of the sandbox.
     private static final int MAX_BITS = 1 << 24;
 
     private BigIntBuiltins() {
@@ -49,8 +46,6 @@ public final class BigIntBuiltins {
         };
     }
 
-    // ToBigInt: unlike the BigInt() function a Number is rejected outright, and an unparseable
-    // string is a SyntaxError rather than a TypeError.
     public static JsBigInt toBigInt(JsValue value, InterpreterOps ops) {
         final var primitive = JsCoercion.toPrimitive(value, "number", ops);
         return switch (primitive) {

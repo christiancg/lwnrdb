@@ -152,11 +152,11 @@ public final class DatabaseStatsHelper {
         memory.addProperty("maxMemoryBytes", config.getMaxMemoryBytes());
         memory.addProperty("cachingDisabled", config.isCachingDisabled());
         memory.addProperty("cacheUnlimited", config.isCacheUnlimited());
-        memory.add("adminMetadataCache", buildAdminMetadataCacheStats(config));
+        memory.add("adminMetadataCache", buildAdminMetadataCacheStats());
         return memory;
     }
 
-    private static JsonObject buildAdminMetadataCacheStats(Configuration config) {
+    private static JsonObject buildAdminMetadataCacheStats() {
         final var stats = cache.metadataCacheStats();
         final var json = new JsonObject();
         json.addProperty("procedureBytes", stats.procedureBytes());
@@ -168,11 +168,6 @@ public final class DatabaseStatsHelper {
         json.addProperty("scheduleBytes", stats.scheduleBytes());
         json.addProperty("scheduleEntries", (long) stats.scheduleEntries());
         json.addProperty("missEntries", (long) stats.missEntries());
-        json.addProperty("procedureCacheMaxBytes", config.getProcedureCacheMaxBytes());
-        json.addProperty("schemaCacheMaxBytes", config.getSchemaCacheMaxBytes());
-        json.addProperty("triggerCacheMaxEntries", (long) config.getTriggerCacheMaxEntries());
-        json.addProperty("scheduleCacheMaxBytes", config.getScheduleCacheMaxBytes());
-        json.addProperty("metadataMissCacheMaxEntries", (long) config.getMetadataMissCacheMaxEntries());
         return json;
     }
 

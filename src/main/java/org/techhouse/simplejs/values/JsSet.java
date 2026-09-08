@@ -5,8 +5,6 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
-// [[SetData]] follows the same append-with-tombstones model as JsMap's [[MapData]]: see the comment
-// there for why a deleted member stays linked into the chain and how `prune` keeps it bounded.
 public final class JsSet extends JsValue {
     private static final int PRUNE_THRESHOLD = 32;
 
@@ -127,7 +125,6 @@ public final class JsSet extends JsValue {
         private boolean started;
         private boolean exhausted;
 
-        // `null` means the list is exhausted, and per spec that is terminal for this cursor.
         public JsValue next() {
             if (exhausted) {
                 return null;

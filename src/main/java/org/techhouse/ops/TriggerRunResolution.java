@@ -11,11 +11,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.ResolveTriggerRunRequest;
 
-/**
- * The local half of LIST_TRIGGER_RUNS and RESOLVE_TRIGGER_RUN: reading this node's recorded runs and acting
- * on one of them. {@code cluster/TriggerRunDirectory} fans these out; keeping them here is what lets the
- * cluster package stay out of the trigger internals.
- */
 public final class TriggerRunResolution {
     private static final Logger logger = Logger.logFor(TriggerRunResolution.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
@@ -29,7 +24,6 @@ public final class TriggerRunResolution {
         }
         final var rows = new ArrayList<TriggerRunRow>();
         try {
-            // One row per run, not per chunk: a run split across chunks is still one thing an operator acts on.
             for (final var chunks : byRun().values()) {
                 final var first = chunks.getFirst();
                 if (filter != null && first.getStatus() != filter) {
@@ -46,9 +40,6 @@ public final class TriggerRunResolution {
         return rows;
     }
 
-    /**
-     * @return {@code true} when this node held the run's record and acted on it.
-     */
     public static boolean resolveLocal(String runId, String decision) {
         if (runId == null || !TriggerRunLog.isEnabled()) {
             return false;
@@ -63,14 +54,10 @@ public final class TriggerRunResolution {
                 logger.info("Discarded trigger run '" + runId + "' on operator request");
                 return true;
             }
-            // Named explicitly rather than treated as the default: this is reached from a peer as well as
-            // from the validated wire request, and an unrecognised decision must not silently replay.
             if (!ResolveTriggerRunRequest.DECISION_REPLAY.equals(decision)) {
                 logger.warning("Ignoring trigger run '" + runId + "': unknown decision '" + decision + "'");
                 return false;
             }
-            // A replay starts the attempt count over: the operator has decided the cause was fixed, so
-            // holding the exhausted count against it would dead-letter it again on the first failure.
             final var event = TriggerRunRecovery.toEvent(chunks);
             if (event == null) {
                 TriggerDispatcher.consumeQuietly(runId, chunks.getFirst().getTriggerName());

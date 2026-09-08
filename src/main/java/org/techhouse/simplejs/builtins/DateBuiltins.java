@@ -1,9 +1,27 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.NewTargetSupport.withNewTargetPrototype;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.dateFromTime;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.day;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.hourFromTime;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.localOffset;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.localTime;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.makeDate;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.makeDay;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.makeTime;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.minFromTime;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.monthFromTime;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.msFromTime;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.secFromTime;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.timeClip;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.timeWithinDay;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.truncate;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.utcFromLocal;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.weekDay;
+import static org.techhouse.simplejs.builtins.date.DateArithmetic.yearFromTime;
+import static org.techhouse.simplejs.internal.temporal.TimeUnits.MS_PER_MINUTE;
+
 import java.time.Instant;
-import java.time.LocalDateTime;
-import java.time.ZoneOffset;
-import java.time.zone.ZoneRules;
 import java.util.List;
 import java.util.Locale;
 import java.util.regex.Pattern;
@@ -15,7 +33,6 @@ import org.techhouse.simplejs.values.JsDate;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
 import org.techhouse.simplejs.values.JsNumber;
-import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsTemporalInstant;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -31,12 +48,8 @@ public final class DateBuiltins {
             "setUTCMinutes", "setSeconds", "setUTCSeconds", "setMilliseconds", "setUTCMilliseconds",
             "toTemporalInstant");
 
-    private static final double MS_PER_SECOND = 1000;
-    private static final double MS_PER_MINUTE = 60_000;
-    private static final double MS_PER_HOUR = 3_600_000;
-    private static final double MS_PER_DAY = 86_400_000;
-    private static final double MAX_TIME = 8.64e15;
-    private static final double MAX_YEAR = 400_000;
+    public static final double MAX_TIME = 8.64e15;
+    public static final double MAX_YEAR = 400_000;
     private static final String INVALID = "Invalid Date";
     private static final String[] WEEKDAYS = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
     private static final String[] MONTHS = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov",
@@ -56,9 +69,6 @@ public final class DateBuiltins {
     }
 
     public static JsNativeFunction create(InterpreterOps ops) {
-        // Called as a plain function Date() answers a string. A `class X extends Date` super-call
-        // reaches the same lambda with no new.target but *with* the instance as its receiver, which
-        // is what separates the two here.
         final var date = new JsNativeFunction("Date",
                 (thisArg,
                         args) -> JsNativeFunction.currentNewTarget() == null && !InterpreterUtils.isObjectLike(thisArg)
@@ -69,26 +79,6 @@ public final class DateBuiltins {
         date.setProperty("UTC",
                 new JsNativeFunction("UTC", (_, args) -> new JsNumber(timeClip(fromComponents(args, ops)))));
         return date;
-    }
-
-    // OrdinaryCreateFromConstructor: Reflect.construct(Date, args, Ctor) must link the new instance's
-    // [[Prototype]] to Ctor.prototype rather than always to the intrinsic Date.prototype (mirrors the
-    // same idiom TypedArrayBuiltins/JsArrayBuffer use for their own constructors). A `class X extends
-    // Date` super-call reaches this constructor with no new.target (see the branch above), so this
-    // path is exercised only by a direct/reflective `new`.
-    private static JsValue withNewTargetPrototype(JsDate constructed, InterpreterOps ops) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
-            return constructed;
-        }
-        final var proto = ops.getMember(newTarget, new JsString("prototype"));
-        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
-            return constructed;
-        }
-        final var wrapper = new JsObject();
-        wrapper.setPrimitive(constructed);
-        wrapper.setProto(requested);
-        return wrapper;
     }
 
     private static double construct(List<JsValue> args, InterpreterOps ops) {
@@ -109,7 +99,6 @@ public final class DateBuiltins {
 
     private static double fromComponents(List<JsValue> args, InterpreterOps ops) {
         var year = doubleArg(args, 0, Double.NaN, ops);
-        // The 1900 offset keys off the *truncated* year, so -0.999999 still maps to 1900.
         final var truncatedYear = truncate(year);
         if (!Double.isNaN(year) && truncatedYear >= 0 && truncatedYear <= 99) {
             year = 1900 + truncatedYear;
@@ -161,8 +150,6 @@ public final class DateBuiltins {
         return -1;
     }
 
-    // The Date Time String Format: a date-only form is UTC, a date-time form without an offset is
-    // local time, and the year may carry the extended six-digit ±YYYYYY spelling.
     private static double parseIso(String text, InterpreterOps ops) {
         final var matcher = ISO.matcher(text);
         if (!matcher.matches()) {
@@ -201,8 +188,6 @@ public final class DateBuiltins {
         return "toJSON".equals(name);
     }
 
-    // Date.prototype.toJSON carries no [[DateValue]] brand check: it is specified over ToObject(this)
-    // plus a ToPrimitive, so it has to work on an arbitrary receiver.
     public static JsValue genericMethod(String name, InterpreterOps ops) {
         if (!isGeneric(name)) {
             return null;
@@ -239,7 +224,6 @@ public final class DateBuiltins {
             case "toLocaleString", "toLocaleDateString", "toLocaleTimeString" ->
                 new JsNativeFunction(name, (_, args) -> new JsString(toLocaleString(receiver, name, args, ops)));
             case "getTimezoneOffset" -> new JsNativeFunction("getTimezoneOffset", (_, _) -> new JsNumber(
-                    // 0.0 - x (not unary -x) so a zero offset stays +0, matching SameValue expectations.
                     receiver.isValid() ? (0.0 - localOffset(receiver.getTime(), ops)) / MS_PER_MINUTE : Double.NaN));
             case "toTemporalInstant" ->
                 new JsNativeFunction(name, (_, _) -> JsTemporalInstant.fromEpochMilliseconds(receiver.getTime()));
@@ -254,11 +238,7 @@ public final class DateBuiltins {
         }
         final var utc = name.startsWith("setUTC");
         return new JsNativeFunction(name, (_, args) -> {
-            // thisTimeValue is read before any argument coercion, and every argument is coerced
-            // (left to right) even when the receiver is already an invalid date.
             final var start = receiver.getTime();
-            // The leading argument is always ToNumber'd, so setMilliseconds() with no argument sees
-            // NaN rather than keeping the current component; the trailing ones only when present.
             final var provided = Math.clamp(args.size(), 1, arity);
             final var values = new double[arity];
             for (var i = 0; i < provided; i++) {
@@ -303,129 +283,6 @@ public final class DateBuiltins {
                     makeTime(hourFromTime(t), minFromTime(t), values[0], provided > 1 ? values[1] : msFromTime(t)));
             default -> makeDate(day(t), makeTime(hourFromTime(t), minFromTime(t), secFromTime(t), values[0]));
         };
-    }
-
-    // The spec's date arithmetic is unbounded: an out-of-range component rolls over rather than
-    // throwing, and only TimeClip at the end collapses an impossible instant to NaN.
-    private static double makeDay(double year, double month, double date) {
-        if (!Double.isFinite(year) || !Double.isFinite(month) || !Double.isFinite(date)) {
-            return Double.NaN;
-        }
-        final var y = truncate(year);
-        final var m = truncate(month);
-        final var ym = y + Math.floor(m / 12);
-        if (Math.abs(ym) > MAX_YEAR) {
-            return Double.NaN;
-        }
-        final var mn = (int) (m - Math.floor(m / 12) * 12);
-        return java.time.LocalDate.of((int) ym, mn + 1, 1).toEpochDay() + truncate(date) - 1;
-    }
-
-    private static double makeTime(double hour, double minute, double second, double millis) {
-        if (!Double.isFinite(hour) || !Double.isFinite(minute) || !Double.isFinite(second)
-                || !Double.isFinite(millis)) {
-            return Double.NaN;
-        }
-        return truncate(hour) * MS_PER_HOUR + truncate(minute) * MS_PER_MINUTE + truncate(second) * MS_PER_SECOND
-                + truncate(millis);
-    }
-
-    private static double makeDate(double day, double time) {
-        if (!Double.isFinite(day) || !Double.isFinite(time)) {
-            return Double.NaN;
-        }
-        final var result = day * MS_PER_DAY + time;
-        return Double.isFinite(result) ? result : Double.NaN;
-    }
-
-    private static double timeClip(double time) {
-        if (!Double.isFinite(time) || Math.abs(time) > MAX_TIME) {
-            return Double.NaN;
-        }
-        return truncate(time) + 0d;
-    }
-
-    private static double truncate(double value) {
-        if (Double.isNaN(value)) {
-            return 0;
-        }
-        return value < 0 ? Math.ceil(value) : Math.floor(value);
-    }
-
-    private static ZoneRules zoneRules(InterpreterOps ops) {
-        return InterpreterOps.timeZone(ops).getRules();
-    }
-
-    // LocalTZA at a UTC instant. Kept out of JsDate so the value type stays a bare epoch-millis
-    // carrier and EJsonInterop's ISO mapping is unaffected by the local-time work.
-    private static double localOffset(double utcTime, InterpreterOps ops) {
-        if (!Double.isFinite(utcTime) || Math.abs(utcTime) > MAX_TIME) {
-            return 0;
-        }
-        return zoneRules(ops).getOffset(Instant.ofEpochMilli((long) utcTime)).getTotalSeconds() * MS_PER_SECOND;
-    }
-
-    private static double localTime(double utcTime, InterpreterOps ops) {
-        return Double.isNaN(utcTime) ? utcTime : utcTime + localOffset(utcTime, ops);
-    }
-
-    // The inverse of LocalTime: a local wall-clock reading back to a UTC instant, preferring the
-    // earlier offset when the reading is ambiguous (a fall-back transition) as the spec does.
-    private static double utcFromLocal(double localTimeValue, InterpreterOps ops) {
-        if (!Double.isFinite(localTimeValue) || Math.abs(localTimeValue) > MAX_TIME + MS_PER_DAY) {
-            return localTimeValue;
-        }
-        final var millis = (long) localTimeValue;
-        final var local = LocalDateTime.ofEpochSecond(Math.floorDiv(millis, 1000L),
-                (int) (Math.floorMod(millis, 1000L) * 1_000_000L), ZoneOffset.UTC);
-        final var rules = zoneRules(ops);
-        final var offsets = rules.getValidOffsets(local);
-        final var offset = offsets.isEmpty() ? rules.getOffset(local) : offsets.getFirst();
-        return localTimeValue - offset.getTotalSeconds() * MS_PER_SECOND;
-    }
-
-    private static double day(double t) {
-        return Math.floor(t / MS_PER_DAY);
-    }
-
-    private static double timeWithinDay(double t) {
-        return t - day(t) * MS_PER_DAY;
-    }
-
-    private static double hourFromTime(double t) {
-        return floorMod(Math.floor(t / MS_PER_HOUR), 24);
-    }
-
-    private static double minFromTime(double t) {
-        return floorMod(Math.floor(t / MS_PER_MINUTE), 60);
-    }
-
-    private static double secFromTime(double t) {
-        return floorMod(Math.floor(t / MS_PER_SECOND), 60);
-    }
-
-    private static double msFromTime(double t) {
-        return floorMod(t, MS_PER_SECOND);
-    }
-
-    private static double yearFromTime(double t) {
-        return java.time.LocalDate.ofEpochDay((long) day(t)).getYear();
-    }
-
-    private static double monthFromTime(double t) {
-        return java.time.LocalDate.ofEpochDay((long) day(t)).getMonthValue() - 1d;
-    }
-
-    private static double dateFromTime(double t) {
-        return java.time.LocalDate.ofEpochDay((long) day(t)).getDayOfMonth();
-    }
-
-    private static double weekDay(double t) {
-        return floorMod(day(t) + 4, 7);
-    }
-
-    private static double floorMod(double value, double modulus) {
-        return value - Math.floor(value / modulus) * modulus;
     }
 
     private static JsValue getter(JsDate receiver, String name, InterpreterOps ops) {
@@ -525,8 +382,6 @@ public final class DateBuiltins {
         return new JsString(isoString(receiver.getTime()));
     }
 
-    // The extended-year spelling is required whenever the year escapes 0000-9999, which is exactly
-    // the range Date.parse has to be able to read back.
     private static String isoString(double t) {
         final var year = (long) yearFromTime(t);
         final String yearText;
@@ -591,8 +446,6 @@ public final class DateBuiltins {
         return position < args.size() ? JsCoercion.toNumber(args.get(position), ops) : fallback;
     }
 
-    // Date.prototype[Symbol.toPrimitive] runs OrdinaryToPrimitive with a hint-derived order, so a
-    // "default" hint prefers toString (unlike every other object, where it prefers valueOf).
     public static JsNativeFunction symbolToPrimitive(InterpreterOps ops) {
         final var method = new JsNativeFunction("[Symbol.toPrimitive]", (thisArg, args) -> {
             if (!InterpreterUtils.isObjectLike(thisArg)) {

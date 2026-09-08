@@ -8,10 +8,6 @@ import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 
-/**
- * A JavaScript {@code DataView} over a {@link JsArrayBuffer}. Unlike a typed array, each getter/setter
- * takes an explicit {@code littleEndian} flag (default big-endian per spec).
- */
 public final class JsDataView extends JsValue {
     private PropertyTable table;
 
@@ -35,7 +31,6 @@ public final class JsDataView extends JsValue {
         return buffer;
     }
 
-    // get byteOffset rejects an out-of-bounds view for the same reason get byteLength does.
     public int byteOffset() {
         if (isOutOfBounds()) {
             throw new TypeErrorException("DataView is out of bounds");
@@ -43,9 +38,6 @@ public final class JsDataView extends JsValue {
         return byteOffset;
     }
 
-    /**
-     * IsViewOutOfBounds: a detached buffer, or a resizable buffer shrunk past this view's window.
-     */
     public boolean isOutOfBounds() {
         if (buffer.isDetached()) {
             return true;
@@ -57,10 +49,6 @@ public final class JsDataView extends JsValue {
         return !lengthTracking && byteOffset + (long) byteLength > bufferLength;
     }
 
-    /**
-     * The spec's {@code get byteLength} throws on an out-of-bounds view rather than reporting a stale
-     * length, so every geometry read has to go through the same check the element accessors do.
-     */
     public int byteLength() {
         if (isOutOfBounds()) {
             throw new TypeErrorException("DataView is out of bounds");
@@ -72,13 +60,7 @@ public final class JsDataView extends JsValue {
         return byteLength;
     }
 
-    // offset arrives as a long (post-ToIndex, so it may exceed Integer.MAX_VALUE) - the comparison
-    // must not overflow the way `int + int` would for a huge, spec-legal-but-out-of-buffer offset.
     private int checkBounds(long offset, int size) {
-        // A detached buffer's backing bytes are truncated to zero-length, so this must be checked
-        // before the bounds comparison below - otherwise a non-lengthTracking view still reports
-        // its original (now-stale) byteLength and the out-of-range ByteBuffer access throws a raw
-        // IndexOutOfBoundsException instead of the spec TypeError.
         if (buffer.isDetached()) {
             throw new TypeErrorException("Cannot perform DataView access on a detached ArrayBuffer");
         }

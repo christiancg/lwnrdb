@@ -3,6 +3,7 @@ package org.techhouse.simplejs.builtins;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isObjectLike;
 
 import java.util.List;
+import org.techhouse.simplejs.builtins.object.ObjectOwnKeys;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArguments;
@@ -49,8 +50,6 @@ public final class ObjectProtoBuiltins {
             case "toString" ->
                 new JsNativeFunction("toString", (_, _) -> new JsString(objectToString(receiver, ops, intrinsics)));
             case "toLocaleString" -> new JsNativeFunction("toLocaleString", (_, _) -> toLocaleString(receiver, ops));
-            // Object.prototype.valueOf: 1. Return ? ToObject(this value) - a primitive receiver must
-            // come back as its wrapper object, not the bare primitive.
             case "valueOf" ->
                 new JsNativeFunction("valueOf", (_, _) -> intrinsics.toObject(requireCoercible(receiver, "valueOf")));
             case "__defineGetter__" -> new JsNativeFunction("__defineGetter__",
@@ -65,8 +64,6 @@ public final class ObjectProtoBuiltins {
         };
     }
 
-    // Object.prototype.__proto__ is an accessor pair rather than a data property, so it is installed
-    // on the intrinsic prototype itself instead of being resolved per receiver through getMethod.
     public static void installProtoAccessor(JsObject objectProto, InterpreterOps ops, Intrinsics intrinsics) {
         final var getter = new JsNativeFunction("get __proto__",
                 (thisArg, _) -> ops.getPrototypeOf(intrinsics.toObject(thisArg)));
@@ -74,7 +71,7 @@ public final class ObjectProtoBuiltins {
         final var setter = new JsNativeFunction("set __proto__", (thisArg, args) -> setProto(thisArg, arg(args), ops));
         setter.setLength(1);
         objectProto.defineAccessor("__proto__", getter, setter);
-        objectProto.setFlags("__proto__", new JsObject.PropertyFlags(true, false, true));
+        objectProto.setFlags("__proto__", JsObject.PropertyFlags.HIDDEN);
     }
 
     private static JsValue setProto(JsValue receiver, JsValue proto, InterpreterOps ops) {
@@ -86,14 +83,9 @@ public final class ObjectProtoBuiltins {
         if (current == proto || (current instanceof JsNull && proto instanceof JsNull)) {
             return JsUndefined.getInstance();
         }
-        // OrdinarySetPrototypeOf returns false for a real change on a non-extensible object, and the
-        // Annex B setter turns that false into a TypeError.
         if (!ops.isExtensible(receiver)) {
             throw new TypeErrorException("Cannot set prototype of a non-extensible object");
         }
-        // OrdinarySetPrototypeOf can also answer false for a cycle or an immutable-prototype exotic
-        // object (%Object.prototype%) - both real rejections the Annex B setter must surface as a
-        // TypeError too, not just the extensibility case checked above.
         if (!ops.setPrototypeOf(receiver, proto)) {
             throw new TypeErrorException("Cannot set prototype: rejected for '" + JsCoercion.toStr(proto) + "'");
         }
@@ -105,8 +97,6 @@ public final class ObjectProtoBuiltins {
         return ops.call(ops.getMember(receiver, new JsString("toString")), receiver, List.of());
     }
 
-    // ToObject runs before ToPropertyKey, so a non-coercible receiver rejects without ever coercing
-    // the key.
     private static JsValue defineAccessor(JsValue receiver, List<JsValue> args, InterpreterOps ops,
             Intrinsics intrinsics, JsString side) {
         final var target = intrinsics.toObject(receiver);
@@ -152,19 +142,8 @@ public final class ObjectProtoBuiltins {
         return "[object " + brand(receiver, intrinsics) + "]";
     }
 
-    // ES2026 step 14's builtinTag switch names only Array/Function/Error/Boolean/Number/String/
-    // Date/RegExp (else "Object"); a Map/Set/WeakMap/WeakSet/Promise/Generator/AsyncGenerator/
-    // Symbol/BigInt object's usual type name comes entirely from a *real*, deletable/overridable
-    // @@toStringTag property installed on its prototype (consulted above, before brand() runs) -
-    // never from this builtin-tag fallback, so once that property is removed or answers a non-string
-    // the fallback here must be "Object", not the type name.
     private static String brand(JsValue receiver, Intrinsics intrinsics) {
-        // %Array.prototype% is an Array exotic object per spec (22.1.3), even though it is
-        // implemented here as an ordinary JsObject carrying a real own "length" (see
-        // Intrinsics.arrayPrototype) rather than a genuine JsArray - IsArray(Array.prototype) is
-        // spec-true, so the brand check must special-case this one object rather than fall through
-        // to wrapperBrand's "Object" default.
-        if (intrinsics != null && receiver == intrinsics.arrayProto()) {
+        if (intrinsics != null && receiver == intrinsics.arrayProto) {
             return "Array";
         }
         return switch (receiver) {
@@ -190,15 +169,6 @@ public final class ObjectProtoBuiltins {
         };
     }
 
-    // Per spec, only two of step 14's builtin-tag checks are themselves proxy-transparent: IsArray
-    // (7.2.2 explicitly recurses into [[ProxyTarget]]) and [[Call]] presence (a Proxy exotic object
-    // literally has its own [[Call]] internal method whenever its target is callable - not an
-    // "unwrap", a real own internal method). Every other check (Boolean/Number/String/Date/RegExp/
-    // ErrorData) is a genuine internal slot the Proxy object itself never has, regardless of its
-    // target - so `new Proxy(new Date, {})` must answer "Object", not "Date" (test262 built-ins/
-    // Object/prototype/toString/non-callable-join-string-tag.js). A prior version of this method
-    // unwrapped to the target's own brand unconditionally, which happened to keep the Array/Function
-    // cases correct while silently reflecting every other internal-slot type through the proxy too.
     private static String proxyBrand(JsProxy proxy) {
         final var target = proxy.getTarget();
         if (proxyResolvesToArray(target)) {
@@ -240,26 +210,24 @@ public final class ObjectProtoBuiltins {
         };
     }
 
-    // ToPropertyKey(V) runs before ToObject(this value), so a poisoned key coercion is observed even
-    // when the receiver is null - and a wrapper whose @@toPrimitive yields a symbol keys by symbol.
     private static boolean hasOwnProperty(JsValue receiver, List<JsValue> args, InterpreterOps ops) {
         final var key = JsCoercion.toPropertyKey(arg(args), ops);
         requireCoercible(receiver, "hasOwnProperty");
         if (key instanceof JsSymbol symbol) {
-            return ObjectBuiltins.hasOwnSymbol(receiver, symbol, ops);
+            return ObjectOwnKeys.hasOwnSymbol(receiver, symbol, ops);
         }
-        return ObjectBuiltins.hasOwnKey(receiver, JsCoercion.toStr(key), ops);
+        return ObjectOwnKeys.hasOwnKey(receiver, JsCoercion.toStr(key), ops);
     }
 
     private static boolean isEnumerable(JsValue receiver, List<JsValue> args, InterpreterOps ops) {
         final var propertyKey = JsCoercion.toPropertyKey(arg(args), ops);
         requireCoercible(receiver, "propertyIsEnumerable");
         if (propertyKey instanceof JsSymbol symbol) {
-            return ObjectBuiltins.hasOwnSymbol(receiver, symbol, ops)
-                    && ObjectBuiltins.isEnumerableOwnSymbol(receiver, symbol);
+            return ObjectOwnKeys.hasOwnSymbol(receiver, symbol, ops)
+                    && ObjectOwnKeys.isEnumerableOwnSymbol(receiver, symbol);
         }
         final var key = JsCoercion.toStr(propertyKey);
-        if (!ObjectBuiltins.hasOwnKey(receiver, key, ops)) {
+        if (!ObjectOwnKeys.hasOwnKey(receiver, key, ops)) {
             return false;
         }
         return switch (receiver) {
@@ -274,13 +242,6 @@ public final class ObjectProtoBuiltins {
         };
     }
 
-    // Object.prototype.isPrototypeOf(V): 1. If V is not an Object, return false. 2. Let O be
-    // ? ToObject(this value). - step 1 must run (and short-circuit to false) before step 2 even
-    // looks at `this`, so a nullish/primitive receiver only throws/no-ops once V is confirmed to be
-    // an object. A value's builtin prototype is reached through Intrinsics.protoFor rather than a
-    // proto link, and those prototypes terminate at Object.prototype implicitly, so both hops are
-    // walked explicitly; a Proxy anywhere in the chain runs its "getPrototypeOf" trap via the ops
-    // seam instead of a raw (and for a Proxy, absent) JsValue.getProto() read.
     private static boolean isPrototypeOf(JsValue receiver, List<JsValue> args, InterpreterOps ops,
             Intrinsics intrinsics) {
         final var candidate = arg(args);
@@ -310,7 +271,7 @@ public final class ObjectProtoBuiltins {
         if (proto != null) {
             return proto;
         }
-        if (intrinsics == null || value == intrinsics.objectProto()) {
+        if (intrinsics == null || value == intrinsics.objectProto) {
             return null;
         }
         return intrinsics.protoFor(value);

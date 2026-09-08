@@ -11,21 +11,6 @@ import org.techhouse.log.Logger;
 import org.techhouse.simplejs.host.DatabaseHostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
 
-/**
- * Runs one due schedule. Nobody is waiting on the result, so every outcome goes to the log and the counters.
- *
- * <p>
- * A scheduled run uses <em>definer rights</em>, like a trigger and for the same reason: it has no caller, so
- * running it as its installer makes it behave identically regardless of who happens to be connected. A
- * definer who no longer exists disables the schedule rather than falling back to anybody — falling back to an
- * admin would let deleting a user widen a job's authority.
- *
- * <p>
- * Deliberately <em>not</em> transactional. A trigger runs inside a transaction because its pending-run record
- * must be consumed atomically with its effects; a schedule has no run record, so wrapping it would only hold
- * collection write locks for the whole job. A scheduled procedure that wants atomicity opens its own
- * {@code db.transaction(...)}, which — unlike inside a trigger — is permitted.
- */
 public final class ScheduleDispatcher {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
@@ -40,7 +25,6 @@ public final class ScheduleDispatcher {
     public static void dispatch(ScheduleRegistry.Entry entry) {
         final var definition = entry.getDefinition();
         final var dbName = entry.getDbName();
-        // The definition may have been dropped or disabled while the run sat in the queue.
         if (!definition.isEnabled()) {
             scheduleExecutor.countSkip();
             return;
@@ -88,8 +72,6 @@ public final class ScheduleDispatcher {
         }
     }
 
-    // A schedule that could not run at all is still a fact about the schedule, and the one an operator is
-    // most likely to be looking for: nothing ran and nothing failed, so no other surface reports it.
     private static void recordSkip(ScheduleRegistry.Entry entry, ScheduleDefinition definition, String reason) {
         ScriptRunHistory.record(new ScriptRunRecord(UUID.randomUUID().toString(), ScriptRunKind.SCHEDULE,
                 entry.getDbName(), definition.getName(), definition.getProcedureName(), null, null,
@@ -97,9 +79,6 @@ public final class ScheduleDispatcher {
                 ScriptRunRecord.OUTCOME_SKIPPED, null, reason, null, null, null, false));
     }
 
-    // The configured sandbox with its wall clock replaced by the schedule's own timeoutMs (falling back to
-    // scheduleTimeoutMs), the same override TriggerDispatcher performs. maxResultBytes stays -1 because a
-    // scheduled run's result is discarded, so capping it would fail a run for a value nobody reads.
     private static ResourceLimits limits(ScheduleDefinition definition) {
         final var base = DatabaseHostBindings.limitsFromConfiguration();
         final var timeout = definition.getTimeoutMs() > 0

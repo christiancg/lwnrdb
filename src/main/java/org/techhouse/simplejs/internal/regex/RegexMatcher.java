@@ -1,16 +1,5 @@
 package org.techhouse.simplejs.internal.regex;
 
-/**
- * Executes a {@link RegexProgram} directly against a UTF-16 string - the ECMA-262 Pattern Semantics
- * backtracking algorithm (continuation-passing, capture snapshot/restore per attempt), not a
- * translation to {@code java.util.regex}. This is what makes three spec behaviours exact where
- * {@code java.util.regex} could not express them: a capturing group inside a repeated group (or a
- * losing branch of a negative lookaround) reports {@code undefined} once backtracked away rather
- * than keeping a stale value; a lookbehind's body may contain a backreference or be otherwise
- * unbounded, since it is matched by walking backward through the real AST rather than precomputing a
- * maximum length; and without the {@code u}/{@code v} flag, {@code "."} and character classes step
- * one UTF-16 code unit at a time instead of always combining a well-formed surrogate pair.
- */
 public final class RegexMatcher {
     private interface Cont {
         boolean run(int pos);
@@ -42,9 +31,6 @@ public final class RegexMatcher {
             if (sticky) {
                 return null;
             }
-            // ECMA-262 RegExpBuiltinExec: a failed attempt advances the candidate position by
-            // AdvanceStringIndex, not by one code unit - in unicode mode this steps over a whole
-            // well-formed surrogate pair so a match is never attempted from inside one.
             start += engine.unicode && start + 1 < input.length() && Character.isHighSurrogate(input.charAt(start))
                     && Character.isLowSurrogate(input.charAt(start + 1)) ? 2 : 1;
         }
@@ -71,8 +57,6 @@ public final class RegexMatcher {
         return new RegexMatch(starts.clone(), ends.clone(), input);
     }
 
-    // ---- dispatch ----------------------------------------------------------------------------
-
     private boolean match(RxNode node, int pos, int dir, Cont k) {
         if (isSimple(node)) {
             final var next = tryConsumeSimple(node, pos, dir);
@@ -94,8 +78,6 @@ public final class RegexMatcher {
                 || node instanceof RxNode.WordBoundary || node instanceof RxNode.Backreference;
     }
 
-    // A deterministic, single-outcome node: no choice to backtrack into, so it can be consumed by a
-    // flat loop (matchSequence, the quantifier fast path) without recursing through match/Cont at all.
     private int tryConsumeSimple(RxNode node, int pos, int dir) {
         return switch (node) {
             case RxNode.CharClass(var set) -> consumeCharClass(set, pos, dir);
@@ -108,11 +90,6 @@ public final class RegexMatcher {
         };
     }
 
-    // ---- sequence / alternation ---------------------------------------------------------------
-
-    // Consecutive simple terms are consumed by a straight loop instead of one recursive/continuation
-    // frame each, so a long run of literals/classes (by far the common case) costs O(1) Java stack
-    // depth rather than O(sequence length).
     private boolean matchSequence(java.util.List<RxNode> terms, int index, int pos, int dir, Cont k) {
         var i = index;
         var p = pos;
@@ -132,10 +109,6 @@ public final class RegexMatcher {
         return match(terms.get(i), pAtChoicePoint, dir, p2 -> matchSequence(terms, resumeAt, p2, dir, k));
     }
 
-    // A loop, not recursion per branch: an Alternation has no bound on its branch count (a Unicode
-    // property-of-strings class can compile to thousands of literal alternatives), and trying each
-    // one is a plain retry, not a nested choice point - recursing here would cost one Java stack
-    // frame per branch for no reason.
     private boolean matchAlternation(java.util.List<RxNode> branches, int pos, int dir, Cont k) {
         for (final var branch : branches) {
             if (match(branch, pos, dir, k)) {
@@ -144,8 +117,6 @@ public final class RegexMatcher {
         }
         return false;
     }
-
-    // ---- capturing groups -----------------------------------------------------------------------
 
     private boolean matchGroup(int number, RxNode body, int pos, int dir, Cont k) {
         final var savedStart = starts[number];
@@ -167,8 +138,6 @@ public final class RegexMatcher {
         return result;
     }
 
-    // ---- quantifiers --------------------------------------------------------------------------
-
     private boolean matchQuantifier(RxNode atom, int min, int max, boolean greedy, int[] nestedGroups, int pos, int dir,
             Cont k) {
         if (isSimple(atom)) {
@@ -177,18 +146,9 @@ public final class RegexMatcher {
         return repeatMatcher(atom, min, max, greedy, nestedGroups, pos, dir, k, new java.util.HashSet<>());
     }
 
-    // (position, min, max) at which every possible continuation of this exact quantifier instance
-    // has already been shown to fail. Ambiguous-length alternatives (a real Unicode ZWJ emoji
-    // sequence set has many overlapping prefixes) otherwise re-explore the same dead end once per
-    // distinct number of prior iterations - classic catastrophic backtracking. Only failure is
-    // memoized, never success: a success can carry capture side effects that a cached boolean alone
-    // cannot replay, but a failure needs no replay at all.
     private record MemoKey(int pos, int min, int max) {
     }
 
-    // Iterative fast path for a quantified atom with no internal choice point (no captures, no
-    // backtracking needed inside a single iteration): avoids one Java stack frame per repetition,
-    // which matters for common unbounded patterns like `.*`/`\d+` over long input.
     private boolean matchSimpleQuantifier(RxNode atom, int min, int max, boolean greedy, int pos, int dir, Cont k) {
         final var maxCount = max == RxNode.Quantifier.UNBOUNDED ? Integer.MAX_VALUE : max;
         final var reachedEnds = new java.util.ArrayList<Integer>();
@@ -226,10 +186,6 @@ public final class RegexMatcher {
         return false;
     }
 
-    // General RepeatMatcher (ECMA-262 22.2.2.5.1) for a quantified atom that has internal choice
-    // points (nested groups/alternation/quantifiers): each iteration is a real recursive attempt, so
-    // matchGroup's save/restore correctly resets a capture made in an iteration that later gets
-    // backtracked away, which is exactly what java.util.regex cannot do.
     private boolean repeatMatcher(RxNode atom, int min, int max, boolean greedy, int[] nestedGroups, int pos, int dir,
             Cont k, java.util.Set<MemoKey> failed) {
         if (max == 0) {
@@ -272,11 +228,6 @@ public final class RegexMatcher {
         return k.run(pos);
     }
 
-    // ECMA-262 RepeatMatcher resets every capture nested inside the quantified atom to undefined
-    // before each new iteration attempt (not just this iteration's own group, if it has one): a
-    // sibling group that participated two iterations ago but not in this one must read back as
-    // undefined, not as that stale value. Restored on failure so an abandoned attempt (e.g. this
-    // quantifier settling for fewer repetitions) leaves the outer backtracking state untouched.
     private boolean matchIteration(RxNode atom, int[] nestedGroups, int pos, int dir, Cont k) {
         if (nestedGroups.length == 0) {
             return match(atom, pos, dir, k);
@@ -299,8 +250,6 @@ public final class RegexMatcher {
         }
         return result;
     }
-
-    // ---- lookaround -----------------------------------------------------------------------------
 
     private boolean matchLookaround(boolean behind, boolean negate, RxNode body, int pos, Cont k) {
         final var lookDir = behind ? -1 : 1;
@@ -325,12 +274,6 @@ public final class RegexMatcher {
         return false;
     }
 
-    // ---- leaf matchers --------------------------------------------------------------------------
-
-    // Without the u/v flag, a class/dot consumes exactly one UTF-16 code unit, even mid-string where
-    // it happens to be one half of a well-formed surrogate pair; with u/v, it consumes a whole code
-    // point, combining a well-formed pair. This one method is the entire fix for that ECMA-262
-    // distinction - every class already carries the right set regardless of mode.
     private int consumeCharClass(CodePointSet set, int pos, int dir) {
         if (dir > 0) {
             if (pos >= input.length()) {

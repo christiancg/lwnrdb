@@ -50,22 +50,14 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final EJson eJson = IocContainer.get(EJson.class);
 
-    // Incremented from coroutine virtual threads as well as the module thread, so an atomic rather
-    // than a plain field.
     private final AtomicLong dbOperations = new AtomicLong();
 
     private final String username;
     private final UUID clientId;
-    // Null means unrestricted (an in-process embedding); RUN_SCRIPT pins it to the requested database.
     private final String scopedDatabase;
-    // Stamped onto every request this access issues, so a write a trigger performs is recognisable as
-    // trigger-originated by TriggerHelper - on this node and on any node the write is forwarded to.
     private final int triggerDepth;
     private JsObject errorPrototype;
-    // Held for the transaction's lifetime rather than per dispatch: TransactionOperationHelper keys
-    // purely on the client id, so a throwaway forwarded client would be unreachable on the next call.
     private UUID sessionClientId;
-    // The only thread allowed to touch an open session — see DatabaseAccess.beginTransaction.
     private Thread sessionThread;
 
     public EnforcingDatabaseAccess(String username, UUID clientId) {
@@ -100,8 +92,6 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (response instanceof FindByIdResponse findByIdResponse) {
             return findByIdResponse.getObject();
         }
-        // An absent document is data, not a failure; any other non-OK response is a real error (entry too
-        // large, a cluster rejection, an internal failure) that the script must be able to see and catch.
         if (isNotFound(response)) {
             return null;
         }
@@ -125,7 +115,6 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (response instanceof AggregateResponse aggregateResponse) {
             return aggregateResponse.getResults();
         }
-        // An empty pipeline result is reported as NO_RESULTS, which is an empty list to a script.
         if (ErrorCode.NO_RESULTS.getCode().equals(response.getErrorCode())) {
             return List.of();
         }
@@ -162,7 +151,6 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         final var request = new DeleteRequest(db, coll);
         request.set_id(id);
         final var response = dispatch(request);
-        // Deleting an absent document leaves the intended state, so it stays a no-op like findById's null.
         if (response.getStatus() != OperationStatus.OK && !isNotFound(response)) {
             throw jsError(response.getMessage());
         }
@@ -226,8 +214,6 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         }
     }
 
-    // Buffers the op that consumes a pending trigger run into this script's open transaction, so the run's
-    // effects and the record that would replay it commit together. Trigger-only: no script reaches this.
     public void bufferTriggerRunConsume(String runId) {
         assertSessionThread();
         final var transaction = clientTracker.getActiveTransaction(sessionClientId);
@@ -262,8 +248,6 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         }
     }
 
-    // Releasing a collection write lock from a thread that does not own it silently does nothing and
-    // strands it for the process's lifetime, so a cross-thread touch fails loudly instead.
     private void assertSessionThread() {
         if (sessionThread != null && sessionThread != Thread.currentThread()) {
             throw jsError("A script transaction may only be used from the thread that started it");
@@ -288,9 +272,6 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (user == null) {
             throw jsError("User '" + username + "' not found");
         }
-        // The three transaction control requests carry no database or collection to authorize and are
-        // absent from ALWAYS_ALLOWED_OPERATIONS, so AuthorizationChecker would deny every non-admin.
-        // Each buffered write inside the transaction is still authorized on its own request.
         if (!isTransactionControl(request)) {
             final var authorization = AuthorizationChecker.check(request, user);
             if (!authorization.isAllowed()) {
@@ -307,8 +288,6 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (clientId != null) {
             return routeOrProcess(request, rawJson, clientId);
         }
-        // Registered before routing, not after: ClusterRouter records the transaction's local slice and
-        // remote participants against this id, and silently no-ops when the tracker has no such client.
         final var forwardedClientId = clientTracker.registerForwardedClient(username);
         try {
             return routeOrProcess(request, rawJson, forwardedClientId);

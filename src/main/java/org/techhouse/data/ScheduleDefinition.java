@@ -6,16 +6,6 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
-/**
- * A scheduled procedure, persisted as one file per schedule in {@code {database}/.schedules/{name}.json}.
- * The database is the file's location rather than a field, following {@link ProcedureDefinition}, and the
- * JSON mapping is hand-written for the same reason: an absent field reads as a documented default, so a
- * record written by an older version loads unchanged.
- *
- * <p>
- * Exactly one of {@code cron} and {@code intervalMs} is set. Because a schedule is a separate record from
- * the procedure it names, one procedure can carry several schedules with different arguments.
- */
 public class ScheduleDefinition {
     private static final String NAME_FIELD = "name";
     private static final String PROCEDURE_NAME_FIELD = "procedureName";
@@ -75,9 +65,7 @@ public class ScheduleDefinition {
         result.args = object.has(ARGS_FIELD) && object.get(ARGS_FIELD).isJsonObject()
                 ? object.get(ARGS_FIELD).asJsonObject()
                 : new JsonObject();
-        // Absent reads as zero, which the dispatcher reads as "use the configured scheduleTimeoutMs".
         result.timeoutMs = longOrZero(object, TIMEOUT_MS_FIELD);
-        // Absent reads as enabled: a record written before the flag existed did fire.
         result.enabled = !object.has(ENABLED_FIELD) || object.get(ENABLED_FIELD).isJsonNull()
                 || object.get(ENABLED_FIELD).asJsonBoolean().getValue();
         result.definer = stringOrNull(object, DEFINER_FIELD);
@@ -115,8 +103,6 @@ public class ScheduleDefinition {
         return json;
     }
 
-    // The metadata a LIST_SCHEDULES response carries: the arguments can be arbitrarily large and are not
-    // what a listing is for.
     public JsonObject toSummaryJson() {
         final var json = toJsonObject();
         json.remove(ARGS_FIELD);

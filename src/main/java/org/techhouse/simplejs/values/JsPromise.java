@@ -80,8 +80,6 @@ public final class JsPromise extends JsValue {
         settle(State.FULFILLED, value);
     }
 
-    // Spec [[Resolve]] for a thenable: schedule a job that calls `then` with fresh resolve/reject
-    // functions bound to this promise, rather than fulfilling with the thenable object itself.
     private void resolveThenable(JsValue thenable, JsValue then, InterpreterOps ops) {
         eventLoop.queueMicrotask(() -> {
             final var alreadyResolved = new boolean[]{false};

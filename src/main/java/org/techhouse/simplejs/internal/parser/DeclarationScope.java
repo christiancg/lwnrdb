@@ -4,9 +4,6 @@ import java.util.HashSet;
 import java.util.Set;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 
-// One lexical scope's declared names, used only for the redeclaration early errors. A var name is
-// recorded in every scope it crosses on the way up to its function boundary, so a lexical
-// declaration anywhere between the var and that boundary is rejected as the spec requires.
 public final class DeclarationScope {
     private final Set<String> lexical = new HashSet<>();
     private final Set<String> vars = new HashSet<>();
@@ -33,8 +30,6 @@ public final class DeclarationScope {
         }
     }
 
-    // A catch parameter clashes with a lexical declaration in the catch block but not with a `var`
-    // there: Annex B keeps `catch (e) { var e; }` legal for a simple binding identifier.
     public void declareCatchParam(String name) {
         if (!catchParams.add(name) || lexical.contains(name)) {
             throw alreadyDeclared(name);

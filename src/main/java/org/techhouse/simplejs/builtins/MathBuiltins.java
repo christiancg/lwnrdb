@@ -44,11 +44,6 @@ public final class MathBuiltins {
         unary(math, ops, "sin", Math::sin);
         unary(math, ops, "cos", Math::cos);
         unary(math, ops, "tan", Math::tan);
-        // Narrowing straight through `(float) value` before `floatToFloat16` rounds twice: a double a
-        // hair above the float16 halfway point can round down at the float32 step and then round the
-        // "wrong" way again at the float16 step. JsTypedArray.toFloat16 already carries the
-        // round-to-odd fix for exactly this (shared with Float16Array element writes / DataView
-        // setFloat16), so reuse it here instead of duplicating a naive double-rounding conversion.
         unary(math, ops, "f16round", value -> (double) Float.float16ToFloat(JsTypedArray.toFloat16(value)));
         unary(math, ops, "log2", value -> Math.log(value) / LN2);
         unary(math, ops, "log10", Math::log10);
@@ -89,16 +84,12 @@ public final class MathBuiltins {
                 : -Math.log(-value + Math.sqrt(value * value + 1));
     }
 
-    // The elements are pulled one at a time (the iterable may be endless) and a non-number closes the
-    // iterator before its TypeError propagates.
     private static double sumPrecise(List<JsValue> args, InterpreterOps ops) {
         final var sum = new PreciseSum();
         new Iteration(ops, args.isEmpty() ? JsUndefined.getInstance() : args.getFirst()).forEach(sum::add);
         return sum.result();
     }
 
-    // BigDecimal accumulation is exact for finite doubles, so the sum rounds to a double exactly once.
-    // The double constructor is the exact one here; BigDecimal.valueOf would round through toString.
     private static final class PreciseSum {
         private BigDecimal total = BigDecimal.ZERO;
         private boolean empty = true;
@@ -135,7 +126,6 @@ public final class MathBuiltins {
             if (positiveInfinity || negativeInfinity) {
                 return positiveInfinity ? Double.POSITIVE_INFINITY : Double.NEGATIVE_INFINITY;
             }
-            // BigDecimal has no signed zero: a run of -0 sums to -0, anything else to +0.
             final var sum = total.doubleValue();
             return sum == 0 && !anyPositiveZero ? -0.0 : sum;
         }
@@ -145,7 +135,6 @@ public final class MathBuiltins {
         return NumberFormatter.toInt32(arg(args, 0, ops)) * NumberFormatter.toInt32(arg(args, 1, ops));
     }
 
-    // floor(x + 0.5) alone reports +0 for every x in [-0.5, 0) and loses a bit above 2^52.
     private static double round(double value) {
         if (Double.isNaN(value) || Double.isInfinite(value) || value == 0 || Math.abs(value) >= 4.503599627370496e15) {
             return value;
@@ -202,8 +191,6 @@ public final class MathBuiltins {
                 new JsNativeFunction(name, (_, args) -> new JsNumber(op.applyAsDouble(arg(args, 0, ops)))));
     }
 
-    // Every argument is coerced before any of them is compared, so a NaN early in the list still
-    // lets a later argument's valueOf run.
     private static JsValue reduce(List<JsValue> args, InterpreterOps ops, boolean min) {
         final var values = new double[args.size()];
         for (var i = 0; i < args.size(); i++) {

@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.values.JsLimits.MAX_SAFE_INTEGER;
+
 import java.math.BigInteger;
 import java.util.Collections;
 import java.util.List;
@@ -26,12 +28,9 @@ public final class NumberBuiltins {
     public static final List<String> NAMES = List.of("toFixed", "toPrecision", "toExponential", "toString",
             "toLocaleString", "valueOf");
 
-    private static final double MAX_SAFE_INTEGER = 9007199254740991d;
     private static final int MAX_FRACTION_DIGITS = 100;
     private static final double TO_FIXED_LIMIT = 1e21;
 
-    // Number(value) is ToNumeric, not ToNumber: a BigInt converts to its numeric value here even
-    // though every other ToNumber path rejects it.
     private static double numberValueOf(JsValue value, InterpreterOps ops) {
         final var primitive = JsCoercion.toPrimitive(value, "number", ops);
         if (primitive instanceof JsBigInt big) {
@@ -84,9 +83,6 @@ public final class NumberBuiltins {
         return toBigIntValue(primitive);
     }
 
-    // Spec ToBigInt, used wherever a value is *stored* as a BigInt (a BigInt typed array element,
-    // DataView.setBigInt64, ...). Unlike the BigInt() function it rejects a Number outright: only
-    // the explicit constructor call applies NumberToBigInt.
     public static JsBigInt toBigIntValue(JsValue value, InterpreterOps ops) {
         return toBigIntValue(ops == null ? value : JsCoercion.toPrimitive(value, "number", ops));
     }
@@ -162,7 +158,6 @@ public final class NumberBuiltins {
         if (Math.abs(value) >= TO_FIXED_LIMIT) {
             return NumberFormatter.toJsString(value);
         }
-        // The exact-binary BigDecimal ctor (not valueOf) is what makes (1.005).toFixed(2) round to "1.00"
         return new java.math.BigDecimal(value).setScale((int) requested, java.math.RoundingMode.HALF_UP)
                 .toPlainString();
     }
@@ -184,9 +179,6 @@ public final class NumberBuiltins {
         return formatPrecision(value, (int) requested);
     }
 
-    // Number::toString-style significant-digit rendering: the mantissa digits come from the exact
-    // binary expansion of the double, so a request for more digits than the shortest form has still
-    // reports the real bits rather than a run of zeroes.
     private static String formatPrecision(double value, int precision) {
         final var negative = value < 0;
         final var magnitude = Math.abs(value);
@@ -250,8 +242,6 @@ public final class NumberBuiltins {
         return new Digits(mantissa, exponent);
     }
 
-    // The no-argument toExponential form asks for the *shortest* digit string that round-trips, which
-    // is exactly what Number::toString already produces.
     private static Digits shortestDigits(double magnitude) {
         if (magnitude == 0) {
             return new Digits("0", 0);
@@ -303,11 +293,6 @@ public final class NumberBuiltins {
         return negative ? "-" + sb : sb.toString();
     }
 
-    // The spec requires Number.parseFloat/parseInt to be the *same* function object as the global
-    // parseFloat/parseInt (18.2.4/18.2.5 vs 21.1.2.15/21.1.2.16), but GlobalScope wires the global
-    // and the Number namespace through two independent calls into this class. A per-realm cache
-    // (keyed by the realm's InterpreterOps, weakly so it never outlives the realm) makes the second
-    // call return the exact instance the first one built instead of a behaviourally-identical twin.
     private static final Map<InterpreterOps, JsNativeFunction> PARSE_FLOAT_CACHE = Collections
             .synchronizedMap(new WeakHashMap<>());
     private static final Map<InterpreterOps, JsNativeFunction> PARSE_INT_CACHE = Collections
@@ -367,13 +352,10 @@ public final class NumberBuiltins {
         return args.isEmpty() ? "undefined" : JsCoercion.toStr(args.getFirst(), ops);
     }
 
-    // ToInt32, not a plain cast: parseInt("11", 4294967298) has to see radix 2.
     private static int radix(List<JsValue> args, InterpreterOps ops) {
         return args.size() < 2 ? 0 : NumberFormatter.toInt32(JsCoercion.toNumber(args.get(1), ops));
     }
 
-    // ToIntegerOrInfinity, kept as a double so the callers can tell an out-of-range infinity from a
-    // truncated integer before they range-check it.
     private static double integerOrInfinity(List<JsValue> args, double fallback, InterpreterOps ops) {
         if (args.isEmpty() || args.getFirst() instanceof JsUndefined) {
             return fallback;
@@ -401,8 +383,6 @@ public final class NumberBuiltins {
         }
     }
 
-    // The longest prefix that is a StrDecimalLiteral: a trailing `e`/`e+` with no digit after it is
-    // not part of the literal, so parseFloat("1ex") is 1 rather than NaN.
     private static int decimalLiteralEnd(String s) {
         var index = 0;
         if (index < s.length() && (s.charAt(index) == '+' || s.charAt(index) == '-')) {
@@ -472,7 +452,6 @@ public final class NumberBuiltins {
         }
     }
 
-    // Character.digit accepts every Unicode decimal digit; a RadixDigit is ASCII only.
     private static boolean isRadixDigit(char c, int radix) {
         final var isAscii = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
         return isAscii && Character.digit(c, radix) >= 0;

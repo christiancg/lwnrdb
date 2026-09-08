@@ -3,11 +3,6 @@ package org.techhouse.simplejs.values;
 import java.time.LocalTime;
 import org.techhouse.ejson.custom_types.JsonTime;
 
-/**
- * The EJson {@code #time(...)} custom type as a JavaScript value: a bare data carrier around the
- * storage layer's own {@link LocalTime}, shaped like {@link JsTemporalPlainTime} (all behaviour lives
- * in {@code DbTimeBuiltins}).
- */
 public final class JsDbTime extends JsValue {
     private PropertyTable table;
 

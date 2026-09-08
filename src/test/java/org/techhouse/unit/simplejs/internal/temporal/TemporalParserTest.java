@@ -7,9 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 import org.techhouse.simplejs.internal.temporal.DurationFields;
+import org.techhouse.simplejs.internal.temporal.DurationStringParser;
 import org.techhouse.simplejs.internal.temporal.Iso8601Fields;
 import org.techhouse.simplejs.internal.temporal.IsoTimeFields;
+import org.techhouse.simplejs.internal.temporal.ReducedFormParser;
 import org.techhouse.simplejs.internal.temporal.TemporalParser;
+import org.techhouse.simplejs.internal.temporal.TimeZoneStringParser;
 
 public class TemporalParserTest {
     @Test
@@ -135,12 +138,12 @@ public class TemporalParserTest {
 
     @Test
     public void test_parse_time_zone_identifier_offset() {
-        assertEquals("+01:00", TemporalParser.parseTimeZoneIdentifier("+01:00"));
+        assertEquals("+01:00", TimeZoneStringParser.parseTimeZoneIdentifier("+01:00"));
     }
 
     @Test
     public void test_parse_time_zone_identifier_iana_name() {
-        assertEquals("America/Los_Angeles", TemporalParser.parseTimeZoneIdentifier("America/Los_Angeles"));
+        assertEquals("America/Los_Angeles", TimeZoneStringParser.parseTimeZoneIdentifier("America/Los_Angeles"));
     }
 
     @Test
@@ -173,19 +176,19 @@ public class TemporalParserTest {
 
     @Test
     public void test_parse_duration_basic() {
-        final var result = TemporalParser.parseDuration("P1Y2M3DT4H5M6.5S");
+        final var result = DurationStringParser.parseDuration("P1Y2M3DT4H5M6.5S");
         assertEquals(new DurationFields(1, 2, 0, 3, 4, 5, 6, 500, 0, 0), result);
     }
 
     @Test
     public void test_parse_duration_weeks() {
-        final var result = TemporalParser.parseDuration("P3W");
+        final var result = DurationStringParser.parseDuration("P3W");
         assertEquals(3, result.weeks());
     }
 
     @Test
     public void test_parse_duration_negative_leading_sign() {
-        final var result = TemporalParser.parseDuration("-P1Y2M3D");
+        final var result = DurationStringParser.parseDuration("-P1Y2M3D");
         assertEquals(-1, result.years());
         assertEquals(-2, result.months());
         assertEquals(-3, result.days());
@@ -195,19 +198,19 @@ public class TemporalParserTest {
     public void test_parse_duration_rejects_unicode_minus() {
         // Every Temporal string sign is ASCII-only; U+2212 MINUS SIGN is rejected everywhere,
         // including the duration's own leading sign, per test262.
-        assertThrows(RangeErrorException.class, () -> TemporalParser.parseDuration("−P1D"));
+        assertThrows(RangeErrorException.class, () -> DurationStringParser.parseDuration("−P1D"));
     }
 
     @Test
     public void test_parse_duration_time_only() {
-        final var result = TemporalParser.parseDuration("PT1H");
+        final var result = DurationStringParser.parseDuration("PT1H");
         assertEquals(1, result.hours());
         assertEquals(0, result.days());
     }
 
     @Test
     public void test_parse_duration_nanosecond_fraction() {
-        final var result = TemporalParser.parseDuration("PT0.000000001S");
+        final var result = DurationStringParser.parseDuration("PT0.000000001S");
         assertEquals(0, result.seconds());
         assertEquals(0, result.milliseconds());
         assertEquals(0, result.microseconds());
@@ -216,22 +219,22 @@ public class TemporalParserTest {
 
     @Test
     public void test_parse_duration_rejects_empty() {
-        assertThrows(RangeErrorException.class, () -> TemporalParser.parseDuration("P"));
+        assertThrows(RangeErrorException.class, () -> DurationStringParser.parseDuration("P"));
     }
 
     @Test
     public void test_parse_duration_rejects_dangling_time_designator() {
-        assertThrows(RangeErrorException.class, () -> TemporalParser.parseDuration("P1YT"));
+        assertThrows(RangeErrorException.class, () -> DurationStringParser.parseDuration("P1YT"));
     }
 
     @Test
     public void test_parse_duration_rejects_missing_p_designator() {
-        assertThrows(RangeErrorException.class, () -> TemporalParser.parseDuration("1Y2M3D"));
+        assertThrows(RangeErrorException.class, () -> DurationStringParser.parseDuration("1Y2M3D"));
     }
 
     @Test
     public void test_parse_duration_rejects_out_of_order_components() {
-        assertThrows(RangeErrorException.class, () -> TemporalParser.parseDuration("P1D2Y"));
+        assertThrows(RangeErrorException.class, () -> DurationStringParser.parseDuration("P1D2Y"));
     }
 
     @Test
@@ -294,7 +297,7 @@ public class TemporalParserTest {
 
     @Test
     public void test_parse_year_month_expanded_sign() {
-        final var result = TemporalParser.parseYearMonth("+002023-11");
+        final var result = ReducedFormParser.parseYearMonth("+002023-11");
         assertEquals(new Iso8601Fields(2023, 11, 1), result.date());
     }
 
@@ -302,37 +305,37 @@ public class TemporalParserTest {
     // parsing falls back to (and fails on) the full date-time grammar.
     @Test
     public void test_parse_month_day_single_leading_dash_rejected() {
-        assertThrows(RangeErrorException.class, () -> TemporalParser.parseMonthDay("-11-30"));
+        assertThrows(RangeErrorException.class, () -> ReducedFormParser.parseMonthDay("-11-30"));
     }
 
     // A three-component "MM-DD-XX" shape is not a valid reduced month-day (a trailing separator
     // follows the day) and also is not a valid full date, so the whole parse fails.
     @Test
     public void test_parse_month_day_trailing_dash_rejected() {
-        assertThrows(RangeErrorException.class, () -> TemporalParser.parseMonthDay("11-30-01"));
+        assertThrows(RangeErrorException.class, () -> ReducedFormParser.parseMonthDay("11-30-01"));
     }
 
     @Test
     public void test_parse_time_zone_identifier_rejects_empty() {
-        assertThrows(RangeErrorException.class, () -> TemporalParser.parseTimeZoneIdentifier(""));
+        assertThrows(RangeErrorException.class, () -> TimeZoneStringParser.parseTimeZoneIdentifier(""));
     }
 
     @Test
     public void test_parse_time_zone_identifier_flexible_extracts_bracket_annotation() {
         assertEquals("America/Los_Angeles",
-                TemporalParser.parseTimeZoneIdentifierFlexible("2023-11-30T12:34:56-08:00[America/Los_Angeles]"));
+                TimeZoneStringParser.parseTimeZoneIdentifierFlexible("2023-11-30T12:34:56-08:00[America/Los_Angeles]"));
     }
 
     // A bare 'Z' with no bracket annotation names the UTC time zone itself.
     @Test
     public void test_parse_time_zone_identifier_flexible_bare_z_means_utc() {
-        assertEquals("UTC", TemporalParser.parseTimeZoneIdentifierFlexible("2023-11-30T12:34:56Z"));
+        assertEquals("UTC", TimeZoneStringParser.parseTimeZoneIdentifierFlexible("2023-11-30T12:34:56Z"));
     }
 
     // Absent a bracket annotation or 'Z', the numeric UTC offset itself is used as the identifier.
     @Test
     public void test_parse_time_zone_identifier_flexible_uses_numeric_offset() {
-        assertEquals("+05:00", TemporalParser.parseTimeZoneIdentifierFlexible("2023-11-30T12:34:56+05:00"));
+        assertEquals("+05:00", TimeZoneStringParser.parseTimeZoneIdentifierFlexible("2023-11-30T12:34:56+05:00"));
     }
 
     // A full date-time string with neither an offset nor a bracket annotation carries no time zone
@@ -340,18 +343,18 @@ public class TemporalParserTest {
     @Test
     public void test_parse_time_zone_identifier_flexible_rejects_no_time_zone_info() {
         assertThrows(RangeErrorException.class,
-                () -> TemporalParser.parseTimeZoneIdentifierFlexible("2023-11-30T12:34:56"));
+                () -> TimeZoneStringParser.parseTimeZoneIdentifierFlexible("2023-11-30T12:34:56"));
     }
 
     @Test
     public void test_parse_time_zone_identifier_flexible_rejects_unparseable_string() {
-        assertThrows(RangeErrorException.class, () -> TemporalParser.parseTimeZoneIdentifierFlexible("###"));
+        assertThrows(RangeErrorException.class, () -> TimeZoneStringParser.parseTimeZoneIdentifierFlexible("###"));
     }
 
     // A duration's fractional hours redistribute into minutes/seconds/sub-second units.
     @Test
     public void test_parse_duration_fractional_hours() {
-        final var result = TemporalParser.parseDuration("PT1.5H");
+        final var result = DurationStringParser.parseDuration("PT1.5H");
         assertEquals(1, result.hours());
         assertEquals(30, result.minutes());
         assertEquals(0, result.seconds());
@@ -360,7 +363,7 @@ public class TemporalParserTest {
     // A duration's fractional minutes redistribute into seconds/sub-second units.
     @Test
     public void test_parse_duration_fractional_minutes() {
-        final var result = TemporalParser.parseDuration("PT1.5M");
+        final var result = DurationStringParser.parseDuration("PT1.5M");
         assertEquals(1, result.minutes());
         assertEquals(30, result.seconds());
     }

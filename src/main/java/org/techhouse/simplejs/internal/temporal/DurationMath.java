@@ -1,40 +1,26 @@
 package org.techhouse.simplejs.internal.temporal;
 
+import static org.techhouse.simplejs.internal.temporal.TemporalLimits.DURATION_DATE_LIMIT;
+import static org.techhouse.simplejs.internal.temporal.TimeUnits.NANOS_PER_DAY;
+import static org.techhouse.simplejs.internal.temporal.TimeUnits.NANOS_PER_HOUR;
+import static org.techhouse.simplejs.internal.temporal.TimeUnits.NANOS_PER_MICRO;
+import static org.techhouse.simplejs.internal.temporal.TimeUnits.NANOS_PER_MILLI;
+import static org.techhouse.simplejs.internal.temporal.TimeUnits.NANOS_PER_MINUTE;
+import static org.techhouse.simplejs.internal.temporal.TimeUnits.NANOS_PER_SECOND;
+import static org.techhouse.simplejs.internal.temporal.TimeUnits.TWO;
+
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
 
-/**
- * Sign determination, balancing and rounding shared by every Temporal type's {@code round}/
- * {@code since}/{@code until}. Balancing/rounding across years, months or weeks is genuinely
- * calendar-dependent (a "month" has no fixed length) and needs a {@code relativeTo} date to
- * resolve — that lands with the calendar-aware types in a later phase. This class only implements
- * the calendar-independent part: time units up to and including days, where a "day" is always
- * exactly 86,400 seconds (a {@code Duration} is not anchored to a real calendar date, so there is
- * no DST to account for).
- */
 public final class DurationMath {
-    private static final BigInteger NANOS_PER_DAY = BigInteger.valueOf(86_400_000_000_000L);
-    private static final BigInteger NANOS_PER_HOUR = BigInteger.valueOf(3_600_000_000_000L);
-    private static final BigInteger NANOS_PER_MINUTE = BigInteger.valueOf(60_000_000_000L);
-    private static final BigInteger NANOS_PER_SECOND = BigInteger.valueOf(1_000_000_000L);
-    private static final BigInteger NANOS_PER_MILLI = BigInteger.valueOf(1_000_000L);
-    private static final BigInteger NANOS_PER_MICRO = BigInteger.valueOf(1_000L);
-    private static final BigInteger TWO = BigInteger.valueOf(2);
 
-    // IsValidDuration: years/months/weeks each cap at 2**32 (exclusive), and the exact days..
-    // nanoseconds total caps at 2**53 * 10**9 - 1 ns (i.e. a total just under 2**53 seconds) -
-    // together the only range constraint a Duration's fields are subject to.
-    private static final double YEARS_MONTHS_WEEKS_LIMIT = 4_294_967_296.0;
     private static final BigInteger MAX_TIME_DURATION_NANOS = BigInteger.TWO.pow(53)
             .multiply(BigInteger.valueOf(1_000_000_000L)).subtract(BigInteger.ONE);
 
     private DurationMath() {
     }
 
-    // CreateDurationRecord's own validation (IsValidDuration): every construction chokepoint for a
-    // Duration - the raw constructor, from(), with(), add()/subtract(), round() - funnels through
-    // JsTemporalDuration's own constructor, which calls this.
     public static void validate(DurationFields fields) {
         requireFinite(fields);
         sign(fields);
@@ -50,13 +36,13 @@ public final class DurationMath {
     }
 
     public static void requireValidRange(DurationFields fields) {
-        if (Math.abs(fields.years()) >= YEARS_MONTHS_WEEKS_LIMIT) {
+        if (Math.abs(fields.years()) >= DURATION_DATE_LIMIT) {
             throw new RangeErrorException("years is out of range: " + fields.years());
         }
-        if (Math.abs(fields.months()) >= YEARS_MONTHS_WEEKS_LIMIT) {
+        if (Math.abs(fields.months()) >= DURATION_DATE_LIMIT) {
             throw new RangeErrorException("months is out of range: " + fields.months());
         }
-        if (Math.abs(fields.weeks()) >= YEARS_MONTHS_WEEKS_LIMIT) {
+        if (Math.abs(fields.weeks()) >= DURATION_DATE_LIMIT) {
             throw new RangeErrorException("weeks is out of range: " + fields.weeks());
         }
         if (totalNanoseconds(fields).abs().compareTo(MAX_TIME_DURATION_NANOS) > 0) {
@@ -64,9 +50,6 @@ public final class DurationMath {
         }
     }
 
-    // The BigDecimal(double) constructor (not BigDecimal.valueOf, which round-trips through
-    // Double.toString and can drop digits of a large exact-integer double) preserves the double's
-    // exact binary value - required here since a field can be far beyond long's range.
     @SuppressWarnings("PMD.AvoidDecimalLiteralsInBigDecimalConstructor")
     private static BigInteger exactNanos(double value, BigInteger nanosPerUnit) {
         return new BigDecimal(value).toBigInteger().multiply(nanosPerUnit);
@@ -101,11 +84,6 @@ public final class DurationMath {
         return overallSign < 0 ? negate(decomposed) : decomposed;
     }
 
-    // Unlike balanceDuration (which re-normalizes an already-valid, uniform-sign Duration into a
-    // different largestUnit), this starts from an already-summed signed total - the shape AddDurations
-    // needs, since a raw per-field sum of two valid durations (e.g. {days:1} + {hours:-1}) can
-    // legitimately have mixed per-field signs before it is carried/decomposed, which sign(fields)
-    // would otherwise reject.
     public static DurationFields balanceFromTotalNanoseconds(BigInteger totalNanoseconds, Unit largestUnit) {
         if (largestUnit.isLargerThan(Unit.DAY)) {
             throw new UnsupportedOperationException(
@@ -152,12 +130,6 @@ public final class DurationMath {
                 fields.minutes(), fields.seconds(), fields.milliseconds(), fields.microseconds(), fields.nanoseconds()};
     }
 
-    // A single-field duration (e.g. only "microseconds" or "nanoseconds" set) can legitimately hold a
-    // value well past Long.MAX_VALUE while still satisfying IsValidDuration's total-nanoseconds bound
-    // (up to ~9.007e21 for microseconds, ~9.007e24 for nanoseconds) - so, like requireValidRange's own
-    // check, this must use the exact BigDecimal conversion rather than a (long) cast, which would
-    // silently clamp such a field to Long.MAX_VALUE and corrupt every arithmetic use of this total
-    // (compare(), add()/subtract(), total()), not merely a validation check.
     public static BigInteger totalNanoseconds(DurationFields fields) {
         return exactNanos(fields.days(), NANOS_PER_DAY).add(exactNanos(fields.hours(), NANOS_PER_HOUR))
                 .add(exactNanos(fields.minutes(), NANOS_PER_MINUTE)).add(exactNanos(fields.seconds(), NANOS_PER_SECOND))
@@ -179,10 +151,6 @@ public final class DurationMath {
         };
     }
 
-    // The hours..nanoseconds portion of a duration's exact nanosecond length, deliberately excluding
-    // `days` (unlike totalNanoseconds) - callers that carry a duration's date part through calendar
-    // arithmetic (IsoCalendar.addDate) need the time part added separately, matching AddDateTime/
-    // AddZonedDateTime's own two-phase split.
     public static BigInteger timeUnitsNanoseconds(DurationFields fields) {
         return exactNanos(fields.hours(), NANOS_PER_HOUR).add(exactNanos(fields.minutes(), NANOS_PER_MINUTE))
                 .add(exactNanos(fields.seconds(), NANOS_PER_SECOND))
@@ -214,20 +182,10 @@ public final class DurationMath {
                 signedComponent(sign, nanosRemainder));
     }
 
-    // See negateField: a zero component must stay +0 after applying `sign`, never -0.
     private static double signedComponent(int sign, long value) {
         return value == 0 ? 0.0 : sign * (double) value;
     }
 
-    // DifferenceISODateTime: the exact (unrounded) calendar-aware difference between two date+time
-    // points, decomposed no larger than largestUnit. The calendar-independent sub-day time-of-day diff
-    // is computed first; if its sign disagrees with the date-only comparison, a day is borrowed so the
-    // (calendar-aware) date-part breakdown and the time-part remainder end up carrying the same sign.
-    // largestUnit "day" and smaller fold the whole result into a single nanosecond total instead (a
-    // "day" is always exactly 86,400 seconds between two ISO-local date+time points, unlike a real
-    // calendar month/week). Shared by every Temporal type's since/until (PlainDateTime, ZonedDateTime
-    // on its local fields) plus the relativeTo-anchored Duration operations, rather than duplicated
-    // per type.
     public static DurationFields differenceCalendar(Iso8601Fields date1, IsoTimeFields time1, Iso8601Fields date2,
             IsoTimeFields time2, Unit largestUnit) {
         final var dateSign = IsoCalendar.compareIsoDate(date2, date1);
@@ -255,13 +213,6 @@ public final class DurationMath {
         return balanceFromTotalNanoseconds(totalNanos, largestUnit);
     }
 
-    // The bucket matching largestUnit itself absorbs every coarser unit (e.g. largestUnit "seconds"
-    // folds days/hours/minutes into the seconds field) and so is the only one that can hold a value
-    // too large for a `long` (e.g. largestUnit "nanoseconds" on a near-2**53-second duration) - every
-    // finer bucket below it is a bounded remainder. doubleValue() (not longValueExact()) handles this
-    // uniformly: it never throws for an out-of-long-range magnitude, instead rounding to the nearest
-    // representable double exactly like JS's own Number(bigint) would, and is exact for the small
-    // remainders every other bucket holds.
     private static DurationFields decompose(BigInteger absNanos, Unit largestUnit) {
         var remaining = absNanos;
         double days = 0;
@@ -304,9 +255,6 @@ public final class DurationMath {
         return new DurationFields(0, 0, 0, days, hours, minutes, seconds, millis, micros, nanos);
     }
 
-    // Negating a zero field must stay +0, not become -0 (a Duration's fields are never observably
-    // signed-zero per spec) - shared publicly so every Temporal type's since()/add(-x)/etc. negation
-    // gets this for free instead of re-deriving it.
     public static DurationFields negate(DurationFields fields) {
         return new DurationFields(negateField(fields.years()), negateField(fields.months()),
                 negateField(fields.weeks()), negateField(fields.days()), negateField(fields.hours()),
@@ -330,21 +278,11 @@ public final class DurationMath {
         return roundedQuotient.multiply(incrementNanos);
     }
 
-    // Rounds a nanosecond total to a nanosecond-fixed increment. Public so relativeTo-anchored
-    // rounding (Duration.round/total/compare with calendar units, ZonedDateTime/PlainDateTime
-    // since/until above "day") can reuse this exact fixed-length rounding for their own day-and-below
-    // tail, rather than reimplementing the eight-branch rounding-mode decision.
     public static BigInteger roundSignedTotalNanoseconds(BigInteger signedTotal, BigInteger incrementNanos,
             RoundingMode mode) {
         return applyRounding(signedTotal, incrementNanos, mode);
     }
 
-    // The rounding-mode decision extracted from applyRounding so it can be reused for a variable-span
-    // "increment" too: a calendar bracket (e.g. one specific month, or `roundingIncrement` months)
-    // does not have a fixed nanosecond length, but once its two exact boundary instants are known, the
-    // exact position of the unrounded point within that span is decided by exactly the same
-    // half-vs-away-from-zero-vs-toward-zero rules as a fixed-length increment - only the meaning of
-    // "quotient"/"remainder"/"denominator" changes (a bracket index instead of total/incrementNanos).
     public static BigInteger roundedQuotient(BigInteger quotient, BigInteger remainderAbs, BigInteger denominator,
             int sign, RoundingMode mode) {
         if (remainderAbs.signum() == 0) {

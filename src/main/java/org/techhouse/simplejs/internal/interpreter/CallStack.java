@@ -6,15 +6,6 @@ import java.util.Deque;
 import java.util.List;
 import org.techhouse.simplejs.elements.SourcePosition;
 
-/**
- * The interpreter's own call stack, kept so a thrown error can name where it came from.
- *
- * <p>
- * Only one thread runs interpreter code at a time - a coroutine parks its parent before running - which is the
- * same invariant the depth counter beside it already relies on, so nothing here is synchronized. A coroutine
- * still needs its own {@link Segment}: its body runs interleaved with its consumer's, so sharing one frame
- * list would leave a suspended generator's frame visible in the trace of whatever resumed it.
- */
 public final class CallStack {
     public static final String TOP_LEVEL_MODULE = "main";
     public static final String ANONYMOUS = "<anonymous>";

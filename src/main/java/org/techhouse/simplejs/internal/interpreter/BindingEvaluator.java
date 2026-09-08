@@ -36,10 +36,6 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-// Binding and destructuring: variable/using declarations, for-target and catch-parameter binding,
-// function parameter binding, and the single recursive destructuring routine (array/object
-// patterns, defaults, rest, computed keys) parameterised by a per-context LeafBinder. Value
-// evaluation and member access route through the Interpreter and MemberEvaluator seams.
 public final class BindingEvaluator {
     private interface LeafBinder {
         void bind(JsNode leaf, JsValue value, Environment env);
@@ -54,8 +50,6 @@ public final class BindingEvaluator {
         void put(JsValue value);
     }
 
-    // One element of an array pattern: the iterator record's [[Done]] flag lives here so a `next`
-    // that throws marks the iteration done (no close) while an abrupt binding closes it.
     private static final class ArrayIteration {
         private final Iteration iteration;
         private boolean done;
@@ -147,10 +141,6 @@ public final class BindingEvaluator {
             }
         }
         if (isNullish(value)) {
-            // AddDisposableResource's null/undefined short-circuit is sync-dispose only; an
-            // `await using` of a nullish value still occupies a disposal slot (method undefined)
-            // so disposal performs the implied Await(undefined) - a real microtask tick - at scope
-            // exit.
             if (async) {
                 env.registerDisposable(value, JsUndefined.getInstance(), true);
             }
@@ -306,8 +296,6 @@ public final class BindingEvaluator {
         }
     }
 
-    // The assignment target of an element is a reference evaluated before the iterator is stepped,
-    // so a throwing member expression aborts the destructuring before any `next` call.
     private PreparedTarget prepareTarget(JsNode element, Environment env, LeafBinder leaf) {
         if (element instanceof Identifier || element instanceof MemberExpression) {
             return leaf.prepare(element, env);
@@ -329,7 +317,7 @@ public final class BindingEvaluator {
         for (final var member : pattern.getProperties()) {
             if (member instanceof RestElement rest) {
                 final var restObject = new JsObject();
-                restObject.setProto(interp.intrinsics().objectProto());
+                restObject.setProto(interp.intrinsics().objectProto);
                 copyDataProperties(restObject, value, taken);
                 destructure(rest.getArgument(), restObject, env, leaf);
                 return;
@@ -339,21 +327,11 @@ public final class BindingEvaluator {
                     ? JsCoercion.toPropertyKey(interp.eval(property.getKey(), env), interp.ops())
                     : new JsString(staticKeyName(property.getKey()));
             taken.add(keyValue);
-            // KeyedDestructuringAssignmentEvaluation resolves the target reference (lref) before
-            // reading the source property's value: a leaf target (identifier/member expression) must
-            // be prepared first, so a getter on the source object is never observed to run before the
-            // target's own base/key expressions (e.g. `this` in a derived constructor's TDZ).
             final var target = prepareTarget(property.getValue(), env, leaf);
             target.put(interp.getMemberByKey(value, keyValue));
         }
     }
 
-    // CopyDataProperties(target, source, excludedNames): walks the source's real
-    // [[OwnPropertyKeys]]/[[GetOwnProperty]]/[[Get]] through the ops seam rather than enumerating
-    // its stored keys directly, so a Proxy source's trap order/values (including a getOwnKeys-only
-    // trap that never reaches "get" for an excluded or non-enumerable key) and a symbol-keyed
-    // accessor's getter are observed exactly like a conformant engine - the same shape as
-    // Object.assign's source walk.
     private void copyDataProperties(JsObject target, JsValue source, List<JsValue> excludedNames) {
         final var ops = interp.ops();
         final var from = interp.intrinsics().toObject(source);
@@ -426,9 +404,6 @@ public final class BindingEvaluator {
                     if (member.getProperty() instanceof PrivateIdentifier priv) {
                         return value -> interp.setPrivateMember(target, priv.getName(), value, env);
                     }
-                    // The reference keeps the raw key: ToPropertyKey is part of PutValue, so it must
-                    // run when the value is finally put (after the source value has been read), not
-                    // when the reference itself is created.
                     final var rawKey = interp.memberKeyValue(member, env);
                     return value -> members.setMember(target, JsCoercion.toStr(rawKey, interp.ops()), value);
                 }

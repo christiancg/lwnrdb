@@ -12,39 +12,6 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.ioc.IocContainer;
 
-/**
- * Picks the node a script runs on, blending availability, current script load and how much of the scoped
- * database a candidate owns.
- *
- * <p>A peer is eligible only if it is {@code ALIVE}, is not still catching up on admin metadata
- * ({@code adminSyncing}) and reports an {@code adminEpoch} at least as high as this node's. Without the last
- * two a script could land on a node that has not applied the DDL the caller is relying on - admin/DDL ops
- * are replicated to a <em>majority</em> and the rest converge through admin anti-entropy - and fail with a
- * transient {@code 404-4}/{@code 404-8} that a local run would not have hit. This node itself is always a
- * candidate: running locally is the fallback in every other case too.
- *
- * <p>The choice is made by <b>power of two choices</b> - sample two distinct live members at random and
- * take the better one. Picking the globally best node instead would herd: every edge sees the same gossiped
- * view, stale by up to one gossip interval, so they would all forward to the same node at once. Sampling
- * needs no accurate global view and still keeps the maximum load exponentially closer to the mean than
- * plain random placement.
- *
- * <p>"Better" is {@code (scriptLocalityWeight / 100) * share - loadRatio}, higher wins, where {@code share}
- * is the fraction of the scoped database's collections the candidate owns on the hash ring and
- * {@code loadRatio} is load <em>relative to</em> {@code maxConcurrentScripts} so a heterogeneous cluster
- * compares like with like. A weight of {@code 0} collapses the score to {@code -loadRatio}, which is exactly
- * the ordering this class had before locality existed; at the default {@code 50} a node owning the whole
- * database beats an idle rival until it is itself more than half full. Locality never overrides saturation:
- * a sample already at its cap loses to one that is not, because it could only answer {@code 503-6}. Nor does
- * it herd - as the owner's load ratio climbs past {@code weight / 100} the score inverts and sampling moves
- * elsewhere. Placing on an owner is what removes round trips: the operations the run issues route themselves,
- * so they resolve locally instead of forwarding.
- *
- * <p>The signal is worth the most for a database with a handful of collections, and nothing for a wide one:
- * with consistent hashing a 50-collection database spreads near-uniformly and every node owns about
- * {@code 1/N} of it either way. That is inherent to a signal that does not know which collections the script
- * will actually touch.
- */
 public class ScriptPlacement {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
@@ -56,8 +23,6 @@ public class ScriptPlacement {
     private final LongAdder localityPreferred = new LongAdder();
     private final RandomGenerator random;
 
-    // java.util.Random rather than RandomGenerator.getDefault(): several connection threads sample
-    // concurrently and the default implementation is not thread-safe.
     public ScriptPlacement() {
         this(new Random());
     }
@@ -66,10 +31,6 @@ public class ScriptPlacement {
         this.random = random;
     }
 
-    /**
-     * @return the node this script should run on, or {@code null} to run it locally (clustering or script
-     *         routing off, this node is the only eligible member, or the sampling chose this node).
-     */
     public NodeInfo choose(String databaseName) {
         if (!clusterConfig.isEnabled() || !clusterConfig.scriptRoutingEnabled()) {
             return null;
@@ -106,8 +67,6 @@ public class ScriptPlacement {
         return localityPreferred.sum();
     }
 
-    // Self is kept whatever it reports: it is where the script runs when nothing else qualifies, and the
-    // epoch comparison is against its own epoch, so it is trivially caught up with itself.
     private List<NodeInfo> eligibleMembers(NodeInfo self) {
         final var selfEpoch = adminEpoch.current();
         final var eligible = new ArrayList<NodeInfo>();
@@ -120,8 +79,6 @@ public class ScriptPlacement {
         return eligible;
     }
 
-    // Recomputed per placement rather than cached: K ring lookups is microseconds against a script run
-    // measured in milliseconds, while a cache would need invalidating on both membership change and DDL.
     private Map<String, Double> ownershipShares(String databaseName) {
         if (databaseName == null) {
             return Map.of();
@@ -152,9 +109,6 @@ public class ScriptPlacement {
         return better(eligible.get(first), eligible.get(second), shares, clusterConfig.scriptLocalityWeight());
     }
 
-    // Ties break on nodeId so two edges sampling the same pair of idle nodes agree on the answer. The
-    // counter is incremented here rather than in choose() so it also counts the run locality kept on the
-    // node that received it - the best outcome, and one no other counter can see.
     private NodeInfo better(NodeInfo a, NodeInfo b, Map<String, Double> shares, int weight) {
         final var winner = blended(a, b, shares, weight);
         if (!winner.getNodeId().equals(blended(a, b, shares, 0).getNodeId())) {
@@ -164,14 +118,9 @@ public class ScriptPlacement {
     }
 
     private static NodeInfo blended(NodeInfo a, NodeInfo b, Map<String, Double> shares, int weight) {
-        // A saturated target could only answer 503-6, so it loses to any sample that is not itself full,
-        // whatever it owns: no amount of locality should route into a rejection.
         if (isSaturated(a) != isSaturated(b)) {
             return isSaturated(a) ? b : a;
         }
-        // Load relative to capacity, not absolute: 6/32 is idle where 3/4 is nearly full. A node reporting
-        // capacity 0 is either uncapped or too old to gossip the field, so the pair falls back to absolute
-        // load rather than comparing against an unknown denominator.
         if (comparable(a) && comparable(b)) {
             final var scoreA = score(a, shares, weight);
             final var scoreB = score(b, shares, weight);

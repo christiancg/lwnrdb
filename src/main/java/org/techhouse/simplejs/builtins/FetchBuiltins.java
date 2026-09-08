@@ -1,10 +1,11 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.JsonBuiltins.EJSON;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.simplejs.host.FetchRequest;
 import org.techhouse.simplejs.host.FetchResponse;
@@ -25,7 +26,6 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class FetchBuiltins {
-    private static final EJson EJSON = new EJson();
 
     private FetchBuiltins() {
     }

@@ -9,8 +9,6 @@ import org.techhouse.simplejs.internal.Environment;
 
 public final class JsGlobalObject extends JsValue {
     private final Environment env;
-    // Own string keys of the global object live in the Environment, never here; the table only
-    // carries what the Environment cannot hold (symbol keys and accessor redefinitions).
     private PropertyTable table;
 
     public JsGlobalObject(Environment env) {
@@ -50,9 +48,6 @@ public final class JsGlobalObject extends JsValue {
             return super.getOwnProperty(key);
         }
         final var name = OrdinaryProperties.keyName(key);
-        // A top-level `let`/`const`/`class` declaration is not a property of the global object (only
-        // var/function/builtin bindings are), so a same-named lexical shadow must not hide - or
-        // stand in for - the real global property here.
         if (!env.hasGlobalProperty(name)) {
             return super.getOwnProperty(key);
         }
@@ -60,18 +55,12 @@ public final class JsGlobalObject extends JsValue {
                 Objects.requireNonNull(env.globalPropertyFlags(name)));
     }
 
-    // A declared global is written through to its binding rather than shadowed by a table entry. An
-    // accessor cannot live in an Environment binding, so defining one drops the binding and the
-    // ordinary table takes over the key.
     @Override
     public boolean defineOwnProperty(JsValue key, PropertyDescriptor descriptor) {
         if (key instanceof JsSymbol) {
             return super.defineOwnProperty(key, descriptor);
         }
         final var name = OrdinaryProperties.keyName(key);
-        // As in getOwnProperty, this must see only the Global Object Record - never a same-named
-        // lexical shadow's flags - so Object.defineProperty(globalThis, ...) redefines the actual
-        // global property.
         final var current = env.globalPropertyFlags(name);
         if (current == null) {
             if (descriptor.isAccessorDescriptor()) {

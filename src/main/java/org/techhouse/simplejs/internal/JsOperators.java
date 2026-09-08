@@ -61,8 +61,6 @@ public final class JsOperators {
         if (leftNullish || rightNullish) {
             return leftNullish && rightNullish;
         }
-        // Two objects of different internal shapes are still both Objects to the spec, so identity
-        // decides and neither side is coerced.
         if (JsCoercion.isObject(left) && JsCoercion.isObject(right)) {
             return left == right;
         }
@@ -155,10 +153,6 @@ public final class JsOperators {
         if (leftPrim instanceof JsString || rightPrim instanceof JsString) {
             final var leftText = JsCoercion.toStr(leftPrim);
             final var rightText = JsCoercion.toStr(rightPrim);
-            // Only the appended delta is charged, not the combined result: `s += "x"` in a loop would
-            // otherwise cost quadratically and reject ordinary string building, while `s = s + s` -
-            // the case tick() cannot see, since it doubles in one instruction - has a delta equal to
-            // the whole accumulated string and is still bounded.
             InterpreterOps.chargeChars(ops, rightText.length());
             return new JsString(leftText + rightText);
         }
@@ -264,8 +258,6 @@ public final class JsOperators {
         };
     }
 
-    // IsLessThan: a BigInt against a String is decided by StringToBigInt, never by a numeric
-    // round-trip, so an unparseable string leaves the pair unordered instead of comparing as 0.
     private static int compare(JsValue left, JsValue right) {
         if (left instanceof JsString a && right instanceof JsString b) {
             return Integer.signum(a.getValue().compareTo(b.getValue()));
@@ -307,9 +299,6 @@ public final class JsOperators {
         return a > b ? 1 : 0;
     }
 
-    // A finite double is exactly mantissa x 2^exponent, so scaling whichever side has the smaller
-    // exponent compares the two mathematical values without ever rounding through a decimal form -
-    // which is what makes 2^53+1 and Number.MAX_VALUE compare against a BigInt correctly.
     private static int bigCompareNumber(BigInteger big, double number) {
         if (Double.isNaN(number)) {
             return UNORDERED;

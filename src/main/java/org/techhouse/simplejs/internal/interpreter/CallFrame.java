@@ -1,8 +1,5 @@
 package org.techhouse.simplejs.internal.interpreter;
 
-// One entry of the interpreter's call stack, holding the caller's state rather than the callee's:
-// entering a function saves where the call was made from, and leaving it restores that, so a frame
-// is a return address in the ordinary sense.
 final class CallFrame {
     private final String callerFunction;
     private final String callerModule;

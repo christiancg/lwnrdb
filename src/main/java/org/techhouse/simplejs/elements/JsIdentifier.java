@@ -2,7 +2,6 @@ package org.techhouse.simplejs.elements;
 
 public class JsIdentifier extends JsBaseElement {
     private final String value;
-    // A name spelled with a unicode escape may not be matched as a contextual keyword.
     private final boolean escaped;
 
     public JsIdentifier(String value) {

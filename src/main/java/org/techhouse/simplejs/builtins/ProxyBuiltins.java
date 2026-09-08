@@ -14,8 +14,6 @@ public final class ProxyBuiltins {
     }
 
     public static JsNativeFunction create() {
-        // Proxy is constructor-only: reached without `new` there is no new.target, and a subclass's
-        // super() call arrives with the instance under construction as thisArg.
         final var proxy = new JsNativeFunction("Proxy", (thisArg, args) -> {
             final var newTarget = JsNativeFunction.currentNewTarget();
             if ((newTarget == null || newTarget instanceof JsUndefined) && !(thisArg instanceof JsObject)) {

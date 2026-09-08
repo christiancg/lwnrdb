@@ -1,10 +1,5 @@
 package org.techhouse.simplejs.values;
 
-/**
- * Normalizes a {@link JsValue} into a key usable in a Java hash map so that {@code Map}/{@code Set}
- * membership follows the SameValueZero algorithm: primitives compare by value (with {@code +0} and
- * {@code -0} unified and {@code NaN} equal to itself), everything else by identity.
- */
 public final class SameValueZero {
     private static final Object NULL_KEY = new Object();
     private static final Object UNDEFINED_KEY = new Object();

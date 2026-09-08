@@ -7,12 +7,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.utils.JsonUtils;
 
-/**
- * A stored procedure, persisted as one file per procedure in {@code {database}/.procedures/{name}.json}. The
- * database is the file's location rather than a field, so a record can never disagree with where it lives.
- * The JSON mapping is hand-written (rather than left to the EJson reflection serializer) so an absent field
- * reads as a documented default, which is what lets a record written by an older version load unchanged.
- */
 public class ProcedureDefinition {
     private static final String NAME_FIELD = "name";
     private static final String SOURCE_FIELD = "source";
@@ -57,7 +51,6 @@ public class ProcedureDefinition {
         result.sourceHash = stringOrNull(object, SOURCE_HASH_FIELD);
         result.version = longOrZero(object, VERSION_FIELD);
         result.description = stringOrNull(object, DESCRIPTION_FIELD);
-        // Absent reads as enabled: a record written before the flag existed was callable.
         result.enabled = !object.has(ENABLED_FIELD) || object.get(ENABLED_FIELD).isJsonNull()
                 || object.get(ENABLED_FIELD).asJsonBoolean().getValue();
         result.createdAt = longOrZero(object, CREATED_AT_FIELD);
@@ -84,7 +77,6 @@ public class ProcedureDefinition {
         return json;
     }
 
-    // The metadata a LIST_PROCEDURES response carries when the caller did not ask for the source.
     public JsonObject toSummaryJson() {
         final var json = toJsonObject();
         json.remove(SOURCE_FIELD);

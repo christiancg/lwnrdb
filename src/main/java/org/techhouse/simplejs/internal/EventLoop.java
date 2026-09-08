@@ -1,5 +1,7 @@
 package org.techhouse.simplejs.internal;
 
+import static org.techhouse.simplejs.host.ScriptErrorNames.TIMED_OUT_MESSAGE;
+
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -19,9 +21,6 @@ import org.techhouse.simplejs.host.CancellationToken;
 import org.techhouse.simplejs.values.JsPromise;
 
 public final class EventLoop {
-    // A cancelled run must not sit in a park until a 30s timer comes due, so every park is capped at this
-    // slice and the token re-read on each wake. Both loops already re-test their condition after waking,
-    // so a shorter park changes nothing else.
     private static final long CANCEL_POLL_NANOS = 50_000_000L;
 
     private static final class Timer {
@@ -64,17 +63,11 @@ public final class EventLoop {
     private Intrinsics intrinsics;
     private CancellationToken cancellation;
 
-    // Wired once by the owning Interpreter so values like JsPromise (constructed all over the
-    // builtins/internal layers, never with direct interpreter access) can call back into it for
-    // duck-typed member access (e.g. thenable assimilation) without threading these through every
-    // call site.
     public void wireInterpreter(InterpreterOps ops, Intrinsics intrinsics) {
         this.ops = ops;
         this.intrinsics = intrinsics;
     }
 
-    // Wired once by the owning Interpreter, for the same reason `ops` is: the park loops are the one place
-    // outside tick() where a cancelled run would otherwise block indefinitely.
     public void wireCancellation(CancellationToken cancellation) {
         this.cancellation = cancellation;
     }
@@ -91,8 +84,6 @@ public final class EventLoop {
         microtasks.add(task);
     }
 
-    // Off-thread async work (e.g. fetch): beginAsyncJob keeps the loop alive while the work runs on
-    // another thread; completeAsyncJob hands a settlement back to the loop thread and wakes it.
     public void beginAsyncJob() {
         pendingAsyncJobs.incrementAndGet();
     }
@@ -155,9 +146,6 @@ public final class EventLoop {
                     awaitAsyncCompletion(deadlineNanos);
                     continue;
                 }
-                // An async job may have completed (queuing its completion and decrementing the
-                // counter) between the poll() above and the counter check just now; re-check the
-                // queue before giving up so that completion is not silently dropped.
                 if (!asyncCompletions.isEmpty()) {
                     continue;
                 }
@@ -174,8 +162,6 @@ public final class EventLoop {
             try {
                 timer.callback.run();
             } catch (JsThrowException ignored) {
-                // an uncaught throw in a timer callback does not abort the script,
-                // mirroring the engine's unhandled-rejection policy
             }
         }
     }
@@ -186,7 +172,7 @@ public final class EventLoop {
             if (deadlineNanos >= 0) {
                 final var remaining = deadlineNanos - System.nanoTime();
                 if (remaining <= 0) {
-                    throw new ScriptTimeoutException("Script exceeded its time limit");
+                    throw new ScriptTimeoutException(TIMED_OUT_MESSAGE);
                 }
                 LockSupport.parkNanos(Math.min(remaining, CANCEL_POLL_NANOS));
             } else {
@@ -209,8 +195,6 @@ public final class EventLoop {
         return timer;
     }
 
-    // Returns true once the timer's due time is reached; false if an async completion arrived first
-    // (so the caller re-queues the timer and processes the completion).
     private boolean awaitUntil(long dueNanos, long deadlineNanos) {
         final var target = deadlineNanos >= 0 ? Math.min(dueNanos, deadlineNanos) : dueNanos;
         long now;
@@ -222,7 +206,7 @@ public final class EventLoop {
             LockSupport.parkNanos(Math.min(target - now, CANCEL_POLL_NANOS));
         }
         if (deadlineNanos >= 0 && dueNanos > deadlineNanos) {
-            throw new ScriptTimeoutException("Script exceeded its time limit");
+            throw new ScriptTimeoutException(TIMED_OUT_MESSAGE);
         }
         return true;
     }

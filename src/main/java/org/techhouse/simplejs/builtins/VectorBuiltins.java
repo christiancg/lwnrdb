@@ -1,5 +1,8 @@
 package org.techhouse.simplejs.builtins;
 
+import static org.techhouse.simplejs.builtins.NewTargetSupport.requireNewTarget;
+import static org.techhouse.simplejs.builtins.NewTargetSupport.withNewTargetPrototype;
+
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.ejson.custom_types.JsonVector;
@@ -17,10 +20,6 @@ import org.techhouse.simplejs.values.JsValue;
 import org.techhouse.simplejs.values.JsVector;
 import org.techhouse.utils.VectorUtils;
 
-/**
- * The {@code Vector} global: constructor + prototype for the EJson {@code #vector(v0,...,vn)} custom
- * type, shaped like {@link GeoBuiltins}.
- */
 public final class VectorBuiltins {
     public static final List<String> NAMES = List.of("at", "toArray", "toString", "toJSON");
     public static final List<String> FIELD_ACCESSORS = List.of("length", "simHash");
@@ -30,7 +29,7 @@ public final class VectorBuiltins {
 
     public static JsNativeFunction create(InterpreterOps ops) {
         final var ctor = new JsNativeFunction("Vector", (thisArg, args) -> {
-            requireNewTarget(thisArg);
+            requireNewTarget("Vector", thisArg);
             return withNewTargetPrototype(new JsVector(construct(args, ops)), ops);
         });
         final var from = new JsNativeFunction("from", (_, args) -> new JsVector(toComponents(firstArg(args), ops)));
@@ -39,30 +38,6 @@ public final class VectorBuiltins {
         return ctor;
     }
 
-    private static void requireNewTarget(JsValue thisArg) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if ((newTarget == null || newTarget instanceof JsUndefined) && thisArg instanceof JsUndefined) {
-            throw new TypeErrorException("Constructor Vector requires 'new'");
-        }
-    }
-
-    private static JsValue withNewTargetPrototype(JsVector constructed, InterpreterOps ops) {
-        final var newTarget = JsNativeFunction.currentNewTarget();
-        if (ops == null || newTarget == null || newTarget instanceof JsUndefined) {
-            return constructed;
-        }
-        final var proto = ops.getMember(newTarget, new JsString("prototype"));
-        if (!(proto instanceof JsObject requested) || proto == ops.getPrototypeOf(constructed)) {
-            return constructed;
-        }
-        final var wrapper = new JsObject();
-        wrapper.setPrimitive(constructed);
-        wrapper.setProto(requested);
-        return wrapper;
-    }
-
-    // Both `new Vector([1, 2, 3])` and `new Vector(1, 2, 3)` build the same vector: an array-like
-    // first argument supplies every component, otherwise the arguments themselves are the components.
     private static double[] construct(List<JsValue> args, InterpreterOps ops) {
         if (args.size() == 1 && InterpreterUtils.isObjectLike(args.getFirst())) {
             return toComponents(args.getFirst(), ops);
@@ -137,7 +112,7 @@ public final class VectorBuiltins {
                     (thisArg, _) -> fieldAccessor(requireReceiver(thisArg, name), name));
             getter.setLength(0);
             proto.defineAccessor(name, getter, null);
-            proto.setFlags(name, new JsObject.PropertyFlags(true, false, true));
+            proto.setFlags(name, JsObject.PropertyFlags.HIDDEN);
         }
     }
 
@@ -173,7 +148,6 @@ public final class VectorBuiltins {
         };
     }
 
-    // Array.prototype.at semantics: a negative index counts from the end, out of range is undefined.
     private static JsValue at(JsVector receiver, JsValue indexArg, InterpreterOps ops) {
         final var relative = (long) JsCoercion.toNumber(indexArg, ops);
         final var index = relative < 0 ? receiver.length() + relative : relative;

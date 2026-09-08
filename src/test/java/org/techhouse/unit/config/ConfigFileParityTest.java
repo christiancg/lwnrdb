@@ -1,6 +1,7 @@
 package org.techhouse.unit.config;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -8,18 +9,30 @@ import java.util.Map;
 import java.util.TreeMap;
 import org.junit.jupiter.api.Test;
 
-/**
- * lwnrdb.cfg is the shipped file and default.cfg the packaged fallback, so a key added to one and not the
- * other silently changes what an untouched deployment runs on.
- */
+// lwnrdb.cfg carries only this deployment's overrides; default.cfg is the packaged fallback and the
+// documented reference. A key here that default.cfg does not declare, or one whose value silently
+// disagrees for no reason, is what would change what an untouched deployment runs on.
 public class ConfigFileParityTest {
 
     @Test
-    public void test_default_and_shipped_config_files_declare_the_same_keys_and_values() throws Exception {
+    public void test_shipped_config_only_declares_keys_the_packaged_default_knows() throws Exception {
         final var packaged = readKeyValues(Path.of("src", "main", "resources", "default.cfg"));
         final var shipped = readKeyValues(Path.of("lwnrdb.cfg"));
 
-        assertEquals(packaged, shipped);
+        for (final var key : shipped.keySet()) {
+            assertTrue(packaged.containsKey(key), key + " is in lwnrdb.cfg but not in default.cfg");
+        }
+    }
+
+    @Test
+    public void test_shipped_overrides_agree_with_the_packaged_defaults() throws Exception {
+        final var packaged = readKeyValues(Path.of("src", "main", "resources", "default.cfg"));
+        final var shipped = readKeyValues(Path.of("lwnrdb.cfg"));
+
+        for (final var entry : shipped.entrySet()) {
+            assertEquals(packaged.get(entry.getKey()), entry.getValue(),
+                    entry.getKey() + " ships a value that differs from the packaged default");
+        }
     }
 
     private static Map<String, String> readKeyValues(Path path) throws Exception {

@@ -3,10 +3,6 @@ package org.techhouse.bckg_ops.events;
 import java.util.Objects;
 import org.techhouse.ops.ScriptRunRecord;
 
-/**
- * A finished script run waiting to be written to its database's history collection. It rides the ordinary
- * background queue so the run that produced it never pays for the write.
- */
 public class ScriptRunHistoryEvent extends Event {
     private final ScriptRunRecord record;
 

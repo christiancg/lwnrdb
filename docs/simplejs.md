@@ -92,9 +92,9 @@ Two things bound what it does *not* do: [Known gaps and divergences](#known-gaps
 |---|---|
 | `elements/` | Token types. `JsBaseElement` is an abstract base with a `JsType` enum resolved by one `internalGetType` switch; concrete tokens are small immutable classes, with `JsNull`/`JsUndefined`/`JsEOF` as singletons. `SourcePosition` holds a token's offset/length/line/column **parallel** to the token stream, so the singletons keep their identity. |
 | `nodes/` | AST nodes, mirroring the `elements/` convention (a `NodeType` enum + `Expression`/`Statement` marker subclasses). Nodes carry their source position and, for function-like productions, their verbatim source text. |
-| `internal/` | `Lexer`, `Parser`, `Interpreter` — each a `final` class with a public static entry point over encapsulated state — plus the runtime helpers `Environment`, `Completion`, `JsCoercion`, `JsOperators`, `Coroutine`, `EventLoop` and `RegexTranslator`. `Parser` and `Interpreter` are split into `internal/parser/` (`ParserTables`, `TokenStream`, `PatternConverter`, `DeclarationScope`) and `internal/interpreter/` (`ExpressionEvaluator`, `StatementEvaluator`, `MemberEvaluator`, `BindingEvaluator`, `ClassEvaluator`, `ModuleEvaluator`, `Iteration`, `ProxyDispatch`, `ModuleRegistry`, `CallStack`, `InterpreterUtils`) while remaining the entry points. `internal/regex/` is the regex engine and `internal/temporal/` the calendar/duration infrastructure. |
+| `internal/` | `Lexer`, `Parser`, `Interpreter` — each a `final` class with a public static entry point over encapsulated state — plus the runtime helpers `Environment`, `Completion`, `JsCoercion`, `JsOperators`, `Coroutine`, `EventLoop` and `RegexTranslator`. Each of the three delegates to its own sub-package. `internal/lexer/` holds the scanners (`LexerTables`, `CharClasses`, `StringLexer`, `NumberLexer`, `IdentifierLexer`, `TemplateLexer`, `RegexLiteralLexer` plus the `Lexed`/`EscapeResult`/`BraceContext` carriers). `internal/parser/` is an abstract chain over `TokenStream` — `GrammarPredicates` -> `ParserContext` (the cursor plus the 14 grammar-context flags, and the abstract seams the layers call upward through) -> `LoopProductions` -> `StatementProductions` -> `ModuleProductions` -> `BindingProductions` -> `ExpressionProductions` -> `ClassProductions` -> `LiteralProductions` -> `ParserProductions` — because the productions are mutually recursive over one moving cursor, which no split into free functions survives. `Interpreter` itself is a facade: its own dispatch, member I/O, function construction and run accounting live beside it in `EvalDispatch`, `MemberIo`, `FunctionFactory` and `RunLifecycle`, with `Session`/`ModuleResult` as the run's result types, and the facade keeps a delegating seam for each so callers still go through `Interpreter`. `internal/interpreter/` holds the evaluator collaborators: `ExpressionEvaluator` (+ `ObjectLiteralEvaluator`, `AssignmentEvaluator`, `DeleteEvaluator`), `StatementEvaluator` (+ `LoopEvaluator`, `ForInEnumeration`, `LoopAction`), `ClassEvaluator` (+ `ClassMemberInstaller`, `ClassConstruction`, `SuperAccess`, `StaticEntry`), `MemberEvaluator` + `MemberWriter`/`BuiltinMemberLookup`/`AsyncGeneratorDriver`, `BindingEvaluator`, `ModuleEvaluator`/`ModuleLifecycle`, `FunctionInvoker`, `ConstructEvaluator`, `HasMemberEvaluator`, `PrivateMemberEvaluator`, `MemberAccessEvaluator`, `Iteration`, `ProxyDispatch`, `ModuleRegistry`, `CallStack`, `InterpreterUtils`. A collaborator is reached through the class that owns the state it mutates, never constructed by a caller. `internal/regex/` is the regex engine, whose parser is the same kind of chain (`RegexCursor` -> `EscapeReader` -> `CharacterClassParser` -> `SetClassParser` -> `RegexProductions`), and `internal/temporal/` the calendar/duration infrastructure plus the shared `TimeUnits`/`TemporalLimits` tables. |
 | `values/` | The runtime value model: `JsValue` + `JsNumber`/`JsString`/`JsBoolean`/`JsBigInt`/`JsUndefined`/`JsNull`/`JsSymbol` (primitives) and `JsObject`/`JsArray`/`JsFunction`/`JsNativeFunction`/`JsClass`/`JsPromise`/`JsGenerator`/`JsAsyncGenerator`/`JsMap`/`JsSet`/`JsDate`/`JsRegExp`/`JsProxy`/`JsArguments`/`JsGlobalObject`, the binary trio `JsArrayBuffer`/`JsTypedArray`/`JsDataView`, the eight `JsTemporal*` types and the four EJson bridges `JsGeo`/`JsVector`/`JsDbDateTime`/`JsDbTime`. A dedicated model rather than EJson, so `undefined`/`null` and JS coercion stay faithful. `EJsonInterop` converts in both directions. |
-| `builtins/` | The standard library, installed by `GlobalScope.install`, one class per family (`ObjectBuiltins`, `ArrayBuiltins`, `StringBuiltins`, …). `Intrinsics` builds the realm's prototype objects. The `InterpreterOps`, `Invoker`, `IterableToList` and `TextImporter` seams are how a builtin calls back into the interpreter without depending on `internal/`. |
+| `builtins/` | The standard library, installed by `GlobalScope.install`, one class per family (`ObjectBuiltins`, `ArrayBuiltins`, `StringBuiltins`, …). A family that outgrew one file keeps its entry point here and moves its internals into a sub-package: `builtins/array/`, `builtins/typedarray/`, `builtins/iterator/`, `builtins/temporal/`, `builtins/string/`, `builtins/object/`, `builtins/regex/`, `builtins/json/`, `builtins/promise/`, `builtins/date/`, `builtins/intrinsics/`. `Intrinsics` builds the realm's prototype objects, with `IntrinsicsBrands` (brand checks), `IntrinsicsInstallers`, `IntrinsicsPrototypes` (prototype wiring) and `IntrinsicsCoercion` (`toObject`/`wrapPrimitive` and the prototype wrappers) under `builtins/intrinsics/`. `BuiltinArgs`, `NewTargetSupport` and the `builtins/temporal/` option/field readers (`TemporalOptions`, `TemporalFields`, `TemporalFieldReader`, `MonthCode`) are the shared helpers those families call instead of re-implementing. The `InterpreterOps`, `Invoker`, `IterableToList` and `TextImporter` seams are how a builtin calls back into the interpreter without depending on `internal/`. |
 | `host/` | The DB-integration seam and public entrypoint: `SimpleJs`, `HostBindings` (+ `SimpleHostBindings`, `DatabaseHostBindings`, `PipelineHostBindings`, `HookHostBindings`), `ResourceLimits`, `DatabaseAccess`/`EnforcingDatabaseAccess`, `NetworkAccess`/`JdkNetworkAccess`, `ModuleResolver`/`ProcedureModuleResolver`, `CancellationToken`, `ConsoleCapture`, `ScriptResult`/`ScriptRunMetrics`. |
 | `exceptions/` | Lexer/parser errors; interpreter errors extending `SimpleJsRuntimeException` (`ReferenceErrorException`, `TypeErrorException`, …) plus `JsThrowException`; and `ScriptAbortException` with its `ScriptTimeoutException`/`ScriptLimitException`/`ScriptCancelledException` subclasses, which extend `RuntimeException` directly so user `try`/`catch` cannot intercept them. |
 
@@ -136,7 +136,13 @@ the symbol-keyed maps and the `extensible` flag; `JsValue` exposes it through `o
 `getProto()`, `setProto()` and `isExtensible()`. Seventeen types hold one, each keeping its
 exotic behaviour *in front of* the table (a `JsArray`'s index and `length` handling, a typed
 array's canonical numeric indices, `JsGlobalObject`'s fallthrough to the global `Environment`)
-and delegating the rest, allocating lazily. The **primitives keep `ownProperties() == null`** —
+and delegating the rest, allocating lazily. `JsArray` splits its exotic behaviour across
+`JsArrayLength` (the `length` setter and the three tail-removal strategies) and
+`JsArrayProperties` (the own-property protocol and index slot resolution); both are package-private
+collaborators over `JsArray`'s own storage fields rather than independent objects, because the
+dense list, the sparse map and the index-accessor maps are one invariant. The two callable types
+share their metadata forwarding through the `JsCallableProperties` default methods, over the
+`CallableMetadata` each one owns. The **primitives keep `ownProperties() == null`** —
 that null is what identifies a primitive at every choke point — and `JsProxy` has none either,
 since `ProxyDispatch` intercepts ahead of it. Descriptor validation is a single
 `ValidateAndApplyPropertyDescriptor` over the table.
@@ -634,7 +640,11 @@ skipped, self is always a candidate, and any failure falls back to local executi
 
 ## Configuration
 
-All keys live in `lwnrdb.cfg`; the request can never influence any of them.
+Every key is declared once, in `config/ConfigKey` — its name, type, shipped default and validation
+rule. Parsing, defaults, validation and the "missing config" warning all read that one table, and
+`ConfigKeyTest` fails the build if `default.cfg` and the registry ever disagree. `default.cfg` is the
+documented reference; `lwnrdb.cfg` carries only a deployment's overrides. The request can never
+influence any of them.
 
 | Group | Keys |
 |---|---|
@@ -645,9 +655,10 @@ All keys live in `lwnrdb.cfg`; the request can never influence any of them.
 | Cursors | `scriptCursorBatchSize`, `scriptCursorMaxBatchSize` |
 | Egress | `scriptFetchEnabled` (on), `scriptFetchAllowlist` (`*`), `scriptFetchTimeoutMs`, `scriptFetchMaxResponseBytes` |
 | Admission | `maxConcurrentScripts`, `scriptQueueWaitMs`, `maxConcurrentScriptsPerUser`, `maxConcurrentScriptsPerDatabase` |
-| Caching | `scriptCompiledCacheSize` |
+| Caching | `procedureCacheSize` (compiled procedures and parsed ad-hoc scripts), `metadataCacheMaxBytes`, `metadataCacheMaxEntries` |
 | Locale | `scriptTimeZone` (UTC), `scriptLocale` (en-US) |
 | Triggers | `triggerThreads`, `triggerQueueSize`, `triggerTimeoutMs`, `triggerMaxDepth`, `triggerRunLogEnabled`, `triggerRunRetentionMs`, `triggerMaxAttempts`, `triggerRetryBackoffMs`, `triggerRetryMaxBackoffMs`, `triggerDeadLetterRetentionMs` |
+| Metadata caches | `metadataCacheMaxBytes` (procedure sources, schemas, schedule definitions), `metadataCacheMaxEntries` (trigger lists, negative lookups) |
 | Before hooks | `beforeHookInstructionBudget`, `beforeHookTimeoutMs` |
 | Schedules | `scheduleThreads`, `scheduleQueueSize`, `scheduleTickMs`, `scheduleRefreshMs`, `scheduleTimeoutMs`, `scheduleMaxPerDatabase` |
 | Pipeline scripts | `aggregationScriptInstructionBudget`, `aggregationScriptTimeoutMs`, `aggregationScriptMaxSourceBytes` |

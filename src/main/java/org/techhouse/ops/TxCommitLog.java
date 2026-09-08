@@ -10,17 +10,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 
-/**
- * Durable commit-intent log for single-node transactions, stored as a {@code {txId}|localcommit} marker in the
- * already-wired {@code admin/transactions} collection.
- *
- * <p>
- * The distributed path has had this since Phase 5b — {@link Tx2pcLog}'s coordinator marker is its commit
- * point and {@code commitPreparedFromDurable} finishes a decided commit after a crash. The single-node
- * {@code commit()} had no equivalent, so recovery could not tell a transaction that was still buffering
- * (discard) from one that was mid-commit (finish), and discarded both — leaving a partially applied
- * transaction. Writing this marker before the first op is applied is what makes that distinction durable.
- */
 public final class TxCommitLog {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final String COLLECTIONS_FIELD = "collections";
