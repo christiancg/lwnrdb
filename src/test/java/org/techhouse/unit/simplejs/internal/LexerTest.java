@@ -607,24 +607,24 @@ public class LexerTest {
         final Lexer.LexResult result = Lexer.lexWithPositions("let x =\n  42;");
         final List<SourcePosition> positions = result.positions();
         // 'let' keyword: offset 0, length 3, line 1, column 1
-        assertEquals(0, positions.getFirst().getOffset());
-        assertEquals(3, positions.getFirst().getLength());
-        assertEquals(1, positions.get(0).getLine());
-        assertEquals(1, positions.get(0).getColumn());
+        assertEquals(0, positions.getFirst().offset());
+        assertEquals(3, positions.getFirst().length());
+        assertEquals(1, positions.get(0).line());
+        assertEquals(1, positions.get(0).column());
         // '=' operator: offset 6, line 1, column 7
-        assertEquals(6, positions.get(2).getOffset());
-        assertEquals(1, positions.get(2).getLine());
-        assertEquals(7, positions.get(2).getColumn());
+        assertEquals(6, positions.get(2).offset());
+        assertEquals(1, positions.get(2).line());
+        assertEquals(7, positions.get(2).column());
         // '42' number on the second line: offset 10, length 2, line 2, column 3
-        assertEquals(10, positions.get(3).getOffset());
-        assertEquals(2, positions.get(3).getLength());
-        assertEquals(2, positions.get(3).getLine());
-        assertEquals(3, positions.get(3).getColumn());
+        assertEquals(10, positions.get(3).offset());
+        assertEquals(2, positions.get(3).length());
+        assertEquals(2, positions.get(3).line());
+        assertEquals(3, positions.get(3).column());
         // trailing EOF: zero length at the end of the source
         final SourcePosition eof = positions.getLast();
-        assertEquals(13, eof.getOffset());
-        assertEquals(0, eof.getLength());
-        assertEquals(2, eof.getLine());
+        assertEquals(13, eof.offset());
+        assertEquals(0, eof.length());
+        assertEquals(2, eof.line());
     }
 
     // newlineBefore is true only for a token whose preceding trivia contained a line terminator

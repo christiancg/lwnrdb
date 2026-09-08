@@ -51,16 +51,16 @@ public final class CallStack {
         if (frame == null) {
             return;
         }
-        current.function = frame.getCallerFunction();
-        current.module = frame.getCallerModule();
-        current.line = frame.getCallerLine();
-        current.column = frame.getCallerColumn();
+        current.function = frame.callerFunction();
+        current.module = frame.callerModule();
+        current.line = frame.callerLine();
+        current.column = frame.callerColumn();
     }
 
     public void setPosition(SourcePosition position) {
         if (position != null) {
-            current.line = position.getLine();
-            current.column = position.getColumn();
+            current.line = position.line();
+            current.column = position.column();
         }
     }
 
@@ -84,8 +84,8 @@ public final class CallStack {
         final var rendered = new ArrayList<String>();
         rendered.add(render(current.function, current.module, current.line, current.column));
         for (final var frame : current.frames) {
-            rendered.add(render(frame.getCallerFunction(), frame.getCallerModule(), frame.getCallerLine(),
-                    frame.getCallerColumn()));
+            rendered.add(
+                    render(frame.callerFunction(), frame.callerModule(), frame.callerLine(), frame.callerColumn()));
         }
         if (maxFrames >= 0 && rendered.size() > maxFrames) {
             final var dropped = rendered.size() - maxFrames;

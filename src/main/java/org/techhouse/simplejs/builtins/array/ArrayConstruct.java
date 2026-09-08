@@ -184,10 +184,10 @@ public final class ArrayConstruct {
     }
 
     public static JsValue speciesCreate(ArrayLike target, long length, InterpreterOps ops) {
-        if (ops == null || !isArray(target.value)) {
+        if (ops == null || !isArray(target.value())) {
             return newArray(length, ops);
         }
-        var constructor = ops.getMember(target.value, new JsString("constructor"));
+        var constructor = ops.getMember(target.value(), new JsString("constructor"));
         if (InterpreterUtils.isObjectLike(constructor)) {
             constructor = ops.getMember(constructor, JsSymbol.SPECIES);
             if (constructor instanceof JsNull) {

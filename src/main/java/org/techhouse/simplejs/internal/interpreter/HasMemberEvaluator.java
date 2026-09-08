@@ -18,13 +18,7 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class HasMemberEvaluator {
-    public final Interpreter interp;
-
-    public HasMemberEvaluator(Interpreter interp) {
-        this.interp = interp;
-    }
-
+public record HasMemberEvaluator(Interpreter interp) {
     public boolean hasMember(JsValue container, JsValue keyValue) {
         return switch (container) {
             case JsProxy proxy -> interp.proxies.has(proxy, JsCoercion.toPropertyKey(keyValue, interp.ops));

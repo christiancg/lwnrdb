@@ -24,13 +24,7 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class MemberAccessEvaluator {
-    public final Interpreter interp;
-
-    public MemberAccessEvaluator(Interpreter interp) {
-        this.interp = interp;
-    }
-
+public record MemberAccessEvaluator(Interpreter interp) {
     public JsValue evalMember(MemberExpression member, Environment env) {
         if (member.getObject() instanceof SuperExpression) {
             return interp.classes.evalSuperMemberRead(member, env);

@@ -22,15 +22,7 @@ import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class ArrayLike {
-    public final JsValue value;
-    public final InterpreterOps ops;
-
-    public ArrayLike(JsValue value, InterpreterOps ops) {
-        this.value = value;
-        this.ops = ops;
-    }
-
+public record ArrayLike(JsValue value, InterpreterOps ops) {
     public JsArray dense() {
         return value instanceof JsArray array && !array.hasAnyIndexAccessor() ? array : null;
     }

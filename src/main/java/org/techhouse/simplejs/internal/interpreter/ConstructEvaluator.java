@@ -19,13 +19,7 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class ConstructEvaluator {
-    public final Interpreter interp;
-
-    public ConstructEvaluator(Interpreter interp) {
-        this.interp = interp;
-    }
-
+public record ConstructEvaluator(Interpreter interp) {
     public JsValue evalNew(NewExpression expression, Environment env) {
         final var callee = interp.eval(expression.getCallee(), env);
         final var args = interp.evalArguments(expression.getArguments(), env);

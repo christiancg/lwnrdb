@@ -104,7 +104,7 @@ public final class ArrayMutation {
         final var result = speciesCreate(target, 0, ops);
         var written = 0L;
         final var items = new ArrayList<JsValue>(args.size() + 1);
-        items.add(target.value);
+        items.add(target.value());
         items.addAll(args);
         for (final var item : items) {
             if (isConcatSpreadable(item, ops)) {
@@ -188,9 +188,9 @@ public final class ArrayMutation {
     public static JsValue toStringMethod(ArrayLike target, Invoker invoker, InterpreterOps ops) {
         final var join = target.getKey(new JsString("join"));
         if (InterpreterUtils.isCallable(join)) {
-            return invoker.call(join, target.value, List.of());
+            return invoker.call(join, target.value(), List.of());
         }
-        return invoker.call(ObjectProtoBuiltins.getMethod(target.value, "toString", ops, null), target.value,
+        return invoker.call(ObjectProtoBuiltins.getMethod(target.value(), "toString", ops, null), target.value(),
                 List.of());
     }
 
@@ -271,7 +271,7 @@ public final class ArrayMutation {
                 target.set(upper, lowerValue);
             }
         }
-        return target.value;
+        return target.value();
     }
 
     public static JsValue fill(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
@@ -285,7 +285,7 @@ public final class ArrayMutation {
             InterpreterOps.tick(ops);
             target.set(i, value);
         }
-        return target.value;
+        return target.value();
     }
 
     public static JsValue copyWithin(ArrayLike target, List<JsValue> args, InterpreterOps ops) {
@@ -308,7 +308,7 @@ public final class ArrayMutation {
             to += step;
             count--;
         }
-        return target.value;
+        return target.value();
     }
 
     public static JsValue at(ArrayLike target, List<JsValue> args, InterpreterOps ops) {

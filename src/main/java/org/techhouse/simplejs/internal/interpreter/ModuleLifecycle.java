@@ -23,13 +23,7 @@ import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class ModuleLifecycle {
-    public final Interpreter interp;
-
-    public ModuleLifecycle(Interpreter interp) {
-        this.interp = interp;
-    }
-
+public record ModuleLifecycle(Interpreter interp) {
     public Interpreter.ProgramOutcome evaluateTopLevelModule(Program program) {
         final var env = Environment.global();
         final var globalThis = GlobalScope.install(env, interp.eventLoop, interp::callValue, interp::iterableToList,

@@ -14,13 +14,7 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class IntrinsicsCoercion {
-    public final Intrinsics intrinsics;
-
-    public IntrinsicsCoercion(Intrinsics intrinsics) {
-        this.intrinsics = intrinsics;
-    }
-
+public record IntrinsicsCoercion(Intrinsics intrinsics) {
     public JsValue callArrayMethod(JsValue thisArg, String name, List<JsValue> args) {
         if (thisArg instanceof JsNull || thisArg instanceof JsUndefined) {
             throw IntrinsicsBrands.incompatible("Array.prototype." + name, thisArg);

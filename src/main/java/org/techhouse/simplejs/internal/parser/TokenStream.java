@@ -178,11 +178,11 @@ public abstract class TokenStream {
         final var position = positions != null ? positions.get(pos) : null;
         if (atEnd()) {
             return position != null
-                    ? new UnexpectedEndOfInputException(position.getLine(), position.getColumn())
+                    ? new UnexpectedEndOfInputException(position.line(), position.column())
                     : new UnexpectedEndOfInputException();
         }
         return position != null
-                ? new UnexpectedTokenException(describe(current()), position.getLine(), position.getColumn())
+                ? new UnexpectedTokenException(describe(current()), position.line(), position.column())
                 : new UnexpectedTokenException(describe(current()), pos);
     }
 

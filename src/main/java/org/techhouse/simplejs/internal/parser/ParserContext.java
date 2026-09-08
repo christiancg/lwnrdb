@@ -96,7 +96,7 @@ abstract class ParserContext extends GrammarPredicates {
     }
 
     protected int spanStart() {
-        return source == null || positions == null ? -1 : positions.get(pos).getOffset();
+        return source == null || positions == null ? -1 : positions.get(pos).offset();
     }
 
     protected SourcePosition positionAt(int index) {
@@ -108,7 +108,7 @@ abstract class ParserContext extends GrammarPredicates {
             return null;
         }
         final var last = positions.get(Math.max(0, pos - 1));
-        return source.substring(start, last.getOffset() + last.getLength());
+        return source.substring(start, last.offset() + last.length());
     }
 
     protected <T> T inScope(Supplier<T> production) {

@@ -36,7 +36,7 @@ public final class ArraySort {
         for (var i = (long) sorted.size(); i < length; i++) {
             target.delete(i);
         }
-        return target.value;
+        return target.value();
     }
 
     public static JsValue toSorted(ArrayLike target, List<JsValue> args, Invoker invoker, InterpreterOps ops) {
@@ -156,7 +156,7 @@ public final class ArraySort {
             }
             var element = source.get(i);
             if (mapper != null) {
-                element = invoker.call(mapper, self, List.of(element, new JsNumber(i), source.value));
+                element = invoker.call(mapper, self, List.of(element, new JsNumber(i), source.value()));
             }
             if (depth > 0 && isArray(element)) {
                 final var nested = new ArrayLike(element, ops);

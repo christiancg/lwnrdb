@@ -62,7 +62,8 @@ public final class ArrayIteration {
         final var result = speciesCreate(target, length, ops);
         for (var i = 0L; i < length; i++) {
             if (target.has(i)) {
-                final var mapped = invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value));
+                final var mapped = invoker.call(callback, self,
+                        List.of(target.get(i), new JsNumber(i), target.value()));
                 createDataPropertyOrThrow(result, i, mapped, ops);
             }
         }
@@ -80,7 +81,7 @@ public final class ArrayIteration {
                 continue;
             }
             final var element = target.get(i);
-            if (JsCoercion.toBoolean(invoker.call(callback, self, List.of(element, new JsNumber(i), target.value)))) {
+            if (JsCoercion.toBoolean(invoker.call(callback, self, List.of(element, new JsNumber(i), target.value())))) {
                 createDataPropertyOrThrow(result, kept, element, ops);
                 kept++;
             }
@@ -109,7 +110,7 @@ public final class ArrayIteration {
         for (var i = index; i < length; i++) {
             if (target.has(i)) {
                 accumulator = invoker.call(callback, JsUndefined.getInstance(),
-                        List.of(accumulator, target.get(i), new JsNumber(i), target.value));
+                        List.of(accumulator, target.get(i), new JsNumber(i), target.value()));
             }
         }
         return accumulator;
@@ -135,7 +136,7 @@ public final class ArrayIteration {
         for (var i = index; i >= 0; i--) {
             if (target.has(i)) {
                 accumulator = invoker.call(callback, JsUndefined.getInstance(),
-                        List.of(accumulator, target.get(i), new JsNumber(i), target.value));
+                        List.of(accumulator, target.get(i), new JsNumber(i), target.value()));
             }
         }
         return accumulator;
@@ -147,7 +148,7 @@ public final class ArrayIteration {
         final var self = thisArg(args);
         for (var i = 0L; i < length; i++) {
             if (target.has(i)) {
-                invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value));
+                invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value()));
             }
         }
         return JsUndefined.getInstance();
@@ -173,7 +174,7 @@ public final class ArrayIteration {
         for (var step = 0L; step < length; step++) {
             final var i = forwards ? step : length - 1 - step;
             final var element = target.get(i);
-            if (JsCoercion.toBoolean(invoker.call(callback, self, List.of(element, new JsNumber(i), target.value)))) {
+            if (JsCoercion.toBoolean(invoker.call(callback, self, List.of(element, new JsNumber(i), target.value())))) {
                 return new Match(i, element);
             }
         }
@@ -186,7 +187,7 @@ public final class ArrayIteration {
         final var self = thisArg(args);
         for (var i = 0L; i < length; i++) {
             if (target.has(i) && JsCoercion
-                    .toBoolean(invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value)))) {
+                    .toBoolean(invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value())))) {
                 return true;
             }
         }
@@ -199,7 +200,7 @@ public final class ArrayIteration {
         final var self = thisArg(args);
         for (var i = 0L; i < length; i++) {
             if (target.has(i) && !JsCoercion
-                    .toBoolean(invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value)))) {
+                    .toBoolean(invoker.call(callback, self, List.of(target.get(i), new JsNumber(i), target.value())))) {
                 return false;
             }
         }

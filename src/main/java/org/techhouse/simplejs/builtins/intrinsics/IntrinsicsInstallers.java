@@ -43,13 +43,7 @@ import org.techhouse.simplejs.values.JsTypedArray;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class IntrinsicsInstallers {
-    public final Intrinsics intrinsics;
-
-    public IntrinsicsInstallers(Intrinsics intrinsics) {
-        this.intrinsics = intrinsics;
-    }
-
+public record IntrinsicsInstallers(Intrinsics intrinsics) {
     public void installToStringTags() {
         defineToStringTag(intrinsics.iteratorProto, "Generator");
         defineToStringTag(intrinsics.mapProto, "Map");

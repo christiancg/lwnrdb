@@ -14,13 +14,7 @@ import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class PrivateMemberEvaluator {
-    public final Interpreter interp;
-
-    public PrivateMemberEvaluator(Interpreter interp) {
-        this.interp = interp;
-    }
-
+public record PrivateMemberEvaluator(Interpreter interp) {
     public JsValue getPrivateMember(JsValue target, String name, Environment env) {
         final var owner = env.resolvePrivateClass(name);
         final var privateName = owner == null ? null : owner.privateNameFor(name);

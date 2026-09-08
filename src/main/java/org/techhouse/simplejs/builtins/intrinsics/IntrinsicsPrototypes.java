@@ -22,13 +22,7 @@ import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class IntrinsicsPrototypes {
-    public final Intrinsics intrinsics;
-
-    public IntrinsicsPrototypes(Intrinsics intrinsics) {
-        this.intrinsics = intrinsics;
-    }
-
+public record IntrinsicsPrototypes(Intrinsics intrinsics) {
     public JsObject functionKindPrototype(String name, JsObject instancePrototype) {
         final var proto = new JsObject();
         proto.setProto(intrinsics.functionProto);

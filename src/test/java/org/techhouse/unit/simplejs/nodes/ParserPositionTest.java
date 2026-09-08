@@ -28,7 +28,7 @@ public class ParserPositionTest {
         assertEquals(3, body.size());
         for (var i = 0; i < body.size(); i++) {
             assertNotNull(body.get(i).getPosition());
-            assertEquals(i + 1, body.get(i).getPosition().getLine());
+            assertEquals(i + 1, body.get(i).getPosition().line());
         }
     }
 
@@ -42,7 +42,7 @@ public class ParserPositionTest {
         final var statement = (ExpressionStatement) program.getBody().getFirst();
         final var call = (CallExpression) statement.getExpression();
         assertNotNull(call.getPosition());
-        assertEquals(1, call.getPosition().getLine());
+        assertEquals(1, call.getPosition().line());
     }
 
     @Test
@@ -54,7 +54,7 @@ public class ParserPositionTest {
         final var statement = (ExpressionStatement) program.getBody().get(1);
         final var expression = (NewExpression) statement.getExpression();
         assertNotNull(expression.getPosition());
-        assertEquals(2, expression.getPosition().getLine());
+        assertEquals(2, expression.getPosition().line());
     }
 
     @Test
@@ -64,7 +64,7 @@ public class ParserPositionTest {
                   throw new Error('x');
                 }
                 """);
-        assertEquals(1, program.getBody().getFirst().getPosition().getLine());
+        assertEquals(1, program.getBody().getFirst().getPosition().line());
     }
 
     // The token-list entry point carries no positions, so nodes degrade to a name with no location

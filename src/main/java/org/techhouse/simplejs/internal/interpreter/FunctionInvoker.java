@@ -35,13 +35,7 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
-public final class FunctionInvoker {
-    public final Interpreter interp;
-
-    public FunctionInvoker(Interpreter interp) {
-        this.interp = interp;
-    }
-
+public record FunctionInvoker(Interpreter interp) {
     public List<JsValue> evalArguments(List<Expression> arguments, Environment env) {
         final var values = new ArrayList<JsValue>();
         for (final var argument : arguments) {

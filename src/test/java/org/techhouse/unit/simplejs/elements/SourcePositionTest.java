@@ -10,9 +10,9 @@ public class SourcePositionTest {
     @Test
     public void test_getters() {
         final var position = new SourcePosition(10, 3, 2, 4);
-        assertEquals(10, position.getOffset());
-        assertEquals(3, position.getLength());
-        assertEquals(2, position.getLine());
-        assertEquals(4, position.getColumn());
+        assertEquals(10, position.offset());
+        assertEquals(3, position.length());
+        assertEquals(2, position.line());
+        assertEquals(4, position.column());
     }
 }
