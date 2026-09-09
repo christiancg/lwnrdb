@@ -115,9 +115,9 @@ def new_conn():
 
 
 def section(title: str):
-    print(f"\n{'─' * 60}")
+    print(f"\n{'─' * 70}")
     print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"{'─' * 70}")
 
 
 # ── operation wrappers ───────────────────────────────────────────────────────
@@ -758,9 +758,9 @@ def test_operation_permissions(s, f):
 # ══════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     print("  LWNRDB — API commands & aggregations integration suite")
-    print("═" * 60)
+    print("═" * 70)
     print(f"  Connecting to {HOST}:{PORT}")
 
     with new_conn() as (s, f):
@@ -797,12 +797,12 @@ def main():
         authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown(s, f)
 
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     if failures == 0:
-        print(f"  \033[92mAll checks passed.\033[0m")
+        print("  \033[92mAll checks passed.\033[0m")
     else:
         print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
-    print("═" * 60 + "\n")
+    print("═" * 70 + "\n")
 
     sys.exit(0 if failures == 0 else 1)
 

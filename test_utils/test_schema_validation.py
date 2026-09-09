@@ -84,9 +84,9 @@ def new_conn():
 
 
 def section(title: str):
-    print(f"\n{'─' * 60}")
+    print(f"\n{'─' * 70}")
     print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"{'─' * 70}")
 
 
 # ── operation wrappers ───────────────────────────────────────────────────────
@@ -269,7 +269,11 @@ def test_permissions(s, f):
 
 
 def main():
-    print("LWNRDB schema-validation test suite")
+    print("\n" + "═" * 70)
+    print("  LWNRDB — Schema validation test suite")
+    print("═" * 70)
+    print(f"  Connecting to {HOST}:{PORT}")
+
     with new_conn() as (s, f):
         if authenticate(s, f).get("status") != "OK":
             print("Could not authenticate as admin. Check lwnrdb.cfg defaultAdminUsername/defaultAdminPassword.")
@@ -296,12 +300,13 @@ def main():
         authenticate(s, f)
         teardown(s, f)
 
-    print(f"\n{'═' * 60}")
+    print("\n" + "═" * 70)
     if failures == 0:
-        print("  All checks passed.")
+        print("  \033[92mAll checks passed.\033[0m")
     else:
-        print(f"  {failures} check(s) FAILED.")
-    print(f"{'═' * 60}")
+        print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
+    print("═" * 70 + "\n")
+
     sys.exit(0 if failures == 0 else 1)
 
 

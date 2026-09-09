@@ -46,9 +46,9 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # ── reporting helpers (mirrors the other suites) ────────────────────────────
 
 def section(title: str):
-    print(f"\n{'─' * 60}")
+    print(f"\n{'─' * 70}")
     print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"{'─' * 70}")
 
 
 def check(label: str, ok: bool, detail: str = ""):
@@ -280,9 +280,9 @@ def test_plaintext_rejected():
 # ══════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     print("  LWNRDB — TLS / secure connections test suite")
-    print("═" * 60)
+    print("═" * 70)
 
     jar = os.path.join(REPO_ROOT, JAR)
     if not os.path.isfile(jar):
@@ -305,13 +305,13 @@ def main():
     finally:
         stop_server(proc)
 
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     if failures == 0:
         print("  \033[92mAll checks passed.\033[0m")
     else:
         print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
         _dump_log(log_path)
-    print("═" * 60 + "\n")
+    print("═" * 70 + "\n")
 
     sys.exit(0 if failures == 0 else 1)
 

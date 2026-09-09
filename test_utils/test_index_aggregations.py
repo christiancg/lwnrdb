@@ -113,9 +113,9 @@ def new_conn():
 
 
 def section(title: str):
-    print(f"\n{'─' * 60}")
+    print(f"\n{'─' * 70}")
     print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"{'─' * 70}")
 
 
 def authenticate(s, f, username: str, password: str) -> dict:
@@ -797,9 +797,9 @@ def geo_suite(s, f):
 # ══════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     print("  LWNRDB — index-backed aggregation performance test suite")
-    print("═" * 60)
+    print("═" * 70)
     print(f"  Connecting to {HOST}:{PORT}")
     print(f"  Plan: load {NUM_DOCS} docs into {COLL} ({NUM_CATEGORIES} categories, each with an object "
           f"meta + array tags), {LEFT_DOCS} left + {NUM_DOCS} right docs for JOIN.")
@@ -870,12 +870,12 @@ def main():
         authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(s, f)
 
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     if failures == 0:
-        print(f"  \033[92mAll checks passed.\033[0m")
+        print("  \033[92mAll checks passed.\033[0m")
     else:
         print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
-    print("═" * 60 + "\n")
+    print("═" * 70 + "\n")
 
     sys.exit(0 if failures == 0 else 1)
 

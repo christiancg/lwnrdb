@@ -54,9 +54,9 @@ def new_conn():
 
 
 def section(title: str):
-    print(f"\n{'─' * 60}")
+    print(f"\n{'─' * 70}")
     print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"{'─' * 70}")
 
 
 # ── helpers ────────────────────────────────────────────────────────────────
@@ -612,9 +612,9 @@ def test_ownership(s, f):
 def main():
     global failures
 
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     print("  LWNRDB — Authentication & Authorization test suite")
-    print("═" * 60)
+    print("═" * 70)
     print(f"  Connecting to {HOST}:{PORT}")
 
     # ── pre-flight: create test users and fixtures ─────────────────────
@@ -676,12 +676,12 @@ def main():
 
     # ── summary ───────────────────────────────────────────────────────
     total_run = 0  # approximate from section counts
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     if failures == 0:
-        print(f"  \033[92mAll checks passed.\033[0m")
+        print("  \033[92mAll checks passed.\033[0m")
     else:
         print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
-    print("═" * 60 + "\n")
+    print("═" * 70 + "\n")
 
     sys.exit(0 if failures == 0 else 1)
 

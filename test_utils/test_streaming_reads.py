@@ -79,9 +79,9 @@ def new_conn():
 
 
 def section(title: str):
-    print(f"\n{'─' * 60}")
+    print(f"\n{'─' * 70}")
     print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"{'─' * 70}")
 
 
 def authenticate(s, f, username: str, password: str) -> dict:
@@ -346,9 +346,9 @@ def test_server_still_alive(s, f):
 # ══════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     print("  LWNRDB — Streaming / targeted-fetch read path test suite")
-    print("═" * 60)
+    print("═" * 70)
     print(f"  Connecting to {HOST}:{PORT}")
     print(f"  Plan: load {NUM_DOCS} docs (~{(NUM_DOCS * PAYLOAD_BYTES) // (1024*1024)}MB) "
           f"across multiple pages, index status+email, leave v unindexed.")
@@ -385,12 +385,12 @@ def main():
         authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(s, f)
 
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     if failures == 0:
-        print(f"  \033[92mAll checks passed.\033[0m")
+        print("  \033[92mAll checks passed.\033[0m")
     else:
         print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
-    print("═" * 60 + "\n")
+    print("═" * 70 + "\n")
 
     sys.exit(0 if failures == 0 else 1)
 

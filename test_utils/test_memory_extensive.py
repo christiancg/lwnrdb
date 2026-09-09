@@ -358,6 +358,11 @@ def assert_rss_bounded(label, max_rss_mb, xmx_mb):
 
 
 def main():
+    print("\n" + "═" * 70)
+    print("  LWNRDB — Extensive memory-bound stress test suite")
+    print("═" * 70)
+    print(f"  Connecting to {HOST}:{PORT}")
+
     pid = find_server_pid()
     print(f"  server pid={pid}  initial rss={get_pid_rss_mb(pid)}MB")
     if pid is None:
@@ -421,13 +426,13 @@ def main():
     teardown(c)
     c.close()
 
-    print(f"\n{'═' * 70}")
+    print("\n" + "═" * 70)
     if failures == 0:
         print(f"  \033[92mAll checks passed.\033[0m  ({warnings} warnings)")
     else:
-        print(f"  \033[91m{failures} check(s) FAILED.\033[0m  "
-              f"({warnings} warnings)")
-    print(f"{'═' * 70}\n")
+        print(f"  \033[91m{failures} check(s) FAILED.\033[0m  ({warnings} warnings)")
+    print("═" * 70 + "\n")
+
     sys.exit(0 if failures == 0 else 1)
 
 

@@ -126,9 +126,9 @@ class Conn:
 
 
 def section(title: str):
-    print(f"\n{'─' * 60}")
+    print(f"\n{'─' * 70}")
     print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"{'─' * 70}")
 
 
 def authenticate(conn: Conn, username: str = ADMIN_USERNAME, password: str = ADMIN_PASSWORD) -> dict:
@@ -608,6 +608,11 @@ def test_unauthenticated_listen():
 def main():
     global failures
 
+    print("\n" + "═" * 70)
+    print("  LWNRDB — Listenable queries (LISTEN / STOP_LISTEN) test suite")
+    print("═" * 70)
+    print(f"  Connecting to {HOST}:{PORT}")
+
     with Conn() as admin_conn:
         authenticate(admin_conn)
         setup(admin_conn)
@@ -639,13 +644,14 @@ def main():
         finally:
             teardown(admin_conn)
 
-    print(f"\n{'═' * 60}")
+    print("\n" + "═" * 70)
     if failures == 0:
-        print(f"  All tests PASSED")
+        print("  \033[92mAll checks passed.\033[0m")
     else:
-        print(f"  {failures} test(s) FAILED")
-    print(f"{'═' * 60}\n")
-    sys.exit(1 if failures else 0)
+        print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
+    print("═" * 70 + "\n")
+
+    sys.exit(0 if failures == 0 else 1)
 
 
 if __name__ == "__main__":

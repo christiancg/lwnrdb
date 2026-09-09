@@ -73,9 +73,9 @@ nodes: list["Node"] = []
 # ── reporting helpers (mirror the other suites) ──────────────────────────────
 
 def section(title: str):
-    print(f"\n{'─' * 60}")
+    print(f"\n{'─' * 70}")
     print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"{'─' * 70}")
 
 
 def check(label: str, response: dict, expected_status: str):
@@ -1430,9 +1430,9 @@ def test_schedule_rejoin_catch_up():
 # ══════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     print("  LWNRDB — Clustering (multi-node) integration suite")
-    print("═" * 60)
+    print("═" * 70)
 
     jar = os.path.join(REPO_ROOT, JAR)
     if not os.path.isfile(jar):
@@ -1491,14 +1491,14 @@ def main():
         for n in nodes:
             n.stop()
 
-    print("\n" + "═" * 60)
+    print("\n" + "═" * 70)
     if failures == 0:
         print("  \033[92mAll checks passed.\033[0m")
     else:
         print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
         for n in nodes:
             n.dump_log()
-    print("═" * 60 + "\n")
+    print("═" * 70 + "\n")
 
     sys.exit(0 if failures == 0 else 1)
 

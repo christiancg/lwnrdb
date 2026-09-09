@@ -1431,13 +1431,17 @@ def test_switches_off(conn: Conn):
 
 def main():
     global failures
+    print("\n" + "═" * 70)
+    print("  LWNRDB — Stored procedures & triggers test suite")
+    print("═" * 70)
+
     jar = os.path.join(REPO_ROOT, JAR)
     if not os.path.isfile(jar):
         print(f"jar not found at {jar}; run `mvn clean package -DskipTests` first", file=sys.stderr)
-        return 1
+        sys.exit(1)
     if port_open():
         print(f"port {PORT} is already in use", file=sys.stderr)
-        return 1
+        sys.exit(1)
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-proc-test-")
     log_path = os.path.join(work_dir, "server.out")
@@ -1509,15 +1513,16 @@ def main():
     finally:
         stop_server(proc)
 
-    print(f"\n{'═' * 70}")
-    if failures:
-        print(f"  {failures} check(s) failed")
-        dump_log(log_path)
+    print("\n" + "═" * 70)
+    if failures == 0:
+        print("  \033[92mAll checks passed.\033[0m")
     else:
-        print("  all checks passed")
-    print(f"{'═' * 70}")
-    return 1 if failures else 0
+        print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
+        dump_log(log_path)
+    print("═" * 70 + "\n")
+
+    sys.exit(0 if failures == 0 else 1)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
