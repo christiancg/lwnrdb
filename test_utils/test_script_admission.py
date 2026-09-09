@@ -39,14 +39,14 @@ The server lifecycle is managed via a tracked subprocess handle (not pgrep), so 
 never touches an unrelated LWNRDB process.
 """
 
-import json
 import os
-import socket
-import subprocess
 import sys
 import tempfile
 import threading
 import time
+
+import base_utils as bu
+from base_utils import check, check_code, check_result, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("ADMISSION_TEST_PORT", "8997"))
@@ -58,11 +58,10 @@ COLL = "docs"
 AUDIT_COLL = "audit"
 TICKS_COLL = "ticks"
 
-PASS = "\033[92mPASS\033[0m"
-FAIL = "\033[91mFAIL\033[0m"
-
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = bu.REPO_ROOT
+
+bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 # The cap under test. Deliberately tiny so a burst of CALLERS reaches it in one round.
 CAPACITY = 2
@@ -81,70 +80,11 @@ MAX_SOURCE_BYTES = 8 * 1024
 
 SLOW_SCRIPT = f"export default new Promise(r => setTimeout(() => r(1), {SLOW_SCRIPT_MS}));"
 
-failures = 0
-
-
-# ── reporting helpers (mirrors the other suites) ─────────────────────────────
-
-def section(title: str):
-    print(f"\n{'─' * 70}")
-    print(f"  {title}")
-    print(f"{'─' * 70}")
-
-
-def check(label: str, ok: bool, detail: str = ""):
-    global failures
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    if detail and not ok:
-        print(f"         {detail}")
-    if not ok:
-        failures += 1
-
-
-def check_status(label: str, response: dict, expected_status: str):
-    check(label, response.get("status") == expected_status,
-          f"expected status={expected_status} got={response.get('status')} "
-          f"code={response.get('errorCode')} msg={response.get('message')!r}")
-
-
-def check_code(label: str, response: dict, expected_status: str, expected_code: str):
-    ok = response.get("status") == expected_status and response.get("errorCode") == expected_code
-    check(label, ok,
-          f"expected {expected_status}/{expected_code} got {response.get('status')}/"
-          f"{response.get('errorCode')} msg={response.get('message')!r}")
-
-
-def check_result(label: str, response: dict, expected):
-    ok = response.get("status") == "OK" and response.get("result") == expected
-    check(label, ok,
-          f"expected result={expected!r} got={response.get('result')!r} "
-          f"status={response.get('status')} msg={response.get('message')!r}")
 
 
 # ── connection / protocol ────────────────────────────────────────────────────
 
-class Conn:
-    def __init__(self):
-        self.s = socket.create_connection((HOST, PORT), timeout=120)
-        self.f = self.s.makefile("rb")
-
-    def send(self, payload: dict) -> dict:
-        try:
-            self.s.sendall((json.dumps(payload) + "\n").encode())
-        except (BrokenPipeError, OSError) as e:
-            return {"status": "ERROR", "message": f"send failed: {e}"}
-        raw = self.f.readline().decode().strip()
-        if not raw:
-            return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return {"status": "ERROR", "message": raw}
-
-    def authenticate(self, username=ADMIN_USERNAME, password=ADMIN_PASSWORD) -> dict:
-        return self.send({"type": "AUTHENTICATE", "username": username, "password": password})
-
+class Conn(bu.Conn):
     def run(self, script: str, args=None, db=DB) -> dict:
         payload = {"type": "RUN_SCRIPT", "databaseName": db, "script": script}
         if args is not None:
@@ -185,19 +125,6 @@ class Conn:
     def script_stats(self) -> dict:
         response = self.send({"type": "GET_DATABASE_STATS"})
         return response.get("stats", {}).get("scripts", {})
-
-    def close(self):
-        try:
-            self.s.close()
-        except OSError:
-            pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        self.close()
-
 
 def admin_conn() -> Conn:
     conn = Conn()
@@ -321,53 +248,6 @@ def write_config(work_dir: str, capacity: int, queue_wait_ms: int, per_user: int
     )
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write(cfg)
-
-
-def port_open() -> bool:
-    try:
-        with socket.create_connection((HOST, PORT), timeout=0.5):
-            return True
-    except OSError:
-        return False
-
-
-def start_server(work_dir: str, log_path: str):
-    jar = os.path.join(REPO_ROOT, JAR)
-    log = open(log_path, "ab")
-    proc = subprocess.Popen(["java", "-Xmx512m", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
-    deadline = time.time() + 60.0
-    while time.time() < deadline:
-        if port_open():
-            time.sleep(0.5)
-            return proc
-        if proc.poll() is not None:
-            break
-        time.sleep(0.2)
-    dump_log(log_path)
-    proc.kill()
-    raise RuntimeError("server did not come up in time")
-
-
-def stop_server(proc):
-    if proc is None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    deadline = time.time() + 30.0
-    while time.time() < deadline and port_open():
-        time.sleep(0.2)
-
-
-def dump_log(log_path: str):
-    try:
-        with open(log_path, "rb") as fp:
-            tail = fp.read()[-4000:].decode(errors="replace")
-        print(f"--- server log tail ---\n{tail}\n--- end ---", file=sys.stderr)
-    except OSError:
-        pass
 
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
@@ -725,9 +605,7 @@ def cleanup(conn: Conn):
 # ══════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═" * 70)
-    print("  LWNRDB — script admission control test suite")
-    print("═" * 70)
+    bu.banner("script admission control test suite")
 
     jar = os.path.join(REPO_ROOT, JAR)
     if not os.path.isfile(jar):
@@ -742,7 +620,7 @@ def main():
     try:
         write_config(work_dir, capacity=CAPACITY, queue_wait_ms=0)
         print(f"  Starting server (capacity {CAPACITY}, no wait) on {HOST}:{PORT} ...")
-        proc = start_server(work_dir, log_path)
+        proc = bu.start_server(work_dir, log_path)
 
         with admin_conn() as conn:
             setup_data(conn)
@@ -754,50 +632,42 @@ def main():
             test_triggers_are_exempt(conn)
             test_schedules_are_exempt(conn)
 
-        stop_server(proc)
+        bu.stop_server(proc)
         proc = None
 
         write_config(work_dir, capacity=CAPACITY, queue_wait_ms=LONG_WAIT_MS)
         print(f"\n  Restarting server (capacity {CAPACITY}, {LONG_WAIT_MS}ms wait) on {HOST}:{PORT} ...")
-        proc = start_server(work_dir, log_path)
+        proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_wait_absorbs_the_burst(conn)
             test_wait_may_exceed_the_run_timeout(conn)
 
-        stop_server(proc)
+        bu.stop_server(proc)
         proc = None
 
         # A generous node-wide cap with a small per-user slice: a refusal here can only be the tenant cap.
         write_config(work_dir, capacity=CALLERS * 2, queue_wait_ms=0, per_user=PER_USER_CAPACITY)
         print(f"\n  Restarting server (per-user cap {PER_USER_CAPACITY}) on {HOST}:{PORT} ...")
-        proc = start_server(work_dir, log_path)
+        proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             create_tenants(conn)
             test_per_user_cap(conn)
             test_a_tenant_refusal_frees_the_node_permit(conn)
             test_tenant_caps_exempt_triggers_and_schedules(conn)
 
-        stop_server(proc)
+        bu.stop_server(proc)
         proc = None
 
         write_config(work_dir, capacity=0, queue_wait_ms=0)
         print(f"\n  Restarting server (cap disabled) on {HOST}:{PORT} ...")
-        proc = start_server(work_dir, log_path)
+        proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_cap_disabled(conn)
             cleanup(conn)
     finally:
-        stop_server(proc)
+        bu.stop_server(proc)
 
-    print("\n" + "═" * 70)
-    if failures == 0:
-        print("  \033[92mAll checks passed.\033[0m")
-    else:
-        print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
-        dump_log(log_path)
-    print("═" * 70 + "\n")
-
-    sys.exit(0 if failures == 0 else 1)
+    bu.summary(on_failure=lambda: bu.dump_log(log_path))
 
 
 if __name__ == "__main__":

@@ -726,16 +726,16 @@ one Unicode version — see the property-escape row of the gaps table.
 ## Measuring conformance
 
 The official tc39/test262 corpus runs against `SimpleJs.run` through a harness in
-`test_utils/test262.py`, filtered to the surface a database script host actually exposes and
+`test_utils/test262/test262.py`, filtered to the surface a database script host actually exposes and
 gated on a tracked baseline so the number can only ratchet upward.
 
 ```bash
-python3 test_utils/test262.py --fetch             # corpus fetched on demand (pinned + sha256, never committed)
-python3 test_utils/test262.py --self-test         # check the harness itself; no corpus needed
-python3 test_utils/test262.py --gate baseline     # what CI runs
-python3 test_utils/test262.py --update-baseline   # after fixing a gap
-python3 test_utils/test262.py --self-check        # assert the known divergences still fail
-python3 test_utils/test262.py --dump-failures     # re-run only the baselined ids, write the failure inventory
+python3 test_utils/test262/test262.py --fetch             # corpus fetched on demand (pinned + sha256, never committed)
+python3 test_utils/test262/test262.py --self-test         # check the harness itself; no corpus needed
+python3 test_utils/test262/test262.py --gate baseline     # what CI runs
+python3 test_utils/test262/test262.py --update-baseline   # after fixing a gap
+python3 test_utils/test262/test262.py --self-check        # assert the known divergences still fail
+python3 test_utils/test262/test262.py --dump-failures     # re-run only the baselined ids, write the failure inventory
 ```
 
 | File | Role |
@@ -744,7 +744,7 @@ python3 test_utils/test262.py --dump-failures     # re-run only the baselined id
 | `config/test262-exclusions.txt` | what is deliberately not measured (a `keep:` line re-admits a subtree from a broader `dir:` exclusion, so a directory-wide omission cannot quietly swallow tests that fail for a reason we own) |
 | `config/test262-baseline.txt` | known-failing ids, with the corpus SHA in the header |
 | `config/test262-features.txt` | features already accounted for, so a corpus bump surfaces only the new ones |
-| `test_utils/test262_shims/` | the `print`/`$DONE`/`$262` shims the corpus harness expects |
+| `test_utils/test262/shims/` | the `print`/`$DONE`/`$262` shims the corpus harness expects |
 | `src/test/java/…/test262/Test262Worker.java` | the worker JVM the driver batches jobs onto |
 | `test_log/test262-report.md` | the latest committed run: per-area rates, totals, exclusion/skip breakdown |
 

@@ -17,14 +17,15 @@ Server is expected to be already running with:
     java -Xmx128m -jar target/lwnrdb-1.0-SNAPSHOT.jar
 """
 
-import json
 import os
 import random
-import socket
 import string
 import subprocess
 import sys
 import time
+
+import base_utils as bu
+from base_utils import Conn, check, section, warn
 
 HOST = "127.0.0.1"
 PORT = 8989
@@ -43,55 +44,8 @@ INDEXED_FIELDS = ["category", "score"]
 CACHE_CAP_TOLERANCE = 1.25
 LATENCY_BUDGET_MS = 3_000
 
-PASS = "\033[92mPASS\033[0m"
-FAIL = "\033[91mFAIL\033[0m"
-WARN = "\033[93mWARN\033[0m"
+bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
-failures = 0
-warnings = 0
-
-
-def send(s, f, payload, timeout=30.0):
-    s.settimeout(timeout)
-    s.sendall((json.dumps(payload) + "\n").encode())
-    raw = f.readline().decode().strip()
-    if not raw:
-        return {"status": "ERROR", "message": "connection closed/no response"}
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"status": "ERROR", "message": f"non-JSON response: {raw[:200]!r}"}
-
-
-def check(label, ok, detail=""):
-    global failures
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    if detail:
-        print(f"         {detail}")
-    if not ok:
-        failures += 1
-
-
-def warn(label, detail=""):
-    global warnings
-    print(f"  [{WARN}] {label}")
-    if detail:
-        print(f"         {detail}")
-    warnings += 1
-
-
-class Conn:
-    def __init__(self):
-        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.s.connect((HOST, PORT))
-        self.f = self.s.makefile("rb")
-        send(self.s, self.f,
-             {"type": "AUTHENTICATE", "username": ADMIN_USERNAME,
-              "password": ADMIN_PASSWORD})
-
-    def close(self):
-        self.s.close()
 
 
 def rand_str(n):
@@ -116,14 +70,8 @@ def find_server_pid():
         return None
 
 
-def section(title):
-    print(f"\n{'─' * 70}")
-    print(f"  {title}")
-    print(f"{'─' * 70}")
-
-
 def snapshot(c):
-    r = send(c.s, c.f, {"type": "GET_DATABASE_STATS"})
+    r = c.send({"type": "GET_DATABASE_STATS"})
     return r.get("stats", {})
 
 
@@ -147,16 +95,16 @@ def fmt_snap(s, pid=None):
 
 
 def setup(c):
-    send(c.s, c.f, {"type": "DROP_DATABASE", "databaseName": DB})
-    send(c.s, c.f, {"type": "CREATE_DATABASE", "databaseName": DB})
+    c.send({"type": "DROP_DATABASE", "databaseName": DB})
+    c.send({"type": "CREATE_DATABASE", "databaseName": DB})
     for i in range(NUM_COLLECTIONS):
-        send(c.s, c.f, {"type": "CREATE_COLLECTION",
+        c.send({"type": "CREATE_COLLECTION",
                         "databaseName": DB,
                         "collectionName": f"coll_{i}"})
 
 
 def teardown(c):
-    send(c.s, c.f, {"type": "DROP_DATABASE", "databaseName": DB})
+    c.send({"type": "DROP_DATABASE", "databaseName": DB})
 
 
 def mass_insert(c, pid, rss_samples, cache_samples, heap_samples):
@@ -188,7 +136,7 @@ def mass_insert(c, pid, rss_samples, cache_samples, heap_samples):
                 "payload": rand_str(PAYLOAD_BYTES),
             })
             if len(batch) >= BULK_BATCH_SIZE:
-                r = send(c.s, c.f, {"type": "BULK_SAVE", "databaseName": DB,
+                r = c.send({"type": "BULK_SAVE", "databaseName": DB,
                                     "collectionName": coll, "objects": batch})
                 if r.get("status") != "OK":
                     check(f"BULK_SAVE coll={coll}", False,
@@ -201,7 +149,7 @@ def mass_insert(c, pid, rss_samples, cache_samples, heap_samples):
                 probes += 1
                 if probes % 30 == 0:
                     t0 = time.perf_counter()
-                    send(c.s, c.f, {"type": "LIST_DATABASES"})
+                    c.send({"type": "LIST_DATABASES"})
                     max_probe_ms = max(max_probe_ms, (time.perf_counter() - t0) * 1000.0)
                 # Memory samples every ~10 batches
                 if probes % 10 == 0:
@@ -213,7 +161,7 @@ def mass_insert(c, pid, rss_samples, cache_samples, heap_samples):
                     if rss is not None:
                         rss_samples.append(rss)
         if batch:
-            send(c.s, c.f, {"type": "BULK_SAVE", "databaseName": DB,
+            c.send({"type": "BULK_SAVE", "databaseName": DB,
                             "collectionName": coll, "objects": batch})
         print(f"    coll_{ci} done — {fmt_snap(snapshot(c), pid)}")
 
@@ -230,7 +178,7 @@ def create_indexes(c, pid):
     for ci in range(NUM_COLLECTIONS):
         coll = f"coll_{ci}"
         for fld in INDEXED_FIELDS:
-            r = send(c.s, c.f, {"type": "CREATE_INDEX", "databaseName": DB,
+            r = c.send({"type": "CREATE_INDEX", "databaseName": DB,
                                 "collectionName": coll, "fieldName": fld}, timeout=60)
             check(f"CREATE_INDEX {coll}.{fld}", r.get("status") == "OK",
                   detail=str(r) if r.get("status") != "OK" else "")
@@ -256,7 +204,7 @@ def mixed_workload(c, pid, rss_samples, cache_samples, heap_samples):
                                    "field": "category",
                                    "value": random.choice(categories)}},
                      {"type": "COUNT"}]
-            r = send(c.s, c.f, {"type": "AGGREGATE", "databaseName": DB,
+            r = c.send({"type": "AGGREGATE", "databaseName": DB,
                                 "collectionName": coll,
                                 "aggregationSteps": steps})
             if r.get("status") != "OK":
@@ -268,20 +216,20 @@ def mixed_workload(c, pid, rss_samples, cache_samples, heap_samples):
                       "operator": {"fieldOperatorType": "GREATER_THAN",
                                    "field": "score", "value": lo}},
                      {"type": "LIMIT", "limit": 50}]
-            r = send(c.s, c.f, {"type": "AGGREGATE", "databaseName": DB,
+            r = c.send({"type": "AGGREGATE", "databaseName": DB,
                                 "collectionName": coll,
                                 "aggregationSteps": steps})
             if r.get("status") != "OK":
                 warn(f"AGGREGATE range on {coll}.score", str(r))
         elif choice < 0.9:
             # full count
-            send(c.s, c.f, {"type": "AGGREGATE", "databaseName": DB,
+            c.send({"type": "AGGREGATE", "databaseName": DB,
                             "collectionName": coll,
                             "aggregationSteps": [{"type": "COUNT"}]})
         else:
             # random FIND_BY_ID
             doc_id = f"{coll}_{random.randint(0, DOCS_PER_COLLECTION - 1):06d}"
-            send(c.s, c.f, {"type": "FIND_BY_ID", "databaseName": DB,
+            c.send({"type": "FIND_BY_ID", "databaseName": DB,
                             "collectionName": coll, "_id": doc_id})
         dt = (time.perf_counter() - t0) * 1000.0
         max_op_ms = max(max_op_ms, dt)
@@ -306,7 +254,7 @@ def verify_correctness(c, samples):
     total = 0
     for coll, ids in samples.items():
         for doc_id in ids:
-            r = send(c.s, c.f, {"type": "FIND_BY_ID", "databaseName": DB,
+            r = c.send({"type": "FIND_BY_ID", "databaseName": DB,
                                 "collectionName": coll, "_id": doc_id})
             total += 1
             if r.get("status") != "OK":
@@ -358,6 +306,8 @@ def assert_rss_bounded(label, max_rss_mb, xmx_mb):
 
 
 def main():
+    bu.banner("Extensive memory-bound stress test suite", HOST, PORT)
+
     pid = find_server_pid()
     print(f"  server pid={pid}  initial rss={get_pid_rss_mb(pid)}MB")
     if pid is None:
@@ -365,6 +315,7 @@ def main():
         sys.exit(1)
 
     c = Conn()
+    c.authenticate()
     teardown(c)
     setup(c)
     print(f"  after setup — {fmt_snap(snapshot(c), pid)}")
@@ -421,14 +372,7 @@ def main():
     teardown(c)
     c.close()
 
-    print(f"\n{'═' * 70}")
-    if failures == 0:
-        print(f"  \033[92mAll checks passed.\033[0m  ({warnings} warnings)")
-    else:
-        print(f"  \033[91m{failures} check(s) FAILED.\033[0m  "
-              f"({warnings} warnings)")
-    print(f"{'═' * 70}\n")
-    sys.exit(0 if failures == 0 else 1)
+    bu.summary(suffix=f"  ({bu.warning_count()} warnings)")
 
 
 if __name__ == "__main__":

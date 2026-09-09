@@ -32,12 +32,13 @@ never touches an unrelated LWNRDB process.
 
 import json
 import os
-import socket
-import subprocess
 import sys
 import tempfile
 import time
 from datetime import datetime, timedelta, timezone
+
+import base_utils as bu
+from base_utils import check, check_code, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SCHEDULE_TEST_PORT", "8995"))
@@ -50,73 +51,20 @@ USER_PASSWORD = "password123"
 MANAGER = "sched_manager"
 READER = "sched_reader"
 
-PASS = "\033[92mPASS\033[0m"
-FAIL = "\033[91mFAIL\033[0m"
-
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = bu.REPO_ROOT
+
+bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 TICK_MS = 200
 SCHEDULE_TIMEOUT_MS = 10_000
 MAX_PER_DATABASE = 3
 
-failures = 0
-
-
-# ── reporting helpers (mirrors the other suites) ─────────────────────────────
-
-def section(title: str):
-    print(f"\n{'─' * 70}")
-    print(f"  {title}")
-    print(f"{'─' * 70}")
-
-
-def check(label: str, ok: bool, detail: str = ""):
-    global failures
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    if detail and not ok:
-        print(f"         {detail}")
-    if not ok:
-        failures += 1
-
-
-def check_status(label: str, response: dict, expected_status: str):
-    check(label, response.get("status") == expected_status,
-          f"expected status={expected_status} got={response.get('status')} "
-          f"code={response.get('errorCode')} msg={response.get('message')!r}")
-
-
-def check_code(label: str, response: dict, expected_status: str, expected_code: str):
-    ok = response.get("status") == expected_status and response.get("errorCode") == expected_code
-    check(label, ok,
-          f"expected {expected_status}/{expected_code} got {response.get('status')}/"
-          f"{response.get('errorCode')} msg={response.get('message')!r}")
 
 
 # ── connection / protocol ────────────────────────────────────────────────────
 
-class Conn:
-    def __init__(self):
-        self.s = socket.create_connection((HOST, PORT), timeout=60)
-        self.f = self.s.makefile("rb")
-
-    def send(self, payload: dict) -> dict:
-        try:
-            self.s.sendall((json.dumps(payload) + "\n").encode())
-        except (BrokenPipeError, OSError) as e:
-            return {"status": "ERROR", "message": f"send failed: {e}"}
-        raw = self.f.readline().decode().strip()
-        if not raw:
-            return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return {"status": "ERROR", "message": raw}
-
-    def authenticate(self, username=ADMIN_USERNAME, password=ADMIN_PASSWORD) -> dict:
-        return self.send({"type": "AUTHENTICATE", "username": username, "password": password})
-
+class Conn(bu.Conn):
     def save_procedure(self, name, script, db=DB, **extra) -> dict:
         payload = {"type": "SAVE_PROCEDURE", "databaseName": db, "name": name, "script": script}
         payload.update(extra)
@@ -138,19 +86,6 @@ class Conn:
 
     def find(self, doc_id, coll=COLL, db=DB) -> dict:
         return self.send({"type": "FIND_BY_ID", "databaseName": db, "collectionName": coll, "_id": doc_id})
-
-    def close(self):
-        try:
-            self.s.close()
-        except OSError:
-            pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        self.close()
-
 
 def admin_conn() -> Conn:
     conn = Conn()
@@ -222,61 +157,6 @@ def write_config(work_dir: str, scripts_enabled: bool, schedules_enabled: bool):
     )
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write(cfg)
-
-
-def port_open() -> bool:
-    try:
-        with socket.create_connection((HOST, PORT), timeout=0.5):
-            return True
-    except OSError:
-        return False
-
-
-def start_server(work_dir: str, log_path: str):
-    jar = os.path.join(REPO_ROOT, JAR)
-    log = open(log_path, "ab")
-    proc = subprocess.Popen(["java", "-Xmx512m", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
-    deadline = time.time() + 60.0
-    while time.time() < deadline:
-        if port_open():
-            time.sleep(0.5)
-            return proc
-        if proc.poll() is not None:
-            break
-        time.sleep(0.2)
-    dump_log(log_path)
-    proc.kill()
-    raise RuntimeError("server did not come up in time")
-
-
-def stop_server(proc):
-    if proc is None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    deadline = time.time() + 30.0
-    while time.time() < deadline and port_open():
-        time.sleep(0.2)
-
-
-def read_log(log_path: str) -> str:
-    try:
-        with open(log_path, "rb") as fp:
-            return fp.read().decode(errors="replace")
-    except OSError:
-        return ""
-
-
-def dump_log(log_path: str):
-    try:
-        with open(log_path, "rb") as fp:
-            tail = fp.read()[-4000:].decode(errors="replace")
-        print(f"--- server log tail ---\n{tail}\n--- end ---", file=sys.stderr)
-    except OSError:
-        pass
 
 
 # ── fixtures ─────────────────────────────────────────────────────────────────
@@ -425,7 +305,7 @@ def test_failure_logs_a_stack(conn: Conn, log_path: str):
     check("the failure is counted", schedule_failures(conn) > before, f"failures did not increase from {before}")
 
     # Nobody is waiting on a response, so the server log is where the trace has to appear
-    log = read_log(log_path)
+    log = bu.read_log(log_path)
     line = next((entry for entry in log.splitlines()
                  if "SCHEDULE name=exploder" in entry and "schedule blew up" in entry), "")
     check("the scheduled run's failure line carries a stack", "stack=[" in line, f"line={line!r}")
@@ -618,15 +498,16 @@ def test_switch_off(conn: Conn):
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
-def main() -> int:
-    global failures
+def main():
+    bu.banner("Scheduled procedures test suite")
+
     jar = os.path.join(REPO_ROOT, JAR)
     if not os.path.isfile(jar):
         print(f"jar not found at {jar}; run `mvn clean package -DskipTests` first", file=sys.stderr)
-        return 1
-    if port_open():
+        sys.exit(1)
+    if bu.port_open():
         print(f"port {PORT} is already in use", file=sys.stderr)
-        return 1
+        sys.exit(1)
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-schedule-test-")
     log_path = os.path.join(work_dir, "server.out")
@@ -634,7 +515,7 @@ def main() -> int:
     try:
         print(f"work dir: {work_dir}")
         write_config(work_dir, scripts_enabled=True, schedules_enabled=True)
-        proc = start_server(work_dir, log_path)
+        proc = bu.start_server(work_dir, log_path)
 
         with admin_conn() as conn:
             setup_data(conn)
@@ -653,28 +534,21 @@ def main() -> int:
             test_cascade_delete(conn, work_dir)
 
         # Phase 2: same data directory, the master switch off
-        stop_server(proc)
+        bu.stop_server(proc)
         proc = None
         write_config(work_dir, scripts_enabled=True, schedules_enabled=False)
-        proc = start_server(work_dir, log_path)
+        proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_switch_off(conn)
     except Exception as exc:  # noqa: BLE001 - the suite reports rather than propagates
         print(f"\nunexpected failure: {exc}", file=sys.stderr)
-        dump_log(log_path)
-        failures += 1
+        bu.dump_log(log_path)
+        bu.record_failure()
     finally:
-        stop_server(proc)
+        bu.stop_server(proc)
 
-    print(f"\n{'═' * 70}")
-    if failures:
-        print(f"  {failures} check(s) failed")
-        dump_log(log_path)
-    else:
-        print("  all checks passed")
-    print(f"{'═' * 70}")
-    return 1 if failures else 0
+    bu.summary(on_failure=lambda: bu.dump_log(log_path))
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    main()
