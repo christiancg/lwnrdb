@@ -198,12 +198,18 @@ def cancel_script(port, run_id) -> dict:
     return op(port, {"type": "CANCEL_SCRIPT", "runId": run_id})
 
 
-def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.0):
+def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.0,
+                    min_rounds: int = 3):
     """Repeat attempt(round) until at least one of its runs was forwarded, or time runs out.
 
     Absorbs both the placement randomness (two random samples per run) and the gossip lag right
     after a DDL: a peer is skipped until it reports an admin epoch at least as high as this node's,
     which takes up to one gossipIntervalMs to propagate.
+
+    min_rounds is what makes that meaningful on a loaded runner. Placement is sampled per round, so
+    a single round proves nothing about randomness; when one attempt happens to outlast the whole
+    wall-clock budget, a purely time-bounded loop would give up after that one sample and report a
+    placement failure that never had a second chance.
     """
     deadline = time.time() + timeout_s
     round_no = 0
@@ -212,9 +218,30 @@ def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.
         results = attempt(round_no)
         delta = script_stats(port).get("forwarded", 0) - before
         round_no += 1
-        if delta > 0 or time.time() >= deadline:
+        if delta > 0 or (round_no >= min_rounds and time.time() >= deadline):
             return results, delta
         time.sleep(0.3)
+
+
+def wait_until_forwarding_is_live(port, timeout_s: float = 60.0) -> bool:
+    """Block until a run submitted to `port` is actually forwarded to some peer.
+
+    ScriptPlacement.eligibleMembers() skips any peer whose gossiped admin epoch trails this
+    node's, so for up to a gossip round after a DDL every peer is ineligible and every run stays
+    local. A test that needs to observe forwarding has to wait that out first, or it measures the
+    epoch lag instead of the behaviour it is asserting.
+    """
+    conn = authed(port)
+    try:
+        def _forwards_at_least_once():
+            before = script_stats(port).get("forwarded", 0)
+            for _ in range(15):
+                run_script(None, "return 1 + 1;", conn=conn)
+            return script_stats(port).get("forwarded", 0) > before
+
+        return wait_until(_forwards_at_least_once, timeout_s=timeout_s, interval_s=0.5)
+    finally:
+        conn.close()
 
 
 def until_locality_preferred(port, attempt: Callable[[int], list], timeout_s: float = 25.0):
@@ -871,16 +898,26 @@ def test_long_forwarded_script_is_not_cut_off():
     # waiting only the ack timeout would answer 503-4 while the target was still running. Placement
     # is random (two samples), so the runs are fired as a concurrent burst and the burst is retried
     # until at least one of them was actually forwarded.
+    #
+    # Driven from node-1: that "random two samples" only holds on the load-only node. node-0 runs
+    # scriptLocalityWeight=100, where the blend follows collection ownership, so a burst there can
+    # legitimately stay local for every round and the forward this test needs never happens.
+    driver = nodes[1].client_port
     script = 'export default new Promise(r => setTimeout(() => r("slept"), 6000));'
 
     def _batch(_round):
-        out = burst(nodes[0].client_port, script, 9)
+        out = burst(driver, script, 9)
         check("every long script returned its result",
                    all(r.get("status") == "OK" and r.get("result") == "slept" for r in out),
                    detail=f"responses={[(r.get('status'), r.get('result'), r.get('message')) for r in out][:3]}")
         return out
 
-    _, forwarded = until_forwarded(nodes[0].client_port, _batch, timeout_s=30.0)
+    # Wait out the admin-epoch lag on cheap runs first. until_forwarded's rounds cost 6s each here,
+    # so a cold start burns most of its budget proving nothing about the long-script path.
+    check("forwarding is live before the long runs",
+               wait_until_forwarding_is_live(driver, timeout_s=60.0))
+
+    _, forwarded = until_forwarded(driver, _batch, timeout_s=45.0)
     check("a long script outliving the ack timeout was forwarded and still answered",
                forwarded > 0, detail="no concurrent long run was forwarded")
 
@@ -962,36 +999,68 @@ def test_script_placement_falls_back_when_the_target_dies():
     section("Script node selection — an unreachable target falls back to local execution")
 
     victim = nodes[2]
+    # Driven from node-1, not node-0: node-0 runs scriptLocalityWeight=100, so its placement follows
+    # collection ownership and only reaches node-2 when node-2 happens to own part of DB. node-1 is
+    # the load-only node, which makes every peer a fair candidate and the crash below observable.
+    driver = nodes[1].client_port
+
+    # Precondition, not decoration: a peer is skipped until its gossiped admin epoch catches up with
+    # the driver's, so straight after the preceding tests' DDL every peer is ineligible and every run
+    # stays local. Killing node-2 in that state produces no failed forward to count, however long we
+    # wait. Gate on forwarding being live rather than on catching node-2 in the listing: which peer a
+    # given run lands on is random, and a 2s run is easy to miss between two polls.
+    check("forwarding is live before the crash",
+               wait_until_forwarding_is_live(driver, timeout_s=60.0))
+
+    # Drive the runs from a background thread that is already going when the process dies. Starting
+    # the loop after kill() loses the race: the driver can drop node-2 from the placement set before
+    # the first run is even issued, and then every run is legitimately local.
+    stop = threading.Event()
+    statuses = set()
+
+    def hammer():
+        conn = authed(driver)
+        try:
+            while not stop.is_set():
+                statuses.add(run_script(None, "return 1 + 1;", conn=conn).get("status"))
+                # Throttled on purpose: the point is only to keep runs flowing across the crash, and
+                # a flat-out loop over the whole window below buries a 512m node under thousands of
+                # runs and OOMs it. ~20/s is more than enough to catch the placement.
+                stop.wait(0.05)
+        finally:
+            conn.close()
+
+    before = script_stats(driver).get("forwardFallbacks", 0)
+    worker = threading.Thread(target=hammer, daemon=True)
+    worker.start()
+    time.sleep(0.5)
     print(f"  Killing node-{victim.index} (hard crash) ...")
     victim.kill()
 
-    before = script_stats(nodes[0].client_port)
-    deadline = time.time() + 8.0
-    statuses = set()
-    fallbacks = 0
-    conn = authed(nodes[0].client_port)
-    try:
-        while time.time() < deadline:
-            statuses.add(run_script(None, "return 1 + 1;", conn=conn).get("status"))
-            fallbacks = script_stats(nodes[0].client_port).get("forwardFallbacks", 0) \
-                - before.get("forwardFallbacks", 0)
-            if fallbacks > 0:
-                break
-    finally:
-        conn.close()
+    # Generous: a forward that dies mid-request can wait out scriptTimeoutMs + replicationAckTimeoutMs
+    # before it throws, and only then is the fallback recorded.
+    fell_back = wait_until(
+        lambda: script_stats(driver).get("forwardFallbacks", 0) > before,
+        timeout_s=35.0)
+    stop.set()
+    worker.join(60.0)
+    fallbacks = script_stats(driver).get("forwardFallbacks", 0) - before
 
     check("scripts keep succeeding while a placement target is down", statuses == {"OK"},
                detail=f"statuses={sorted(statuses)}")
-    check("a failed forward is counted and the run stays local", fallbacks > 0,
+    check("a failed forward is counted and the run stays local", fell_back,
                detail=f"forwardFallbacks delta={fallbacks}")
 
-    # Whatever the timing, the calls after the node is declared dead must all succeed.
+    # Whatever the timing, the calls after the node is declared dead must all succeed. Checked on
+    # node-0, which has not been driving traffic and so has yet to discover the crash: its first
+    # forward to node-2 can burn the whole scriptTimeoutMs + replicationAckTimeoutMs budget before
+    # falling back, so the window has to be wide enough for one such stall plus a retry.
     def _all_ok():
         return all(run_script(nodes[0].client_port, "return 1 + 1;").get("status") == "OK"
                    for _ in range(5))
 
     check("scripts still succeed once the dead node leaves the view",
-               wait_until(_all_ok, timeout_s=20.0, interval_s=1.0))
+               wait_until(_all_ok, timeout_s=120.0, interval_s=1.0))
 
     print(f"  Restarting node-{victim.index} ...")
     victim.start()
