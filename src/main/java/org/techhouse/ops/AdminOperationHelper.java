@@ -221,23 +221,36 @@ public final class AdminOperationHelper {
         }
     }
 
+    // Insert-or-update by primary key. The caller owns the lock, because saveCollectionEntry must hold
+    // the databases lock as well and lock policy differs per collection.
+    private static PkIndexEntry writeAdminEntry(String collName, DbEntry entry, PkIndexEntry existingPk)
+            throws IOException, InterruptedException {
+        if (existingPk != null) {
+            entry.setPage(existingPk.getPage());
+            final var updateResult = fs.updateFromCollection(entry, existingPk);
+            cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
+            return updateResult.indexEntry();
+        }
+        entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, collName, entry.byteSize()));
+        final var pk = fs.insertIntoCollection(entry);
+        baseUpdateEntryCount(Globals.ADMIN_DB_NAME, collName, EventType.CREATED, List.of(entry), false);
+        return pk;
+    }
+
+    // Removes an admin entry's row and fixes the surviving in-memory PK positions. The caller owns the
+    // lock and the cache eviction, which differ per collection.
+    private static void eraseAdminEntry(String collName, DbEntry entry, PkIndexEntry pk)
+            throws IOException, InterruptedException {
+        entry.setPreviousByteSize(pk.getLength());
+        cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(pk));
+        baseUpdateEntryCount(Globals.ADMIN_DB_NAME, collName, EventType.DELETED, List.of(entry), false);
+    }
+
     public static void saveDatabaseEntry(AdminDbEntry dbEntry) throws IOException, InterruptedException {
         lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         try {
-            var adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbEntry.get_id());
-            PkIndexEntry adminDbEntry;
-            if (adminIndexPkDbEntry != null) {
-                dbEntry.setPage(adminIndexPkDbEntry.getPage());
-                final var updateResult = fs.updateFromCollection(dbEntry, adminIndexPkDbEntry);
-                adminDbEntry = updateResult.indexEntry();
-                cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
-            } else {
-                dbEntry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME,
-                        Globals.ADMIN_DATABASES_COLLECTION_NAME, dbEntry.byteSize()));
-                adminDbEntry = fs.insertIntoCollection(dbEntry);
-                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, EventType.CREATED,
-                        List.of(dbEntry), false);
-            }
+            final var adminDbEntry = writeAdminEntry(Globals.ADMIN_DATABASES_COLLECTION_NAME, dbEntry,
+                    cache.getPkIndexAdminDbEntry(dbEntry.get_id()));
             cache.putAdminDbEntry(dbEntry, adminDbEntry);
         } finally {
             releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
@@ -250,22 +263,14 @@ public final class AdminOperationHelper {
             lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
             try {
                 final var adminDbEntry = cache.getAdminDbEntry(dbName);
-                // we need to create a new list to avoid concurrent modification exception
-                //      as the array is also being modified inside the method deleteCollectionEntry
-                final var collections = new ArrayList<>(adminDbEntry.getCollections());
-                for (var collection : collections) {
+                final var collectionsSnapshot = new ArrayList<>(adminDbEntry.getCollections());
+                for (var collection : collectionsSnapshot) {
                     deleteCollectionEntry(dbName, collection);
                     deletePageCollections(dbName, collection);
                 }
-                // we need to reload this variable as the removal of collections
-                //      will change the database entry
-                adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbName);
-                adminDbEntry.setPreviousByteSize(adminIndexPkDbEntry.getLength());
-                final var compaction = fs.deleteFromCollection(adminIndexPkDbEntry);
-                cache.shiftPkPositionsAfterCompaction(compaction);
+                final var pkAfterCollectionRemoval = cache.getPkIndexAdminDbEntry(dbName);
+                eraseAdminEntry(Globals.ADMIN_DATABASES_COLLECTION_NAME, adminDbEntry, pkAfterCollectionRemoval);
                 cache.removeAdminDbEntry(dbName);
-                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, EventType.DELETED,
-                        List.of(adminDbEntry), false);
             } finally {
                 releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
             }
@@ -301,20 +306,8 @@ public final class AdminOperationHelper {
         lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         try {
-            var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(dbEntry.get_id());
-            PkIndexEntry pkIndexEntry;
-            if (adminIndexPkCollEntry != null) {
-                dbEntry.setPage(adminIndexPkCollEntry.getPage());
-                final var updateResult = fs.updateFromCollection(dbEntry, adminIndexPkCollEntry);
-                pkIndexEntry = updateResult.indexEntry();
-                cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
-            } else {
-                dbEntry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME,
-                        Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, dbEntry.byteSize()));
-                pkIndexEntry = fs.insertIntoCollection(dbEntry);
-                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
-                        EventType.CREATED, List.of(dbEntry), false);
-            }
+            final var pkIndexEntry = writeAdminEntry(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, dbEntry,
+                    cache.getPkIndexAdminCollEntry(dbEntry.get_id()));
             cache.putAdminCollectionEntry(dbEntry, pkIndexEntry);
             final var split = dbEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
             final var adminDbEntry = cache.getAdminDbEntry(split[0]);
@@ -416,20 +409,8 @@ public final class AdminOperationHelper {
     public static void saveUserEntry(AdminUserEntry userEntry) throws IOException, InterruptedException {
         lockAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
         try {
-            var adminIndexPkUserEntry = cache.getPkIndexAdminUserEntry(userEntry.get_id());
-            PkIndexEntry adminUserEntry;
-            if (adminIndexPkUserEntry != null) {
-                userEntry.setPage(adminIndexPkUserEntry.getPage());
-                final var updateResult = fs.updateFromCollection(userEntry, adminIndexPkUserEntry);
-                adminUserEntry = updateResult.indexEntry();
-                cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
-            } else {
-                userEntry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
-                        userEntry.byteSize()));
-                adminUserEntry = fs.insertIntoCollection(userEntry);
-                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME, EventType.CREATED,
-                        List.of(userEntry), false);
-            }
+            final var adminUserEntry = writeAdminEntry(Globals.ADMIN_USERS_COLLECTION_NAME, userEntry,
+                    cache.getPkIndexAdminUserEntry(userEntry.get_id()));
             cache.putAdminUserEntry(userEntry, adminUserEntry);
         } finally {
             releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
@@ -568,13 +549,9 @@ public final class AdminOperationHelper {
         if (adminIndexPkUserEntry != null) {
             lockAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
             try {
-                final var adminUserEntry = cache.getAdminUserEntry(username);
-                adminUserEntry.setPreviousByteSize(adminIndexPkUserEntry.getLength());
-                final var compaction = fs.deleteFromCollection(adminIndexPkUserEntry);
-                cache.shiftPkPositionsAfterCompaction(compaction);
+                eraseAdminEntry(Globals.ADMIN_USERS_COLLECTION_NAME, cache.getAdminUserEntry(username),
+                        adminIndexPkUserEntry);
                 cache.removeAdminUserEntry(username);
-                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME, EventType.DELETED,
-                        List.of(adminUserEntry), false);
             } finally {
                 releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
             }
