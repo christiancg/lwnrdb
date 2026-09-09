@@ -1,5 +1,8 @@
 package org.techhouse.data;
 
+import static org.techhouse.data.JsonFieldReader.longOrZero;
+import static org.techhouse.data.JsonFieldReader.stringOrNull;
+
 import java.util.Objects;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -81,20 +84,6 @@ public class ProcedureDefinition {
         final var json = toJsonObject();
         json.remove(SOURCE_FIELD);
         return json;
-    }
-
-    private static String stringOrNull(JsonObject object, String field) {
-        if (!object.has(field) || object.get(field).isJsonNull()) {
-            return null;
-        }
-        return object.get(field).asJsonString().getValue();
-    }
-
-    private static long longOrZero(JsonObject object, String field) {
-        if (!object.has(field) || object.get(field).isJsonNull()) {
-            return 0L;
-        }
-        return object.get(field).asJsonNumber().getValue().longValue();
     }
 
     public String getName() {

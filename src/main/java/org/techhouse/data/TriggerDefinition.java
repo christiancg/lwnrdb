@@ -1,5 +1,9 @@
 package org.techhouse.data;
 
+import static org.techhouse.data.JsonFieldReader.booleanOrDefault;
+import static org.techhouse.data.JsonFieldReader.longOrZero;
+import static org.techhouse.data.JsonFieldReader.stringOrNull;
+
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -152,27 +156,6 @@ public class TriggerDefinition {
         final var array = new JsonArray();
         definitions.forEach(definition -> array.add(definition.toJsonObject()));
         return array;
-    }
-
-    private static String stringOrNull(JsonObject object, String field) {
-        if (!object.has(field) || object.get(field).isJsonNull()) {
-            return null;
-        }
-        return object.get(field).asJsonString().getValue();
-    }
-
-    private static boolean booleanOrDefault(JsonObject object, String field, boolean fallback) {
-        if (!object.has(field) || object.get(field).isJsonNull()) {
-            return fallback;
-        }
-        return object.get(field).asJsonBoolean().getValue();
-    }
-
-    private static long longOrZero(JsonObject object, String field) {
-        if (!object.has(field) || object.get(field).isJsonNull()) {
-            return 0L;
-        }
-        return object.get(field).asJsonNumber().getValue().longValue();
     }
 
     public String getName() {

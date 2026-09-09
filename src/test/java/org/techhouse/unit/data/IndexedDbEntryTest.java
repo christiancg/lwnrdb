@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
+import org.techhouse.data.JsonDocumentEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -140,11 +141,9 @@ public class IndexedDbEntryTest {
         assertEquals(pkIndexEntry, indexedDbEntry.getIndex());
     }
 
-    // Handles null _id in IndexedDbEntry
     @Test
     public void test_e_json_is_not_null() throws NoSuchFieldException, IllegalAccessException {
-        IndexedDbEntry indexedDbEntry = new IndexedDbEntry();
-        final var eJson = TestUtils.getPrivateField(indexedDbEntry, "eJson", EJson.class);
+        final var eJson = TestUtils.getPrivateStaticField(JsonDocumentEntry.class, "eJson", EJson.class);
         assertNotNull(eJson);
     }
 

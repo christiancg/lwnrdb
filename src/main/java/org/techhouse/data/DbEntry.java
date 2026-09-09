@@ -2,22 +2,11 @@ package org.techhouse.data;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
-import java.util.UUID;
 import org.techhouse.config.Globals;
-import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ioc.IocContainer;
 
-public class DbEntry {
-    private static final EJson eJson = IocContainer.get(EJson.class);
-    private String _id;
-    private String databaseName;
-    private String collectionName;
-    private JsonObject data;
+public class DbEntry extends JsonDocumentEntry {
     private long page;
-    // Pre-update byte size for the corresponding file entry. Only set for updates,
-    // so that page-size accounting can compute the size delta after an update.
-    private long previousByteSize;
     // Last-write-wins version (epoch millis), assigned by the coordinating owner and persisted in the PK
     // index. Not part of the document data or of equality; threaded through the write path for replication
     // and anti-entropy.
@@ -43,51 +32,11 @@ public class DbEntry {
         return entry;
     }
 
-    public String toFileEntry() {
-        if (_id == null) {
-            _id = UUID.randomUUID().toString();
-        }
-        data.addProperty(Globals.PK_FIELD, _id);
-        return eJson.toJson(data);
-    }
-
     public int byteSize() {
         if (data == null) {
             return 0;
         }
         return (toFileEntry() + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8).length;
-    }
-
-    public String get_id() {
-        return _id;
-    }
-
-    public void set_id(String _id) {
-        this._id = _id;
-    }
-
-    public String getDatabaseName() {
-        return databaseName;
-    }
-
-    public void setDatabaseName(String databaseName) {
-        this.databaseName = databaseName;
-    }
-
-    public String getCollectionName() {
-        return collectionName;
-    }
-
-    public void setCollectionName(String collectionName) {
-        this.collectionName = collectionName;
-    }
-
-    public JsonObject getData() {
-        return data;
-    }
-
-    public void setData(JsonObject data) {
-        this.data = data;
     }
 
     public long getPage() {
@@ -96,14 +45,6 @@ public class DbEntry {
 
     public void setPage(long page) {
         this.page = page;
-    }
-
-    public long getPreviousByteSize() {
-        return previousByteSize;
-    }
-
-    public void setPreviousByteSize(long previousByteSize) {
-        this.previousByteSize = previousByteSize;
     }
 
     public long getVersion() {
