@@ -20,11 +20,11 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
-// Protocol-level tests for the test262 worker, driven against test_utils/test262_fixtures/ so they
+// Protocol-level tests for the test262 worker, driven against test_utils/test262/fixtures/ so they
 // exercise the same job/result shape the Python driver uses.
 public class Test262WorkerTest {
-    private static final Path FIXTURES = Path.of("test_utils", "test262_fixtures");
-    private static final Path SHIMS = Path.of("test_utils", "test262_shims");
+    private static final Path FIXTURES = Path.of("test_utils", "test262", "fixtures");
+    private static final Path SHIMS = Path.of("test_utils", "test262", "shims");
 
     private final EJson eJson = new EJson();
 
