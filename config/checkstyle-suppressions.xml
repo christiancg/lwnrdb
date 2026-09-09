@@ -18,6 +18,5 @@
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]TransactionOperationHelper\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]OperationProcessor\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]AdminOperationHelper\.java" checks="FileLength"/>
-    <suppress files="org[\\/]techhouse[\\/]ops[\\/]FilterOperatorHelper\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]cluster[\\/]AdminAntiEntropyService\.java" checks="FileLength"/>
 </suppressions>

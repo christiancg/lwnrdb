@@ -7,7 +7,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.function.BiPredicate;
@@ -27,6 +26,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.filter.FieldPredicateFactory;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
@@ -123,7 +123,7 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> processFieldOperator(FieldOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName) throws IOException {
 
-        final var tester = getTester(operator, operator.getFieldOperatorType());
+        final var tester = FieldPredicateFactory.getTester(operator, operator.getFieldOperatorType());
         return internalBaseFiltering(tester, operator, resultStream, dbName, collName);
     }
 
@@ -292,105 +292,8 @@ public class FilterOperatorHelper {
     private record ScoredDocument(JsonObject document, double score) {
     }
 
-    @SuppressWarnings("unchecked")
-    private static Integer compareCustom(JsonCustom<?> operator, JsonCustom<?> toTestWith) {
-        final var customClass = operator.getClass();
-        // The following line throws a warning but should be fine as we are checking that it is the same class
-        return customClass.cast(operator).compare(customClass.cast(toTestWith).getCustomValue());
-    }
-
     public static BiPredicate<JsonObject, String> getTester(FieldOperator operator, FieldOperatorType operation) {
-        return (JsonObject toTest, String fieldName) -> {
-            final var operatorElement = operator.getValue();
-            if (JsonUtils.hasInPath(toTest, fieldName)) {
-                final var toTestElement = JsonUtils.getFromPath(toTest, fieldName);
-                if (operatorElement.isJsonPrimitive()) {
-                    if (toTestElement.isJsonPrimitive()) {
-                        final var operatorPrimitive = operatorElement.asJsonPrimitive();
-                        final var toTestPrimitive = toTestElement.asJsonPrimitive();
-                        if (operatorPrimitive.isJsonBoolean() && toTestPrimitive.isJsonBoolean()) {
-                            if (operation == FieldOperatorType.EQUALS) {
-                                return operatorPrimitive.asJsonBoolean().getValue() == toTestPrimitive.asJsonBoolean()
-                                        .getValue();
-                            } else if (operation == FieldOperatorType.NOT_EQUALS) {
-                                return operatorPrimitive.asJsonBoolean().getValue() != toTestPrimitive.asJsonBoolean()
-                                        .getValue();
-                            }
-                            return false;
-                        } else if (operatorPrimitive.isJsonNumber() && toTestPrimitive.isJsonNumber()) {
-                            final var operatorDouble = operatorElement.asJsonNumber().getValue();
-                            final var toTestDouble = toTestElement.asJsonNumber().getValue();
-                            return switch (operation) {
-                                case EQUALS -> Objects.equals(operatorDouble, toTestDouble);
-                                case NOT_EQUALS -> !Objects.equals(operatorDouble, toTestDouble);
-                                case GREATER_THAN -> operatorDouble.doubleValue() < toTestDouble.doubleValue();
-                                case GREATER_THAN_EQUALS -> operatorDouble.doubleValue() <= toTestDouble.doubleValue();
-                                case SMALLER_THAN -> operatorDouble.doubleValue() > toTestDouble.doubleValue();
-                                case SMALLER_THAN_EQUALS -> operatorDouble.doubleValue() >= toTestDouble.doubleValue();
-                                case IN, NOT_IN, CONTAINS -> false;
-                            };
-                        } else if (operatorPrimitive.isJsonCustom() && toTestPrimitive.isJsonCustom()
-                                && operatorPrimitive.getClass().equals(toTestPrimitive.getClass())) {
-                            final var operatorCustom = operatorPrimitive.asJsonCustom();
-                            final var toTestCustom = toTestPrimitive.asJsonCustom();
-                            return switch (operation) {
-                                case EQUALS -> compareCustom(operatorCustom, toTestCustom) == 0;
-                                case NOT_EQUALS -> compareCustom(operatorCustom, toTestCustom) != 0;
-                                case GREATER_THAN -> compareCustom(operatorCustom, toTestCustom) < 0;
-                                case GREATER_THAN_EQUALS -> compareCustom(operatorCustom, toTestCustom) <= 0;
-                                case SMALLER_THAN -> compareCustom(operatorCustom, toTestCustom) > 0;
-                                case SMALLER_THAN_EQUALS -> compareCustom(operatorCustom, toTestCustom) >= 0;
-                                case IN, NOT_IN, CONTAINS -> false;
-                            };
-                        } else if (!operatorPrimitive.isJsonCustom() && !toTestPrimitive.isJsonCustom()
-                                && operatorPrimitive.isJsonString() && toTestPrimitive.isJsonString()) {
-                            final var operatorString = operatorElement.asJsonString().getValue();
-                            final var toTestString = toTestElement.asJsonString().getValue();
-                            return switch (operation) {
-                                case EQUALS -> operatorString.equalsIgnoreCase(toTestString);
-                                case NOT_EQUALS -> !operatorString.equalsIgnoreCase(toTestString);
-                                case CONTAINS -> toTestString.contains(operatorString);
-                                case GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN ->
-                                    false;
-                            };
-                        } else {
-                            return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
-                        }
-                    } else if (operation == FieldOperatorType.CONTAINS && toTestElement.isJsonArray()) {
-                        // CONTAINS on an array field: does the array contain the primitive query value?
-                        // (e.g. ownedDatabases CONTAINS "mydb"). Uses element equality, like IN.
-                        return toTestElement.asJsonArray().contains(operatorElement);
-                    }
-                } else if (operatorElement.isJsonArray()) {
-                    if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {
-                        if (toTestElement != null && toTestElement.isJsonArray()) {
-                            final var equal = operatorElement.asJsonArray().equals(toTestElement.asJsonArray());
-                            return (operation == FieldOperatorType.EQUALS) == equal;
-                        }
-                        return false;
-                    }
-                    // IN / NOT_IN: membership of the field value in the candidate list. JsonArray.contains
-                    // uses element equality, so this also matches object/array field values against a list
-                    // of candidate objects/arrays (mirroring the index path's element-match resolution).
-                    if ((operation == FieldOperatorType.IN || operation == FieldOperatorType.NOT_IN)
-                            && toTestElement != null && !toTestElement.isJsonNull()) {
-                        final var jsonArray = operatorElement.asJsonArray();
-                        final var result = jsonArray.contains(toTestElement);
-                        return (operation == FieldOperatorType.IN) == result;
-                    }
-                } else if (operatorElement.isJsonObject()) {
-                    if ((operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS)
-                            && toTestElement != null && toTestElement.isJsonObject()) {
-                        final var equal = operatorElement.asJsonObject().equals(toTestElement.asJsonObject());
-                        return (operation == FieldOperatorType.EQUALS) == equal;
-                    }
-                    return false;
-                } else if (operatorElement.isJsonNull()) {
-                    return toTestElement.isJsonNull();
-                }
-            }
-            return false;
-        };
+        return FieldPredicateFactory.getTester(operator, operation);
     }
 
     private static Stream<JsonObject> internalBaseFiltering(BiPredicate<JsonObject, String> test,
@@ -495,7 +398,7 @@ public class FilterOperatorHelper {
         final var fieldName = operator.getField();
         final var corrected = new HashSet<>(raw);
         corrected.removeAll(pendingIds);
-        final var tester = getTester(operator, operator.getFieldOperatorType());
+        final var tester = FieldPredicateFactory.getTester(operator, operator.getFieldOperatorType());
         for (var dbEntry : cache.getEntriesByIds(dbName, collName, pendingIds)) {
             if (tester.test(dbEntry.getData(), fieldName)) {
                 corrected.add(dbEntry.get_id());
