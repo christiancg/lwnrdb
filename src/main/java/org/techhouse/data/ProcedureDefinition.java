@@ -1,6 +1,5 @@
 package org.techhouse.data;
 
-import static org.techhouse.data.JsonFieldReader.longOrZero;
 import static org.techhouse.data.JsonFieldReader.stringOrNull;
 
 import java.util.Objects;
@@ -10,26 +9,14 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.utils.JsonUtils;
 
-public class ProcedureDefinition {
-    private static final String NAME_FIELD = "name";
+public class ProcedureDefinition extends StoredDefinition {
     private static final String SOURCE_FIELD = "source";
     private static final String SOURCE_HASH_FIELD = "sourceHash";
-    private static final String VERSION_FIELD = "version";
     private static final String DESCRIPTION_FIELD = "description";
-    private static final String ENABLED_FIELD = "enabled";
-    private static final String CREATED_AT_FIELD = "createdAt";
-    private static final String UPDATED_AT_FIELD = "updatedAt";
-    private static final String UPDATED_BY_FIELD = "updatedBy";
 
-    private String name;
     private String source;
     private String sourceHash;
-    private long version;
     private String description;
-    private boolean enabled;
-    private long createdAt;
-    private long updatedAt;
-    private String updatedBy;
 
     public ProcedureDefinition() {
     }
@@ -49,16 +36,10 @@ public class ProcedureDefinition {
 
     public static ProcedureDefinition fromJsonObject(JsonObject object) {
         final var result = new ProcedureDefinition();
-        result.name = stringOrNull(object, NAME_FIELD);
+        result.readCommonFields(object);
         result.source = stringOrNull(object, SOURCE_FIELD);
         result.sourceHash = stringOrNull(object, SOURCE_HASH_FIELD);
-        result.version = longOrZero(object, VERSION_FIELD);
         result.description = stringOrNull(object, DESCRIPTION_FIELD);
-        result.enabled = !object.has(ENABLED_FIELD) || object.get(ENABLED_FIELD).isJsonNull()
-                || object.get(ENABLED_FIELD).asJsonBoolean().getValue();
-        result.createdAt = longOrZero(object, CREATED_AT_FIELD);
-        result.updatedAt = longOrZero(object, UPDATED_AT_FIELD);
-        result.updatedBy = stringOrNull(object, UPDATED_BY_FIELD);
         return result;
     }
 
@@ -72,11 +53,7 @@ public class ProcedureDefinition {
             json.add(DESCRIPTION_FIELD, new JsonString(description));
         }
         json.add(ENABLED_FIELD, new JsonBoolean(enabled));
-        json.add(CREATED_AT_FIELD, new JsonNumber(createdAt));
-        json.add(UPDATED_AT_FIELD, new JsonNumber(updatedAt));
-        if (updatedBy != null) {
-            json.add(UPDATED_BY_FIELD, new JsonString(updatedBy));
-        }
+        writeAuditFields(json);
         return json;
     }
 
@@ -84,10 +61,6 @@ public class ProcedureDefinition {
         final var json = toJsonObject();
         json.remove(SOURCE_FIELD);
         return json;
-    }
-
-    public String getName() {
-        return name;
     }
 
     public String getSource() {
@@ -98,28 +71,8 @@ public class ProcedureDefinition {
         return sourceHash;
     }
 
-    public long getVersion() {
-        return version;
-    }
-
     public String getDescription() {
         return description;
-    }
-
-    public boolean isEnabled() {
-        return enabled;
-    }
-
-    public long getCreatedAt() {
-        return createdAt;
-    }
-
-    public long getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public String getUpdatedBy() {
-        return updatedBy;
     }
 
     @Override

@@ -177,7 +177,7 @@ public class AggregationStepValidator {
         if (step.getJoinCollection() == null || step.getJoinCollection().isBlank()) {
             return ValidationResult.fail("JOIN step requires a non-blank joinCollection");
         }
-        if (!step.getJoinCollection().matches(RequestValidator.NAME_PATTERN)) {
+        if (!step.getJoinCollection().matches(NameValidations.NAME_PATTERN)) {
             return ValidationResult
                     .fail("JOIN joinCollection name must be 3-64 alphanumeric characters, underscores, or hyphens");
         }

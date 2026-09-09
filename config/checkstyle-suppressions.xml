@@ -19,7 +19,6 @@
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]TransactionOperationHelper\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]OperationProcessor\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]AdminOperationHelper\.java" checks="FileLength"/>
-    <suppress files="org[\\/]techhouse[\\/]ops[\\/]req[\\/]validations[\\/]RequestValidator\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]IndexHelper\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]cache[\\/]AdminCache\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]cache[\\/]UserCache\.java" checks="FileLength"/>
