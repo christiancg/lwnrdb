@@ -24,6 +24,7 @@ import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.admin.AdminRecordStore;
 
 public final class AdminOperationHelper {
     private AdminOperationHelper() {
@@ -33,20 +34,22 @@ public final class AdminOperationHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
 
-    private static void lockAdminCollectionsCollection() throws InterruptedException {
-        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+    private static final AdminRecordStore<AdminTransactionEntry> TRANSACTION_OPS = new AdminRecordStore<>(
+            Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, "transaction op", cache::getPkIndexTransaction,
+            cache::removePkIndexTransaction, AdminTransactionEntry::fromJsonObject,
+            (dbName, collName, type, entries) -> baseUpdateEntryCount(dbName, collName, type, entries, false));
+
+    private static final AdminRecordStore<AdminTriggerRunEntry> TRIGGER_RUNS = new AdminRecordStore<>(
+            Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, "trigger run", cache::getPkIndexTriggerRun,
+            cache::removePkIndexTriggerRun, AdminTriggerRunEntry::fromJsonObject,
+            (dbName, collName, type, entries) -> baseUpdateEntryCount(dbName, collName, type, entries, false));
+
+    private static void lockAdmin(String collName) throws InterruptedException {
+        locks.lock(Globals.ADMIN_DB_NAME, collName);
     }
 
-    private static void releaseAdminCollectionsCollection() {
-        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-    }
-
-    private static void lockAdminDatabaseCollection() throws InterruptedException {
-        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
-    }
-
-    private static void releaseAdminDatabaseCollection() {
-        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
+    private static void releaseAdmin(String collName) {
+        locks.release(Globals.ADMIN_DB_NAME, collName);
     }
 
     private static void lockAdminPageCollection(String dbName, String collName) throws InterruptedException {
@@ -219,7 +222,7 @@ public final class AdminOperationHelper {
     }
 
     public static void saveDatabaseEntry(AdminDbEntry dbEntry) throws IOException, InterruptedException {
-        lockAdminDatabaseCollection();
+        lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         try {
             var adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbEntry.get_id());
             PkIndexEntry adminDbEntry;
@@ -237,14 +240,14 @@ public final class AdminOperationHelper {
             }
             cache.putAdminDbEntry(dbEntry, adminDbEntry);
         } finally {
-            releaseAdminDatabaseCollection();
+            releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         }
     }
 
     public static void deleteDatabaseEntry(String dbName) throws IOException, InterruptedException {
         var adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbName);
         if (adminIndexPkDbEntry != null) {
-            lockAdminDatabaseCollection();
+            lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
             try {
                 final var adminDbEntry = cache.getAdminDbEntry(dbName);
                 // we need to create a new list to avoid concurrent modification exception
@@ -264,7 +267,7 @@ public final class AdminOperationHelper {
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, EventType.DELETED,
                         List.of(adminDbEntry), false);
             } finally {
-                releaseAdminDatabaseCollection();
+                releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
             }
         }
     }
@@ -295,8 +298,8 @@ public final class AdminOperationHelper {
         // admin/databases collection, so it must hold the databases lock too — otherwise it races a
         // concurrent saveDatabaseEntry/deleteDatabaseEntry that owns only that lock. Acquire databases
         // before collections to match deleteDatabaseEntry's lock order (reentrant, deadlock-safe).
-        lockAdminDatabaseCollection();
-        lockAdminCollectionsCollection();
+        lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         try {
             var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(dbEntry.get_id());
             PkIndexEntry pkIndexEntry;
@@ -327,8 +330,8 @@ public final class AdminOperationHelper {
             baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, EventType.UPDATED,
                     List.of(adminDbEntry), false);
         } finally {
-            releaseAdminCollectionsCollection();
-            releaseAdminDatabaseCollection();
+            releaseAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+            releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         }
     }
 
@@ -339,8 +342,8 @@ public final class AdminOperationHelper {
             // Also mutates the parent AdminDbEntry in admin/databases; hold the databases lock too,
             // acquired before collections to match deleteDatabaseEntry's order (reentrant when this
             // is called from deleteDatabaseEntry, which already holds the databases lock).
-            lockAdminDatabaseCollection();
-            lockAdminCollectionsCollection();
+            lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
+            lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             try {
                 final var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
                 adminCollEntry.setPreviousByteSize(adminIndexPkCollEntry.getLength());
@@ -361,8 +364,8 @@ public final class AdminOperationHelper {
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME, EventType.UPDATED,
                         List.of(adminDbEntry), false);
             } finally {
-                releaseAdminCollectionsCollection();
-                releaseAdminDatabaseCollection();
+                releaseAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+                releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
             }
         }
     }
@@ -386,7 +389,7 @@ public final class AdminOperationHelper {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
         if (adminIndexPkCollEntry != null) {
-            lockAdminCollectionsCollection();
+            lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             try {
                 var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
                 final var indexes = new HashSet<>(adminCollEntry.getIndexes());
@@ -405,21 +408,13 @@ public final class AdminOperationHelper {
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
                         EventType.UPDATED, List.of(adminCollEntry), false);
             } finally {
-                releaseAdminCollectionsCollection();
+                releaseAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             }
         }
     }
 
-    private static void lockAdminUsersCollection() throws InterruptedException {
-        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
-    }
-
-    private static void releaseAdminUsersCollection() {
-        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
-    }
-
     public static void saveUserEntry(AdminUserEntry userEntry) throws IOException, InterruptedException {
-        lockAdminUsersCollection();
+        lockAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
         try {
             var adminIndexPkUserEntry = cache.getPkIndexAdminUserEntry(userEntry.get_id());
             PkIndexEntry adminUserEntry;
@@ -437,16 +432,8 @@ public final class AdminOperationHelper {
             }
             cache.putAdminUserEntry(userEntry, adminUserEntry);
         } finally {
-            releaseAdminUsersCollection();
+            releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
         }
-    }
-
-    private static void lockAdminCollectionUsageCollection() throws InterruptedException {
-        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
-    }
-
-    private static void releaseAdminCollectionUsageCollection() {
-        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
     }
 
     public static void upsertCollectionUsage(CollectionUsageEvent event) throws IOException, InterruptedException {
@@ -462,7 +449,7 @@ public final class AdminOperationHelper {
         if (counter == null) {
             return;
         }
-        lockAdminCollectionUsageCollection();
+        lockAdmin(Globals.ADMIN_COLLECTION_USAGE_NAME);
         try {
             final var entryId = AdminCollectionUsageEntry.buildId(counter.dbName(), counter.collName(),
                     counter.indexKey());
@@ -487,13 +474,13 @@ public final class AdminOperationHelper {
             }
             cache.putPkIndexCollectionUsage(savedPk);
         } finally {
-            releaseAdminCollectionUsageCollection();
+            releaseAdmin(Globals.ADMIN_COLLECTION_USAGE_NAME);
         }
     }
 
     public static void cleanupCollectionUsage(long maxAgeMillis) throws IOException, InterruptedException {
         final var threshold = System.currentTimeMillis() - maxAgeMillis;
-        lockAdminCollectionUsageCollection();
+        lockAdmin(Globals.ADMIN_COLLECTION_USAGE_NAME);
         try {
             final var pkIndexes = new ArrayList<>(cache.getCollectionUsagePkIndexes().values());
             for (var pk : pkIndexes) {
@@ -520,22 +507,14 @@ public final class AdminOperationHelper {
                 }
             }
         } finally {
-            releaseAdminCollectionUsageCollection();
+            releaseAdmin(Globals.ADMIN_COLLECTION_USAGE_NAME);
         }
-    }
-
-    private static void lockAdminTransactionsCollection() throws InterruptedException {
-        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-    }
-
-    private static void releaseAdminTransactionsCollection() {
-        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
     }
 
     // Appends one buffered transaction operation to admin/transactions. Op records are always new
     // inserts (their _id is transactionId|seq, unique per transaction), so this only ever inserts.
     public static void saveTransactionOp(AdminTransactionEntry entry) throws IOException, InterruptedException {
-        lockAdminTransactionsCollection();
+        lockAdmin(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         try {
             entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME,
                     entry.byteSize()));
@@ -544,85 +523,25 @@ public final class AdminOperationHelper {
             baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, EventType.CREATED,
                     List.of(entry), false);
         } finally {
-            releaseAdminTransactionsCollection();
+            releaseAdmin(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         }
     }
 
-    // Reads the buffered operations for the given op ids (in the order supplied — the caller passes
-    // them in ascending seq order) so a commit can replay them against the real collections.
     public static List<AdminTransactionEntry> readTransactionOps(List<String> opIds)
             throws IOException, InterruptedException {
-        lockAdminTransactionsCollection();
-        try {
-            final var result = new ArrayList<AdminTransactionEntry>();
-            for (var opId : opIds) {
-                final var pk = cache.getPkIndexTransaction(opId);
-                if (pk == null) {
-                    continue;
-                }
-                final DbEntry entry;
-                try {
-                    entry = fs.getById(pk);
-                } catch (Exception ex) {
-                    throw new IOException("Failed to read transaction op " + opId, ex);
-                }
-                if (entry == null) {
-                    continue;
-                }
-                final var data = entry.getData();
-                data.addProperty(Globals.PK_FIELD, entry.get_id());
-                result.add(AdminTransactionEntry.fromJsonObject(data));
-            }
-            return result;
-        } finally {
-            releaseAdminTransactionsCollection();
-        }
+        return TRANSACTION_OPS.read(opIds);
     }
 
-    // Removes the given buffered operations from admin/transactions (used at both commit and rollback,
-    // and — with every op id — for startup cleanup of transactions orphaned by a crash).
+    // Used at both commit and rollback, and - with every op id - for startup cleanup of transactions
+    // orphaned by a crash.
     public static void deleteTransactionOps(List<String> opIds) throws IOException, InterruptedException {
-        lockAdminTransactionsCollection();
-        try {
-            for (var opId : opIds) {
-                final var pk = cache.getPkIndexTransaction(opId);
-                if (pk == null) {
-                    continue;
-                }
-                final DbEntry entry;
-                try {
-                    entry = fs.getById(pk);
-                } catch (Exception ex) {
-                    throw new IOException("Failed to read transaction op " + opId, ex);
-                }
-                if (entry == null) {
-                    continue;
-                }
-                entry.setPage(pk.getPage());
-                entry.setPreviousByteSize(pk.getLength());
-                final var compaction = fs.deleteFromCollection(pk);
-                cache.shiftPkPositionsAfterCompaction(compaction);
-                cache.removePkIndexTransaction(opId);
-                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME,
-                        EventType.DELETED, List.of(entry), false);
-            }
-        } finally {
-            releaseAdminTransactionsCollection();
-        }
-    }
-
-    private static void lockAdminTriggerRunsCollection() throws InterruptedException {
-        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-    }
-
-    private static void releaseAdminTriggerRunsCollection() {
-        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
+        TRANSACTION_OPS.delete(opIds);
     }
 
     // Appends one pending trigger run record. Records are always new inserts (their _id is runId|chunkSeq,
     // unique per run), so this only ever inserts.
     public static void saveTriggerRun(AdminTriggerRunEntry entry) throws IOException, InterruptedException {
-        lockAdminTriggerRunsCollection();
+        lockAdmin(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
         try {
             entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME,
                     entry.byteSize()));
@@ -631,73 +550,23 @@ public final class AdminOperationHelper {
             baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, EventType.CREATED,
                     List.of(entry), false);
         } finally {
-            releaseAdminTriggerRunsCollection();
+            releaseAdmin(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
         }
     }
 
     public static List<AdminTriggerRunEntry> readTriggerRuns(List<String> recordIds)
             throws IOException, InterruptedException {
-        lockAdminTriggerRunsCollection();
-        try {
-            final var result = new ArrayList<AdminTriggerRunEntry>();
-            for (var recordId : recordIds) {
-                final var pk = cache.getPkIndexTriggerRun(recordId);
-                if (pk == null) {
-                    continue;
-                }
-                final DbEntry entry;
-                try {
-                    entry = fs.getById(pk);
-                } catch (Exception ex) {
-                    throw new IOException("Failed to read trigger run " + recordId, ex);
-                }
-                if (entry == null) {
-                    continue;
-                }
-                final var data = entry.getData();
-                data.addProperty(Globals.PK_FIELD, entry.get_id());
-                result.add(AdminTriggerRunEntry.fromJsonObject(data));
-            }
-            return result;
-        } finally {
-            releaseAdminTriggerRunsCollection();
-        }
+        return TRIGGER_RUNS.read(recordIds);
     }
 
     public static void deleteTriggerRuns(List<String> recordIds) throws IOException, InterruptedException {
-        lockAdminTriggerRunsCollection();
-        try {
-            for (var recordId : recordIds) {
-                final var pk = cache.getPkIndexTriggerRun(recordId);
-                if (pk == null) {
-                    continue;
-                }
-                final DbEntry entry;
-                try {
-                    entry = fs.getById(pk);
-                } catch (Exception ex) {
-                    throw new IOException("Failed to read trigger run " + recordId, ex);
-                }
-                if (entry == null) {
-                    continue;
-                }
-                entry.setPage(pk.getPage());
-                entry.setPreviousByteSize(pk.getLength());
-                final var compaction = fs.deleteFromCollection(pk);
-                cache.shiftPkPositionsAfterCompaction(compaction);
-                cache.removePkIndexTriggerRun(recordId);
-                baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME,
-                        EventType.DELETED, List.of(entry), false);
-            }
-        } finally {
-            releaseAdminTriggerRunsCollection();
-        }
+        TRIGGER_RUNS.delete(recordIds);
     }
 
     public static void deleteUserEntry(String username) throws IOException, InterruptedException {
         var adminIndexPkUserEntry = cache.getPkIndexAdminUserEntry(username);
         if (adminIndexPkUserEntry != null) {
-            lockAdminUsersCollection();
+            lockAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
             try {
                 final var adminUserEntry = cache.getAdminUserEntry(username);
                 adminUserEntry.setPreviousByteSize(adminIndexPkUserEntry.getLength());
@@ -707,7 +576,7 @@ public final class AdminOperationHelper {
                 baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME, EventType.DELETED,
                         List.of(adminUserEntry), false);
             } finally {
-                releaseAdminUsersCollection();
+                releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
             }
         }
     }
