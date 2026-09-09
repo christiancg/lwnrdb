@@ -44,11 +44,19 @@ public class EJson {
     }
 
     private void registerTypeAdapters() {
-        // boolean types
+        registerBooleanAdapters();
+        registerNumberAdapters();
+        registerStringAdapters();
+        registerEjsonElementAdapters();
+    }
+
+    private void registerBooleanAdapters() {
         final var booleanTypeAdapter = new BooleanTypeAdapter();
         TypeAdapterFactory.registerTypeAdapter(Boolean.class, booleanTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(boolean.class, booleanTypeAdapter);
-        // number types
+    }
+
+    private void registerNumberAdapters() {
         final var numberTypeAdapter = new NumberTypeAdapter();
         TypeAdapterFactory.registerTypeAdapter(Number.class, numberTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(short.class, numberTypeAdapter);
@@ -63,23 +71,23 @@ public class EJson {
         TypeAdapterFactory.registerTypeAdapter(double.class, numberTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(Double.class, numberTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(BigDecimal.class, numberTypeAdapter);
-        // String types
+    }
+
+    private void registerStringAdapters() {
         final var stringTypeAdapter = new StringTypeAdapter();
         TypeAdapterFactory.registerTypeAdapter(String.class, stringTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(StringBuilder.class, stringTypeAdapter);
-        // ejson types
+    }
+
+    private void registerEjsonElementAdapters() {
         final var jsonBaseElementTypeAdapter = new JsonBaseElementTypeAdapter();
         TypeAdapterFactory.registerTypeAdapter(JsonBoolean.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonNumber.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonNull.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonString.class, jsonBaseElementTypeAdapter);
         TypeAdapterFactory.registerTypeAdapter(JsonBaseElement.class, jsonBaseElementTypeAdapter);
-        TypeAdapterFactory.registerTypeAdapter(JsonPrimitive.class, jsonBaseElementTypeAdapter);
-        // JsonPrimitive type
         TypeAdapterFactory.registerTypeAdapter(JsonPrimitive.class, new JsonPrimitiveTypeAdapter());
-        // JsonObject type
         TypeAdapterFactory.registerTypeAdapter(JsonObject.class, new JsonObjectTypeAdapter());
-        // JsonArray type
         TypeAdapterFactory.registerTypeAdapter(JsonArray.class, new JsonArrayTypeAdapter());
     }
 

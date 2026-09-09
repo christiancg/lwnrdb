@@ -37,23 +37,29 @@ public abstract class JsonCustom<T> extends JsonString {
     public abstract Integer compare(T another);
 
     // The names of the custom (type-specific) filter operators this type supports, e.g. a geo type
-    // supports "distance" and "within". Types without custom operators return an empty set.
-    public abstract Set<String> customOperatorNames();
+    // supports "distance" and "within". A type that declares none inherits the empty set here, and
+    // the matching apply method then throws.
+    public Set<String> customOperatorNames() {
+        return Set.of();
+    }
 
     // Evaluates a custom operator against this value (the stored document value). args carries the
     // operator's parameters as raw JSON elements (interpreted by the concrete type). Returns whether
-    // this value satisfies the operator. Throws UnsupportedOperationException for a type that declares
-    // no custom operators.
-    public abstract boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args);
+    // this value satisfies the operator.
+    public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
+        throw new UnsupportedOperationException(getCustomTypeName() + " has no custom operators");
+    }
 
     // The ranking (top-K) operators this type supports (e.g. the vector type's "nearest"). Unlike a
     // predicate operator, a ranking operator scores each value and the FILTER step keeps the highest K.
-    // Types without ranking operators return an empty set.
-    public abstract Set<String> customRankingOperatorNames();
+    public Set<String> customRankingOperatorNames() {
+        return Set.of();
+    }
 
-    // Scores this value for a ranking operator (higher is better, e.g. cosine similarity). Throws
-    // UnsupportedOperationException for a type that declares no ranking operators.
-    public abstract double applyCustomRankingOperator(String operatorName, Map<String, JsonBaseElement> args);
+    // Scores this value for a ranking operator (higher is better, e.g. cosine similarity).
+    public double applyCustomRankingOperator(String operatorName, Map<String, JsonBaseElement> args) {
+        throw new UnsupportedOperationException(getCustomTypeName() + " has no ranking operators");
+    }
 
     public static Boolean isJsonCustom(JsonString str) {
         final var value = str.get();

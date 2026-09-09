@@ -65,13 +65,7 @@ import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.CancelScriptResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
-import org.techhouse.ops.resp.CreateCollectionResponse;
-import org.techhouse.ops.resp.CreateDatabaseResponse;
-import org.techhouse.ops.resp.CreateIndexResponse;
 import org.techhouse.ops.resp.DeleteResponse;
-import org.techhouse.ops.resp.DropCollectionResponse;
-import org.techhouse.ops.resp.DropDatabaseResponse;
-import org.techhouse.ops.resp.DropIndexResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
@@ -84,7 +78,6 @@ import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ReindexResponse;
 import org.techhouse.ops.resp.ResolveTriggerRunResponse;
 import org.techhouse.ops.resp.SaveResponse;
-import org.techhouse.ops.resp.SetDatabaseOwnersResponse;
 import org.techhouse.ops.resp.StopListenResponse;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 
@@ -472,7 +465,7 @@ public class OperationProcessor {
                 final var newEntry = new AdminDbEntry(dbName, new java.util.ArrayList<>(),
                         new java.util.ArrayList<>(owners));
                 AdminOperationHelper.saveDatabaseEntry(newEntry);
-                return new CreateDatabaseResponse("Database created successfully");
+                return OperationResponse.ok(OperationType.CREATE_DATABASE, "Database created successfully");
             }
             return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
         } catch (Exception exception) {
@@ -488,7 +481,7 @@ public class OperationProcessor {
                         ErrorCode.DATABASE_NOT_FOUND);
             }
             AdminOperationHelper.updateDatabaseOwners(dbName, request.getOwners());
-            return new SetDatabaseOwnersResponse("Database owners updated successfully");
+            return OperationResponse.ok(OperationType.SET_DATABASE_OWNERS, "Database owners updated successfully");
         } catch (Exception e) {
             return new OperationResponse(OperationType.SET_DATABASE_OWNERS, ErrorCode.ERROR_UPDATING_DATABASE_OWNERS);
         }
@@ -527,7 +520,7 @@ public class OperationProcessor {
                 // letting the periodic refresh notice, so nothing keeps firing against a gone database.
                 scheduleRegistry.removeDatabase(dbName);
                 listenManager.unregisterAllForDatabase(dbName);
-                return new DropDatabaseResponse("Database dropped successfully");
+                return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");
             }
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
         } catch (Exception exception) {
@@ -565,7 +558,7 @@ public class OperationProcessor {
                     AdminOperationHelper.createPageCollections(dbName, collName);
                     AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
                 }
-                return new CreateCollectionResponse("Collection created successfully");
+                return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
             }
             return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
         } catch (Exception e) {
@@ -590,7 +583,7 @@ public class OperationProcessor {
                 AdminOperationHelper.deletePageCollections(dbName, collName);
                 listenManager.unregisterAllForCollection(dbName, collName);
                 dropSucceeded = true;
-                return new DropCollectionResponse("Collection dropped successfully");
+                return OperationResponse.ok(OperationType.DROP_COLLECTION, "Collection dropped successfully");
             }
             return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
         } catch (Exception e) {
@@ -642,7 +635,7 @@ public class OperationProcessor {
             locks.lock(dbName, collName);
             IndexHelper.createIndex(dbName, collName, fieldName);
             AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);
-            return new CreateIndexResponse("Created index for field: " + fieldName);
+            return OperationResponse.ok(OperationType.CREATE_INDEX, "Created index for field: " + fieldName);
         } catch (Exception e) {
             return new OperationResponse(OperationType.CREATE_INDEX, ErrorCode.ERROR_CREATING_INDEX);
         } finally {
@@ -682,7 +675,7 @@ public class OperationProcessor {
             final var result = IndexHelper.dropIndex(dbName, collName, fieldName);
             if (result) {
                 AdminOperationHelper.deleteIndex(dbName, collName, fieldName);
-                return new DropIndexResponse("Successfully dropped index: " + fieldName);
+                return OperationResponse.ok(OperationType.DROP_INDEX, "Successfully dropped index: " + fieldName);
             } else {
                 return new OperationResponse(OperationType.DROP_INDEX, ErrorCode.INDEX_NOT_FOUND, fieldName);
             }

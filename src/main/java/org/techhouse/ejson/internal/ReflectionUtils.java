@@ -56,7 +56,7 @@ public class ReflectionUtils {
         fieldList.forEach(field -> field.setAccessible(true));
         final List<Field> fields = new ArrayList<>(fieldList);
         final var superClass = tClass.getSuperclass();
-        if (!superClass.equals(Object.class)) {
+        if (!superClass.equals(Object.class) && !superClass.equals(Record.class)) {
             fields.addAll(List.of(getFields(superClass)));
         }
         return fields.toArray(Field[]::new);
@@ -110,6 +110,40 @@ public class ReflectionUtils {
         } catch (Exception e) {
             throw new NoConstructorException(tClass);
         }
+    }
+
+    public static <T> T createRecordInstance(Class<T> tClass, JsonObject parsed) throws Exception {
+        final var components = tClass.getRecordComponents();
+        final var componentTypes = new Class<?>[components.length];
+        final var arguments = new Object[components.length];
+        for (var i = 0; i < components.length; i++) {
+            final var componentType = components[i].getType();
+            componentTypes[i] = componentType;
+            final var name = components[i].getName();
+            final var value = parsed.has(name)
+                    ? cast(componentType, parsed.get(name), components[i].getGenericType())
+                    : null;
+            arguments[i] = value == null ? defaultComponentValue(componentType) : value;
+        }
+        final var constructor = tClass.getDeclaredConstructor(componentTypes);
+        constructor.setAccessible(true);
+        return tClass.cast(constructor.newInstance(arguments));
+    }
+
+    private static Object defaultComponentValue(Class<?> componentType) {
+        if (!componentType.isPrimitive()) {
+            return null;
+        }
+        return switch (componentType.getName()) {
+            case "boolean" -> false;
+            case "char" -> '\0';
+            case "byte" -> (byte) 0;
+            case "short" -> (short) 0;
+            case "int" -> 0;
+            case "long" -> 0L;
+            case "float" -> 0.0f;
+            default -> 0.0d;
+        };
     }
 
     public static <T> T cast(Class<T> parameterType, JsonBaseElement fieldValue, Type genericType) throws Exception {

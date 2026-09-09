@@ -37,6 +37,10 @@ public class OperationResponse {
         this(type, errorCode.getStatus(), errorCode.getDefaultMessage() + ": " + detail, errorCode.getCode());
     }
 
+    public static OperationResponse ok(OperationType type, String message) {
+        return new OperationResponse(type, OperationStatus.OK, message);
+    }
+
     public OperationType getType() {
         return type;
     }

@@ -19,7 +19,6 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.DeleteSchemaRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
-import org.techhouse.ops.resp.DeleteSchemaResponse;
 import org.techhouse.ops.resp.SaveSchemaResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -95,7 +94,7 @@ public class OperationProcessorSchemaTest {
         processor.processMessage(
                 new SaveSchemaRequest(TestGlobals.DB, TestGlobals.COLL, schema("{\"type\":\"object\"}")));
         final var response = processor.processMessage(new DeleteSchemaRequest(TestGlobals.DB, TestGlobals.COLL));
-        assertInstanceOf(DeleteSchemaResponse.class, response);
+        assertEquals(OperationType.DELETE_SCHEMA, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
         assertNull(cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }

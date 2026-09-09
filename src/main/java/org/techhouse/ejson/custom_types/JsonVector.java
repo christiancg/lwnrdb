@@ -88,16 +88,6 @@ public class JsonVector extends JsonCustom<double[]> {
     }
 
     @Override
-    public Set<String> customOperatorNames() {
-        return Set.of();
-    }
-
-    @Override
-    public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
-        throw new UnsupportedOperationException(getCustomTypeName() + " has no predicate custom operators");
-    }
-
-    @Override
     public Set<String> customRankingOperatorNames() {
         return Set.of(OPERATOR_NEAREST);
     }

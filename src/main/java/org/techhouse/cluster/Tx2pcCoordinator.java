@@ -13,10 +13,7 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
-import org.techhouse.ops.resp.CommitTransactionResponse;
 import org.techhouse.ops.resp.OperationResponse;
-import org.techhouse.ops.resp.ResolveTransactionResponse;
-import org.techhouse.ops.resp.RollbackTransactionResponse;
 
 /**
  * Edge-side two-phase-commit coordinator for a transaction spanning more than one owner (Phase 5b). Runs
@@ -67,7 +64,7 @@ public class Tx2pcCoordinator {
         }
         deleteCoordinatorMarkerQuietly(dtxId);
         finishEdge(clientId, local);
-        return new CommitTransactionResponse("Transaction committed");
+        return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
     }
 
     // Operator escape hatch: force an in-doubt distributed transaction to a decision. Records the decision
@@ -91,7 +88,8 @@ public class Tx2pcCoordinator {
                 send(member.address().toString(), type, dtxId, dtxId, ack, null);
             }
         }
-        return new ResolveTransactionResponse("Transaction " + (commit ? "committed" : "aborted"));
+        return OperationResponse.ok(OperationType.RESOLVE_TRANSACTION,
+                "Transaction " + (commit ? "committed" : "aborted"));
     }
 
     public OperationResponse rollback(UUID clientId) {
@@ -105,7 +103,7 @@ public class Tx2pcCoordinator {
         final var remotes = new ArrayList<>(clientTracker.transactionParticipants(clientId));
         abortAll(clientId, sessionId, dtxId, local, remotes);
         finishEdge(clientId, local);
-        return new RollbackTransactionResponse("Transaction rolled back");
+        return OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction rolled back");
     }
 
     private boolean prepareAll(UUID clientId, String sessionId, String dtxId, boolean local, ArrayList<String> remotes,

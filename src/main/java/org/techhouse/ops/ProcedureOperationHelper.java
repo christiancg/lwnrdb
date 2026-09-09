@@ -16,7 +16,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.DeleteProcedureRequest;
 import org.techhouse.ops.req.ListProceduresRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
-import org.techhouse.ops.resp.DeleteProcedureResponse;
 import org.techhouse.ops.resp.ListProceduresResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveProcedureResponse;
@@ -149,7 +148,7 @@ public final class ProcedureOperationHelper {
             fs.deleteProcedure(dbName, request.getName());
             cache.removeProcedure(dbName, request.getName());
             compiledProcedures.invalidateProcedure(dbName, request.getName());
-            return new DeleteProcedureResponse("Procedure deleted successfully");
+            return OperationResponse.ok(OperationType.DELETE_PROCEDURE, "Procedure deleted successfully");
         } finally {
             locks.release(dbName, Globals.PROCEDURES_FOLDER);
         }

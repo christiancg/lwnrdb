@@ -16,14 +16,12 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
-import org.techhouse.ops.resp.CommitTransactionResponse;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ResponseParser;
-import org.techhouse.ops.resp.RollbackTransactionResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
 
@@ -97,13 +95,16 @@ public class ResponseParserTest {
         assertEquals(List.of("db1"), assertInstanceOf(ListDatabasesResponse.class, parsed).getDatabases());
     }
 
-    // The three transaction control responses round-trip as their own types
+    // START_TRANSACTION round-trips as its own type because it carries a transactionId; the other two
+    // carry nothing beyond the base fields, so they parse back as a plain OperationResponse.
     @Test
     public void test_parses_transaction_control_responses() {
         final var started = roundTrip(new StartTransactionResponse("ok", "tx-1"));
         assertEquals("tx-1", assertInstanceOf(StartTransactionResponse.class, started).getTransactionId());
-        assertInstanceOf(CommitTransactionResponse.class, roundTrip(new CommitTransactionResponse("ok")));
-        assertInstanceOf(RollbackTransactionResponse.class, roundTrip(new RollbackTransactionResponse("ok")));
+        assertEquals(OperationType.COMMIT_TRANSACTION,
+                roundTrip(OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "ok")).getType());
+        assertEquals(OperationType.ROLLBACK_TRANSACTION,
+                roundTrip(OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "ok")).getType());
     }
 
     // An error response keeps its status, message and errorCode

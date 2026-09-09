@@ -56,13 +56,7 @@ import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.CloseConnectionResponse;
-import org.techhouse.ops.resp.CreateCollectionResponse;
-import org.techhouse.ops.resp.CreateDatabaseResponse;
-import org.techhouse.ops.resp.CreateIndexResponse;
 import org.techhouse.ops.resp.DeleteResponse;
-import org.techhouse.ops.resp.DropCollectionResponse;
-import org.techhouse.ops.resp.DropDatabaseResponse;
-import org.techhouse.ops.resp.DropIndexResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.GetDatabaseStatsResponse;
 import org.techhouse.ops.resp.ListCollectionsResponse;
@@ -189,7 +183,7 @@ public class OperationProcessorTest {
         assertNotNull(response);
         assertEquals(OperationType.CREATE_DATABASE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
-        assertInstanceOf(CreateDatabaseResponse.class, response);
+        assertEquals(OperationType.CREATE_DATABASE, response.getType());
     }
 
     // Process different operation types and return appropriate response objects
@@ -204,7 +198,7 @@ public class OperationProcessorTest {
         OperationResponse response2 = processor.processMessage(request2);
         assertEquals(OperationStatus.OK, response2.getStatus());
         assertEquals(OperationType.DROP_DATABASE, response2.getType());
-        assertInstanceOf(DropDatabaseResponse.class, response2);
+        assertEquals(OperationType.DROP_DATABASE, response2.getType());
     }
 
     // Dropping a database that has collections locks each collection during deletion and releases them
@@ -223,8 +217,9 @@ public class OperationProcessorTest {
         assertTrue(
                 IocContainer.get(org.techhouse.cache.Cache.class).getAdminDbEntry(db).getCollections().contains(coll));
 
-        final var resp = (DropDatabaseResponse) processor.processMessage(new DropDatabaseRequest(db));
+        final var resp = processor.processMessage(new DropDatabaseRequest(db));
 
+        assertEquals(OperationType.DROP_DATABASE, resp.getType());
         assertEquals(OperationStatus.OK, resp.getStatus());
         // The per-collection lock was released, so it can be re-acquired.
         final var locks = IocContainer.get(ResourceLocking.class);
@@ -239,12 +234,14 @@ public class OperationProcessorTest {
     public void test_create_and_drop_index() {
         CreateIndexRequest createIndexRequest = new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "fieldName");
 
-        CreateIndexResponse createIndexResponse = (CreateIndexResponse) processor.processMessage(createIndexRequest);
+        final var createIndexResponse = processor.processMessage(createIndexRequest);
+        assertEquals(OperationType.CREATE_INDEX, createIndexResponse.getType());
         assertEquals(OperationStatus.OK, createIndexResponse.getStatus());
         assertEquals("Created index for field: fieldName", createIndexResponse.getMessage());
 
         DropIndexRequest dropIndexRequest = new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "fieldName");
-        DropIndexResponse dropIndexResponse = (DropIndexResponse) processor.processMessage(dropIndexRequest);
+        final var dropIndexResponse = processor.processMessage(dropIndexRequest);
+        assertEquals(OperationType.DROP_INDEX, dropIndexResponse.getType());
         assertEquals(OperationStatus.OK, dropIndexResponse.getStatus());
         assertEquals("Successfully dropped index: fieldName", dropIndexResponse.getMessage());
     }
@@ -503,7 +500,7 @@ public class OperationProcessorTest {
         OperationResponse createResponse = processor.processMessage(createRequest);
 
         assertNotNull(createResponse);
-        assertInstanceOf(CreateCollectionResponse.class, createResponse);
+        assertEquals(OperationType.CREATE_COLLECTION, createResponse.getType());
         assertEquals(OperationStatus.OK, createResponse.getStatus());
 
         // Drop Collection
@@ -511,7 +508,7 @@ public class OperationProcessorTest {
         OperationResponse dropResponse = processor.processMessage(dropRequest);
 
         assertNotNull(dropResponse);
-        assertInstanceOf(DropCollectionResponse.class, dropResponse);
+        assertEquals(OperationType.DROP_COLLECTION, dropResponse.getType());
         assertEquals(OperationStatus.OK, dropResponse.getStatus());
     }
 

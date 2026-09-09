@@ -20,6 +20,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CommitTransactionRequest;
@@ -31,10 +32,8 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
-import org.techhouse.ops.resp.CommitTransactionResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.OperationResponse;
-import org.techhouse.ops.resp.RollbackTransactionResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
 import org.techhouse.test.TestGlobals;
@@ -248,7 +247,7 @@ public class OperationProcessorTransactionTest {
         processor.processMessage(new StartTransactionRequest(), clientId);
         processor.processMessage(saveRequest("txn-rb-1", "name", "dave"), clientId);
         final var response = processor.processMessage(new RollbackTransactionRequest(), clientId);
-        assertInstanceOf(RollbackTransactionResponse.class, response);
+        assertEquals(OperationType.ROLLBACK_TRANSACTION, response.getType());
 
         final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         find.set_id("txn-rb-1");
@@ -261,7 +260,7 @@ public class OperationProcessorTransactionTest {
         processor.processMessage(new StartTransactionRequest(), clientId);
         processor.processMessage(saveRequest("txn-lock-1", "name", "erin"), clientId);
         final var response = processor.processMessage(new CommitTransactionRequest(), clientId);
-        assertInstanceOf(CommitTransactionResponse.class, response);
+        assertEquals(OperationType.COMMIT_TRANSACTION, response.getType());
         // The write lock must have been released: acquire+release it directly, which throws nothing.
         final var locks = IocContainer.get(ResourceLocking.class);
         assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL));

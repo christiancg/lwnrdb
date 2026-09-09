@@ -7,7 +7,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.DeleteSchemaRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
-import org.techhouse.ops.resp.DeleteSchemaResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveSchemaResponse;
 
@@ -53,6 +52,6 @@ public final class SchemaOperationHelper {
         }
         fs.deleteCollectionSchema(dbName, collName);
         cache.removeCollectionSchema(dbName, collName);
-        return new DeleteSchemaResponse("Collection schema deleted successfully");
+        return OperationResponse.ok(OperationType.DELETE_SCHEMA, "Collection schema deleted successfully");
     }
 }

@@ -17,10 +17,9 @@ import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.resp.CallProcedureResponse;
-import org.techhouse.ops.resp.DeleteProcedureResponse;
-import org.techhouse.ops.resp.DeleteTriggerResponse;
 import org.techhouse.ops.resp.ListProceduresResponse;
 import org.techhouse.ops.resp.ListTriggersResponse;
+import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveProcedureResponse;
 import org.techhouse.ops.resp.SaveTriggerResponse;
 
@@ -152,12 +151,13 @@ public class ProcedureAndTriggerRequestTest {
     @Test
     public void test_response_accessors() {
         assertEquals(3L, new SaveProcedureResponse("ok", 3L).getVersion());
-        assertEquals(OperationType.DELETE_PROCEDURE, new DeleteProcedureResponse("ok").getType());
+        assertEquals(OperationType.DELETE_PROCEDURE,
+                OperationResponse.ok(OperationType.DELETE_PROCEDURE, "ok").getType());
         assertTrue(new ListProceduresResponse("ok", List.of()).getProcedures().isEmpty());
         final var saveTrigger = new SaveTriggerResponse("ok", 2L, "owner");
         assertEquals(2L, saveTrigger.getVersion());
         assertEquals("owner", saveTrigger.getDefiner());
-        assertEquals(OperationType.DELETE_TRIGGER, new DeleteTriggerResponse("ok").getType());
+        assertEquals(OperationType.DELETE_TRIGGER, OperationResponse.ok(OperationType.DELETE_TRIGGER, "ok").getType());
         assertTrue(new ListTriggersResponse("ok", List.of()).getTriggers().isEmpty());
     }
 

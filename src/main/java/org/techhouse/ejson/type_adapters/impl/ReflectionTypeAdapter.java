@@ -53,6 +53,9 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             return null;
         }
         try {
+            if (clazz.isRecord()) {
+                return ReflectionUtils.createRecordInstance(clazz, obj);
+            }
             final var instance = ReflectionUtils.createInstance(clazz, obj);
             final var fields = ReflectionUtils.getFields(clazz);
             for (var field : fields) {

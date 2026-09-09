@@ -24,7 +24,6 @@
     <suppress files="org[\\/]techhouse[\\/]cache[\\/]AdminCache\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]cache[\\/]UserCache\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]FilterOperatorHelper\.java" checks="FileLength"/>
-    <suppress files="org[\\/]techhouse[\\/]ejson[\\/]internal[\\/]LinkedTreeMap\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]cache[\\/]Cache\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]cluster[\\/]AdminAntiEntropyService\.java" checks="FileLength"/>
 </suppressions>

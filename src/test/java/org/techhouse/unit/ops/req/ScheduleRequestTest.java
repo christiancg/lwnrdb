@@ -12,8 +12,8 @@ import org.techhouse.ops.req.ListSchedulesRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.validations.RequestValidator;
-import org.techhouse.ops.resp.DeleteScheduleResponse;
 import org.techhouse.ops.resp.ListSchedulesResponse;
+import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveScheduleResponse;
 
 public class ScheduleRequestTest {
@@ -87,7 +87,8 @@ public class ScheduleRequestTest {
     @Test
     public void test_response_accessors() {
         assertEquals(3L, new SaveScheduleResponse("ok", 3L).getVersion());
-        assertEquals(OperationType.DELETE_SCHEDULE, new DeleteScheduleResponse("ok").getType());
+        assertEquals(OperationType.DELETE_SCHEDULE,
+                OperationResponse.ok(OperationType.DELETE_SCHEDULE, "ok").getType());
         assertTrue(new ListSchedulesResponse("ok", List.of()).getSchedules().isEmpty());
     }
 

@@ -31,10 +31,8 @@ import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
-import org.techhouse.ops.resp.CommitTransactionResponse;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.OperationResponse;
-import org.techhouse.ops.resp.RollbackTransactionResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
 
@@ -136,7 +134,7 @@ public final class TransactionOperationHelper {
             // A replication timeout does not fail the commit — the decision is made and the local commit is
             // durable; anti-entropy reconciles the lagging replicas.
             coordinator.replicateTransaction(transaction);
-            return new CommitTransactionResponse("Transaction committed");
+            return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
         } catch (Exception e) {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
@@ -156,7 +154,7 @@ public final class TransactionOperationHelper {
         try {
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             resolveMarkers(transaction.getTransactionId().toString(), false);
-            return new RollbackTransactionResponse("Transaction aborted");
+            return OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction aborted");
         } catch (Exception e) {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
@@ -273,7 +271,7 @@ public final class TransactionOperationHelper {
             if (coordinator.replicateTransaction(transaction) == ReplicationOutcome.TIMEOUT) {
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT);
             }
-            return new CommitTransactionResponse("Transaction committed");
+            return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
         } catch (Exception e) {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
@@ -290,7 +288,7 @@ public final class TransactionOperationHelper {
         }
         try {
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
-            return new RollbackTransactionResponse("Transaction rolled back");
+            return OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction rolled back");
         } catch (Exception e) {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
