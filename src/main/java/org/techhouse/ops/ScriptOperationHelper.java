@@ -158,7 +158,7 @@ public final class ScriptOperationHelper {
         return stack == null || stack.isEmpty() ? "" : " stack=[" + String.join(" | ", stack) + "]";
     }
 
-    static ErrorCode errorCodeFor(String errorName) {
+    public static ErrorCode errorCodeFor(String errorName) {
         return switch (errorName) {
             case TIMEOUT -> ErrorCode.SCRIPT_TIMEOUT;
             case CANCELLED -> ErrorCode.SCRIPT_CANCELLED;
