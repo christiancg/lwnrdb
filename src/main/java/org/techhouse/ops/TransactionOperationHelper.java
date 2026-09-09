@@ -31,6 +31,7 @@ import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
+import org.techhouse.ops.tx.TransactionRecovery;
 import org.techhouse.ops.tx.TransactionWrites;
 
 /**
@@ -120,14 +121,14 @@ public final class TransactionOperationHelper {
         try {
             final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
             for (final var op : ops) {
-                applyBufferedOp(op);
+                TransactionRecovery.applyBufferedOp(op);
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             // After the durable commit, so a trigger never observes a transaction that later rolled back.
             // A rollback fires nothing.
             fireTriggersForCommittedOps(ops, clientTracker.getAuthenticatedUsername(clientId),
                     transaction.getTriggerDepth(), transaction);
-            resolveMarkers(transaction.getTransactionId().toString(), true);
+            TransactionRecovery.resolveMarkers(transaction.getTransactionId().toString(), true);
             // A replication timeout does not fail the commit — the decision is made and the local commit is
             // durable; anti-entropy reconciles the lagging replicas.
             coordinator.replicateTransaction(transaction);
@@ -150,7 +151,7 @@ public final class TransactionOperationHelper {
         }
         try {
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
-            resolveMarkers(transaction.getTransactionId().toString(), false);
+            TransactionRecovery.resolveMarkers(transaction.getTransactionId().toString(), false);
             return OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction aborted");
         } catch (Exception e) {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
@@ -161,78 +162,24 @@ public final class TransactionOperationHelper {
         }
     }
 
-    // Recovery commit of a prepared slice with no in-memory transaction (after a restart): re-acquires the
-    // collection write locks (sorted, deadlock-safe), replays the durable slice, replicates, then removes the
-    // slice + PREPARED marker.
     public static void commitPreparedFromDurable(String dtxId, List<String> collections) throws Exception {
-        final var acquired = new ArrayList<String>();
-        try {
-            for (final var collId : new java.util.TreeSet<>(collections)) {
-                locks.lockWrite(collId);
-                acquired.add(collId);
-            }
-            final var ops = AdminOperationHelper.readTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
-            ops.sort(java.util.Comparator.comparingLong(AdminTransactionEntry::getSeq));
-            final var reconstructed = new Transaction(UUID.fromString(dtxId), UUID.randomUUID());
-            for (final var op : ops) {
-                applyBufferedOp(op);
-                recordIntoOverlay(reconstructed, op);
-            }
-            AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
-            resolveMarkers(dtxId, true);
-            coordinator.replicateTransaction(reconstructed);
-        } finally {
-            for (final var collId : acquired) {
-                locks.releaseWrite(collId);
-            }
-        }
+        TransactionRecovery.commitPreparedFromDurable(dtxId, collections);
     }
 
-    // Recovery abort of a prepared slice with no in-memory transaction: discards the durable slice + marker.
     public static void abortFromDurable(String dtxId) throws Exception {
-        AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
-        resolveMarkers(dtxId, false);
+        TransactionRecovery.abortFromDurable(dtxId);
     }
 
-    // Resolves a prepared slice from the durable log (no in-memory transaction), used by session-less
-    // COMMIT_TX/ABORT_TX and by force-resolve. A no-op when this node holds no prepared slice for the id, so
-    // a broadcast force-resolve is safely ignored by non-participants and re-drives are idempotent.
     public static void resolveFromDurable(String dtxId, boolean commit) throws Exception {
-        if (!Tx2pcLog.isPrepared(dtxId)) {
-            return;
-        }
-        if (commit) {
-            final var marker = Tx2pcLog.readParticipantMarker(dtxId);
-            commitPreparedFromDurable(dtxId, marker != null ? marker.collections() : List.of());
-        } else {
-            abortFromDurable(dtxId);
-        }
+        TransactionRecovery.resolveFromDurable(dtxId, commit);
     }
 
-    // Replaces a resolved transaction's PREPARED marker with a retained OUTCOME marker, so a peer can still
-    // report the decision during another participant's cooperative termination.
-    private static void resolveMarkers(String dtxId, boolean committed) throws Exception {
-        Tx2pcLog.deleteParticipantMarker(dtxId);
-        Tx2pcLog.recordOutcome(dtxId, committed);
+    public static void cleanupOrphansAtStartup() throws Exception {
+        TransactionRecovery.cleanupOrphansAtStartup();
     }
 
-    private static void recordIntoOverlay(Transaction transaction, AdminTransactionEntry op) {
-        final var collId = Cache.getCollectionIdentifier(op.getTargetDb(), op.getTargetColl());
-        switch (op.getOpType()) {
-            case AdminTransactionEntry.OP_TYPE_SAVE -> transaction.recordSave(collId,
-                    op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue(), op.getPayload());
-            case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
-                for (final var element : op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList()) {
-                    final var obj = element.asJsonObject();
-                    transaction.recordSave(collId, obj.get(Globals.PK_FIELD).asJsonString().getValue(), obj);
-                }
-            }
-            case AdminTransactionEntry.OP_TYPE_DELETE ->
-                transaction.recordDelete(collId, op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue());
-            default -> {
-                // markers never appear in the slice op id list
-            }
-        }
+    public static void commitLocalFromDurable(String txId, List<String> collections) throws Exception {
+        TransactionRecovery.commitLocalFromDurable(txId, collections);
     }
 
     public static OperationResponse commit(UUID clientId) {
@@ -254,7 +201,7 @@ public final class TransactionOperationHelper {
             TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(),
                     new ArrayList<>(transaction.getHeldLocks()));
             for (final var op : ops) {
-                applyBufferedOp(op);
+                TransactionRecovery.applyBufferedOp(op);
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             TxCommitLog.clearLocalCommit(txId);
@@ -385,75 +332,6 @@ public final class TransactionOperationHelper {
             }
             clientTracker.removeTxSession(entry.getKey());
         }
-    }
-
-    // Removes operation records left in admin/transactions by transactions that were open when the server
-    // stopped (their owning connections are gone). Records belonging to an in-doubt 2PC transaction (one
-    // with a PREPARED or COMMITTED marker) are preserved for recovery to resolve.
-    public static void cleanupOrphansAtStartup() throws Exception {
-        finishLocalCommitsAtStartup();
-        final var inDoubt = new HashSet<String>();
-        inDoubt.addAll(Tx2pcLog.preparedDtxIds());
-        inDoubt.addAll(Tx2pcLog.committedDtxIds());
-        // Retained outcome markers (for cooperative termination) must also survive restart cleanup.
-        inDoubt.addAll(Tx2pcLog.outcomeDtxIds());
-        // A local commit whose replay just failed keeps its marker and slice, so the next restart can retry it
-        // instead of the sweep discarding a commit that was already decided.
-        inDoubt.addAll(TxCommitLog.localCommitTxIds());
-        final var orphans = cache.getTransactionPkIndexes().keySet().stream()
-                .filter(id -> !inDoubt.contains(dtxIdOf(id))).toList();
-        if (orphans.isEmpty()) {
-            return;
-        }
-        AdminOperationHelper.deleteTransactionOps(orphans);
-        logger.info("Removed " + orphans.size() + " orphaned transaction operation(s) at startup");
-    }
-
-    // Finishes every single-node commit that had reached its commit point before the process died. Runs before
-    // the orphan sweep so a decided commit is completed rather than discarded with the undecided ones.
-    private static void finishLocalCommitsAtStartup() {
-        for (final var txId : TxCommitLog.localCommitTxIds()) {
-            try {
-                final var marker = TxCommitLog.readLocalCommitMarker(txId);
-                commitLocalFromDurable(txId, marker == null ? List.of() : marker.collections());
-                logger.info("Finished transaction " + txId + " that was interrupted mid-commit at startup");
-            } catch (Exception e) {
-                logger.error("Failed to finish interrupted transaction " + txId + " at startup", e);
-            }
-        }
-    }
-
-    // Replays a decided single-node commit from the durable log. Idempotent: buffered ops carry whole values
-    // (a SAVE's full document, a DELETE's id), so re-applying the prefix a crash already applied converges to
-    // the same state rather than compounding.
-    public static void commitLocalFromDurable(String txId, List<String> collections) throws Exception {
-        final var acquired = new ArrayList<String>();
-        try {
-            for (final var collId : new java.util.TreeSet<>(collections)) {
-                locks.lockWrite(collId);
-                acquired.add(collId);
-            }
-            final var opIds = Tx2pcLog.sliceOpIds(txId);
-            final var ops = AdminOperationHelper.readTransactionOps(opIds);
-            ops.sort(java.util.Comparator.comparingLong(AdminTransactionEntry::getSeq));
-            final var reconstructed = new Transaction(UUID.fromString(txId), UUID.randomUUID());
-            for (final var op : ops) {
-                applyBufferedOp(op);
-                recordIntoOverlay(reconstructed, op);
-            }
-            AdminOperationHelper.deleteTransactionOps(opIds);
-            TxCommitLog.clearLocalCommit(txId);
-            coordinator.replicateTransaction(reconstructed);
-        } finally {
-            for (final var collId : acquired) {
-                locks.releaseWrite(collId);
-            }
-        }
-    }
-
-    private static String dtxIdOf(String recordId) {
-        final var sep = recordId.lastIndexOf(Globals.COLL_IDENTIFIER_SEPARATOR);
-        return sep > 0 ? recordId.substring(0, sep) : recordId;
     }
 
     // Buffers the op that consumes a pending trigger run, so it commits with the run's effects.
@@ -685,41 +563,6 @@ public final class TransactionOperationHelper {
                     // writes and fire nothing.
                 }
             }
-        }
-    }
-
-    private static void applyBufferedOp(AdminTransactionEntry op) throws Exception {
-        final var dbName = op.getTargetDb();
-        final var collName = op.getTargetColl();
-        switch (op.getOpType()) {
-            case AdminTransactionEntry.OP_TYPE_SAVE -> {
-                final var saveRequest = new SaveRequest(dbName, collName);
-                final var object = op.getPayload();
-                saveRequest.setObject(object);
-                saveRequest.set_id(object.get(Globals.PK_FIELD).asJsonString().getValue());
-                SaveOperationHelper.executeSave(saveRequest);
-            }
-            case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
-                final var bulkSaveRequest = new BulkSaveRequest(dbName, collName);
-                final var objects = new ArrayList<JsonObject>();
-                for (final var element : op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList()) {
-                    objects.add(element.asJsonObject());
-                }
-                bulkSaveRequest.setObjects(objects);
-                SaveOperationHelper.executeBulkSave(bulkSaveRequest);
-            }
-            case AdminTransactionEntry.OP_TYPE_DELETE -> {
-                final var deleteRequest = new DeleteRequest(dbName, collName);
-                deleteRequest.set_id(op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue());
-                DeleteOperationHelper.executeDelete(deleteRequest);
-            }
-            // Consuming the pending trigger run in the same commit as the run's effects is what makes a
-            // trigger exactly-once: the record that would replay it disappears if and only if it landed.
-            case AdminTransactionEntry.OP_TYPE_DELETE_TRIGGER_RUN -> {
-                final var runId = op.getPayload().get(TRIGGER_RUN_ID_FIELD).asJsonString().getValue();
-                AdminOperationHelper.deleteTriggerRuns(TriggerRunLog.recordIdsFor(runId));
-            }
-            default -> throw new IllegalStateException("Unknown transaction op type: " + op.getOpType());
         }
     }
 
