@@ -44,6 +44,12 @@
         <!-- Empty catch blocks are already covered by Checkstyle's EmptyBlock
              (which accepts an explanatory comment); avoid double reporting. -->
         <exclude name="EmptyCatchBlock"/>
+        <!-- Android-only rule (looks for a hardcoded "/sdcard" path), so it can
+             never fire here. It is the one rule that atomizes a string literal's
+             cooked value through Saxon, which throws on the unpaired surrogates
+             JsonStringsTest asserts the escaper handles - a PMD processing error
+             on every run. Nothing to lose by dropping it. -->
+        <exclude name="DoNotHardCodeSDCard"/>
     </rule>
 
     <!-- Performance rules that flag genuine waste -->

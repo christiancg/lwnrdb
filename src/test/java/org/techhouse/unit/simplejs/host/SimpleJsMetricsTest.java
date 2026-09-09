@@ -26,14 +26,17 @@ public class SimpleJsMetricsTest {
     }
 
     private static HostBindings cancelledAfter(ResourceLimits limits) {
-        return new LimitedBindings(new JsonObject(), null, null, limits, new CancellationToken() {
+        // Hoisted out of the constructor call: PMD's disambiguation pass fails on an
+        // anonymous class nested inside a call to a nested record's constructor.
+        final CancellationToken cancellation = new CancellationToken() {
             private int seen;
 
             @Override
             public boolean isCancelled() {
                 return ++seen > 20;
             }
-        });
+        };
+        return new LimitedBindings(new JsonObject(), null, null, limits, cancellation);
     }
 
     private ScriptResult run(String source) {
