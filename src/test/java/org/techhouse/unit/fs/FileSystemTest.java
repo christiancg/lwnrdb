@@ -41,7 +41,7 @@ public class FileSystemTest {
         Configuration config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "filePath", TestGlobals.PATH);
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         fileSystem.createBaseDbPath();
         fileSystem.createAdminDatabase();
         fileSystem.createDatabaseFolder(TestGlobals.DB);
@@ -104,7 +104,7 @@ public class FileSystemTest {
     public void test_creates_new_db_folder_successfully() throws NoSuchFieldException, IllegalAccessException {
         String testDbPath = System.getProperty("java.io.tmpdir");
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", testDbPath);
+        TestUtils.setDbPath(fileSystem, testDbPath);
 
         boolean result = fileSystem.createDatabaseFolder(TestGlobals.DB);
 
@@ -118,7 +118,7 @@ public class FileSystemTest {
     @Test
     public void test_delete_existing_database() throws NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         boolean result = fileSystem.deleteDatabase(TestGlobals.DB);
 
@@ -129,7 +129,7 @@ public class FileSystemTest {
     @Test
     public void test_delete_nonexistent_database() throws NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         boolean result = fileSystem.deleteDatabase("nonExistentDb");
 
@@ -158,7 +158,7 @@ public class FileSystemTest {
     @Test
     public void test_delete_collection_files_success() throws NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         boolean result = fileSystem.deleteCollectionFiles(TestGlobals.DB, TestGlobals.COLL);
 
@@ -196,7 +196,7 @@ public class FileSystemTest {
     public void test_get_by_id_returns_valid_db_entry() throws Exception {
         // Arrange
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         fileSystem.createBaseDbPath();
         fileSystem.createAdminDatabase();
         fileSystem.createDatabaseFolder(TestGlobals.DB);
@@ -228,7 +228,7 @@ public class FileSystemTest {
     @Test
     public void test_getById_data_contains_id_field() throws Exception {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         fileSystem.createBaseDbPath();
         fileSystem.createAdminDatabase();
         fileSystem.createDatabaseFolder(TestGlobals.DB);
@@ -258,7 +258,7 @@ public class FileSystemTest {
     public void test_bulk_insert_multiple_entries_success()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -291,7 +291,7 @@ public class FileSystemTest {
     public void test_bulk_insert_groups_entries_by_page()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -328,7 +328,7 @@ public class FileSystemTest {
     @Test
     public void test_bulk_insert_empty_list() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         List<DbEntry> entries = new ArrayList<>();
 
@@ -342,7 +342,7 @@ public class FileSystemTest {
     @Test
     public void test_insert_entry_creates_index() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         JsonObject data = new JsonObject();
         data.addProperty("name", "test");
@@ -358,7 +358,7 @@ public class FileSystemTest {
         assertTrue(result.getPosition() >= 0);
         assertTrue(result.getLength() > 0);
 
-        final var filePath = TestUtils.getPrivateField(fs, "dbPath", String.class);
+        final var filePath = TestUtils.getDbPath(fs);
         File collFile = new File(filePath + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
         assertTrue(collFile.exists());
@@ -370,7 +370,7 @@ public class FileSystemTest {
             throws IOException, NoSuchFieldException, IllegalAccessException {
         // Setup
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
@@ -407,7 +407,7 @@ public class FileSystemTest {
     public void test_bulk_update_multiple_entries_success()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         final var data1 = new JsonObject();
         data1.addProperty("_id", "1");
@@ -439,7 +439,7 @@ public class FileSystemTest {
     @Test
     public void test_bulk_update_empty_entries_list() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         List<IndexedDbEntry> entries = new ArrayList<>();
 
@@ -455,7 +455,7 @@ public class FileSystemTest {
     @Test
     public void test_bulk_update_multiple_same_page_entries_no_corruption() throws Exception {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         final var toInsert = new ArrayList<DbEntry>();
         for (var id : List.of("1", "2", "3")) {
             final var data = new JsonObject();
@@ -484,7 +484,7 @@ public class FileSystemTest {
     @Test
     public void test_update_file_length() throws NoSuchFieldException, IllegalAccessException, IOException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         final var file = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
         final var jsonObject = new JsonObject();
@@ -504,7 +504,7 @@ public class FileSystemTest {
     @Test
     public void test_concurrent_inserts_and_reads_keep_page_coherent() throws Exception {
         final var fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         final int writers = 8;
         final int perWriter = 25;
         final var errors = new java.util.concurrent.CopyOnWriteArrayList<Throwable>();
@@ -540,7 +540,7 @@ public class FileSystemTest {
     @Test
     public void test_writes_index_entries_to_file() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "testField";
         Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap = new HashMap<>();
         List<FieldIndexEntry<?>> stringEntries = List.of(
@@ -561,7 +561,7 @@ public class FileSystemTest {
     @Test
     public void test_empty_index_entry_map() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "testField";
         Map<Class<?>, List<FieldIndexEntry<?>>> emptyMap = new HashMap<>();
         fileSystem.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, emptyMap);
@@ -575,7 +575,7 @@ public class FileSystemTest {
     public void test_update_index_files_with_insert_and_remove()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "testField";
 
         Set<String> ids1 = new HashSet<>(Arrays.asList("id1", "id2"));
@@ -600,7 +600,7 @@ public class FileSystemTest {
     public void test_update_index_files_with_empty_ids_remove()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         String fieldName = "testField";
 
@@ -620,7 +620,7 @@ public class FileSystemTest {
     public void test_update_index_files_with_pipe_in_field_value()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "testField";
 
         FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo|bar",
@@ -637,7 +637,7 @@ public class FileSystemTest {
     public void test_search_does_not_match_prefix_when_value_contains_pipe()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "testField";
 
         // Write two entries: "foo" and "foo|bar" — the search for "foo" must not hit "foo|bar"
@@ -665,7 +665,7 @@ public class FileSystemTest {
     public void test_field_index_round_trip_with_pipe_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "testField";
 
         FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue",
@@ -685,7 +685,7 @@ public class FileSystemTest {
     public void test_field_index_round_trip_with_semicolon_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "testField";
 
         FieldIndexEntry<String> entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "someValue",
@@ -705,7 +705,7 @@ public class FileSystemTest {
     public void test_field_index_round_trip_with_pipe_and_semicolon_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "testField";
 
         Set<String> ids = Set.of("id|pipe", "id;semi", "id|and;both");
@@ -723,7 +723,7 @@ public class FileSystemTest {
     public void test_field_index_update_id_with_special_chars()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "testField";
 
         // Insert initial entry pointing to a document with special-char ID
@@ -750,7 +750,7 @@ public class FileSystemTest {
     public void test_pk_index_round_trip_with_pipe_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         DbEntry entry = new DbEntry();
         entry.setDatabaseName(TestGlobals.DB);
@@ -771,7 +771,7 @@ public class FileSystemTest {
     public void test_pk_index_round_trip_with_semicolon_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         DbEntry entry = new DbEntry();
         entry.setDatabaseName(TestGlobals.DB);
@@ -792,7 +792,7 @@ public class FileSystemTest {
     public void test_pk_index_round_trip_with_pipe_and_semicolon_in_id()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         DbEntry entry = new DbEntry();
         entry.setDatabaseName(TestGlobals.DB);
@@ -813,7 +813,7 @@ public class FileSystemTest {
     @Test
     public void test_delete_index_files_success() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         String fieldName = "testField";
 
@@ -839,7 +839,7 @@ public class FileSystemTest {
     @Test
     public void test_drop_index_nonexistent_collection() throws NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         String dbName = "nonExistentDb";
         String collName = "nonExistentColl";
@@ -855,7 +855,7 @@ public class FileSystemTest {
     public void test_read_and_map_index_files_success() throws NoSuchFieldException, IllegalAccessException {
         // Arrange
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "age";
 
         Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap = new HashMap<>();
@@ -879,7 +879,7 @@ public class FileSystemTest {
     public void test_returns_null_when_collection_folder_missing() throws NoSuchFieldException, IllegalAccessException {
         // Arrange
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "age";
 
         // Act
@@ -894,7 +894,7 @@ public class FileSystemTest {
     @Test
     public void test_read_number_type_index_entries() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         String fieldName = "testField";
         Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap = new HashMap<>();
@@ -918,7 +918,7 @@ public class FileSystemTest {
     public void test_empty_index_file_returns_empty_list()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         List<FieldIndexEntry<String>> entries = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL,
                 "emptyField", String.class);
@@ -932,7 +932,7 @@ public class FileSystemTest {
             throws IOException, NoSuchFieldException, IllegalAccessException {
         // Arrange
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         File mockIndexFile = mock(File.class);
         when(mockIndexFile.exists()).thenReturn(true);
@@ -965,7 +965,7 @@ public class FileSystemTest {
             throws IOException, NoSuchFieldException, IllegalAccessException {
         // Arrange
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         File mockIndexFile = mock(File.class);
         when(mockIndexFile.exists()).thenReturn(false);
@@ -982,7 +982,7 @@ public class FileSystemTest {
     public void test_stream_pages_yields_one_map_per_page()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         fileSystem.createDatabaseFolder(TestGlobals.DB);
         fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
 
@@ -1016,7 +1016,7 @@ public class FileSystemTest {
     public void test_stream_pages_missing_folder_empty()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         assertEquals(0L, fileSystem.streamPages("noSuchDbNameForStreamTest", "noSuchCollName").count());
     }
 
@@ -1025,7 +1025,7 @@ public class FileSystemTest {
     @Test
     public void test_pages_namespace_resolves_under_admin_pages_folder() throws Exception {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         fileSystem.createAdminDatabase();
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "rdb", "coll");
         fileSystem.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
@@ -1053,7 +1053,7 @@ public class FileSystemTest {
     @Test
     public void test_find_pk_index_entry() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         fileSystem.createDatabaseFolder(TestGlobals.DB);
         fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
 
@@ -1074,7 +1074,7 @@ public class FileSystemTest {
     @Test
     public void test_readWholeCollectionPage_skips_malformed_lines() throws Exception {
         final var fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         // Insert one valid entry so the page file exists with a known good line.
         final var entry = new DbEntry();
@@ -1107,7 +1107,7 @@ public class FileSystemTest {
     @Test
     public void test_readWholePkIndexFile_drops_and_rewrites_malformed_lines() throws Exception {
         final var fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         final var entry = new DbEntry();
         entry.setDatabaseName(TestGlobals.DB);
@@ -1142,7 +1142,7 @@ public class FileSystemTest {
     @Test
     public void test_readWholePkIndexFile_dedups_duplicate_keys_keeping_last() throws Exception {
         final var fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         final var entry = new DbEntry();
         entry.setDatabaseName(TestGlobals.DB);
@@ -1178,7 +1178,7 @@ public class FileSystemTest {
     @Test
     public void test_readWholeFieldIndexFiles_drops_and_rewrites_malformed_lines() throws Exception {
         final var fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         final var fieldName = "selfHeal";
 
         final var entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "good", Set.of("id1"));
@@ -1204,7 +1204,7 @@ public class FileSystemTest {
     @Test
     public void test_readWholeHashIndexFile_drops_and_rewrites_malformed_lines() throws Exception {
         final var fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         final var fieldName = "hashSelfHeal";
 
         final var entry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aaaa1111",
@@ -1243,7 +1243,7 @@ public class FileSystemTest {
     public void test_get_by_index_entries_empty_input()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
 
         assertTrue(fs.getByIndexEntries(null).isEmpty());
         assertTrue(fs.getByIndexEntries(new ArrayList<>()).isEmpty());
@@ -1254,7 +1254,7 @@ public class FileSystemTest {
     public void test_get_by_index_entries_reads_requested_across_pages()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -1299,7 +1299,7 @@ public class FileSystemTest {
     public void test_get_by_index_entries_single_page_multiple()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -1328,7 +1328,7 @@ public class FileSystemTest {
     public void test_stream_entries_empty_collection()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.createBaseDbPath();
 
         try (var stream = fs.streamEntries(TestGlobals.DB, "nonExistentColl")) {
@@ -1341,7 +1341,7 @@ public class FileSystemTest {
     public void test_stream_entries_yields_all_across_pages()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -1374,7 +1374,7 @@ public class FileSystemTest {
     public void test_hash_index_write_and_read_round_trip()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "payload";
 
         FieldIndexEntry<String> objEntry = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aaaa1111",
@@ -1403,7 +1403,7 @@ public class FileSystemTest {
     public void test_hash_index_write_empty_list_is_noop()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         fileSystem.writeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, "payload", IndexKind.OBJECT, List.of());
         assertNull(fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, "payload", IndexKind.OBJECT));
     }
@@ -1413,7 +1413,7 @@ public class FileSystemTest {
     public void test_hash_index_update_insert_then_remove()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "payload";
 
         FieldIndexEntry<String> inserted = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "cccc3333",
@@ -1435,7 +1435,7 @@ public class FileSystemTest {
     public void test_drop_index_removes_hash_index_files()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "payload";
         fileSystem.writeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, IndexKind.OBJECT, List
                 .of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "dddd4444", new HashSet<>(Set.of("a")))));
@@ -1451,7 +1451,7 @@ public class FileSystemTest {
     @Test
     public void test_delete_returns_compaction() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var entry1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -1476,7 +1476,7 @@ public class FileSystemTest {
     public void test_delete_last_entry_returns_null_compaction()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -1491,7 +1491,7 @@ public class FileSystemTest {
     public void test_update_returns_index_entry_and_compaction()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var entry1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -1519,7 +1519,7 @@ public class FileSystemTest {
     @Test
     public void test_sequential_deletes_applying_compaction_no_crash() throws Exception {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var pks = new ArrayList<PkIndexEntry>();
@@ -1554,7 +1554,7 @@ public class FileSystemTest {
     public void test_delete_with_over_eof_position_does_not_throw()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         final var data = new JsonObject();
         data.addProperty("name", "test");
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
@@ -1572,7 +1572,7 @@ public class FileSystemTest {
 
     private FileSystem freshFs() throws NoSuchFieldException, IllegalAccessException, IOException {
         FileSystem fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.createDatabaseFolder(TestGlobals.DB);
@@ -1698,7 +1698,7 @@ public class FileSystemTest {
     @Test
     public void test_compactTombstones_dedups_and_drops_old() throws Exception {
         final var fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "keep", 1000L);
         fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "keep", 2000L);
         fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "old", 100L);
@@ -1712,7 +1712,7 @@ public class FileSystemTest {
     @Test
     public void test_compactTombstones_missing_file_is_noop() throws Exception {
         final var fs = new FileSystem();
-        TestUtils.setPrivateField(fs, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.compactTombstones(TestGlobals.DB, "noSuchColl", 0L);
         assertTrue(fs.readTombstones(TestGlobals.DB, "noSuchColl").isEmpty());
     }
@@ -1721,7 +1721,7 @@ public class FileSystemTest {
     @Test
     public void test_document_with_newline_occupies_one_line() throws Exception {
         FileSystem fileSystem = new FileSystem();
-        TestUtils.setPrivateField(fileSystem, "dbPath", TestGlobals.PATH);
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         fileSystem.createBaseDbPath();
         fileSystem.createAdminDatabase();
         fileSystem.createDatabaseFolder(TestGlobals.DB);

@@ -32,7 +32,6 @@ public abstract class StoredDefinition {
         updatedBy = stringOrNull(object, UPDATED_BY_FIELD);
     }
 
-    // Written as a group so every definition's audit tail keeps the same key order on disk.
     protected void writeAuditFields(JsonObject json) {
         json.add(CREATED_AT_FIELD, new JsonNumber(createdAt));
         json.add(UPDATED_AT_FIELD, new JsonNumber(updatedAt));

@@ -190,6 +190,14 @@ public class TestUtils {
         field.set(null, fieldValue);
     }
 
+    public static void setDbPath(Object fileSystem, String path) throws NoSuchFieldException, IllegalAccessException {
+        setPrivateField(getPrivateField(fileSystem, "paths", Object.class), "dbPath", path);
+    }
+
+    public static String getDbPath(Object fileSystem) throws NoSuchFieldException, IllegalAccessException {
+        return getPrivateField(getPrivateField(fileSystem, "paths", Object.class), "dbPath", String.class);
+    }
+
     public static void deleteFolder(File folder) {
         File[] files = folder.listFiles();
         if (files != null) { //some JVMs return null for empty dirs
