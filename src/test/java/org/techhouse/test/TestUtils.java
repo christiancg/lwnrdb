@@ -202,6 +202,10 @@ public class TestUtils {
         return getPrivateField(adminCache, "pageCache", Object.class);
     }
 
+    public static Object usageTrackerOf(Object memoryManagement) throws NoSuchFieldException, IllegalAccessException {
+        return getPrivateField(memoryManagement, "usageTracker", Object.class);
+    }
+
     public static void deleteFolder(File folder) {
         File[] files = folder.listFiles();
         if (files != null) { //some JVMs return null for empty dirs

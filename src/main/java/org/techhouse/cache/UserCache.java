@@ -34,33 +34,11 @@ public class UserCache {
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
+    private final UsageTracker usageTracker = IocContainer.get(UsageTracker.class);
+    private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private final Map<String, List<PkIndexEntry>> pkIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, List<FieldIndexEntry<?>>>> fieldIndexMap = new ConcurrentHashMap<>();
     private final Map<String, Map<String, DbEntry>> collectionMap = new ConcurrentHashMap<>();
-    // Lazily initialized because UserCache <-> MemoryManagement is a construction-time cycle:
-    // MemoryManagement holds the cache eagerly, so we cannot hold MemoryManagement eagerly here
-    // without recursing through the IoC container during static init.
-    private MemoryManagement memoryManagement;
-    private BackgroundTaskManager taskManager;
-
-    private MemoryManagement memoryManagement() {
-        var mm = memoryManagement;
-        if (mm == null) {
-            mm = IocContainer.get(MemoryManagement.class);
-            memoryManagement = mm;
-        }
-        return mm;
-    }
-
-    private BackgroundTaskManager taskManager() {
-        var tm = taskManager;
-        if (tm == null) {
-            tm = IocContainer.get(BackgroundTaskManager.class);
-            taskManager = tm;
-        }
-        return tm;
-    }
-
     public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
@@ -104,7 +82,21 @@ public class UserCache {
         if (Globals.ADMIN_DB_NAME.equals(dbName)) {
             return true;
         }
-        return memoryManagement().admissionCheck(estimatedBytes) == AdmissionDecision.ADMIT;
+        if (configuration.isCachingDisabled()) {
+            return false;
+        }
+        if (configuration.isCacheUnlimited()) {
+            return true;
+        }
+        return footprintBytes() + estimatedBytes <= configuration.getMaxMemoryBytes();
+    }
+
+    private long footprintBytes() {
+        var total = 0L;
+        for (final var resource : listCacheableResources()) {
+            total += resource.estimatedSizeBytes();
+        }
+        return total;
     }
 
     // Contract: callers must hold the field's index lock (read lock for queries via
@@ -184,8 +176,8 @@ public class UserCache {
     }
 
     public void recordFieldIndexAccess(String dbName, String collName, String fieldName) {
-        memoryManagement().recordAccess(AccessKind.FIELD_INDEX, dbName, collName, fieldName);
-        taskManager().submitBackgroundTask(new CollectionUsageEvent(AccessKind.FIELD_INDEX, dbName, collName, fieldName,
+        usageTracker.recordAccess(AccessKind.FIELD_INDEX, dbName, collName, fieldName);
+        taskManager.submitBackgroundTask(new CollectionUsageEvent(AccessKind.FIELD_INDEX, dbName, collName, fieldName,
                 System.currentTimeMillis()));
     }
 

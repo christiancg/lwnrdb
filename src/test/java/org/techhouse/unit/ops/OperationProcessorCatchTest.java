@@ -48,10 +48,10 @@ public class OperationProcessorCatchTest {
         TestUtils.createTestDatabaseAndCollection();
         realAdminCache = TestUtils.getPrivateField(cache, "adminCache", AdminCache.class);
         realUserCache = TestUtils.getPrivateField(cache, "userCache", UserCache.class);
-        final var throwing = mock(AdminCache.class, invocation -> {
+        final var throwing = mock(AdminCache.class, _ -> {
             throw new RuntimeException("boom");
         });
-        final var throwingUser = mock(UserCache.class, invocation -> {
+        final var throwingUser = mock(UserCache.class, _ -> {
             throw new RuntimeException("boom");
         });
         TestUtils.setPrivateField(cache, "adminCache", throwing);

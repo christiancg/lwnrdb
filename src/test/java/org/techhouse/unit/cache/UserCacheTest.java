@@ -756,9 +756,7 @@ public class UserCacheTest {
         var fieldName = "time";
         var timeValue = new JsonTime("#time(10:00:00)");
         var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, timeValue);
-        @SuppressWarnings("unchecked")
-        List<FieldIndexEntry<Object>> idx = (List<FieldIndexEntry<Object>>) (List<?>) List
-                .of(new FieldIndexEntry<>(dbName, collName, timeValue, Set.of("id1")));
+        List<FieldIndexEntry<Object>> idx = List.of(new FieldIndexEntry<>(dbName, collName, timeValue, Set.of("id1")));
         when(cache.getFieldIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any())).thenReturn(idx);
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, (Object) timeValue)).thenCallRealMethod();
 
@@ -804,9 +802,7 @@ public class UserCacheTest {
         arr.add(new JsonNumber(10.0));
         arr.add(new JsonNumber(20.0));
         var operator = new FieldOperator(FieldOperatorType.IN, fieldName, arr);
-        @SuppressWarnings("unchecked")
-        List<FieldIndexEntry<Number>> idx = (List<FieldIndexEntry<Number>>) (List<?>) List.of(
-                new FieldIndexEntry<>(dbName, collName, 10.0, Set.of("id1")),
+        List<FieldIndexEntry<Number>> idx = List.of(new FieldIndexEntry<>(dbName, collName, 10.0, Set.of("id1")),
                 new FieldIndexEntry<>(dbName, collName, 30.0, Set.of("id2")));
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class)).thenReturn(idx);
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
@@ -1245,9 +1241,6 @@ public class UserCacheTest {
         UserCache cache = new UserCache();
         FileSystem fsMock = mock(FileSystem.class);
         TestUtils.setPrivateField(cache, "fs", fsMock);
-        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
-        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.ADMIT);
-        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
 
         final var collId = Cache.getCollectionIdentifier("userDb", "c1");
         injectPkIndex(cache, collId, List.of(new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0)));
@@ -1267,9 +1260,6 @@ public class UserCacheTest {
         UserCache cache = new UserCache();
         FileSystem fsMock = mock(FileSystem.class);
         TestUtils.setPrivateField(cache, "fs", fsMock);
-        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
-        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.ADMIT);
-        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
 
         final var collId = Cache.getCollectionIdentifier("userDb", "c1");
         final var pk1 = new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0);
@@ -1309,9 +1299,9 @@ public class UserCacheTest {
         UserCache cache = new UserCache();
         FileSystem fsMock = mock(FileSystem.class);
         TestUtils.setPrivateField(cache, "fs", fsMock);
-        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
-        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.REJECT);
-        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
+        final var config = Configuration.getInstance();
+        final var savedMaxMemory = TestUtils.getPrivateField(config, "maxMemoryBytes", Long.class);
+        TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
 
         final var collId = Cache.getCollectionIdentifier("userDb", "c1");
         injectPkIndex(cache, collId, List.of(new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0)));
@@ -1319,7 +1309,12 @@ public class UserCacheTest {
         readObj.addProperty(Globals.PK_FIELD, "id1");
         when(fsMock.getByIndexEntries(anyList())).thenReturn(List.of(DbEntry.fromJsonObject("userDb", "c1", readObj)));
 
-        final var result = cache.getEntriesByIds("userDb", "c1", Set.of("id1"));
+        final List<DbEntry> result;
+        try {
+            result = cache.getEntriesByIds("userDb", "c1", Set.of("id1"));
+        } finally {
+            TestUtils.setPrivateField(config, "maxMemoryBytes", savedMaxMemory);
+        }
 
         assertEquals(1, result.size());
         final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
@@ -1363,9 +1358,6 @@ public class UserCacheTest {
         UserCache cache = new UserCache();
         FileSystem fsMock = mock(FileSystem.class);
         TestUtils.setPrivateField(cache, "fs", fsMock);
-        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
-        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.ADMIT);
-        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
 
         final var collId = Cache.getCollectionIdentifier("userDb", "c1");
         injectPkIndex(cache, collId, List.of(new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0)));
@@ -1412,9 +1404,6 @@ public class UserCacheTest {
         UserCache cache = new UserCache();
         FileSystem fsMock = mock(FileSystem.class);
         TestUtils.setPrivateField(cache, "fs", fsMock);
-        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
-        when(mmMock.admissionCheck(anyLong())).thenReturn(org.techhouse.cache.AdmissionDecision.ADMIT);
-        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
 
         final var collId = Cache.getCollectionIdentifier("userDb", "c1");
         final var livePk = new PkIndexEntry("userDb", "c1", "id1", 100L, 50, 0);

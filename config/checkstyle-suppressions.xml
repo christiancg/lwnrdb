@@ -20,6 +20,5 @@
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]AdminOperationHelper\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]IndexHelper\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]ops[\\/]FilterOperatorHelper\.java" checks="FileLength"/>
-    <suppress files="org[\\/]techhouse[\\/]cache[\\/]Cache\.java" checks="FileLength"/>
     <suppress files="org[\\/]techhouse[\\/]cluster[\\/]AdminAntiEntropyService\.java" checks="FileLength"/>
 </suppressions>

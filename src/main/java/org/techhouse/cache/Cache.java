@@ -1,13 +1,11 @@
 package org.techhouse.cache;
 
 import java.io.IOException;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Predicate;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.config.Configuration;
@@ -15,14 +13,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
-import org.techhouse.data.PkIndexEntry;
-import org.techhouse.data.ProcedureDefinition;
-import org.techhouse.data.ScheduleDefinition;
-import org.techhouse.data.TriggerDefinition;
-import org.techhouse.data.admin.AdminCollEntry;
-import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
-import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.fs.PkCompaction;
@@ -38,23 +29,20 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
  * facade stays a concrete IoC singleton so the existing
  * {@code IocContainer.get(Cache.class)} call sites are unchanged.
  */
-public class Cache {
+public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final AdminCache adminCache = IocContainer.get(AdminCache.class);
     private final UserCache userCache = IocContainer.get(UserCache.class);
-    // Lazily initialized because the cache <-> MemoryManagement relationship is a
-    // construction-time cycle: MemoryManagement holds the cache eagerly, so we cannot hold
-    // MemoryManagement eagerly here without recursing through the IoC container during init.
-    private MemoryManagement memoryManagement;
+    private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    @Override
+    public UserCache userCache() {
+        return userCache;
+    }
 
-    private MemoryManagement memoryManagement() {
-        var mm = memoryManagement;
-        if (mm == null) {
-            mm = IocContainer.get(MemoryManagement.class);
-            memoryManagement = mm;
-        }
-        return mm;
+    @Override
+    public AdminCache adminCache() {
+        return adminCache;
     }
 
     public static String getCollectionIdentifier(String dbName, String collName) {
@@ -68,16 +56,6 @@ public class Cache {
 
     public static String getIndexIdentifier(String fieldName, String typeLabel) {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + typeLabel;
-    }
-
-    public void loadAdminData() throws IOException {
-        adminCache.loadAdminData();
-    }
-
-    // ── User document / index cache (delegated to UserCache) ──────────────────
-
-    public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
-        return userCache.getPkIndexAndLoadIfNecessary(dbName, collName);
     }
 
     /**
@@ -114,22 +92,6 @@ public class Cache {
         return userCache.getIdsFromIndex(dbName, collName, fieldName, operator, value);
     }
 
-    public void recordFieldIndexAccess(String dbName, String collName, String fieldName) {
-        userCache.recordFieldIndexAccess(dbName, collName, fieldName);
-    }
-
-    public void addEntryToCache(String dbName, String collName, DbEntry entry) {
-        userCache.addEntryToCache(dbName, collName, entry);
-    }
-
-    public void addEntriesToCache(String dbName, String collName, List<DbEntry> entries) {
-        userCache.addEntriesToCache(dbName, collName, entries);
-    }
-
-    public DbEntry getById(String dbName, String collName, PkIndexEntry idxEntry) throws Exception {
-        return userCache.getById(dbName, collName, idxEntry);
-    }
-
     public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {
         final var entries = userCache.getEntriesByIds(dbName, collName, ids);
         recordScanned(entries.size());
@@ -142,10 +104,6 @@ public class Cache {
         if (analyzeContext != null) {
             analyzeContext.addScanned(count);
         }
-    }
-
-    public void evictEntry(String dbName, String collName, String pk) {
-        userCache.evictEntry(dbName, collName, pk);
     }
 
     public void evictDatabase(String dbName) {
@@ -161,16 +119,6 @@ public class Cache {
         adminCache.removeCollectionSchema(dbName, collName);
         adminCache.removeTriggers(dbName, collName);
     }
-
-    public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
-        userCache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-    }
-
-    public List<CacheableResource> listCacheableResources() {
-        return userCache.listCacheableResources();
-    }
-
-    // ── Cross-cutting reads (combine user documents with admin page metadata) ──
 
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {
         final var wholeCollection = userCache.getCachedCollection(dbName, collName);
@@ -240,7 +188,7 @@ public class Cache {
         // released for GC before the next is read.
         return sortedPages.stream().flatMap(pageEntry -> {
             final var estimate = pageEntry.getPageSize() > 0 ? pageEntry.getPageSize() : maxPageBytes;
-            memoryManagement().ensureHeadroomForBytes(estimate);
+            memoryManagement.ensureHeadroomForBytes(estimate);
             try {
                 return fs.readWholeCollectionPage(dbName, collName, pageEntry.getPage()).values().stream();
             } catch (IOException e) {
@@ -265,258 +213,13 @@ public class Cache {
         return result;
     }
 
-    // ── Admin metadata cache (delegated to AdminCache) ────────────────────────
-
-    public long selectPageForInsert(String dbName, String collName, int entryByteSize) {
-        return adminCache.selectPageForInsert(dbName, collName, entryByteSize);
-    }
-
     public long selectPageForInsert(String dbName, String collName, int entryByteSize,
             Map<Long, Long> pendingPageBytes) {
         return adminCache.selectPageForInsert(dbName, collName, entryByteSize, pendingPageBytes);
-    }
-
-    public PkIndexEntry getPkIndexAdminDbEntry(String dbName) {
-        return adminCache.getPkIndexAdminDbEntry(dbName);
-    }
-
-    public void putPkIndexAdminDbEntry(PkIndexEntry adminPkIndexAdminDbEntry) {
-        adminCache.putPkIndexAdminDbEntry(adminPkIndexAdminDbEntry);
-    }
-
-    public AdminDbEntry getAdminDbEntry(String dbName) {
-        return adminCache.getAdminDbEntry(dbName);
-    }
-
-    public Collection<AdminDbEntry> getAllAdminDbEntries() {
-        return adminCache.getAllAdminDbEntries();
-    }
-
-    public List<String> getUserDatabaseNames() {
-        return adminCache.getUserDatabaseNames();
-    }
-
-    public List<String> getCollectionNamesForDatabase(String dbName) {
-        return adminCache.getCollectionNamesForDatabase(dbName);
-    }
-
-    public PkIndexEntry getPkIndexAdminCollEntry(String collIdentifier) {
-        return adminCache.getPkIndexAdminCollEntry(collIdentifier);
-    }
-
-    public void putPkIndexAdminCollEntry(PkIndexEntry adminPkIndexAdminCollEntry) {
-        adminCache.putPkIndexAdminCollEntry(adminPkIndexAdminCollEntry);
-    }
-
-    public AdminCollEntry getAdminCollectionEntry(String dbName, String collName) {
-        return adminCache.getAdminCollectionEntry(dbName, collName);
-    }
-
-    public List<AdminPageEntry> getAdminPageEntries(String dbName, String collName) {
-        return adminCache.getAdminPageEntries(dbName, collName);
-    }
-
-    public AdminPageEntry getAdminPageEntry(String dbName, String collName, long page) {
-        return adminCache.getAdminPageEntry(dbName, collName, page);
-    }
-
-    public void putAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
-        adminCache.putAdminPageEntries(dbName, collName, adminPageEntries);
-    }
-
-    public void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
-        adminCache.addAdminPageEntries(dbName, collName, adminPageEntry);
-    }
-
-    public void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
-        adminCache.updatePageSizeInMemory(dbName, collName, page, bytesDelta);
-    }
-
-    public List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
-        return adminCache.getAdminPagePkIndexes(dbName, collName);
-    }
-
-    public void removeAdminPageEntries(String dbName, String collName) {
-        adminCache.removeAdminPageEntries(dbName, collName);
-    }
-
-    public void putAdminDbEntry(AdminDbEntry dbEntry, PkIndexEntry indexEntry) {
-        adminCache.putAdminDbEntry(dbEntry, indexEntry);
-    }
-
-    public void removeAdminDbEntry(String dbName) {
-        adminCache.removeAdminDbEntry(dbName);
-    }
-
-    public void putAdminCollectionEntry(AdminCollEntry dbEntry, PkIndexEntry indexEntry) {
-        adminCache.putAdminCollectionEntry(dbEntry, indexEntry);
-    }
-
-    public void removeAdminCollEntry(String collIdentifier) {
-        adminCache.removeAdminCollEntry(collIdentifier);
     }
 
     public boolean hasNoIndex(String dbName, String collName, String fieldName) {
         return !adminCache.hasIndex(dbName, collName, fieldName);
     }
 
-    public Set<String> getIndexesForCollection(String dbName, String collName) {
-        return adminCache.getIndexesForCollection(dbName, collName);
-    }
-
-    public JsonObject getCollectionSchema(String dbName, String collName) {
-        return adminCache.getCollectionSchema(dbName, collName);
-    }
-
-    public void putCollectionSchema(String dbName, String collName, JsonObject schema) {
-        adminCache.putCollectionSchema(dbName, collName, schema);
-    }
-
-    public void removeCollectionSchema(String dbName, String collName) {
-        adminCache.removeCollectionSchema(dbName, collName);
-    }
-
-    public void removeCollectionSchemasForDatabase(String dbName) {
-        adminCache.removeCollectionSchemasForDatabase(dbName);
-    }
-
-    public JsonObject loadSchemaUncached(String dbName, String collName) {
-        return adminCache.loadSchemaUncached(dbName, collName);
-    }
-
-    public ProcedureDefinition getProcedure(String dbName, String name) {
-        return adminCache.getProcedure(dbName, name);
-    }
-
-    public void putProcedure(String dbName, ProcedureDefinition definition) {
-        adminCache.putProcedure(dbName, definition);
-    }
-
-    public void removeProcedure(String dbName, String name) {
-        adminCache.removeProcedure(dbName, name);
-    }
-
-    public void removeProceduresForDatabase(String dbName) {
-        adminCache.removeProceduresForDatabase(dbName);
-    }
-
-    public ProcedureDefinition loadProcedureUncached(String dbName, String name) {
-        return adminCache.loadProcedureUncached(dbName, name);
-    }
-
-    public List<TriggerDefinition> getTriggersFor(String dbName, String collName) {
-        return adminCache.getTriggersFor(dbName, collName);
-    }
-
-    public void putTriggers(String dbName, String collName, List<TriggerDefinition> definitions) {
-        adminCache.putTriggers(dbName, collName, definitions);
-    }
-
-    public void removeTriggers(String dbName, String collName) {
-        adminCache.removeTriggers(dbName, collName);
-    }
-
-    public void removeTriggersMatching(Predicate<String> keyMatches) {
-        adminCache.removeTriggersMatching(keyMatches);
-    }
-
-    public List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
-        return adminCache.loadTriggersUncached(dbName, collName);
-    }
-
-    public ScheduleDefinition getSchedule(String dbName, String name) {
-        return adminCache.getSchedule(dbName, name);
-    }
-
-    public ScheduleDefinition loadScheduleUncached(String dbName, String name) {
-        return adminCache.loadScheduleUncached(dbName, name);
-    }
-
-    public void putSchedule(String dbName, ScheduleDefinition definition) {
-        adminCache.putSchedule(dbName, definition);
-    }
-
-    public void removeSchedule(String dbName, String name) {
-        adminCache.removeSchedule(dbName, name);
-    }
-
-    public void removeSchedulesForDatabase(String dbName) {
-        adminCache.removeSchedulesForDatabase(dbName);
-    }
-
-    public void removeSchedulesMatching(Predicate<String> keyMatches) {
-        adminCache.removeSchedulesMatching(keyMatches);
-    }
-
-    public MetadataCacheStats metadataCacheStats() {
-        return adminCache.metadataCacheStats();
-    }
-
-    public AdminUserEntry getAdminUserEntry(String username) {
-        return adminCache.getAdminUserEntry(username);
-    }
-
-    public Collection<AdminUserEntry> getAllAdminUserEntries() {
-        return adminCache.getAllAdminUserEntries();
-    }
-
-    public void putAdminUserEntry(AdminUserEntry userEntry, PkIndexEntry indexEntry) {
-        adminCache.putAdminUserEntry(userEntry, indexEntry);
-    }
-
-    public void removeAdminUserEntry(String username) {
-        adminCache.removeAdminUserEntry(username);
-    }
-
-    public PkIndexEntry getPkIndexAdminUserEntry(String username) {
-        return adminCache.getPkIndexAdminUserEntry(username);
-    }
-
-    public PkIndexEntry getPkIndexCollectionUsage(String usageId) {
-        return adminCache.getPkIndexCollectionUsage(usageId);
-    }
-
-    public void putPkIndexCollectionUsage(PkIndexEntry indexEntry) {
-        adminCache.putPkIndexCollectionUsage(indexEntry);
-    }
-
-    public void removePkIndexCollectionUsage(String usageId) {
-        adminCache.removePkIndexCollectionUsage(usageId);
-    }
-
-    public Map<String, PkIndexEntry> getCollectionUsagePkIndexes() {
-        return adminCache.getCollectionUsagePkIndexes();
-    }
-
-    public PkIndexEntry getPkIndexTransaction(String opId) {
-        return adminCache.getPkIndexTransaction(opId);
-    }
-
-    public void putPkIndexTransaction(PkIndexEntry indexEntry) {
-        adminCache.putPkIndexTransaction(indexEntry);
-    }
-
-    public void removePkIndexTransaction(String opId) {
-        adminCache.removePkIndexTransaction(opId);
-    }
-
-    public Map<String, PkIndexEntry> getTransactionPkIndexes() {
-        return adminCache.getTransactionPkIndexes();
-    }
-
-    public PkIndexEntry getPkIndexTriggerRun(String recordId) {
-        return adminCache.getPkIndexTriggerRun(recordId);
-    }
-
-    public void putPkIndexTriggerRun(PkIndexEntry indexEntry) {
-        adminCache.putPkIndexTriggerRun(indexEntry);
-    }
-
-    public void removePkIndexTriggerRun(String recordId) {
-        adminCache.removePkIndexTriggerRun(recordId);
-    }
-
-    public Map<String, PkIndexEntry> getTriggerRunPkIndexes() {
-        return adminCache.getTriggerRunPkIndexes();
-    }
 }
