@@ -126,7 +126,7 @@ public class CacheTest {
         final var typePages = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {
         };
         final var adminCache = IocContainer.get(org.techhouse.cache.AdminCache.class);
-        final var pagesMap = TestUtils.getPrivateField(adminCache, "pages", typePages);
+        final var pagesMap = TestUtils.getPrivateField(TestUtils.pageCacheOf(adminCache), "pages", typePages);
         pagesMap.put(collectionIdentifier, pageList);
 
         DbEntry entry1 = new DbEntry();
@@ -281,7 +281,7 @@ public class CacheTest {
         };
         // Page metadata lives on the AdminCache singleton, which the facade reads through.
         final var adminCache = IocContainer.get(org.techhouse.cache.AdminCache.class);
-        final var pages = TestUtils.getPrivateField(adminCache, "pages", type);
+        final var pages = TestUtils.getPrivateField(TestUtils.pageCacheOf(adminCache), "pages", type);
         pages.put(collId, pageList);
     }
 

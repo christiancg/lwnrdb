@@ -53,8 +53,8 @@ public class TestUtils {
         TestUtils.setPrivateField(userCache, "collectionMap", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(userCache, "fieldIndexMap", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(userCache, "pkIndexMap", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(adminCache, "pages", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(adminCache, "pagesPkIndexes", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(pageCacheOf(adminCache), "pages", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(pageCacheOf(adminCache), "pagesPkIndexes", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "transactionsPkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "triggerRunsPkIndex", new ConcurrentHashMap<>());
@@ -196,6 +196,10 @@ public class TestUtils {
 
     public static String getDbPath(Object fileSystem) throws NoSuchFieldException, IllegalAccessException {
         return getPrivateField(getPrivateField(fileSystem, "paths", Object.class), "dbPath", String.class);
+    }
+
+    public static Object pageCacheOf(Object adminCache) throws NoSuchFieldException, IllegalAccessException {
+        return getPrivateField(adminCache, "pageCache", Object.class);
     }
 
     public static void deleteFolder(File folder) {

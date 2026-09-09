@@ -5,18 +5,16 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import org.techhouse.config.Globals;
 
-// One disk-derived definition family (schemas, procedures, schedules): loaded lazily on first access
-// and negatively cached on absence, so a name that does not exist on disk is read once rather than on
-// every call. Misses live in a cache separate from the values, so a caller naming thousands of
-// nonexistent definitions cannot evict the ones in use.
+// Misses are held in a cache separate from the values, so a caller naming thousands of nonexistent
+// definitions cannot evict the ones in use.
 final class DefinitionCache<T> {
     private final Supplier<BoundedLruCache<T>> values;
     private final Supplier<BoundedLruCache<Boolean>> misses;
     private final String missPrefix;
     private final BiFunction<String, String, T> loader;
 
-    // The caches are resolved per call rather than captured: AdminCache owns them, so reading them
-    // through it keeps one source of truth even when an instance is replaced underneath.
+    // Resolved per call, not captured: AdminCache owns these caches, and holding a direct reference
+    // would keep answering from a stale one if an instance is ever replaced underneath.
     DefinitionCache(Supplier<BoundedLruCache<T>> values, Supplier<BoundedLruCache<Boolean>> misses, String missPrefix,
             BiFunction<String, String, T> loader) {
         this.values = values;

@@ -305,7 +305,7 @@ public class AdminCacheTest {
         final var entry = new PkIndexEntry(Globals.ADMIN_PAGES_DB_NAME, pagesCollName, "p1", 30, 10, 0);
         final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
         };
-        TestUtils.getPrivateField(cache, "pagesPkIndexes", type).put(
+        TestUtils.getPrivateField(TestUtils.pageCacheOf(cache), "pagesPkIndexes", type).put(
                 Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, pagesCollName),
                 new ArrayList<>(List.of(entry)));
 
@@ -501,7 +501,7 @@ public class AdminCacheTest {
         list.add(p2);
         final var type = new ReflectionUtils.TypeToken<Map<String, List<AdminPageEntry>>>() {
         };
-        final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
+        final var pagesMap = TestUtils.getPrivateField(TestUtils.pageCacheOf(cache), "pages", type);
         pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
 
         long target = cache.selectPageForInsert("myDb", "myColl", 100);
@@ -524,7 +524,7 @@ public class AdminCacheTest {
         list.add(p1);
         final var type = new ReflectionUtils.TypeToken<Map<String, List<AdminPageEntry>>>() {
         };
-        final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
+        final var pagesMap = TestUtils.getPrivateField(TestUtils.pageCacheOf(cache), "pages", type);
         pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
 
         long target = cache.selectPageForInsert("myDb", "myColl", 100_000); // 100KB, doesn't fit anywhere
@@ -542,7 +542,7 @@ public class AdminCacheTest {
         list.add(p0);
         final var type = new ReflectionUtils.TypeToken<Map<String, List<AdminPageEntry>>>() {
         };
-        final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
+        final var pagesMap = TestUtils.getPrivateField(TestUtils.pageCacheOf(cache), "pages", type);
         pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
 
         // 1MB existing + 500KB pending + 100KB new = 1.6MB, still under 2MB cap
@@ -643,8 +643,8 @@ public class AdminCacheTest {
         TestUtils.setPrivateField(cache, "collections", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(cache, "databasesPkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(cache, "collectionsPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "pages", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "pagesPkIndexes", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(TestUtils.pageCacheOf(cache), "pages", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(TestUtils.pageCacheOf(cache), "pagesPkIndexes", new ConcurrentHashMap<>());
 
         // Reload admin data — should find the saved database and collection
         cache.loadAdminData();

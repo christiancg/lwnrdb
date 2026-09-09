@@ -1,13 +1,11 @@
 package org.techhouse.cache;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -47,11 +45,10 @@ public class AdminCache {
     private final Map<String, AdminDbEntry> databases = new ConcurrentHashMap<>();
     private final Map<String, AdminCollEntry> collections = new ConcurrentHashMap<>();
     private final Map<String, AdminUserEntry> users = new ConcurrentHashMap<>();
-    private final Map<String, List<AdminPageEntry>> pages = new ConcurrentHashMap<>();
+    private final AdminPageCache pageCache = new AdminPageCache();
     private final Map<String, PkIndexEntry> databasesPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionsPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> usersPkIndex = new ConcurrentHashMap<>();
-    private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionUsagePkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> transactionsPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> triggerRunsPkIndex = new ConcurrentHashMap<>();
@@ -81,7 +78,7 @@ public class AdminCache {
         for (var collName : List.of(Globals.ADMIN_DATABASES_COLLECTION_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
                 Globals.ADMIN_USERS_COLLECTION_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
                 Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME)) {
-            loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, collName);
+            pageCache.loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, collName);
         }
         loadPkIndexInto(Globals.ADMIN_COLLECTION_USAGE_NAME, collectionUsagePkIndex);
         loadPkIndexInto(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, transactionsPkIndex);
@@ -98,7 +95,7 @@ public class AdminCache {
             final var parts = collEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
             if (parts.length < 2)
                 continue;
-            loadAdminPagesForCollection(parts[0], parts[1]);
+            pageCache.loadAdminPagesForCollection(parts[0], parts[1]);
         }
     }
 
@@ -127,44 +124,73 @@ public class AdminCache {
         loadAdminEntries(readWholeAdminCollection(collName), collName, factory, target);
     }
 
-    private void loadAdminPagesForCollection(String dbName, String collName) throws IOException {
-        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
-        final var collId = Cache.getCollectionIdentifier(dbName, collName);
-        final var pkIdx = fs.readWholePkIndexFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
-        // The PK index loaded here belongs to pagesCollName (the file on disk that holds the
-        // AdminPageEntries for `collName`). It must be keyed by (admin_pages, pagesCollName) because
-        // that's where insertAdminPages / updateTouchedPagesInFileSystem look it up.
-        pagesPkIndexes.put(Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, pagesCollName),
-                new ArrayList<>(pkIdx));
-        final var pageEntries = new ArrayList<AdminPageEntry>();
-        try (var pagesStream = fs.streamPages(Globals.ADMIN_PAGES_DB_NAME, pagesCollName)) {
-            pagesStream.forEach(map -> map.values().stream()
-                    .map(e -> AdminPageEntry.fromJsonObject(dbName, collName, e.getData())).forEach(pageEntries::add));
-        }
-        pages.put(collId, pageEntries);
-        rebuildInMemoryPagesFromPkIndex(pagesCollName, pkIdx);
-    }
-
-    private void rebuildInMemoryPagesFromPkIndex(String collName, List<PkIndexEntry> pkIdx) {
-        final var byPage = pkIdx.stream().collect(Collectors.groupingBy(PkIndexEntry::getPage));
-        final var entries = new ArrayList<AdminPageEntry>();
-        for (var e : byPage.entrySet()) {
-            final var pageNum = e.getKey();
-            final var pkList = e.getValue();
-            final var entry = new AdminPageEntry(Globals.ADMIN_PAGES_DB_NAME, collName, pageNum);
-            entry.setEntryCount(pkList.size());
-            entry.setPageSize(pkList.stream().mapToLong(PkIndexEntry::getLength).sum());
-            entries.add(entry);
-        }
-        pages.put(Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, collName), entries);
-    }
-
     private Map<String, DbEntry> readWholeAdminCollection(String collName) throws IOException {
         final var result = new HashMap<String, DbEntry>();
         try (var pagesStream = fs.streamPages(Globals.ADMIN_DB_NAME, collName)) {
             pagesStream.forEach(result::putAll);
         }
         return result;
+    }
+
+    public List<AdminPageEntry> getAdminPageEntries(String dbName, String collName) {
+        return pageCache.getAdminPageEntries(dbName, collName);
+    }
+
+    public AdminPageEntry getAdminPageEntry(String dbName, String collName, long page) {
+        return pageCache.getAdminPageEntry(dbName, collName, page);
+    }
+
+    public void putAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
+        pageCache.putAdminPageEntries(dbName, collName, adminPageEntries);
+    }
+
+    public void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
+        pageCache.addAdminPageEntries(dbName, collName, adminPageEntry);
+    }
+
+    public void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
+        pageCache.updatePageSizeInMemory(dbName, collName, page, bytesDelta);
+    }
+
+    public List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
+        return pageCache.getAdminPagePkIndexes(dbName, collName);
+    }
+
+    /**
+     * Keeps the cached admin PK index positions consistent after a single-entry page compaction on
+     * the given admin collection, dispatching to the matching PK structure (databases, collections,
+     * users, collection_usage, or a page-metadata collection). Every cached entry on {@code page}
+     * whose position is greater than {@code removedPosition} shifted toward the start of the file by
+     * {@code removedLength}; entries are mutated in place.
+     */
+    public void shiftPkPositionsAfterCompaction(String collName, long page, long removedPosition, long removedLength) {
+        final Collection<PkIndexEntry> entries = switch (collName) {
+            case Globals.ADMIN_DATABASES_COLLECTION_NAME -> databasesPkIndex.values();
+            case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> collectionsPkIndex.values();
+            case Globals.ADMIN_USERS_COLLECTION_NAME -> usersPkIndex.values();
+            case Globals.ADMIN_COLLECTION_USAGE_NAME -> collectionUsagePkIndex.values();
+            case Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME -> transactionsPkIndex.values();
+            case Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME -> triggerRunsPkIndex.values();
+            case null, default -> pageCache.pkIndexesForPagesCollection(collName);
+        };
+        for (final var entry : entries) {
+            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
+                entry.setPosition(entry.getPosition() - removedLength);
+            }
+        }
+    }
+
+    public void removeAdminPageEntries(String dbName, String collName) {
+        pageCache.removeAdminPageEntries(dbName, collName);
+    }
+
+    public long selectPageForInsert(String dbName, String collName, int entryByteSize) {
+        return pageCache.selectPageForInsert(dbName, collName, entryByteSize);
+    }
+
+    public long selectPageForInsert(String dbName, String collName, int entryByteSize,
+            Map<Long, Long> pendingBytesByPage) {
+        return pageCache.selectPageForInsert(dbName, collName, entryByteSize, pendingBytesByPage);
     }
 
     public PkIndexEntry getPkIndexAdminDbEntry(String dbName) {
@@ -205,80 +231,6 @@ public class AdminCache {
         return collections.get(Cache.getCollectionIdentifier(dbName, collName));
     }
 
-    public List<AdminPageEntry> getAdminPageEntries(String dbName, String collName) {
-        return pages.get(Cache.getCollectionIdentifier(dbName, collName));
-    }
-
-    public AdminPageEntry getAdminPageEntry(String dbName, String collName, long page) {
-        final var entries = pages.get(Cache.getCollectionIdentifier(dbName, collName));
-        if (entries == null)
-            return null;
-        return entries.stream().filter(p -> p.getPage() == page).findFirst().orElse(null);
-    }
-
-    public void putAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
-        pages.put(Cache.getCollectionIdentifier(dbName, collName), adminPageEntries);
-    }
-
-    public void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
-        pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>())
-                .add(adminPageEntry);
-    }
-
-    public void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
-        final var pageEntries = pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
-                _ -> new ArrayList<>());
-        final var existing = pageEntries.stream().filter(p -> p.getPage() == page).findFirst();
-        if (existing.isPresent()) {
-            existing.get().setPageSize(existing.get().getPageSize() + bytesDelta);
-            existing.get().setEntryCount(existing.get().getEntryCount() + 1);
-        } else {
-            final var newEntry = new AdminPageEntry(dbName, collName, page);
-            newEntry.setPageSize(bytesDelta);
-            newEntry.setEntryCount(1);
-            pageEntries.add(newEntry);
-        }
-    }
-
-    public List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
-        return pagesPkIndexes.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
-    }
-
-    /**
-     * Keeps the cached admin PK index positions consistent after a single-entry page compaction on
-     * the given admin collection, dispatching to the matching PK structure (databases, collections,
-     * users, collection_usage, or a page-metadata collection). Every cached entry on {@code page}
-     * whose position is greater than {@code removedPosition} shifted toward the start of the file by
-     * {@code removedLength}; entries are mutated in place.
-     */
-    public void shiftPkPositionsAfterCompaction(String collName, long page, long removedPosition, long removedLength) {
-        final Collection<PkIndexEntry> entries;
-        switch (collName) {
-            case Globals.ADMIN_DATABASES_COLLECTION_NAME -> entries = databasesPkIndex.values();
-            case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> entries = collectionsPkIndex.values();
-            case Globals.ADMIN_USERS_COLLECTION_NAME -> entries = usersPkIndex.values();
-            case Globals.ADMIN_COLLECTION_USAGE_NAME -> entries = collectionUsagePkIndex.values();
-            case Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME -> entries = transactionsPkIndex.values();
-            case Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME -> entries = triggerRunsPkIndex.values();
-            case null, default -> {
-                final var list = pagesPkIndexes
-                        .get(Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, collName));
-                entries = list != null ? list : List.of();
-            }
-        }
-        for (final var entry : entries) {
-            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
-                entry.setPosition(entry.getPosition() - removedLength);
-            }
-        }
-    }
-
-    public void removeAdminPageEntries(String dbName, String collName) {
-        final var collId = Cache.getCollectionIdentifier(dbName, collName);
-        pages.remove(collId);
-        pagesPkIndexes.remove(collId);
-    }
-
     public void putAdminDbEntry(AdminDbEntry dbEntry, PkIndexEntry indexEntry) {
         databases.put(dbEntry.get_id(), dbEntry);
         databasesPkIndex.put(dbEntry.get_id(), indexEntry);
@@ -298,34 +250,6 @@ public class AdminCache {
     public void removeAdminCollEntry(String collIdentifier) {
         collections.remove(collIdentifier);
         collectionsPkIndex.remove(collIdentifier);
-    }
-
-    public long selectPageForInsert(String dbName, String collName, int entryByteSize) {
-        return selectPageForInsert(dbName, collName, entryByteSize, Map.of());
-    }
-
-    public long selectPageForInsert(String dbName, String collName, int entryByteSize,
-            Map<Long, Long> pendingPageBytes) {
-        final var maxPageBytes = configuration.getMaxPageSize();
-        final var pageEntries = pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
-                _ -> new ArrayList<>());
-        // First-fit must also consider pages allocated earlier in the same in-flight batch (present
-        // only in pendingPageBytes, not yet committed to pageEntries) — otherwise a single bulk insert
-        // into a fresh collection scatters every entry onto its own new page.
-        final var committedSizeByPage = pageEntries.stream()
-                .collect(Collectors.toMap(AdminPageEntry::getPage, AdminPageEntry::getPageSize));
-        final var candidatePages = new TreeSet<>(committedSizeByPage.keySet());
-        candidatePages.addAll(pendingPageBytes.keySet());
-        for (final long page : candidatePages) {
-            final var effectiveSize = committedSizeByPage.getOrDefault(page, 0L)
-                    + pendingPageBytes.getOrDefault(page, 0L);
-            if (effectiveSize + entryByteSize <= maxPageBytes) {
-                return page;
-            }
-        }
-        final var maxKnownPage = pageEntries.stream().mapToLong(AdminPageEntry::getPage).max().orElse(-1L);
-        final var maxPendingPage = pendingPageBytes.keySet().stream().mapToLong(Long::longValue).max().orElse(-1L);
-        return Math.max(maxKnownPage, maxPendingPage) + 1L;
     }
 
     public boolean hasIndex(String dbName, String collName, String fieldName) {
