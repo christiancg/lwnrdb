@@ -41,18 +41,16 @@ The server lifecycle is managed via a tracked subprocess handle (not pgrep), so 
 it never touches an unrelated LWNRDB process.
 """
 
-from __future__ import annotations
-
-import json
 import os
-import socket
-import subprocess
 import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable
 from typing import Optional
+
+import base_utils as bu
+from base_utils import check, check_code, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SCRIPT_CONTROL_TEST_PORT", "8998"))
@@ -63,11 +61,10 @@ DB = "script_control_db"
 COLL = "docs"
 OUT_COLL = "sideeffects"
 
-PASS = "\033[92mPASS\033[0m"
-FAIL = "\033[91mFAIL\033[0m"
-
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = bu.REPO_ROOT
+
+bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 # Long enough that no test's own patience can be mistaken for the sandbox giving up: every
 # run in this suite ends because it was cancelled, finished, or the test failed.
@@ -83,66 +80,11 @@ BUSY_SCRIPT = "while (true) { }"
 INSTRUCTION_BUDGET = 1_000_000_000_000
 TICK_MS = 200
 
-failures = 0
-
-
-# ── reporting helpers (mirrors the other suites) ─────────────────────────────
-
-def section(title: str):
-    print(f"\n{'─' * 70}")
-    print(f"  {title}")
-    print(f"{'─' * 70}")
-
-
-def check(label: str, ok: bool, detail: str = ""):
-    global failures
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    if detail and not ok:
-        print(f"         {detail}")
-    if not ok:
-        failures += 1
-
-
-def check_status(label: str, response: dict, expected_status: str):
-    check(label, response.get("status") == expected_status,
-          f"expected status={expected_status} got={response.get('status')} "
-          f"code={response.get('errorCode')} msg={response.get('message')!r}")
-
-
-def check_code(label: str, response: dict, expected_status: str, expected_code: str):
-    ok = response.get("status") == expected_status and response.get("errorCode") == expected_code
-    check(label, ok,
-          f"expected {expected_status}/{expected_code} got {response.get('status')}/"
-          f"{response.get('errorCode')} msg={response.get('message')!r}")
 
 
 # ── connection / protocol ────────────────────────────────────────────────────
 
-class Conn:
-    def __init__(self, timeout=60):
-        self.s = socket.create_connection((HOST, PORT), timeout=timeout)
-        self.f = self.s.makefile("rb")
-
-    def send(self, payload: dict) -> dict:
-        try:
-            self.s.sendall((json.dumps(payload) + "\n").encode())
-        except (BrokenPipeError, OSError) as e:
-            return {"status": "ERROR", "message": f"send failed: {e}"}
-        try:
-            raw = self.f.readline().decode().strip()
-        except (OSError, ConnectionError) as e:
-            return {"status": "ERROR", "message": f"read failed: {e}"}
-        if not raw:
-            return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-        try:
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            return {"status": "ERROR", "message": raw}
-
-    def authenticate(self, username=ADMIN_USERNAME, password=ADMIN_PASSWORD) -> dict:
-        return self.send({"type": "AUTHENTICATE", "username": username, "password": password})
-
+class Conn(bu.Conn):
     def run(self, script: str, args=None, db=DB) -> dict:
         payload = {"type": "RUN_SCRIPT", "databaseName": db, "script": script}
         if args is not None:
@@ -176,19 +118,6 @@ class Conn:
     def trigger_stats(self) -> dict:
         response = self.send({"type": "GET_DATABASE_STATS"})
         return ((response.get("stats") or {}).get("triggers") or {})
-
-    def close(self):
-        try:
-            self.s.close()
-        except OSError:
-            pass
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *_):
-        self.close()
-
 
 def admin_conn(timeout=60) -> Conn:
     conn = Conn(timeout=timeout)
@@ -300,61 +229,6 @@ def write_config(work_dir: str):
     )
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write(cfg)
-
-
-def port_open() -> bool:
-    try:
-        with socket.create_connection((HOST, PORT), timeout=0.5):
-            return True
-    except OSError:
-        return False
-
-
-def start_server(work_dir: str, log_path: str):
-    jar = os.path.join(REPO_ROOT, JAR)
-    log = open(log_path, "ab")
-    proc = subprocess.Popen(["java", "-Xmx512m", "-jar", jar], stdout=log, stderr=log, cwd=work_dir)
-    deadline = time.time() + 60.0
-    while time.time() < deadline:
-        if port_open():
-            time.sleep(0.5)
-            return proc
-        if proc.poll() is not None:
-            break
-        time.sleep(0.2)
-    dump_log(log_path)
-    proc.kill()
-    raise RuntimeError("server did not come up in time")
-
-
-def stop_server(proc):
-    if proc is None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-    deadline = time.time() + 30.0
-    while time.time() < deadline and port_open():
-        time.sleep(0.2)
-
-
-def dump_log(log_path: str):
-    try:
-        with open(log_path, "rb") as fp:
-            tail = fp.read()[-4000:].decode(errors="replace")
-        print(f"--- server log tail ---\n{tail}\n--- end ---", file=sys.stderr)
-    except OSError:
-        pass
-
-
-def read_log(log_path: str) -> str:
-    try:
-        with open(log_path, "rb") as fp:
-            return fp.read().decode(errors="replace")
-    except OSError:
-        return ""
 
 
 # ── setup ────────────────────────────────────────────────────────────────────
@@ -636,7 +510,7 @@ def test_the_run_id_is_logged(conn: Conn, log_path: str):
     response = conn.run("return 1;")
     check_status("a run for the log line", response, "OK")
     run_id = response.get("runId")
-    found = wait_until(lambda: f"runId={run_id}" in read_log(log_path), 15.0)
+    found = wait_until(lambda: f"runId={run_id}" in bu.read_log(log_path), 15.0)
     check("the run's log line names it", bool(found), f"runId={run_id!r} not found in the log")
 
 
@@ -668,9 +542,7 @@ def cleanup(conn: Conn):
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    print("\n" + "═" * 70)
-    print("  LWNRDB — script run visibility and cancellation e2e tests")
-    print("═" * 70)
+    bu.banner("script run visibility and cancellation e2e tests")
 
     jar = os.path.join(REPO_ROOT, JAR)
     if not os.path.isfile(jar):
@@ -685,7 +557,7 @@ def main():
     try:
         write_config(work_dir)
         print(f"  Starting server on {HOST}:{PORT} ...")
-        proc = start_server(work_dir, log_path)
+        proc = bu.start_server(work_dir, log_path)
 
         with admin_conn() as conn:
             setup_data(conn)
@@ -703,26 +575,18 @@ def main():
             test_the_run_id_is_logged(conn, log_path)
             test_permissions(conn)
 
-        stop_server(proc)
+        bu.stop_server(proc)
         proc = None
 
         print(f"\n  Restarting server on {HOST}:{PORT} (trigger-recovery phase) ...")
-        proc = start_server(work_dir, log_path)
+        proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_cancelled_trigger_run_is_not_replayed(conn)
             cleanup(conn)
     finally:
-        stop_server(proc)
+        bu.stop_server(proc)
 
-    print("\n" + "═" * 70)
-    if failures == 0:
-        print("  \033[92mAll checks passed.\033[0m")
-    else:
-        print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
-        dump_log(log_path)
-    print("═" * 70 + "\n")
-
-    sys.exit(0 if failures == 0 else 1)
+    bu.summary(on_failure=lambda: bu.dump_log(log_path))
 
 
 if __name__ == "__main__":

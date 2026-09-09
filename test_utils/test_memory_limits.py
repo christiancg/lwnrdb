@@ -1,9 +1,10 @@
-import socket
-import json
 import sys
 import time
 import random
 import string
+
+import base_utils as bu
+from base_utils import Conn, check, check_status, section
 
 HOST = "127.0.0.1"
 PORT = 8989
@@ -21,73 +22,12 @@ BULK_BATCH_SIZE = 500
 LATENCY_PROBE_INTERVAL = 50        # probe every Nth bulk batch
 LATENCY_BUDGET_MS = 2_000          # a single small query should not exceed this under pressure
 
-PASS = "\033[92mPASS\033[0m"
-FAIL = "\033[91mFAIL\033[0m"
-
-failures = 0
+bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-def send(s, f, payload: dict) -> dict:
-    try:
-        s.sendall((json.dumps(payload) + "\n").encode())
-    except (BrokenPipeError, OSError):
-        return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-    raw = f.readline().decode().strip()
-    if not raw:
-        return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-    return json.loads(raw)
 
-
-def check(label: str, response: dict, expected_status: str):
-    global failures
-    actual = response.get("status")
-    ok = actual == expected_status
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    print(f"         expected={expected_status}  got={actual}  msg={response.get('message', '')!r}")
-    if not ok:
-        failures += 1
-
-
-def check_true(label: str, ok: bool, detail: str = ""):
-    global failures
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    if detail:
-        print(f"         {detail}")
-    if not ok:
-        failures += 1
-
-
-class Conn:
-    def __init__(self):
-        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.s.connect((HOST, PORT))
-        self.f = self.s.makefile("rb")
-
-    def __enter__(self):
-        return self.s, self.f
-
-    def __exit__(self, *_):
-        self.s.close()
-
-
-def new_conn():
-    return Conn()
-
-
-def section(title: str):
-    print(f"\n{'─' * 70}")
-    print(f"  {title}")
-    print(f"{'─' * 70}")
-
-
-def authenticate(s, f, username: str, password: str) -> dict:
-    return send(s, f, {"type": "AUTHENTICATE", "username": username, "password": password})
-
-
-def stats(s, f) -> dict:
-    return send(s, f, {"type": "GET_DATABASE_STATS"})
+def stats(c) -> dict:
+    return c.send({"type": "GET_DATABASE_STATS"})
 
 
 # Tolerance applied to the cache cap check. The eviction sweep runs at most
@@ -97,8 +37,8 @@ def stats(s, f) -> dict:
 CACHE_CAP_TOLERANCE = 1.20
 
 
-def print_memory_snapshot(label: str, s, f) -> dict:
-    r = stats(s, f)
+def print_memory_snapshot(label: str, c) -> dict:
+    r = stats(c)
     if r.get("status") != "OK":
         print(f"  [stats] {label}: stats unavailable ({r.get('message')})")
         return {}
@@ -128,7 +68,7 @@ def assert_cache_respects_cap(label: str, snapshot: dict):
     cap = mem.get("maxMemoryBytes", 0)
     used = mem.get("userCacheBytes", 0)
     budget = int(cap * CACHE_CAP_TOLERANCE)
-    check_true(
+    check(
         f"{label}: userCacheBytes={used} <= maxMemoryBytes*{CACHE_CAP_TOLERANCE}={budget}",
         used <= budget,
         detail=("eviction is keeping the cache within the configured cap"
@@ -153,7 +93,7 @@ def assert_eviction_actually_happened(label: str, snapshot: dict):
               f"({cap}B) — eviction is not expected to fire. "
               f"Lower maxMemory in lwnrdb.cfg to actually exercise this.")
         return
-    check_true(
+    check(
         f"{label}: with on-disk={on_disk}B > cap={cap}B, cache holds only {used}B (subset)",
         used < on_disk,
         detail="confirms eviction is reclaiming entries the cache can no longer hold",
@@ -165,7 +105,7 @@ def assert_heap_stays_under_high_watermark(label: str, snapshot: dict, high_wate
     watermark. A bit fuzzy because heap pressure depends on GC timing."""
     mem = snapshot.get("memory", {})
     heap_ratio = (mem.get("heapUsedBytes", 0) / max(mem.get("heapMaxBytes", 1), 1))
-    check_true(
+    check(
         f"{label}: heapUsedRatio={heap_ratio*100:.1f}% < high watermark ({high_watermark*100:.0f}%)",
         heap_ratio < high_watermark,
         detail=("heap is below the high watermark — the sweep / GC are keeping up"
@@ -180,21 +120,21 @@ def rand_str(size: int) -> str:
 
 # ── fixtures ───────────────────────────────────────────────────────────────
 
-def setup_fixtures(s, f):
-    send(s, f, {"type": "CREATE_DATABASE", "databaseName": "mem_db"})
-    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "mem_db", "collectionName": HOT_COLL})
-    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": "mem_db", "collectionName": COLD_COLL})
+def setup_fixtures(c):
+    c.send({"type": "CREATE_DATABASE", "databaseName": "mem_db"})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": "mem_db", "collectionName": HOT_COLL})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": "mem_db", "collectionName": COLD_COLL})
 
 
-def teardown_fixtures(s, f):
-    send(s, f, {"type": "DROP_DATABASE", "databaseName": "mem_db"})
+def teardown_fixtures(c):
+    c.send({"type": "DROP_DATABASE", "databaseName": "mem_db"})
 
 
 # ══════════════════════════════════════════════════════════════════════════
 # Tests
 # ══════════════════════════════════════════════════════════════════════════
 
-def test_mass_insert_with_eviction(s, f):
+def test_mass_insert_with_eviction(c):
     """Push more data than the cache can hold; the database must stay responsive
     and the latency of a small probe query must not blow up."""
     section(f"Mass insert ({DOCS_PER_COLLECTION} docs x 2 collections x {PAYLOAD_BYTES}B)")
@@ -209,10 +149,10 @@ def test_mass_insert_with_eviction(s, f):
             doc_id = f"{coll}_{i:06d}"
             batch.append({"_id": doc_id, "v": i, "payload": rand_str(PAYLOAD_BYTES)})
             if len(batch) >= BULK_BATCH_SIZE:
-                r = send(s, f, {"type": "BULK_SAVE", "databaseName": "mem_db",
+                r = c.send({"type": "BULK_SAVE", "databaseName": "mem_db",
                                 "collectionName": coll, "objects": batch})
                 if r.get("status") != "OK":
-                    check("BULK_SAVE during mass insert", r, "OK")
+                    check_status("BULK_SAVE during mass insert", r, "OK")
                     return
                 # remember some ids for later correctness check
                 if len(sample_ids[coll]) < 50:
@@ -222,14 +162,14 @@ def test_mass_insert_with_eviction(s, f):
                 probes += 1
                 if probes % LATENCY_PROBE_INTERVAL == 0:
                     t0 = time.perf_counter()
-                    send(s, f, {"type": "LIST_DATABASES"})
+                    c.send({"type": "LIST_DATABASES"})
                     dt_ms = (time.perf_counter() - t0) * 1000.0
                     max_probe_ms = max(max_probe_ms, dt_ms)
         if batch:
-            send(s, f, {"type": "BULK_SAVE", "databaseName": "mem_db",
+            c.send({"type": "BULK_SAVE", "databaseName": "mem_db",
                         "collectionName": coll, "objects": batch})
 
-    check_true(
+    check(
         f"Server stayed responsive during mass insert (max probe latency = {max_probe_ms:.1f} ms, budget = {LATENCY_BUDGET_MS} ms)",
         max_probe_ms < LATENCY_BUDGET_MS,
         detail=f"if this fails the eviction sweep is likely blocking the request path",
@@ -237,26 +177,26 @@ def test_mass_insert_with_eviction(s, f):
     return sample_ids
 
 
-def test_correctness_after_eviction(s, f, sample_ids: dict):
+def test_correctness_after_eviction(c, sample_ids: dict):
     """Eviction must be transparent: every doc we wrote is still retrievable."""
     section("Correctness after eviction — every sampled doc must still be retrievable")
 
     misses = []
     for coll, ids in sample_ids.items():
         for doc_id in ids:
-            r = send(s, f, {"type": "FIND_BY_ID", "databaseName": "mem_db",
+            r = c.send({"type": "FIND_BY_ID", "databaseName": "mem_db",
                             "collectionName": coll, "_id": doc_id})
             if r.get("status") != "OK":
                 misses.append((coll, doc_id, r.get("status")))
 
-    check_true(
+    check(
         f"All {sum(len(v) for v in sample_ids.values())} sampled docs retrievable across both collections",
         not misses,
         detail=(f"first miss: {misses[0]}" if misses else "data survived eviction (read from disk)"),
     )
 
 
-def test_hot_collection_remains_warm(s, f):
+def test_hot_collection_remains_warm(c):
     """LFU policy should keep the hot collection's PK index resident while
     evicting cold. We can't observe that directly, but we can verify queries
     on the hot collection stay fast under repeated access."""
@@ -264,28 +204,28 @@ def test_hot_collection_remains_warm(s, f):
 
     # Warm "hot" hard
     for _ in range(200):
-        send(s, f, {"type": "AGGREGATE", "databaseName": "mem_db",
+        c.send({"type": "AGGREGATE", "databaseName": "mem_db",
                     "collectionName": HOT_COLL,
                     "aggregationSteps": [{"type": "COUNT"}]})
     # Touch "cold" once
-    send(s, f, {"type": "AGGREGATE", "databaseName": "mem_db",
+    c.send({"type": "AGGREGATE", "databaseName": "mem_db",
                 "collectionName": COLD_COLL,
                 "aggregationSteps": [{"type": "COUNT"}]})
 
     # After all that access, hot queries must still complete promptly.
     t0 = time.perf_counter()
-    r = send(s, f, {"type": "AGGREGATE", "databaseName": "mem_db",
+    r = c.send({"type": "AGGREGATE", "databaseName": "mem_db",
                     "collectionName": HOT_COLL,
                     "aggregationSteps": [{"type": "COUNT"}]})
     dt_ms = (time.perf_counter() - t0) * 1000.0
-    check("AGGREGATE COUNT on hot collection (OK)", r, "OK")
-    check_true(
+    check_status("AGGREGATE COUNT on hot collection (OK)", r, "OK")
+    check(
         f"Hot-collection COUNT under access pressure stays fast (took {dt_ms:.1f} ms)",
         dt_ms < LATENCY_BUDGET_MS,
     )
 
 
-def test_repeated_full_scan(s, f):
+def test_repeated_full_scan(c):
     """Repeatedly stream the full hot collection. Even if its full document map
     is evicted between scans, results must be consistent and the server must not
     fail or hang."""
@@ -293,30 +233,30 @@ def test_repeated_full_scan(s, f):
 
     counts = []
     for _ in range(5):
-        r = send(s, f, {"type": "AGGREGATE", "databaseName": "mem_db",
+        r = c.send({"type": "AGGREGATE", "databaseName": "mem_db",
                         "collectionName": HOT_COLL,
                         "aggregationSteps": [{"type": "COUNT"}]})
         if r.get("status") != "OK":
-            check("AGGREGATE COUNT during scans", r, "OK")
+            check_status("AGGREGATE COUNT during scans", r, "OK")
             return
         # The COUNT step returns {"count": N} inside the result array.
         # The wire shape may vary across operations; just sanity-check status.
         counts.append(r.get("status"))
 
-    check_true(
+    check(
         f"All 5 full scans returned OK",
         all(c == "OK" for c in counts),
         detail=f"statuses={counts}",
     )
 
 
-def test_server_still_alive(s, f):
+def test_server_still_alive(c):
     """Final liveness check — the server must still be answering after the load."""
     section("Liveness check after the whole run")
 
-    check("LIST_DATABASES still responds", send(s, f, {"type": "LIST_DATABASES"}), "OK")
-    check("AUTHENTICATE still works",
-          authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    check_status("LIST_DATABASES still responds", c.send({"type": "LIST_DATABASES"}), "OK")
+    check_status("AUTHENTICATE still works",
+          c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -324,73 +264,63 @@ def test_server_still_alive(s, f):
 # ══════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═" * 70)
-    print("  LWNRDB — Memory limits & eviction test suite")
-    print("═" * 70)
-    print(f"  Connecting to {HOST}:{PORT}")
+    bu.banner("Memory limits & eviction test suite", HOST, PORT)
     print(f"  Plan: insert ~{(DOCS_PER_COLLECTION * PAYLOAD_BYTES * 2) // (1024*1024)}MB total")
     print(f"        Tune maxMemory in lwnrdb.cfg low (e.g. 4mb) to force eviction.")
 
-    with new_conn() as (s, f):
-        r = authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
+    with Conn() as c:
+        r = c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         if r.get("status") != "OK":
             print(f"\n[ERROR] Cannot authenticate as admin: {r.get('message')}")
             sys.exit(1)
-        teardown_fixtures(s, f)
-        setup_fixtures(s, f)
+        teardown_fixtures(c)
+        setup_fixtures(c)
 
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
-        before = print_memory_snapshot("before mass insert", s, f)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        before = print_memory_snapshot("before mass insert", c)
         assert_cache_respects_cap("before mass insert", before)
 
     sample_ids = None
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
-        sample_ids = test_mass_insert_with_eviction(s, f)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        sample_ids = test_mass_insert_with_eviction(c)
 
     # Give the background sweep a few cycles to react to the load.
     # Default sweep is every 10s and pressure poll every 2s, so 12s covers both.
     section("Waiting 12s for the background sweep to settle")
     time.sleep(12)
 
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
-        after = print_memory_snapshot("after mass insert + sweep settle", s, f)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        after = print_memory_snapshot("after mass insert + sweep settle", c)
         section("Memory-limit assertions (via GET_DATABASE_STATS)")
         assert_cache_respects_cap("post-insert cache stays within cap", after)
         assert_eviction_actually_happened("post-insert eviction observed", after)
         assert_heap_stays_under_high_watermark("post-insert heap below high watermark", after)
 
     if sample_ids:
-        with new_conn() as (s, f):
-            authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
-            test_correctness_after_eviction(s, f, sample_ids)
+        with Conn() as c:
+            c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+            test_correctness_after_eviction(c, sample_ids)
 
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
-        test_hot_collection_remains_warm(s, f)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_hot_collection_remains_warm(c)
 
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
-        test_repeated_full_scan(s, f)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        test_repeated_full_scan(c)
 
-    with new_conn() as (s, f):
-        test_server_still_alive(s, f)
+    with Conn() as c:
+        test_server_still_alive(c)
 
     # cleanup
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
-        teardown_fixtures(s, f)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        teardown_fixtures(c)
 
-    print("\n" + "═" * 70)
-    if failures == 0:
-        print("  \033[92mAll checks passed.\033[0m")
-    else:
-        print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
-    print("═" * 70 + "\n")
-
-    sys.exit(0 if failures == 0 else 1)
+    bu.summary()
 
 
 if __name__ == "__main__":

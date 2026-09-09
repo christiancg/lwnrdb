@@ -1,9 +1,10 @@
 import os
-import socket
-import json
 import sys
 import threading
 import time
+
+import base_utils as bu
+from base_utils import Conn, check, check_status, section
 
 HOST = os.environ.get("INDEX_TEST_HOST", "127.0.0.1")
 # Overridable so CI can point this suite at a dedicated caching-disabled server
@@ -33,9 +34,6 @@ REPEATS = int(os.environ.get("INDEX_TEST_REPEATS", "5"))
 # correctness under async index maintenance is still covered by probe_group_by in the consistency suite.
 SPEED_TOLERANCE = float(os.environ.get("INDEX_TEST_SPEED_TOLERANCE", "1.25"))
 
-PASS = "\033[92mPASS\033[0m"
-FAIL = "\033[91mFAIL\033[0m"
-
 # Consistency suite (separate from the perf suite): index maintenance is asynchronous, so right after
 # a write the field index may not yet reflect it. These probes write then *immediately* query the
 # index-backed path (no sleep) and assert the answer is correct, repeating to land inside the
@@ -60,84 +58,26 @@ GEO_CLUSTER = int(os.environ.get("INDEX_TEST_GEO_CLUSTER", "50"))
 # A box comfortably containing the whole main-collection cluster (used by the perf within case).
 GEO_CLUSTER_POLYGON = ["#geo(39.99,-74.02)", "#geo(39.99,-73.98)", "#geo(40.02,-73.98)", "#geo(40.02,-74.02)"]
 
-failures = 0
+bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
-def send(s, f, payload: dict) -> dict:
-    try:
-        s.sendall((json.dumps(payload) + "\n").encode())
-    except (BrokenPipeError, OSError):
-        return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-    raw = f.readline().decode().strip()
-    if not raw:
-        return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-    return json.loads(raw)
+
+def stats(c) -> dict:
+    return c.send({"type": "GET_DATABASE_STATS"})
 
 
-def check(label: str, response: dict, expected_status: str):
-    global failures
-    actual = response.get("status")
-    ok = actual == expected_status
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    print(f"         expected={expected_status}  got={actual}  msg={response.get('message', '')!r}")
-    if not ok:
-        failures += 1
-
-
-def check_true(label: str, ok: bool, detail: str = ""):
-    global failures
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    if detail:
-        print(f"         {detail}")
-    if not ok:
-        failures += 1
-
-
-class Conn:
-    def __init__(self):
-        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.s.connect((HOST, PORT))
-        self.f = self.s.makefile("rb")
-
-    def __enter__(self):
-        return self.s, self.f
-
-    def __exit__(self, *_):
-        self.s.close()
-
-
-def new_conn():
-    return Conn()
-
-
-def section(title: str):
-    print(f"\n{'─' * 70}")
-    print(f"  {title}")
-    print(f"{'─' * 70}")
-
-
-def authenticate(s, f, username: str, password: str) -> dict:
-    return send(s, f, {"type": "AUTHENTICATE", "username": username, "password": password})
-
-
-def stats(s, f) -> dict:
-    return send(s, f, {"type": "GET_DATABASE_STATS"})
-
-
-def agg(s, f, coll, steps) -> dict:
-    return send(s, f, {"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
+def agg(c, coll, steps) -> dict:
+    return c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
                        "aggregationSteps": steps})
 
 
-def timed_agg(s, f, coll, steps):
+def timed_agg(c, coll, steps):
     """Run an aggregation REPEATS times and return (best_seconds, last_response)."""
     best = None
     last = None
     for _ in range(REPEATS):
         t0 = time.perf_counter()
-        last = agg(s, f, coll, steps)
+        last = agg(c, coll, steps)
         dt = time.perf_counter() - t0
         best = dt if best is None else min(best, dt)
     return best, last
@@ -172,29 +112,29 @@ def geo_within_steps(polygon, field: str = "location"):
 
 # ── fixtures ───────────────────────────────────────────────────────────────
 
-def bulk_load(s, f, coll, docs):
+def bulk_load(c, coll, docs):
     batch = []
     for doc in docs:
         batch.append(doc)
         if len(batch) >= BULK_BATCH_SIZE:
-            r = send(s, f, {"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll, "objects": batch})
+            r = c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll, "objects": batch})
             if r.get("status") != "OK":
-                check(f"BULK_SAVE into {coll}", r, "OK")
+                check_status(f"BULK_SAVE into {coll}", r, "OK")
                 return
             batch = []
     if batch:
-        send(s, f, {"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll, "objects": batch})
+        c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll, "objects": batch})
 
 
-def setup_fixtures(s, f):
-    send(s, f, {"type": "CREATE_DATABASE", "databaseName": DB})
+def setup_fixtures(c):
+    c.send({"type": "CREATE_DATABASE", "databaseName": DB})
     for coll in (COLL, JOIN_LEFT, JOIN_BIG):
-        send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+        c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
 
     # Main collection: category is low-cardinality (good for GROUP_BY/DISTINCT), score is unique (SORT).
     # meta (object) and tags (array) are unique per doc so an element-match FILTER hits a single row,
     # giving the hashed object/array index a clear win over the full scan.
-    bulk_load(s, f, COLL, ({
+    bulk_load(c, COLL, ({
         "_id": f"doc_{v:06d}",
         "category": category_for(v),
         "score": v,
@@ -205,8 +145,8 @@ def setup_fixtures(s, f):
     } for v in range(NUM_DOCS)))
 
     # JOIN: small left side, every row shares the same key; large right side where only one row matches.
-    bulk_load(s, f, JOIN_LEFT, ({"_id": f"left_{v:06d}", "joinKey": "shared"} for v in range(LEFT_DOCS)))
-    bulk_load(s, f, JOIN_BIG, ({
+    bulk_load(c, JOIN_LEFT, ({"_id": f"left_{v:06d}", "joinKey": "shared"} for v in range(LEFT_DOCS)))
+    bulk_load(c, JOIN_BIG, ({
         "_id": f"big_{v:06d}",
         "joinKey": "shared" if v == 0 else f"key_{v}",
         "label": "the-one" if v == 0 else f"label_{v}",
@@ -214,11 +154,11 @@ def setup_fixtures(s, f):
     } for v in range(NUM_DOCS)))
 
 
-def wait_for_indexes(s, f, expected, timeout_s=20.0):
+def wait_for_indexes(c, expected, timeout_s=20.0):
     """Indexes are built in the background; poll stats until they appear, with a sleep fallback."""
     deadline = time.time() + timeout_s
     while time.time() < deadline:
-        r = stats(s, f)
+        r = stats(c)
         present = {}
         for db in r.get("stats", {}).get("databases", []):
             if db.get("name") != DB:
@@ -233,21 +173,21 @@ def wait_for_indexes(s, f, expected, timeout_s=20.0):
     return False
 
 
-def create_indexes(s, f):
-    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "category"})
-    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "score"})
+def create_indexes(c):
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "category"})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "score"})
     # Element-match indexes for object- and array-valued fields (hashed object/array indexes).
-    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "meta"})
-    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "tags"})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "meta"})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "tags"})
     # Geohash-backed spatial index on the geo field.
-    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "location"})
-    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": JOIN_BIG, "fieldName": "joinKey"})
-    wait_for_indexes(s, f, [(COLL, "category"), (COLL, "score"), (COLL, "meta"), (COLL, "tags"),
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": COLL, "fieldName": "location"})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": JOIN_BIG, "fieldName": "joinKey"})
+    wait_for_indexes(c, [(COLL, "category"), (COLL, "score"), (COLL, "meta"), (COLL, "tags"),
                             (COLL, "location"), (JOIN_BIG, "joinKey")])
 
 
-def teardown_fixtures(s, f):
-    send(s, f, {"type": "DROP_DATABASE", "databaseName": DB})
+def teardown_fixtures(c):
+    c.send({"type": "DROP_DATABASE", "databaseName": DB})
 
 
 # ── step definitions (each step is the pipeline source, so the index fast-path applies) ──
@@ -302,7 +242,7 @@ def compare(label, unindexed_time, unindexed_resp, indexed_time, indexed_resp, s
     section(label)
     sig_unindexed = signature(unindexed_resp)
     sig_indexed = signature(indexed_resp)
-    check_true(
+    check(
         "results identical with and without the index",
         sig_unindexed == sig_indexed,
         detail=f"signature={sig_indexed!r}",
@@ -311,9 +251,9 @@ def compare(label, unindexed_time, unindexed_resp, indexed_time, indexed_resp, s
     detail = (f"unindexed_best={unindexed_time * 1000:.2f}ms  indexed_best={indexed_time * 1000:.2f}ms  "
               f"ratio={ratio:.2f} (lower is better)")
     if strict_speed:
-        check_true("index path is faster than the full scan", indexed_time < unindexed_time, detail=detail)
+        check("index path is faster than the full scan", indexed_time < unindexed_time, detail=detail)
     else:
-        check_true(
+        check(
             f"index path is not slower than the full scan (within {SPEED_TOLERANCE:.2f}x)",
             indexed_time <= unindexed_time * SPEED_TOLERANCE,
             detail=detail,
@@ -324,168 +264,168 @@ def compare(label, unindexed_time, unindexed_resp, indexed_time, indexed_resp, s
 # Consistency under asynchronous index maintenance
 # ══════════════════════════════════════════════════════════════════════════
 
-def save_doc(s, f, coll, obj) -> dict:
-    return send(s, f, {"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": obj})
+def save_doc(c, coll, obj) -> dict:
+    return c.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": obj})
 
 
-def setup_consistency(s, f):
+def setup_consistency(c):
     for coll in (CONS, CONS_SORT, CONS_COUNT, CONS_JOIN, CONS_LEFT, CONS_CREATE):
-        send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+        c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
     # JOIN left side: a single row that shares the key every remote row will be saved with.
-    save_doc(s, f, CONS_LEFT, {"_id": "left_shared", "joinKey": "shared"})
+    save_doc(c, CONS_LEFT, {"_id": "left_shared", "joinKey": "shared"})
     # Build the indexes on the (empty) collections, so every subsequent write exercises the
     # committed-but-not-yet-indexed path.
-    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS, "fieldName": "status"})
-    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS_SORT, "fieldName": "score"})
-    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS_JOIN, "fieldName": "joinKey"})
-    wait_for_indexes(s, f, [(CONS, "status"), (CONS_SORT, "score"), (CONS_JOIN, "joinKey")])
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS, "fieldName": "status"})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS_SORT, "fieldName": "score"})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": CONS_JOIN, "fieldName": "joinKey"})
+    wait_for_indexes(c, [(CONS, "status"), (CONS_SORT, "score"), (CONS_JOIN, "joinKey")])
 
 
-def filter_status(s, f, value):
-    r = agg(s, f, CONS, [{"type": "FILTER",
+def filter_status(c, value):
+    r = agg(c, CONS, [{"type": "FILTER",
                           "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": value}}])
     return sorted(d.get("_id") for d in (r.get("results") or []))
 
 
-def probe_filter_no_false_negative(s, f):
+def probe_filter_no_false_negative(c):
     # A just-saved matching document must be returned immediately, even before it is indexed.
     bad = 0
     for i in range(CONS_REPEATS):
         value = f"fn_val_{i}"
-        save_doc(s, f, CONS, {"_id": f"fn_{i}", "status": value})
-        if filter_status(s, f, value) != [f"fn_{i}"]:
+        save_doc(c, CONS, {"_id": f"fn_{i}", "status": value})
+        if filter_status(c, value) != [f"fn_{i}"]:
             bad += 1
-    check_true("FILTER never misses a just-written match (no false negative)", bad == 0,
+    check("FILTER never misses a just-written match (no false negative)", bad == 0,
                detail=f"{bad}/{CONS_REPEATS} immediate queries were stale")
 
 
-def probe_filter_no_false_positive_on_update(s, f):
+def probe_filter_no_false_positive_on_update(c):
     # Re-pointing a document's indexed value must not leave it visible under the old value, and it
     # must be visible under the new value — immediately.
-    save_doc(s, f, CONS, {"_id": "upd", "status": "upd_v0"})
+    save_doc(c, CONS, {"_id": "upd", "status": "upd_v0"})
     prev = "upd_v0"
     bad = 0
     for i in range(1, CONS_REPEATS + 1):
         cur = f"upd_v{i}"
-        save_doc(s, f, CONS, {"_id": "upd", "status": cur})
-        if "upd" in filter_status(s, f, prev):
+        save_doc(c, CONS, {"_id": "upd", "status": cur})
+        if "upd" in filter_status(c, prev):
             bad += 1  # stale false positive under the old value
-        if filter_status(s, f, cur) != ["upd"]:
+        if filter_status(c, cur) != ["upd"]:
             bad += 1  # missing under the new value
         prev = cur
-    check_true("FILTER reflects updates immediately (no stale false positive / no false negative)",
+    check("FILTER reflects updates immediately (no stale false positive / no false negative)",
                bad == 0, detail=f"{bad} inconsistent immediate queries")
 
 
-def probe_count_with_filter(s, f):
+def probe_count_with_filter(c):
     # An index-only COUNT with a filter must reflect every committed matching document.
     bad = 0
     for i in range(CONS_REPEATS):
-        save_doc(s, f, CONS, {"_id": f"cf_{i}", "status": "countme"})
-        r = agg(s, f, CONS, [{"type": "FILTER",
+        save_doc(c, CONS, {"_id": f"cf_{i}", "status": "countme"})
+        r = agg(c, CONS, [{"type": "FILTER",
                               "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": "countme"}},
                              {"type": "COUNT"}])
         got = (r.get("results") or [{}])[0].get("count")
         if got != i + 1:
             bad += 1
-    check_true("index-only COUNT (with filter) counts committed docs immediately", bad == 0,
+    check("index-only COUNT (with filter) counts committed docs immediately", bad == 0,
                detail=f"{bad}/{CONS_REPEATS} counts were stale")
 
 
-def probe_whole_collection_count(s, f):
+def probe_whole_collection_count(c):
     # The no-filter COUNT comes from the synchronously-maintained PK index, so it is exact at once.
     bad = 0
     for i in range(CONS_REPEATS):
-        save_doc(s, f, CONS_COUNT, {"_id": f"wc_{i}", "n": i})
-        r = agg(s, f, CONS_COUNT, [{"type": "COUNT"}])
+        save_doc(c, CONS_COUNT, {"_id": f"wc_{i}", "n": i})
+        r = agg(c, CONS_COUNT, [{"type": "COUNT"}])
         got = (r.get("results") or [{}])[0].get("count")
         if got != i + 1:
             bad += 1
-    check_true("whole-collection COUNT is exact immediately after each save", bad == 0,
+    check("whole-collection COUNT is exact immediately after each save", bad == 0,
                detail=f"{bad}/{CONS_REPEATS} counts were stale")
 
 
-def probe_distinct_new_value(s, f):
+def probe_distinct_new_value(c):
     # A brand-new indexed value must appear in DISTINCT immediately.
     bad = 0
     for i in range(CONS_REPEATS):
         value = f"dv_{i}"
-        save_doc(s, f, CONS, {"_id": f"di_{i}", "status": value})
-        r = agg(s, f, CONS, DISTINCT_STATUS_STEPS)
+        save_doc(c, CONS, {"_id": f"di_{i}", "status": value})
+        r = agg(c, CONS, DISTINCT_STATUS_STEPS)
         values = {d.get("status") for d in (r.get("results") or [])}
         if value not in values:
             bad += 1
-    check_true("DISTINCT includes a just-written new value immediately", bad == 0,
+    check("DISTINCT includes a just-written new value immediately", bad == 0,
                detail=f"{bad}/{CONS_REPEATS} distinct results were missing the new value")
 
 
-def probe_group_by(s, f):
+def probe_group_by(c):
     # A just-written document must land in its group immediately.
     bad = 0
     for i in range(CONS_REPEATS):
         value = f"gv_{i}"
-        save_doc(s, f, CONS, {"_id": f"gi_{i}", "status": value})
-        r = agg(s, f, CONS, [{"type": "GROUP_BY", "fieldName": "status"}])
+        save_doc(c, CONS, {"_id": f"gi_{i}", "status": value})
+        r = agg(c, CONS, [{"type": "GROUP_BY", "fieldName": "status"}])
         sizes = {d.get("status"): len(d.get("group") or []) for d in (r.get("results") or [])}
         if sizes.get(value) != 1:
             bad += 1
-    check_true("GROUP_BY places a just-written doc in its group immediately", bad == 0,
+    check("GROUP_BY places a just-written doc in its group immediately", bad == 0,
                detail=f"{bad}/{CONS_REPEATS} group-by results were stale")
 
 
-def probe_sort(s, f):
+def probe_sort(c):
     # SORT must include and correctly order a just-written value immediately.
     bad = 0
     for i in range(CONS_REPEATS):
-        save_doc(s, f, CONS_SORT, {"_id": f"s_{i}", "score": i})
-        r = agg(s, f, CONS_SORT, [{"type": "SORT", "fieldName": "score", "ascending": True}])
+        save_doc(c, CONS_SORT, {"_id": f"s_{i}", "score": i})
+        r = agg(c, CONS_SORT, [{"type": "SORT", "fieldName": "score", "ascending": True}])
         scores = [d.get("score") for d in (r.get("results") or [])]
         if scores != sorted(scores) or i not in scores or len(scores) != i + 1:
             bad += 1
-    check_true("SORT includes and orders a just-written value immediately", bad == 0,
+    check("SORT includes and orders a just-written value immediately", bad == 0,
                detail=f"{bad}/{CONS_REPEATS} sort results were stale or misordered")
 
 
-def probe_join(s, f):
+def probe_join(c):
     # A just-written remote document must be matched by an index-backed JOIN immediately.
     bad = 0
     for i in range(CONS_REPEATS):
-        save_doc(s, f, CONS_JOIN, {"_id": f"r_{i}", "joinKey": "shared", "label": f"lbl_{i}"})
-        r = agg(s, f, CONS_LEFT, [{"type": "JOIN", "joinCollection": CONS_JOIN, "localField": "joinKey",
+        save_doc(c, CONS_JOIN, {"_id": f"r_{i}", "joinKey": "shared", "label": f"lbl_{i}"})
+        r = agg(c, CONS_LEFT, [{"type": "JOIN", "joinCollection": CONS_JOIN, "localField": "joinKey",
                                    "remoteField": "joinKey", "asField": "joined"}])
         rows = r.get("results") or []
         joined = rows[0].get("joined") if rows else None
         if joined is None or len(joined) != i + 1:
             bad += 1
-    check_true("index-backed JOIN matches a just-written remote doc immediately", bad == 0,
+    check("index-backed JOIN matches a just-written remote doc immediately", bad == 0,
                detail=f"{bad}/{CONS_REPEATS} join results were stale")
 
 
-def probe_delete_consistency(s, f):
+def probe_delete_consistency(c):
     # Deleting the only doc with a unique value must remove it from index-only COUNT and DISTINCT
     # immediately (not just from FILTER), even before the async index removal runs.
     bad = 0
     for i in range(CONS_REPEATS):
         value = f"del_{i}"
         doc_id = f"del_doc_{i}"
-        save_doc(s, f, CONS, {"_id": doc_id, "status": value})
-        send(s, f, {"type": "DELETE", "databaseName": DB, "collectionName": CONS, "_id": doc_id})
+        save_doc(c, CONS, {"_id": doc_id, "status": value})
+        c.send({"type": "DELETE", "databaseName": DB, "collectionName": CONS, "_id": doc_id})
         # Immediately: the value must be gone from FILTER, COUNT and DISTINCT.
-        if filter_status(s, f, value):
+        if filter_status(c, value):
             bad += 1
-        r = agg(s, f, CONS, [{"type": "FILTER",
+        r = agg(c, CONS, [{"type": "FILTER",
                               "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": value}},
                              {"type": "COUNT"}])
         if (r.get("results") or [{}])[0].get("count") != 0:
             bad += 1
-        d = agg(s, f, CONS, DISTINCT_STATUS_STEPS)
+        d = agg(c, CONS, DISTINCT_STATUS_STEPS)
         if value in {row.get("status") for row in (d.get("results") or [])}:
             bad += 1
-    check_true("DELETE removes a doc from FILTER, COUNT and DISTINCT immediately", bad == 0,
+    check("DELETE removes a doc from FILTER, COUNT and DISTINCT immediately", bad == 0,
                detail=f"{bad} inconsistent immediate queries after delete")
 
 
-def probe_same_id_rapid_updates_converge(s, f):
+def probe_same_id_rapid_updates_converge(c):
     # Hammer one _id with alternating values so the worker pool processes its events concurrently
     # (and possibly out of order). After the background settles, the index must reflect the LAST
     # committed value — not a reordered stale one.
@@ -493,37 +433,37 @@ def probe_same_id_rapid_updates_converge(s, f):
     last_value = None
     for i in range(iterations):
         last_value = f"hammer_{i}"
-        save_doc(s, f, CONS, {"_id": "hammer", "status": last_value})
+        save_doc(c, CONS, {"_id": "hammer", "status": last_value})
     wait_for_background()
     bad = 0
-    if filter_status(s, f, last_value) != ["hammer"]:
+    if filter_status(c, last_value) != ["hammer"]:
         bad += 1
-    if filter_status(s, f, "hammer_0"):  # an earlier value must no longer resolve to the doc
+    if filter_status(c, "hammer_0"):  # an earlier value must no longer resolve to the doc
         bad += 1
-    r = agg(s, f, CONS, [{"type": "FILTER",
+    r = agg(c, CONS, [{"type": "FILTER",
                           "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": last_value}},
                          {"type": "COUNT"}])
     if (r.get("results") or [{}])[0].get("count") != 1:
         bad += 1
-    check_true("same-id rapid updates converge to the last value after the background settles", bad == 0,
+    check("same-id rapid updates converge to the last value after the background settles", bad == 0,
                detail=f"{bad} stale results after hammering one id with {iterations} updates")
 
 
-def probe_save_delete_converges(s, f):
+def probe_save_delete_converges(c):
     # Flood save+delete pairs for distinct ids; after the background settles none of the values may
     # remain in the index (catches a save event applied after its delete event).
     for i in range(CONS_REPEATS):
         value = f"sd_{i}"
         doc_id = f"sd_doc_{i}"
-        save_doc(s, f, CONS, {"_id": doc_id, "status": value})
-        send(s, f, {"type": "DELETE", "databaseName": DB, "collectionName": CONS, "_id": doc_id})
+        save_doc(c, CONS, {"_id": doc_id, "status": value})
+        c.send({"type": "DELETE", "databaseName": DB, "collectionName": CONS, "_id": doc_id})
     wait_for_background()
-    bad = sum(1 for i in range(CONS_REPEATS) if filter_status(s, f, f"sd_{i}"))
-    check_true("save+delete of the same id converges to absent after the background settles", bad == 0,
+    bad = sum(1 for i in range(CONS_REPEATS) if filter_status(c, f"sd_{i}"))
+    check("save+delete of the same id converges to absent after the background settles", bad == 0,
                detail=f"{bad}/{CONS_REPEATS} deleted values still present after settling")
 
 
-def probe_concurrent_save_during_create_index(s, f):
+def probe_concurrent_save_during_create_index(c):
     # A document saved concurrently with CREATE_INDEX must not be lost from the new index. The build
     # holds the collection write lock and registers the field synchronously, so each concurrent save is
     # serialized: it is either captured by the build's whole-collection read or indexed afterwards
@@ -531,19 +471,19 @@ def probe_concurrent_save_during_create_index(s, f):
     # were silently missing from the index forever.
     seed = 40
     for i in range(seed):
-        save_doc(s, f, CONS_CREATE, {"_id": f"seed_{i}", "tag": f"t{i % 5}"})
+        save_doc(c, CONS_CREATE, {"_id": f"seed_{i}", "tag": f"t{i % 5}"})
 
     saved_ids = []
     saved_lock = threading.Lock()
     stop = threading.Event()
 
     def writer():
-        with new_conn() as (ws, wf):
-            authenticate(ws, wf, ADMIN_USERNAME, ADMIN_PASSWORD)
+        with Conn() as wc:
+            wc.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
             i = 0
             while not stop.is_set():
                 doc_id = f"conc_{i}"
-                r = save_doc(ws, wf, CONS_CREATE, {"_id": doc_id, "tag": "concurrent"})
+                r = save_doc(wc, CONS_CREATE, {"_id": doc_id, "tag": "concurrent"})
                 if r.get("status") == "OK":
                     with saved_lock:
                         saved_ids.append(doc_id)
@@ -555,7 +495,7 @@ def probe_concurrent_save_during_create_index(s, f):
         # Let several concurrent writes land, then build the index mid-flight, then let a few more
         # land after the build — exercising both sides of the build's write-locked section.
         time.sleep(0.05)
-        send(s, f, {"type": "CREATE_INDEX", "databaseName": DB,
+        c.send({"type": "CREATE_INDEX", "databaseName": DB,
                     "collectionName": CONS_CREATE, "fieldName": "tag"})
         time.sleep(0.05)
     finally:
@@ -563,73 +503,73 @@ def probe_concurrent_save_during_create_index(s, f):
         t.join()
     wait_for_background()
 
-    r = agg(s, f, CONS_CREATE, [{"type": "FILTER",
+    r = agg(c, CONS_CREATE, [{"type": "FILTER",
                                  "operator": {"fieldOperatorType": "EQUALS", "field": "tag",
                                               "value": "concurrent"}}])
     found = {row.get("_id") for row in (r.get("results") or [])}
     with saved_lock:
         expected = list(saved_ids)
     missing = [i for i in expected if i not in found]
-    check_true("no document saved concurrently with CREATE_INDEX is missing from the index",
+    check("no document saved concurrently with CREATE_INDEX is missing from the index",
                not missing,
                detail=f"{len(missing)} of {len(expected)} concurrently-saved docs missing from the index")
 
 
-def probe_drop_burst_no_background_errors(s, f):
+def probe_drop_burst_no_background_errors(c):
     # Create, populate and drop many collections (plus the database) in a burst while background
     # events for those collections are still in flight. This stresses the shared admin-collection
     # files (collections/databases) with repeated compaction; with the PK-position fix the survivors
     # stay readable and no NegativeArraySizeException / null-collection error is raised.
     burst_db = "idxagg_drop_burst"
-    send(s, f, {"type": "CREATE_DATABASE", "databaseName": burst_db})
+    c.send({"type": "CREATE_DATABASE", "databaseName": burst_db})
     n = max(CONS_REPEATS, 12)
     for i in range(n):
         coll = f"burst_{i}"
-        send(s, f, {"type": "CREATE_COLLECTION", "databaseName": burst_db, "collectionName": coll})
+        c.send({"type": "CREATE_COLLECTION", "databaseName": burst_db, "collectionName": coll})
         for j in range(5):
-            send(s, f, {"type": "SAVE", "databaseName": burst_db, "collectionName": coll,
+            c.send({"type": "SAVE", "databaseName": burst_db, "collectionName": coll,
                         "object": {"_id": f"d{j}", "k": f"v{j}"}})
-        send(s, f, {"type": "DROP_COLLECTION", "databaseName": burst_db, "collectionName": coll})
+        c.send({"type": "DROP_COLLECTION", "databaseName": burst_db, "collectionName": coll})
     # A survivor collection that is NOT dropped must remain fully readable afterwards.
-    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": burst_db, "collectionName": "keep"})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": burst_db, "collectionName": "keep"})
     for j in range(5):
-        send(s, f, {"type": "SAVE", "databaseName": burst_db, "collectionName": "keep",
+        c.send({"type": "SAVE", "databaseName": burst_db, "collectionName": "keep",
                     "object": {"_id": f"k{j}", "k": f"v{j}"}})
     wait_for_background()
-    r = send(s, f, {"type": "AGGREGATE", "databaseName": burst_db, "collectionName": "keep",
+    r = c.send({"type": "AGGREGATE", "databaseName": burst_db, "collectionName": "keep",
                     "aggregationSteps": [{"type": "COUNT"}]})
     count = (r.get("results") or [{}])[0].get("count")
-    send(s, f, {"type": "DROP_DATABASE", "databaseName": burst_db})
-    check_true("drop burst keeps survivors intact (no stale-position corruption)", count == 5,
+    c.send({"type": "DROP_DATABASE", "databaseName": burst_db})
+    check("drop burst keeps survivors intact (no stale-position corruption)", count == 5,
                detail=f"survivor count={count} (expected 5)")
 
 
-def probe_bulk_update_same_page_no_corruption(s, f):
+def probe_bulk_update_same_page_no_corruption(c):
     # Bulk-insert several docs (they pack onto one page), then BULK_SAVE updating all of them to
     # different, longer values. Each must read back intact afterwards — regression for the
     # multi-same-page bulk-update page-corruption bug.
     coll = "idxagg_bulk_upd"
-    send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
     ids = [f"bu_{i}" for i in range(6)]
-    send(s, f, {"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+    c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
                 "objects": [{"_id": i, "v": "short"} for i in ids]})
-    send(s, f, {"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+    c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
                 "objects": [{"_id": i, "v": f"updated-longer-value-for-{i}"} for i in ids]})
     bad = 0
     for i in ids:
-        r = send(s, f, {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": i})
+        r = c.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": i})
         if (r.get("object") or {}).get("v") != f"updated-longer-value-for-{i}":
             bad += 1
-    send(s, f, {"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
-    check_true("bulk update of multiple same-page docs reads back intact (no page corruption)", bad == 0,
+    c.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+    check("bulk update of multiple same-page docs reads back intact (no page corruption)", bad == 0,
                detail=f"{bad}/{len(ids)} docs corrupted/stale after bulk update")
 
 
-def probe_convergence(s, f):
+def probe_convergence(c):
     # After the background settles, the document is found via the (now-updated, re-evicted) index.
-    save_doc(s, f, CONS, {"_id": "converge", "status": "converged"})
+    save_doc(c, CONS, {"_id": "converge", "status": "converged"})
     wait_for_background()
-    check_true("index converges after the background settles", filter_status(s, f, "converged") == ["converge"])
+    check("index converges after the background settles", filter_status(c, "converged") == ["converge"])
 
 
 def wait_for_background():
@@ -639,24 +579,24 @@ def wait_for_background():
 DISTINCT_STATUS_STEPS = [{"type": "DISTINCT", "fieldName": "status"}]
 
 
-def consistency_suite(s, f):
+def consistency_suite(c):
     section("Consistency under asynchronous index maintenance (pending-write window)")
-    setup_consistency(s, f)
-    probe_filter_no_false_negative(s, f)
-    probe_filter_no_false_positive_on_update(s, f)
-    probe_count_with_filter(s, f)
-    probe_whole_collection_count(s, f)
-    probe_distinct_new_value(s, f)
-    probe_group_by(s, f)
-    probe_sort(s, f)
-    probe_join(s, f)
-    probe_delete_consistency(s, f)
-    probe_same_id_rapid_updates_converge(s, f)
-    probe_save_delete_converges(s, f)
-    probe_concurrent_save_during_create_index(s, f)
-    probe_drop_burst_no_background_errors(s, f)
-    probe_bulk_update_same_page_no_corruption(s, f)
-    probe_convergence(s, f)
+    setup_consistency(c)
+    probe_filter_no_false_negative(c)
+    probe_filter_no_false_positive_on_update(c)
+    probe_count_with_filter(c)
+    probe_whole_collection_count(c)
+    probe_distinct_new_value(c)
+    probe_group_by(c)
+    probe_sort(c)
+    probe_join(c)
+    probe_delete_consistency(c)
+    probe_same_id_rapid_updates_converge(c)
+    probe_save_delete_converges(c)
+    probe_concurrent_save_during_create_index(c)
+    probe_drop_burst_no_background_errors(c)
+    probe_bulk_update_same_page_no_corruption(c)
+    probe_convergence(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -677,119 +617,119 @@ GEO_POLY = ["#geo(39.99,-74.1)", "#geo(39.99,-73.9)", "#geo(40.1,-73.9)", "#geo(
 GEO_POLY_MID = ["#geo(40.04,-74.01)", "#geo(40.04,-73.99)", "#geo(40.06,-73.99)", "#geo(40.06,-74.01)"]
 
 
-def agg_analyze(s, f, coll, steps) -> dict:
-    return send(s, f, {"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
+def agg_analyze(c, coll, steps) -> dict:
+    return c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
                        "analyze": True, "aggregationSteps": steps})
 
 
-def geo_filter(s, f, coll, steps):
-    return sorted(d.get("_id") for d in (agg(s, f, coll, steps).get("results") or []))
+def geo_filter(c, coll, steps):
+    return sorted(d.get("_id") for d in (agg(c, coll, steps).get("results") or []))
 
 
-def setup_geo(s, f):
+def setup_geo(c):
     for coll in (GEO, GEO_SCAN):
-        send(s, f, {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+        c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
         for _id, loc in GEO_SEED:
-            save_doc(s, f, coll, {"_id": _id, "location": loc})
+            save_doc(c, coll, {"_id": _id, "location": loc})
     # Only GEO is indexed; GEO_SCAN stays a full scan for the indexed==scan cross-check.
-    send(s, f, {"type": "CREATE_INDEX", "databaseName": DB, "collectionName": GEO, "fieldName": "location"})
-    wait_for_indexes(s, f, [(GEO, "location")])
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": GEO, "fieldName": "location"})
+    wait_for_indexes(c, [(GEO, "location")])
 
 
-def geo_compare_case(s, f, label, steps, expected):
-    idx = geo_filter(s, f, GEO, steps)
-    scan = geo_filter(s, f, GEO_SCAN, steps)
-    check_true(label, idx == scan == expected, detail=f"indexed={idx}  scan={scan}  expected={expected}")
+def geo_compare_case(c, label, steps, expected):
+    idx = geo_filter(c, GEO, steps)
+    scan = geo_filter(c, GEO_SCAN, steps)
+    check(label, idx == scan == expected, detail=f"indexed={idx}  scan={scan}  expected={expected}")
 
 
-def probe_geo_distance_comparators(s, f):
+def probe_geo_distance_comparators(c):
     # Each comparator, cross-checked indexed vs full scan against the known-correct answer.
-    geo_compare_case(s, f, "distance SMALLER_THAN 1 km -> {close, near}",
+    geo_compare_case(c, "distance SMALLER_THAN 1 km -> {close, near}",
                      geo_distance_steps("SMALLER_THAN", 1000), ["close", "near"])
-    geo_compare_case(s, f, "distance SMALLER_THAN_EQUALS 6 km -> {close, mid, near}",
+    geo_compare_case(c, "distance SMALLER_THAN_EQUALS 6 km -> {close, mid, near}",
                      geo_distance_steps("SMALLER_THAN_EQUALS", 6000), ["close", "mid", "near"])
-    geo_compare_case(s, f, "distance GREATER_THAN 1 km -> {far, mid}",
+    geo_compare_case(c, "distance GREATER_THAN 1 km -> {far, mid}",
                      geo_distance_steps("GREATER_THAN", 1000), ["far", "mid"])
-    geo_compare_case(s, f, "distance GREATER_THAN_EQUALS 6 km -> {far}",
+    geo_compare_case(c, "distance GREATER_THAN_EQUALS 6 km -> {far}",
                      geo_distance_steps("GREATER_THAN_EQUALS", 6000), ["far"])
-    geo_compare_case(s, f, "distance EQUALS 0 m -> only the exact point {near}",
+    geo_compare_case(c, "distance EQUALS 0 m -> only the exact point {near}",
                      geo_distance_steps("EQUALS", 0.0), ["near"])
 
 
-def probe_geo_within(s, f):
-    geo_compare_case(s, f, "within polygon -> {close, mid, near}", geo_within_steps(GEO_POLY),
+def probe_geo_within(c):
+    geo_compare_case(c, "within polygon -> {close, mid, near}", geo_within_steps(GEO_POLY),
                      ["close", "mid", "near"])
 
 
-def probe_geo_conjunctions(s, f):
+def probe_geo_conjunctions(c):
     # AND of two custom operators: within(near,close,mid) ∩ distance<1km(near,close) = {near,close}.
     and_steps = [{"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": [
         {"customOperatorName": "within", "field": "location", "polygon": GEO_POLY},
         {"customOperatorName": "distance", "field": "location", "value": GEO_TARGET,
          "comparator": "SMALLER_THAN", "distance": 1000}]}}]
-    check_true("AND(within, distance<1km) -> {close, near}",
-               geo_filter(s, f, GEO, and_steps) == ["close", "near"],
-               detail=f"got={geo_filter(s, f, GEO, and_steps)}")
+    check("AND(within, distance<1km) -> {close, near}",
+               geo_filter(c, GEO, and_steps) == ["close", "near"],
+               detail=f"got={geo_filter(c, GEO, and_steps)}")
     # OR of two custom operators: distance<1km(near,close) ∪ within(mid) = {near,close,mid}.
     or_steps = [{"type": "FILTER", "operator": {"conjunctionType": "OR", "operators": [
         {"customOperatorName": "distance", "field": "location", "value": GEO_TARGET,
          "comparator": "SMALLER_THAN", "distance": 1000},
         {"customOperatorName": "within", "field": "location", "polygon": GEO_POLY_MID}]}}]
-    check_true("OR(distance<1km, within-mid) -> {close, mid, near}",
-               geo_filter(s, f, GEO, or_steps) == ["close", "mid", "near"],
-               detail=f"got={geo_filter(s, f, GEO, or_steps)}")
+    check("OR(distance<1km, within-mid) -> {close, mid, near}",
+               geo_filter(c, GEO, or_steps) == ["close", "mid", "near"],
+               detail=f"got={geo_filter(c, GEO, or_steps)}")
 
 
-def probe_geo_count(s, f):
-    r = agg(s, f, GEO, geo_distance_steps("SMALLER_THAN", 1000) + [{"type": "COUNT"}])
+def probe_geo_count(c):
+    r = agg(c, GEO, geo_distance_steps("SMALLER_THAN", 1000) + [{"type": "COUNT"}])
     got = (r.get("results") or [{}])[0].get("count")
-    check_true("COUNT after a geo distance filter -> 2", got == 2, detail=f"count={got}")
+    check("COUNT after a geo distance filter -> 2", got == 2, detail=f"count={got}")
 
 
-def probe_geo_analyze(s, f):
-    ar = agg_analyze(s, f, GEO, geo_distance_steps("SMALLER_THAN", 1000)).get("analyzeResult") or {}
-    check_true("analyze: distance within-radius uses the location index",
+def probe_geo_analyze(c):
+    ar = agg_analyze(c, GEO, geo_distance_steps("SMALLER_THAN", 1000)).get("analyzeResult") or {}
+    check("analyze: distance within-radius uses the location index",
                ar.get("indexUsed") is True and "location" in (ar.get("indexesUsed") or []),
                detail=f"indexUsed={ar.get('indexUsed')} indexesUsed={ar.get('indexesUsed')}")
-    ar = agg_analyze(s, f, GEO, geo_within_steps(GEO_POLY)).get("analyzeResult") or {}
-    check_true("analyze: within uses the location index", ar.get("indexUsed") is True,
+    ar = agg_analyze(c, GEO, geo_within_steps(GEO_POLY)).get("analyzeResult") or {}
+    check("analyze: within uses the location index", ar.get("indexUsed") is True,
                detail=f"indexUsed={ar.get('indexUsed')}")
-    ar = agg_analyze(s, f, GEO, geo_distance_steps("GREATER_THAN", 1000)).get("analyzeResult") or {}
-    check_true("analyze: distance GREATER_THAN falls back to a scan (no index)", ar.get("indexUsed") is False,
+    ar = agg_analyze(c, GEO, geo_distance_steps("GREATER_THAN", 1000)).get("analyzeResult") or {}
+    check("analyze: distance GREATER_THAN falls back to a scan (no index)", ar.get("indexUsed") is False,
                detail=f"indexUsed={ar.get('indexUsed')}")
 
 
-def probe_geo_pending_write(s, f):
+def probe_geo_pending_write(c):
     # A just-saved geo point must be found by the index-backed distance filter immediately, before the
     # background field-index update runs (the pending-write overlay adds it as a candidate).
     bad = 0
     for i in range(CONS_REPEATS):
         doc_id = f"geo_pending_{i}"
-        save_doc(s, f, GEO, {"_id": doc_id, "location": "#geo(40.0,-74.0)"})
-        if doc_id not in geo_filter(s, f, GEO, geo_distance_steps("SMALLER_THAN", 1000)):
+        save_doc(c, GEO, {"_id": doc_id, "location": "#geo(40.0,-74.0)"})
+        if doc_id not in geo_filter(c, GEO, geo_distance_steps("SMALLER_THAN", 1000)):
             bad += 1
-    check_true("distance filter finds a just-written geo point immediately (pending-write overlay)",
+    check("distance filter finds a just-written geo point immediately (pending-write overlay)",
                bad == 0, detail=f"{bad}/{CONS_REPEATS} immediate geo queries were stale")
 
 
-def probe_geo_non_geo_field_no_match(s, f):
+def probe_geo_non_geo_field_no_match(c):
     # A distance operator on a field that is not a geo value must simply not match (no error).
-    save_doc(s, f, GEO_SCAN, {"_id": "not_geo", "location": "just a string"})
-    res = geo_filter(s, f, GEO_SCAN, geo_distance_steps("SMALLER_THAN", 1000))
-    check_true("distance filter ignores a non-geo field value (no match, no error)", "not_geo" not in res,
+    save_doc(c, GEO_SCAN, {"_id": "not_geo", "location": "just a string"})
+    res = geo_filter(c, GEO_SCAN, geo_distance_steps("SMALLER_THAN", 1000))
+    check("distance filter ignores a non-geo field value (no match, no error)", "not_geo" not in res,
                detail=f"got={res}")
 
 
-def geo_suite(s, f):
+def geo_suite(c):
     section("Geo type: distance & within custom operators")
-    setup_geo(s, f)
-    probe_geo_distance_comparators(s, f)
-    probe_geo_within(s, f)
-    probe_geo_conjunctions(s, f)
-    probe_geo_count(s, f)
-    probe_geo_analyze(s, f)
-    probe_geo_non_geo_field_no_match(s, f)
-    probe_geo_pending_write(s, f)
+    setup_geo(c)
+    probe_geo_distance_comparators(c)
+    probe_geo_within(c)
+    probe_geo_conjunctions(c)
+    probe_geo_count(c)
+    probe_geo_analyze(c)
+    probe_geo_non_geo_field_no_match(c)
+    probe_geo_pending_write(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -797,23 +737,20 @@ def geo_suite(s, f):
 # ══════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═" * 70)
-    print("  LWNRDB — index-backed aggregation performance test suite")
-    print("═" * 70)
-    print(f"  Connecting to {HOST}:{PORT}")
+    bu.banner("index-backed aggregation performance test suite", HOST, PORT)
     print(f"  Plan: load {NUM_DOCS} docs into {COLL} ({NUM_CATEGORIES} categories, each with an object "
           f"meta + array tags), {LEFT_DOCS} left + {NUM_DOCS} right docs for JOIN.")
     print(f"        Measure JOIN/SORT/DISTINCT and object/array element-match FILTER unindexed, "
           f"then create indexes and re-measure.")
 
-    with new_conn() as (s, f):
-        r = authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
+    with Conn() as c:
+        r = c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         if r.get("status") != "OK":
             print(f"\n[ERROR] Cannot authenticate as admin: {r.get('message')}")
             sys.exit(1)
-        teardown_fixtures(s, f)
+        teardown_fixtures(c)
         print("\nLoading fixtures (this can take a moment)...")
-        setup_fixtures(s, f)
+        setup_fixtures(c)
 
     cases = [
         ("DISTINCT on category", COLL, DISTINCT_STEPS, distinct_signature, True),
@@ -830,25 +767,25 @@ def main():
 
     # Phase 1 — measure every case while no index exists (full scan path).
     unindexed = {}
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         for name, coll, steps, _sig, _strict in cases:
-            best, resp = timed_agg(s, f, coll, steps)
-            check(f"[unindexed] {name} (OK)", resp, "OK")
+            best, resp = timed_agg(c, coll, steps)
+            check_status(f"[unindexed] {name} (OK)", resp, "OK")
             unindexed[name] = (best, resp)
 
     # Build the indexes, then re-measure.
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         print("\nCreating indexes and waiting for the background build...")
-        create_indexes(s, f)
+        create_indexes(c)
 
     indexed = {}
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         for name, coll, steps, _sig, _strict in cases:
-            best, resp = timed_agg(s, f, coll, steps)
-            check(f"[indexed] {name} (OK)", resp, "OK")
+            best, resp = timed_agg(c, coll, steps)
+            check_status(f"[indexed] {name} (OK)", resp, "OK")
             indexed[name] = (best, resp)
 
     for name, coll, steps, sig, strict in cases:
@@ -857,27 +794,20 @@ def main():
         compare(name, u_time, u_resp, i_time, i_resp, sig, strict)
 
     # Phase 3 — correctness under asynchronous index maintenance (the consistency fixes).
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
-        consistency_suite(s, f)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        consistency_suite(c)
 
     # Phase 4 — geo type: distance & within custom operators (correctness, analyze, consistency).
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
-        geo_suite(s, f)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        geo_suite(c)
 
-    with new_conn() as (s, f):
-        authenticate(s, f, ADMIN_USERNAME, ADMIN_PASSWORD)
-        teardown_fixtures(s, f)
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        teardown_fixtures(c)
 
-    print("\n" + "═" * 70)
-    if failures == 0:
-        print("  \033[92mAll checks passed.\033[0m")
-    else:
-        print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
-    print("═" * 70 + "\n")
-
-    sys.exit(0 if failures == 0 else 1)
+    bu.summary()
 
 
 if __name__ == "__main__":
