@@ -1,11 +1,8 @@
 package org.techhouse.ops;
 
-import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 import org.techhouse.bckg_ops.events.EventType;
@@ -20,7 +17,6 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.DbEntry;
-import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -35,6 +31,7 @@ import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
+import org.techhouse.ops.tx.TransactionWrites;
 
 /**
  * Client-scoped transactions. A transaction buffers its data mutations (SAVE / BULK_SAVE / DELETE)
@@ -483,17 +480,19 @@ public final class TransactionOperationHelper {
             if (lockResult != null) {
                 return lockResult;
             }
-            final var id = ensureId(object, request.get_id());
+            final var id = TransactionWrites.ensureId(object, request.get_id());
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
-            final var insert = !isVisible(transaction, collId, cache.getPkIndexAndLoadIfNecessary(dbName, collName),
-                    id);
-            final var hooked = runBeforeHooks(dbName, collName, insert ? EventType.CREATED : EventType.UPDATED,
+            final var insert = !TransactionWrites.isVisible(transaction, collId,
+                    cache.getPkIndexAndLoadIfNecessary(dbName, collName), id);
+            final var hooked = TransactionWrites.runBeforeHooks(dbName, collName,
+                    insert ? EventType.CREATED : EventType.UPDATED,
                     clientTracker.getAuthenticatedUsername(transaction.getClientId()), object, id, OperationType.SAVE);
             if (hooked.isRejected()) {
                 return hooked.rejection();
             }
             final var effective = hooked.document();
-            final var sizeError = checkEntrySize(dbName, collName, effective, object, OperationType.SAVE);
+            final var sizeError = TransactionWrites.checkEntrySize(dbName, collName, effective, object,
+                    OperationType.SAVE);
             if (sizeError != null) {
                 return sizeError;
             }
@@ -523,7 +522,7 @@ public final class TransactionOperationHelper {
                                     + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
                             ErrorCode.ENTRY_TOO_LARGE);
                 }
-                final var id = ensureId(object, null);
+                final var id = TransactionWrites.ensureId(object, null);
                 if (!seenIds.add(id)) {
                     return new OperationResponse(OperationType.BULK_SAVE, "Duplicate _id in bulk save request: " + id,
                             ErrorCode.DUPLICATE_ID);
@@ -541,15 +540,17 @@ public final class TransactionOperationHelper {
             final var updated = new ArrayList<String>();
             for (final var object : request.getObjects()) {
                 final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
-                final var isUpdate = isVisible(transaction, collId, primaryKeyIndex, id);
-                final var hooked = runBeforeHooks(dbName, collName, isUpdate ? EventType.UPDATED : EventType.CREATED,
+                final var isUpdate = TransactionWrites.isVisible(transaction, collId, primaryKeyIndex, id);
+                final var hooked = TransactionWrites.runBeforeHooks(dbName, collName,
+                        isUpdate ? EventType.UPDATED : EventType.CREATED,
                         clientTracker.getAuthenticatedUsername(transaction.getClientId()), object, id,
                         OperationType.BULK_SAVE);
                 if (hooked.isRejected()) {
                     return hooked.rejection();
                 }
                 final var effective = hooked.document();
-                final var sizeError = checkEntrySize(dbName, collName, effective, object, OperationType.BULK_SAVE);
+                final var sizeError = TransactionWrites.checkEntrySize(dbName, collName, effective, object,
+                        OperationType.BULK_SAVE);
                 if (sizeError != null) {
                     return sizeError;
                 }
@@ -582,17 +583,18 @@ public final class TransactionOperationHelper {
             }
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-            if (!isVisible(transaction, collId, primaryKeyIndex, id)) {
+            if (!TransactionWrites.isVisible(transaction, collId, primaryKeyIndex, id)) {
                 return new OperationResponse(OperationType.DELETE, "Entry with id " + id + " not found",
                         ErrorCode.ENTRY_NOT_FOUND);
             }
-            final var deleteHook = runDeleteBeforeHooks(transaction, collId, dbName, collName, id);
+            final var deleteHook = TransactionWrites.runDeleteBeforeHooks(transaction, collId, dbName, collName, id);
             if (deleteHook != null) {
                 return deleteHook;
             }
             final var payload = new JsonObject();
             payload.addProperty(Globals.PK_FIELD, id);
-            final var deletedDocument = documentForDeletedTrigger(transaction, collId, dbName, collName, id);
+            final var deletedDocument = TransactionWrites.documentForDeletedTrigger(transaction, collId, dbName,
+                    collName, id);
             if (deletedDocument != null) {
                 payload.add(DELETED_DOCUMENT_FIELD, deletedDocument);
             }
@@ -757,105 +759,4 @@ public final class TransactionOperationHelper {
         transaction.getHeldLocks().clear();
     }
 
-    // Ensures the object carries an _id (assigning a UUID when absent), returning the effective id.
-    private static String ensureId(JsonObject object, String requestId) {
-        var id = requestId;
-        if (id == null) {
-            id = object.has(Globals.PK_FIELD)
-                    ? object.get(Globals.PK_FIELD).asJsonString().getValue()
-                    : UUID.randomUUID().toString();
-        }
-        object.addProperty(Globals.PK_FIELD, id);
-        return id;
-    }
-
-    // Whether the id is currently visible to the transaction: present (non-tombstone) in the overlay,
-    // or — absent from the overlay — present in the committed PK index.
-    // The document the buffered delete will remove, captured now because the commit that fires the trigger
-    // can no longer read it. Null when no DELETED trigger would fire, so an untriggered collection neither
-    // pays for the read nor stores a second copy of the document. A document this transaction saved earlier
-    // wins over the committed one: the buffered ops replay in order, so that is the version being removed.
-    // The hook runs once the session holds the collection lock, so it sees the same serialization a
-    // non-transactional write does, and the buffered document is the one it produced.
-    private static BeforeHookOutcome runBeforeHooks(String dbName, String collName, EventType event, String actingUser,
-            JsonObject object, String id, OperationType type) {
-        if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
-            return BeforeHookOutcome.accepted(object);
-        }
-        try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser)) {
-            return hooks.apply(object, id, type);
-        }
-    }
-
-    // Only re-checked when a hook actually replaced the document: the caller's own document was already
-    // size-checked, and a hook can inflate one past maxEntrySize.
-    private static OperationResponse checkEntrySize(String dbName, String collName, JsonObject effective,
-            JsonObject original, OperationType type) {
-        if (effective == original) {
-            return null;
-        }
-        final var maxEntrySize = configuration.getMaxEntrySize();
-        final var size = DbEntry.fromJsonObject(dbName, collName, effective).byteSize();
-        if (size <= maxEntrySize) {
-            return null;
-        }
-        return new OperationResponse(type,
-                "Entry size of " + size + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
-                ErrorCode.ENTRY_TOO_LARGE);
-    }
-
-    private static OperationResponse runDeleteBeforeHooks(Transaction transaction, String collId, String dbName,
-            String collName, String id) {
-        if (!BeforeHookContext.hasHooksFor(dbName, collName, EventType.DELETED)) {
-            return null;
-        }
-        final var document = effectiveDocumentFor(transaction, collId, dbName, collName, id);
-        if (document == null) {
-            return null;
-        }
-        try (var hooks = BeforeHookContext.open(dbName, collName, EventType.DELETED,
-                clientTracker.getAuthenticatedUsername(transaction.getClientId()))) {
-            final var outcome = hooks.apply(document, id, OperationType.DELETE);
-            return outcome.isRejected() ? outcome.rejection() : null;
-        }
-    }
-
-    private static JsonObject effectiveDocumentFor(Transaction transaction, String collId, String dbName,
-            String collName, String id) {
-        final var overlay = transaction.overlayFor(collId);
-        if (overlay != null && overlay.containsKey(id)) {
-            final var buffered = overlay.get(id);
-            return Transaction.isTombstone(buffered) ? null : buffered;
-        }
-        try {
-            final var entries = cache.getEntriesByIds(dbName, collName, Set.of(id));
-            return entries.isEmpty() ? null : entries.getFirst().getData();
-        } catch (IOException e) {
-            return null;
-        }
-    }
-
-    private static JsonObject documentForDeletedTrigger(Transaction transaction, String collId, String dbName,
-            String collName, String id) {
-        final var depth = transaction.getTriggerDepth();
-        if (!TriggerHelper.firesOnDelete(dbName, collName, depth)) {
-            return null;
-        }
-        final var overlay = transaction.overlayFor(collId);
-        final var buffered = overlay == null ? null : overlay.get(id);
-        if (buffered != null && !Transaction.isTombstone(buffered)) {
-            return buffered;
-        }
-        final var captured = TriggerHelper.captureForDelete(dbName, collName, id, depth);
-        return captured == null ? null : captured.getData();
-    }
-
-    private static boolean isVisible(Transaction transaction, String collId, List<PkIndexEntry> primaryKeyIndex,
-            String id) {
-        final var overlay = transaction.overlayFor(collId);
-        if (overlay != null && overlay.containsKey(id)) {
-            return !Transaction.isTombstone(overlay.get(id));
-        }
-        return Collections.binarySearch(primaryKeyIndex, id) >= 0;
-    }
 }
