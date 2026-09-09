@@ -9,6 +9,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.techhouse.config.Configuration;
@@ -69,58 +70,30 @@ public class AdminCache {
             definition -> (long) eJson.toJson(definition.toJsonObject()).length() * 2L);
     private final BoundedLruCache<Boolean> metadataMisses = new BoundedLruCache<>(
             configuration.getMetadataCacheMaxEntries(), 0L, _ -> 1L);
+    private final DefinitionCache<JsonObject> schemaCache = new DefinitionCache<>(() -> collectionSchemas,
+            () -> metadataMisses, SCHEMA_MISS_PREFIX, this::loadSchemaUncached);
+    private final DefinitionCache<ProcedureDefinition> procedureCache = new DefinitionCache<>(() -> procedures,
+            () -> metadataMisses, PROCEDURE_MISS_PREFIX, this::loadProcedureUncached);
+    private final DefinitionCache<ScheduleDefinition> scheduleCache = new DefinitionCache<>(() -> schedules,
+            () -> metadataMisses, SCHEDULE_MISS_PREFIX, this::loadScheduleUncached);
 
     public void loadAdminData() throws IOException {
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-        final var pkIndexCollectionUsageEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_COLLECTION_USAGE_NAME);
-        final var pkIndexCollectionUsageEntriesMap = pkIndexCollectionUsageEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
-        collectionUsagePkIndex.putAll(pkIndexCollectionUsageEntriesMap);
-        final var pkIndexTransactionEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-        final var pkIndexTransactionEntriesMap = pkIndexTransactionEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
-        transactionsPkIndex.putAll(pkIndexTransactionEntriesMap);
-        final var pkIndexTriggerRunEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-        triggerRunsPkIndex.putAll(pkIndexTriggerRunEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry)));
-        final var pkIndexAdminDbEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
-        databasesPkIndex.putAll(pkIndexAdminDbEntriesMap);
-        final var pkIndexAdminCollEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        final var pkIndexAdminCollEntriesMap = pkIndexAdminCollEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
-        collectionsPkIndex.putAll(pkIndexAdminCollEntriesMap);
-        final var pkIndexAdminUserEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_USERS_COLLECTION_NAME);
-        final var pkIndexAdminUserEntriesMap = pkIndexAdminUserEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
-        usersPkIndex.putAll(pkIndexAdminUserEntriesMap);
-        if (!pkIndexAdminDbEntriesMap.isEmpty()) {
-            final var adminDatabasesColl = readWholeAdminCollection(Globals.ADMIN_DATABASES_COLLECTION_NAME);
-            loadAdminEntries(adminDatabasesColl, Globals.ADMIN_DATABASES_COLLECTION_NAME, AdminDbEntry::fromJsonObject,
-                    databases);
+        for (var collName : List.of(Globals.ADMIN_DATABASES_COLLECTION_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
+                Globals.ADMIN_USERS_COLLECTION_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
+                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME)) {
+            loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, collName);
         }
-        if (!pkIndexAdminCollEntries.isEmpty()) {
-            final var adminCollectionsColl = readWholeAdminCollection(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-            loadAdminEntries(adminCollectionsColl, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
-                    AdminCollEntry::fromJsonObject, collections);
-        }
-        if (!pkIndexAdminUserEntriesMap.isEmpty()) {
-            final var adminUsersColl = readWholeAdminCollection(Globals.ADMIN_USERS_COLLECTION_NAME);
-            loadAdminEntries(adminUsersColl, Globals.ADMIN_USERS_COLLECTION_NAME, AdminUserEntry::fromJsonObject,
-                    users);
-        }
+        loadPkIndexInto(Globals.ADMIN_COLLECTION_USAGE_NAME, collectionUsagePkIndex);
+        loadPkIndexInto(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, transactionsPkIndex);
+        loadPkIndexInto(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, triggerRunsPkIndex);
+        loadPkIndexInto(Globals.ADMIN_DATABASES_COLLECTION_NAME, databasesPkIndex);
+        loadPkIndexInto(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, collectionsPkIndex);
+        loadPkIndexInto(Globals.ADMIN_USERS_COLLECTION_NAME, usersPkIndex);
+        loadAdminCollection(Globals.ADMIN_DATABASES_COLLECTION_NAME, databasesPkIndex, AdminDbEntry::fromJsonObject,
+                databases);
+        loadAdminCollection(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, collectionsPkIndex,
+                AdminCollEntry::fromJsonObject, collections);
+        loadAdminCollection(Globals.ADMIN_USERS_COLLECTION_NAME, usersPkIndex, AdminUserEntry::fromJsonObject, users);
         for (var collEntry : collections.values()) {
             final var parts = collEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
             if (parts.length < 2)
@@ -139,6 +112,19 @@ public class AdminCache {
                         + e.getMessage());
             }
         }
+    }
+
+    private void loadPkIndexInto(String collName, Map<String, PkIndexEntry> target) throws IOException {
+        target.putAll(fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, collName).stream()
+                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry)));
+    }
+
+    private <T extends DbEntry> void loadAdminCollection(String collName, Map<String, PkIndexEntry> pkIndex,
+            Function<JsonObject, T> factory, Map<String, T> target) throws IOException {
+        if (pkIndex.isEmpty()) {
+            return;
+        }
+        loadAdminEntries(readWholeAdminCollection(collName), collName, factory, target);
     }
 
     private void loadAdminPagesForCollection(String dbName, String collName) throws IOException {
@@ -357,25 +343,8 @@ public class AdminCache {
         return collection.getIndexes();
     }
 
-    // Returns the collection's cached JSON Schema, or null when the collection has none. Loads lazily
-    // from disk on first access and negatively caches absence (NO_SCHEMA), so an unconstrained
-    // collection is only read from disk once.
     public JsonObject getCollectionSchema(String dbName, String collName) {
-        final var id = Cache.getCollectionIdentifier(dbName, collName);
-        final var cached = collectionSchemas.get(id);
-        if (cached != null) {
-            return cached;
-        }
-        if (metadataMisses.get(schemaMissKey(id)) != null) {
-            return null;
-        }
-        final var loaded = loadSchemaUncached(dbName, collName);
-        if (loaded == null) {
-            metadataMisses.put(schemaMissKey(id), Boolean.TRUE);
-        } else {
-            collectionSchemas.put(id, loaded);
-        }
-        return loaded;
+        return schemaCache.get(dbName, collName);
     }
 
     public JsonObject loadSchemaUncached(String dbName, String collName) {
@@ -393,43 +362,20 @@ public class AdminCache {
     }
 
     public void putCollectionSchema(String dbName, String collName, JsonObject schema) {
-        final var id = Cache.getCollectionIdentifier(dbName, collName);
-        metadataMisses.remove(schemaMissKey(id));
-        collectionSchemas.put(id, schema);
+        schemaCache.put(Cache.getCollectionIdentifier(dbName, collName), schema);
     }
 
     public void removeCollectionSchema(String dbName, String collName) {
-        final var id = Cache.getCollectionIdentifier(dbName, collName);
-        collectionSchemas.remove(id);
-        metadataMisses.remove(schemaMissKey(id));
+        schemaCache.remove(Cache.getCollectionIdentifier(dbName, collName));
     }
 
     public void removeCollectionSchemasForDatabase(String dbName) {
-        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        collectionSchemas.removeIf(id -> id.startsWith(prefix));
-        metadataMisses.removeIf(id -> id.startsWith(SCHEMA_MISS_PREFIX + prefix));
+        schemaCache.removeForDatabase(dbName);
     }
 
-    // Returns the database's cached procedure, or null when it has none by that name. Loads lazily from
-    // disk on first access and remembers absence in the separate miss cache, so a database with no
-    // procedures - or a misspelled name called in a loop - is only read from disk once. Same contract as
-    // getCollectionSchema, and the reason loadAdminData does not have to load procedures at startup.
+    // loadAdminData deliberately does not read procedures at startup: this cache fills on first call.
     public ProcedureDefinition getProcedure(String dbName, String name) {
-        final var id = Cache.getCollectionIdentifier(dbName, name);
-        final var cached = procedures.get(id);
-        if (cached != null) {
-            return cached;
-        }
-        if (metadataMisses.get(procedureMissKey(id)) != null) {
-            return null;
-        }
-        final var loaded = loadProcedureUncached(dbName, name);
-        if (loaded == null) {
-            metadataMisses.put(procedureMissKey(id), Boolean.TRUE);
-        } else {
-            procedures.put(id, loaded);
-        }
-        return loaded;
+        return procedureCache.get(dbName, name);
     }
 
     public ProcedureDefinition loadProcedureUncached(String dbName, String name) {
@@ -447,42 +393,20 @@ public class AdminCache {
     }
 
     public void putProcedure(String dbName, ProcedureDefinition definition) {
-        final var id = Cache.getCollectionIdentifier(dbName, definition.getName());
-        metadataMisses.remove(procedureMissKey(id));
-        procedures.put(id, definition);
+        procedureCache.put(Cache.getCollectionIdentifier(dbName, definition.getName()), definition);
     }
 
     public void removeProcedure(String dbName, String name) {
-        final var id = Cache.getCollectionIdentifier(dbName, name);
-        procedures.remove(id);
-        metadataMisses.remove(procedureMissKey(id));
+        procedureCache.remove(Cache.getCollectionIdentifier(dbName, name));
     }
 
     public void removeProceduresForDatabase(String dbName) {
-        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        procedures.removeIf(id -> id.startsWith(prefix));
-        metadataMisses.removeIf(id -> id.startsWith(PROCEDURE_MISS_PREFIX + prefix));
+        procedureCache.removeForDatabase(dbName);
     }
 
-    // Returns the database's cached schedule, or null when it has none by that name. Same lazy-load and
-    // negative-caching contract as getProcedure, which is why loadAdminData does not read schedules at
-    // startup either - ScheduleRegistry walks them once when the feature is on.
+    // ScheduleRegistry walks the schedules once when the feature is on, so startup does not read them.
     public ScheduleDefinition getSchedule(String dbName, String name) {
-        final var id = Cache.getCollectionIdentifier(dbName, name);
-        final var cached = schedules.get(id);
-        if (cached != null) {
-            return cached;
-        }
-        if (metadataMisses.get(scheduleMissKey(id)) != null) {
-            return null;
-        }
-        final var loaded = loadScheduleUncached(dbName, name);
-        if (loaded == null) {
-            metadataMisses.put(scheduleMissKey(id), Boolean.TRUE);
-        } else {
-            schedules.put(id, loaded);
-        }
-        return loaded;
+        return scheduleCache.get(dbName, name);
     }
 
     public ScheduleDefinition loadScheduleUncached(String dbName, String name) {
@@ -500,25 +424,19 @@ public class AdminCache {
     }
 
     public void putSchedule(String dbName, ScheduleDefinition definition) {
-        final var id = Cache.getCollectionIdentifier(dbName, definition.getName());
-        metadataMisses.remove(scheduleMissKey(id));
-        schedules.put(id, definition);
+        scheduleCache.put(Cache.getCollectionIdentifier(dbName, definition.getName()), definition);
     }
 
     public void removeSchedule(String dbName, String name) {
-        final var id = Cache.getCollectionIdentifier(dbName, name);
-        schedules.remove(id);
-        metadataMisses.remove(scheduleMissKey(id));
+        scheduleCache.remove(Cache.getCollectionIdentifier(dbName, name));
     }
 
     public void removeSchedulesForDatabase(String dbName) {
-        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        schedules.removeIf(id -> id.startsWith(prefix));
-        metadataMisses.removeIf(id -> id.startsWith(SCHEDULE_MISS_PREFIX + prefix));
+        scheduleCache.removeForDatabase(dbName);
     }
 
     public void removeSchedulesMatching(Predicate<String> keyMatches) {
-        schedules.removeIf(keyMatches);
+        scheduleCache.removeIf(keyMatches);
     }
 
     // Every trigger on the collection, empty when it has none. The cache key is db|coll, so the write
@@ -573,18 +491,6 @@ public class AdminCache {
         return new MetadataCacheStats(procedures.bytes(), procedures.size(), triggers.bytes(), triggers.size(),
                 collectionSchemas.bytes(), collectionSchemas.size(), schedules.bytes(), schedules.size(),
                 metadataMisses.size());
-    }
-
-    private static String procedureMissKey(String id) {
-        return PROCEDURE_MISS_PREFIX + id;
-    }
-
-    private static String schemaMissKey(String id) {
-        return SCHEMA_MISS_PREFIX + id;
-    }
-
-    private static String scheduleMissKey(String id) {
-        return SCHEDULE_MISS_PREFIX + id;
     }
 
     public AdminUserEntry getAdminUserEntry(String username) {
