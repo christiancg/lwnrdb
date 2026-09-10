@@ -25,7 +25,6 @@ public class ResourceLocking {
         return locks.computeIfAbsent(lockName, _ -> new ReentrantReadWriteLock());
     }
 
-    // ---------- name-based primitives ----------
     public void lockWrite(String lockName) throws InterruptedException {
         lockFor(lockName).writeLock().lockInterruptibly();
     }
@@ -48,7 +47,6 @@ public class ResourceLocking {
         }
     }
 
-    // ---------- collection write locking (exclusive) ----------
     public void lock(String dbName, String collName) throws InterruptedException {
         lockWrite(Cache.getCollectionIdentifier(dbName, collName));
     }
@@ -74,7 +72,6 @@ public class ResourceLocking {
                 java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
-    // ---------- collection read locking (shared) ----------
     public void lockRead(String dbName, String collName) throws InterruptedException {
         lockReadByName(Cache.getCollectionIdentifier(dbName, collName));
     }
@@ -83,7 +80,6 @@ public class ResourceLocking {
         releaseReadByName(Cache.getCollectionIdentifier(dbName, collName));
     }
 
-    // ---------- multi-resource read locking (shared) ----------
     // Acquire shared read locks on the given identifiers in a deterministic (sorted) order so two
     // overlapping multi-collection reads can never deadlock. Returns the identifiers actually locked
     // (in acquisition order); a dirty read takes no lock and returns an empty list, relying on
@@ -107,7 +103,6 @@ public class ResourceLocking {
         }
     }
 
-    // ---------- field index locking ----------
     private String getIndexIdentifier(String dbName, String collName, String fieldName) {
         return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + Globals.COLL_IDENTIFIER_SEPARATOR + fieldName;
     }

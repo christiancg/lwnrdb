@@ -21,7 +21,6 @@ import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.conn.tls.TlsContextFactory;
 import org.techhouse.data.admin.AdminUserEntry;
@@ -39,7 +38,6 @@ import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunRecovery;
-import org.techhouse.simplejs.host.HostAllowlist;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -100,10 +98,10 @@ public class Main {
         memoryManagement.loadProfileFromAdmin();
         memoryManagement.startSweepThread();
         scriptRunHistory.startSweep();
-        warnIfXmxExceedsMaxMemory();
-        warnIfCachesExceedHeap();
-        warnIfDefaultAdminPassword();
-        warnIfScriptFetchEnabled();
+        StartupWarnings.warnIfXmxExceedsMaxMemory();
+        StartupWarnings.warnIfCachesExceedHeap();
+        StartupWarnings.warnIfDefaultAdminPassword();
+        StartupWarnings.warnIfScriptFetchEnabled();
         startClusterIfEnabled();
         // Built eagerly so a self-signed keystore is generated (and its security warning logged) at startup,
         // not lazily on the first client connection.
@@ -176,77 +174,6 @@ public class Main {
             return null;
         }
         return TlsContextFactory.createServerSocketFactory(config);
-    }
-
-    static void warnIfDefaultAdminPassword() {
-        if (Globals.DEFAULT_ADMIN_PASSWORD.equals(config.getDefaultAdminPassword())) {
-            logger.warning("SECURITY WARNING: defaultAdminPassword is still set to the well-known default value. "
-                    + "Change it in lwnrdb.cfg and update the admin user's password immediately to avoid "
-                    + "unauthorized access.");
-        }
-    }
-
-    // Outbound HTTP from stored code is a capability worth naming at startup rather than leaving in a
-    // config file: an operator reading the log should be able to see what this node may reach.
-    static void warnIfScriptFetchEnabled() {
-        if (!config.isScriptFetchEnabled()) {
-            return;
-        }
-        final var allowlist = config.getScriptFetchAllowlist();
-        if (HostAllowlist.allowsEverything(allowlist)) {
-            logger.warning("SECURITY WARNING: scriptFetchAllowlist is '*', so any script may make this server "
-                    + "issue HTTP requests to any host it can reach - including services inside your network "
-                    + "and the cloud instance-metadata endpoint (169.254.169.254), not just the public "
-                    + "internet. Narrow it in lwnrdb.cfg to the hosts your scripts actually call, or set "
-                    + "scriptFetchEnabled=false to remove the capability.");
-        } else if (allowlist.isEmpty()) {
-            logger.warning("scriptFetchEnabled is true but scriptFetchAllowlist is empty, so every fetch will be "
-                    + "refused. Name the hosts scripts may reach.");
-        } else {
-            logger.info("Script fetch is enabled for: " + String.join(", ", allowlist));
-        }
-    }
-
-    // The metadata caps are budgeted separately from maxMemory, so the heap a fully-warm node needs is the
-    // sum of the two. Warned about together because an operator sizing -Xmx from maxMemory alone undercounts.
-    static void warnIfCachesExceedHeap() {
-        final var xmx = Runtime.getRuntime().maxMemory();
-        final var metadataCap = config.getMetadataCacheMaxBytes();
-        final var userCap = config.isCachingDisabled() || config.isCacheUnlimited() ? 0L : config.getMaxMemoryBytes();
-        final var scriptCap = scriptBudgetBytes();
-        final var total = userCap + metadataCap + scriptCap;
-        if (total > xmx) {
-            logger.warning("The configured memory budgets total " + total + " bytes (maxMemory " + userCap
-                    + " + metadataCacheMaxBytes " + metadataCap + " + concurrent script budgets " + scriptCap
-                    + ") but JVM -Xmx is only " + xmx
-                    + " bytes. Lower the budgets or raise -Xmx, otherwise a fully-warm node cannot fit in heap.");
-        }
-    }
-
-    // The concurrent interpreters this node can hold at once: client runs are capped by
-    // maxConcurrentScripts, triggers and schedules by their own worker pools. Each may allocate up to
-    // scriptMaxMemoryBytes, and that is additive with the cache budgets.
-    private static long scriptBudgetBytes() {
-        if (!config.isScriptsEnabled()) {
-            return 0L;
-        }
-        final var interpreters = (long) config.getMaxConcurrentScripts() + config.getTriggerThreads()
-                + config.getScheduleThreads();
-        return interpreters * config.getScriptMaxMemoryBytes();
-    }
-
-    static void warnIfXmxExceedsMaxMemory() {
-        if (config.isCachingDisabled() || config.isCacheUnlimited()) {
-            return;
-        }
-        final var xmx = Runtime.getRuntime().maxMemory();
-        final var cap = config.getMaxMemoryBytes();
-        if (xmx > cap * 2L) {
-            logger.warning("JVM -Xmx (" + xmx + " bytes) is more than 2x the configured maxMemory (" + cap
-                    + " bytes). The cap drives in-memory eviction but cannot constrain heap the JVM keeps "
-                    + "committed; set -Xmx close to maxMemory so the OS-visible process size "
-                    + "matches the configured budget.");
-        }
     }
 
     private static void bootstrapDefaultAdmin() throws IOException {

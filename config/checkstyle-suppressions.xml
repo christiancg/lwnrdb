@@ -4,15 +4,11 @@
         "https://checkstyle.org/dtds/suppressions_1_2.dtd">
 
 <!--
-  FileLength debt list. Every entry is a file over the 500-line limit the Checker enforces.
-  Test sources are out of scope for the limit; every main source below predates the SimpleJS
-  work. No SimpleJS file is listed - the limit is enforced there with no exceptions, so a new
-  oversized file in that subsystem fails the build. An entry is removed as soon as the file
-  drops under the limit; nothing may be added without a reason.
+  No main source is exempt from the 500-line FileLength limit. The debt list this file used to hold is
+  empty: every oversized file has been split, so a new one fails the build. Do not add an entry here -
+  split the file instead.
 -->
 <suppressions>
     <!-- Test sources are not subject to the file-length limit. -->
     <suppress files="[\\/]src[\\/]test[\\/]" checks="FileLength"/>
-
-    <!-- Pre-existing, outside the SimpleJS remediation scope. -->
 </suppressions>
