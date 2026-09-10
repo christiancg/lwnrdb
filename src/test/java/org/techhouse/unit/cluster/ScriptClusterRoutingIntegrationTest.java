@@ -10,20 +10,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterRouter;
-import org.techhouse.cluster.ClusterServer;
-import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
-import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.ScriptPlacement;
-import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
@@ -52,34 +47,26 @@ import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsObject;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class ScriptClusterRoutingIntegrationTest {
-    private static final String SECRET = "s";
     private static final String ADMIN = "scriptrouteadmin";
+    private final ClusterTestHarness cluster = new ClusterTestHarness();
     private final Configuration config = Configuration.getInstance();
-    private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
-    private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final ClusterRouter router = IocContainer.get(ClusterRouter.class);
     private final ScriptPlacement scriptPlacement = IocContainer.get(ScriptPlacement.class);
-    private ClusterServer server;
-    private int serverPort;
-    private boolean origEnabled;
-    private String origSecret;
-    private boolean origTls;
-    private long origAck;
-    private int origExpected;
     private boolean origScripts;
     private boolean origScriptRouting;
     private int origLocalityWeight;
 
     private static NodeInfo node(String id, int port) {
-        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
+        return ClusterTestHarness.node(id, port);
     }
 
     private static NodeInfo node(String id, int port, int scriptLoad) {
@@ -94,38 +81,18 @@ public class ScriptClusterRoutingIntegrationTest {
         TestUtils.createTestDatabaseAndCollection();
         TestUtils.resetClients();
         createAdminUser();
-        origEnabled = config.isClusterEnabled();
-        origSecret = config.getClusterSecret();
-        origTls = config.isClusterTlsEnabled();
-        origAck = config.getReplicationAckTimeoutMs();
-        origExpected = config.getClusterExpectedSize();
         origScripts = config.isScriptsEnabled();
         origScriptRouting = config.isScriptRoutingEnabled();
         origLocalityWeight = config.getScriptLocalityWeight();
-        TestUtils.setPrivateField(config, "clusterSecret", SECRET);
-        TestUtils.setPrivateField(config, "clusterTlsEnabled", false);
-        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 1000L);
-        server = new ClusterServer(0, "127.0.0.1", null);
-        server.start();
-        serverPort = server.getPort();
+        cluster.start(false, 1000L);
     }
 
     @AfterEach
     public void tearDown() throws Exception {
-        pool.closeAll();
-        server.stop();
-        TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
-        TestUtils.setPrivateField(config, "clusterSecret", origSecret);
-        TestUtils.setPrivateField(config, "clusterTlsEnabled", origTls);
-        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origAck);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
         TestUtils.setPrivateField(config, "scriptsEnabled", origScripts);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", origScriptRouting);
         TestUtils.setPrivateField(config, "scriptLocalityWeight", origLocalityWeight);
-        ownership.setSelfNodeId(null);
-        ownership.onMembershipChanged(new MembershipView(List.of()));
-        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(membershipService, "self", null);
+        cluster.stop();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -148,18 +115,11 @@ public class ScriptClusterRoutingIntegrationTest {
         return object;
     }
 
+    // Clustering stays off in setUp so the single-node paths can be exercised too; configuring a
+    // membership is what switches it on.
     private void configureMembership(int expectedSize, NodeInfo self, NodeInfo... others) throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", expectedSize);
-        final var members = new ConcurrentHashMap<String, NodeInfo>();
-        members.put(self.getNodeId(), self);
-        for (final var other : others) {
-            members.put(other.getNodeId(), other);
-        }
-        TestUtils.setPrivateField(membershipService, "members", members);
-        TestUtils.setPrivateField(membershipService, "self", self);
-        ownership.setSelfNodeId(self.getNodeId());
-        ownership.onMembershipChanged(membershipService.membershipView());
+        cluster.configureMembership(expectedSize, self, others);
     }
 
     private String collectionOwnedByOther() {
@@ -203,7 +163,7 @@ public class ScriptClusterRoutingIntegrationTest {
     // A non-transactional script read of a collection this node does not own is forwarded to the owner
     @Test
     public void test_non_transactional_read_of_foreign_collection_is_forwarded() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", serverPort));
+        configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
         seed(coll, "routed-read");
@@ -232,7 +192,7 @@ public class ScriptClusterRoutingIntegrationTest {
     // A forwarded aggregate ships the caller's own pipeline JSON and returns the owner's results
     @Test
     public void test_aggregate_on_foreign_collection_is_forwarded() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", serverPort));
+        configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
         seed(coll, "agg-1");
@@ -256,7 +216,7 @@ public class ScriptClusterRoutingIntegrationTest {
     // A transactional write to a foreign collection registers its owner as a 2PC participant
     @Test
     public void test_transactional_write_to_foreign_collection_becomes_participant() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", serverPort));
+        configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -274,7 +234,7 @@ public class ScriptClusterRoutingIntegrationTest {
     // A cross-owner script transaction (local slice + a remote participant) commits through 2PC
     @Test
     public void test_cross_owner_transaction_commits_via_two_phase_commit() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", serverPort));
+        configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var remote = collectionOwnedByOther();
         createCollection(remote);
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -289,7 +249,7 @@ public class ScriptClusterRoutingIntegrationTest {
     // A script transaction that rolls back aborts the remote participant's slice too
     @Test
     public void test_script_transaction_rollback_aborts_remote_participant() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", serverPort));
+        configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var remote = collectionOwnedByOther();
         createCollection(remote);
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -303,7 +263,7 @@ public class ScriptClusterRoutingIntegrationTest {
     // A read inside a transaction is forwarded only to an owner already holding a slice
     @Test
     public void test_read_inside_transaction_forwards_only_to_an_existing_participant() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", serverPort));
+        configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var remote = collectionOwnedByOther();
         createCollection(remote);
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -344,7 +304,7 @@ public class ScriptClusterRoutingIntegrationTest {
     // A collection this node owns is still written locally, with no forwarding
     @Test
     public void test_owned_collection_write_stays_local() throws Exception {
-        configureMembership(1, node("self", serverPort));
+        configureMembership(1, node("self", cluster.serverPort()));
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
         db.save(TestGlobals.DB, TestGlobals.COLL, doc("owned"));
         assertEquals(OperationStatus.OK, findStatus(TestGlobals.COLL, "owned"));
@@ -354,7 +314,7 @@ public class ScriptClusterRoutingIntegrationTest {
     // caller-supplied client never 2PCs against stale participants.
     @Test
     public void test_session_teardown_clears_cluster_transaction_state() throws Exception {
-        configureMembership(1, node("self", serverPort));
+        configureMembership(1, node("self", cluster.serverPort()));
         final var clientId = clientTracker.registerForwardedClient(ADMIN);
         try {
             final var db = new EnforcingDatabaseAccess(ADMIN, clientId);
@@ -376,7 +336,7 @@ public class ScriptClusterRoutingIntegrationTest {
     // survives the round trip - re-serializing the parsed operator tree would mangle it.
     @Test
     public void test_forwarded_aggregate_preserves_a_custom_geo_operator() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", serverPort));
+        configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
         final var located = new JsonObject();
@@ -478,7 +438,7 @@ public class ScriptClusterRoutingIntegrationTest {
     // Self carries a load the peer does not, so placement always prefers the peer. Locality is pinned off
     // so these cases keep exercising the load path in isolation.
     private void enableScriptRouting() throws Exception {
-        configureMembership(2, node("self", 19990, 9), node("other", serverPort, 0));
+        configureMembership(2, node("self", 19990, 9), node("other", cluster.serverPort(), 0));
         TestUtils.setPrivateField(config, "scriptsEnabled", true);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
         TestUtils.setPrivateField(config, "scriptLocalityWeight", 0);
@@ -490,7 +450,7 @@ public class ScriptClusterRoutingIntegrationTest {
         final var collections = IocContainer.get(Cache.class).getCollectionNamesForDatabase(TestGlobals.DB);
         assertFalse(collections.isEmpty(), "the fixture database must have at least one collection");
         for (var i = 0; i < 500; i++) {
-            final var peer = node("z-owner-" + i, serverPort, 0);
+            final var peer = node("z-owner-" + i, cluster.serverPort(), 0);
             configureMembership(2, node("self", 19990, 0), peer);
             if (collections.stream()
                     .allMatch(coll -> peer.getNodeId().equals(ownership.ownerFor(TestGlobals.DB, coll)))) {
