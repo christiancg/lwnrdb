@@ -5,7 +5,6 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.util.List;
 import java.util.Objects;
-
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;

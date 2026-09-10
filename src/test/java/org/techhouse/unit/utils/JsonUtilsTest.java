@@ -2,7 +2,10 @@ package org.techhouse.unit.utils;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.ArrayList;
+import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -163,7 +166,7 @@ public class JsonUtilsTest {
         assertTrue(JsonUtils.sortFunctionAscending(obj1, obj2, "field") > 0);
     }
 
-    // sortFunctionAscending: mixed primitive types (string vs number) returns 1
+    // Different types still order deterministically: numbers rank before strings.
     @Test
     public void test_sort_ascending_mixed_primitive_types_returns_positive() {
         JsonObject obj1 = new JsonObject();
@@ -173,15 +176,18 @@ public class JsonUtilsTest {
         assertEquals(1, JsonUtils.sortFunctionAscending(obj1, obj2, "field"));
     }
 
-    // sortFunctionAscending: boolean fields
+    // Booleans order the conventional way ascending - false before true - and two equal ones compare
+    // equal, which a comparator has to guarantee before TimSort will accept it.
     @Test
     public void test_sort_ascending_boolean_fields() {
-        JsonObject obj1 = new JsonObject();
-        obj1.add("flag", new JsonBoolean(true));
-        JsonObject obj2 = new JsonObject();
-        obj2.add("flag", new JsonBoolean(false));
-        assertTrue(JsonUtils.sortFunctionAscending(obj1, obj2, "flag") < 0);
-        assertTrue(JsonUtils.sortFunctionAscending(obj2, obj1, "flag") > 0);
+        JsonObject yes = new JsonObject();
+        yes.add("flag", new JsonBoolean(true));
+        JsonObject no = new JsonObject();
+        no.add("flag", new JsonBoolean(false));
+        assertTrue(JsonUtils.sortFunctionAscending(no, yes, "flag") < 0);
+        assertTrue(JsonUtils.sortFunctionAscending(yes, no, "flag") > 0);
+        assertEquals(0, JsonUtils.sortFunctionAscending(yes, yes, "flag"));
+        assertEquals(0, JsonUtils.sortFunctionAscending(no, no, "flag"));
     }
 
     // sortFunctionAscending: custom type fields
@@ -226,25 +232,24 @@ public class JsonUtilsTest {
 
     // sortFunctionDescending: mixed primitive types returns 1
     @Test
-    public void test_sort_descending_mixed_primitive_types_returns_positive() {
+    public void test_sort_descending_mixed_primitive_types_inverts_ascending() {
         JsonObject obj1 = new JsonObject();
         obj1.addProperty("field", "hello");
         JsonObject obj2 = new JsonObject();
         obj2.addProperty("field", 42);
-        assertEquals(1, JsonUtils.sortFunctionDescending(obj1, obj2, "field"));
+        assertEquals(1, JsonUtils.sortFunctionAscending(obj1, obj2, "field"));
+        assertEquals(-1, JsonUtils.sortFunctionDescending(obj1, obj2, "field"));
     }
 
-    // sortFunctionDescending: boolean fields — code returns o2.isTrue ? 1 : -1
     @Test
     public void test_sort_descending_boolean_fields() {
-        JsonObject obj1 = new JsonObject();
-        obj1.add("flag", new JsonBoolean(true));
-        JsonObject obj2 = new JsonObject();
-        obj2.add("flag", new JsonBoolean(false));
-        // o2=false → false ? 1 : -1 = -1
-        assertTrue(JsonUtils.sortFunctionDescending(obj1, obj2, "flag") < 0);
-        // o2=true → true ? 1 : -1 = 1
-        assertTrue(JsonUtils.sortFunctionDescending(obj2, obj1, "flag") > 0);
+        JsonObject yes = new JsonObject();
+        yes.add("flag", new JsonBoolean(true));
+        JsonObject no = new JsonObject();
+        no.add("flag", new JsonBoolean(false));
+        assertTrue(JsonUtils.sortFunctionDescending(yes, no, "flag") < 0);
+        assertTrue(JsonUtils.sortFunctionDescending(no, yes, "flag") > 0);
+        assertEquals(0, JsonUtils.sortFunctionDescending(yes, yes, "flag"));
     }
 
     // sortFunctionDescending: custom type fields
@@ -381,5 +386,81 @@ public class JsonUtilsTest {
         assertEquals("{}", JsonUtils.canonicalize(new JsonObject()));
         assertEquals("[]", JsonUtils.canonicalize(new JsonArray()));
         assertNotEquals(JsonUtils.hashElement(new JsonObject()), JsonUtils.hashElement(new JsonArray()));
+    }
+    // Over values the comparator actually orders, the two directions are exact inverses - which is
+    // what stops one of them drifting from the other.
+    @Test
+    public void test_ascending_and_descending_are_exact_inverses_over_primitives() {
+        final var values = primitiveSamples();
+        for (final var a : values) {
+            for (final var b : values) {
+                assertEquals(Integer.signum(JsonUtils.sortFunctionAscending(a, b, "field")),
+                        Integer.signum(JsonUtils.sortFunctionDescending(b, a, "field")),
+                        "ascending(a,b) and descending(b,a) disagree");
+            }
+        }
+    }
+
+    // The deliberate exception to that inversion: a missing field sorts last whichever way you sort,
+    // rather than jumping to the front when the direction flips. Only the primitive comparison
+    // reverses - see compareAtPath.
+    @Test
+    public void test_a_missing_field_sorts_last_in_both_directions() {
+        final var present = field(new JsonNumber(42));
+        final var missing = new JsonObject();
+
+        assertTrue(JsonUtils.sortFunctionAscending(missing, present, "field") > 0);
+        assertTrue(JsonUtils.sortFunctionDescending(missing, present, "field") > 0);
+        assertTrue(JsonUtils.sortFunctionAscending(present, missing, "field") < 0);
+        assertTrue(JsonUtils.sortFunctionDescending(present, missing, "field") < 0);
+        assertEquals(0, JsonUtils.sortFunctionAscending(missing, new JsonObject(), "field"));
+    }
+
+    // A comparator that is not antisymmetric makes TimSort throw "Comparison method violates its
+    // general contract!" on a long enough list, which would fail the whole SORT step.
+    @Test
+    public void test_the_comparator_is_a_valid_total_order() {
+        final var values = sortSamples();
+        for (final var a : values) {
+            assertEquals(0, JsonUtils.sortFunctionAscending(a, a, "field"), "a value must equal itself");
+            for (final var b : values) {
+                assertEquals(Integer.signum(JsonUtils.sortFunctionAscending(a, b, "field")),
+                        -Integer.signum(JsonUtils.sortFunctionAscending(b, a, "field")),
+                        "compare(a,b) and compare(b,a) must have opposite signs");
+            }
+        }
+        final var many = new ArrayList<JsonObject>();
+        for (var i = 0; i < 40; i++) {
+            many.addAll(values);
+        }
+        assertDoesNotThrow(() -> many.sort((o1, o2) -> JsonUtils.sortFunctionAscending(o1, o2, "field")));
+    }
+
+    private static List<JsonObject> primitiveSamples() {
+        final var samples = new ArrayList<JsonObject>();
+        samples.add(field(new JsonBoolean(true)));
+        samples.add(field(new JsonBoolean(false)));
+        samples.add(field(new JsonNumber(42)));
+        samples.add(field(new JsonNumber(7)));
+        samples.add(field(new JsonString("hello")));
+        samples.add(field(new JsonString("world")));
+        samples.add(field(new JsonDateTime("#datetime(2023-10-01T10:00:00)")));
+        samples.add(field(new JsonTime("#time(10:00:00)")));
+        return samples;
+    }
+
+    // Everything above plus the shapes the comparator refuses to order: a nested object and a
+    // missing field. TimSort sees these too, so they belong in the total-order check.
+    private static List<JsonObject> sortSamples() {
+        final var samples = primitiveSamples();
+        samples.add(field(new JsonObject()));
+        samples.add(new JsonObject());
+        return samples;
+    }
+
+    private static JsonObject field(JsonBaseElement value) {
+        final var object = new JsonObject();
+        object.add("field", value);
+        return object;
     }
 }
