@@ -8,12 +8,14 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 
 public final class BeforeHookHelper {
+    private static final Logger logger = Logger.logFor(BeforeHookHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
 
     private BeforeHookHelper() {
@@ -80,6 +82,7 @@ public final class BeforeHookHelper {
             }
             document = entries.getFirst().getData();
         } catch (Exception e) {
+            logger.error(OperationType.DELETE + " failed with " + ErrorCode.ERROR_DELETING.getCode(), e);
             return new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_DELETING);
         }
         try (var hooks = BeforeHookContext.open(dbName, collName, EventType.DELETED, actingUser)) {

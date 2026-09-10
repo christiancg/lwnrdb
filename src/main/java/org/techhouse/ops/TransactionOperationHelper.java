@@ -125,6 +125,7 @@ public final class TransactionOperationHelper {
             coordinator.replicateTransaction(transaction);
             return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
         } catch (Exception e) {
+            logger.error(OperationType.COMMIT_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(), e);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
             releaseHeldLocks(transaction);
@@ -145,6 +146,8 @@ public final class TransactionOperationHelper {
             TransactionRecovery.resolveMarkers(transaction.getTransactionId().toString(), false);
             return OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction aborted");
         } catch (Exception e) {
+            logger.error(OperationType.ROLLBACK_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(),
+                    e);
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
             releaseHeldLocks(transaction);
@@ -208,6 +211,7 @@ public final class TransactionOperationHelper {
             }
             return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
         } catch (Exception e) {
+            logger.error(OperationType.COMMIT_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(), e);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
             releaseHeldLocks(transaction);
@@ -225,6 +229,8 @@ public final class TransactionOperationHelper {
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             return OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction rolled back");
         } catch (Exception e) {
+            logger.error(OperationType.ROLLBACK_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(),
+                    e);
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
             releaseHeldLocks(transaction);

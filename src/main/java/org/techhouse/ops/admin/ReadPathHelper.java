@@ -7,6 +7,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.data.Transaction;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.AnalyzeHelper;
 import org.techhouse.ops.CollectionAccessHelper;
@@ -26,6 +27,7 @@ import org.techhouse.simplejs.exceptions.ScriptCallableException;
 // FIND_BY_ID and AGGREGATE. Both read under the collection read lock unless the request opted into a
 // dirty read, and AGGREGATE additionally owns the analyze context for the whole pipeline.
 public final class ReadPathHelper {
+    private static final Logger logger = Logger.logFor(ReadPathHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
 
@@ -109,6 +111,7 @@ public final class ReadPathHelper {
             return new OperationResponse(OperationType.AGGREGATE, scriptFailure.getMessage(),
                     ScriptOperationHelper.errorCodeFor(scriptFailure.getErrorName()));
         } catch (Exception e) {
+            logger.error(OperationType.AGGREGATE + " failed with " + ErrorCode.ERROR_AGGREGATING.getCode(), e);
             return new OperationResponse(OperationType.AGGREGATE, ErrorCode.ERROR_AGGREGATING);
         } finally {
             locks.releaseReadLocks(readLocks);

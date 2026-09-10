@@ -8,6 +8,7 @@ import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationLocks;
@@ -20,6 +21,7 @@ import org.techhouse.ops.resp.OperationResponse;
 
 // The collection-level DDL handlers.
 public final class CollectionOperationHelper {
+    private static final Logger logger = Logger.logFor(CollectionOperationHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
@@ -73,6 +75,8 @@ public final class CollectionOperationHelper {
             }
             return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
         } catch (Exception e) {
+            logger.error(
+                    OperationType.DROP_COLLECTION + " failed with " + ErrorCode.ERROR_DROPPING_COLLECTION.getCode(), e);
             return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
         } finally {
             locks.release(dbName, collName);

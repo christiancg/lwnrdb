@@ -49,6 +49,7 @@ public class OperationResponse {
         try {
             return attempt.run();
         } catch (Exception e) {
+            ResponseLog.LOGGER.error(type + " failed with " + errorCode.getCode(), e);
             return new OperationResponse(type, errorCode);
         }
     }

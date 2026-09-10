@@ -2,8 +2,11 @@ package org.techhouse.unit.ops.resp;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.mockStatic;
 
 import org.junit.jupiter.api.Test;
+import org.techhouse.log.LogWriter;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -68,5 +71,29 @@ public class OperationResponseTest {
         assertEquals(ErrorCode.INDEX_NOT_FOUND.getCode(), response.getErrorCode());
         assertEquals(ErrorCode.INDEX_NOT_FOUND.getDefaultMessage() + ": myField", response.getMessage());
         assertEquals(ErrorCode.INDEX_NOT_FOUND.getStatus(), response.getStatus());
+    }
+    @Test
+    public void test_respondOrError_returns_what_the_attempt_produced() {
+        final var response = OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_SAVING,
+                () -> OperationResponse.ok(OperationType.SAVE, "Ok"));
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertNull(response.getErrorCode());
+    }
+
+    // The failure is turned into an error code for the client, but it must not vanish: this is the one
+    // choke point where the ~30 handlers that share this shape would otherwise swallow their cause.
+    @Test
+    public void test_respondOrError_logs_the_failure_it_swallows() {
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            final var response = OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
+                throw new IllegalStateException("disk gone");
+            });
+
+            assertEquals(ErrorCode.ERROR_SAVING.getCode(), response.getErrorCode());
+            logWriter.verify(() -> LogWriter.writeLogEntry(
+                    argThat(entry -> entry.contains("SAVE failed with " + ErrorCode.ERROR_SAVING.getCode())
+                            && entry.contains("disk gone"))));
+        }
     }
 }
