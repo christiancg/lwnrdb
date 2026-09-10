@@ -4,7 +4,6 @@ import java.util.List;
 import java.util.UUID;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
-import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.DbEntry;
@@ -65,7 +64,6 @@ import org.techhouse.ops.resp.SaveResponse;
 
 public class OperationProcessor {
     private final Cache cache = IocContainer.get(Cache.class);
-    private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
 
     public OperationResponse processMessage(OperationRequest operationRequest) {
@@ -251,29 +249,17 @@ public class OperationProcessor {
     private OperationResponse processSaveTrigger(SaveTriggerRequest request, String actingUser) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        try {
-            // The collection write lock serializes the trigger-file rewrite against a concurrent save to
-            // the same collection, mirroring processSaveSchema.
-            locks.lock(dbName, collName);
-            return TriggerOperationHelper.executeSave(request, actingUser);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.SAVE_TRIGGER, ErrorCode.ERROR_SAVING_TRIGGER);
-        } finally {
-            locks.release(dbName, collName);
-        }
+        // The collection write lock serializes the trigger-file rewrite against a concurrent save to
+        // the same collection, mirroring processSaveSchema.
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_TRIGGER,
+                ErrorCode.ERROR_SAVING_TRIGGER, () -> TriggerOperationHelper.executeSave(request, actingUser));
     }
 
     private OperationResponse processDeleteTrigger(DeleteTriggerRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        try {
-            locks.lock(dbName, collName);
-            return TriggerOperationHelper.executeDelete(request);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.DELETE_TRIGGER, ErrorCode.ERROR_DELETING_TRIGGER);
-        } finally {
-            locks.release(dbName, collName);
-        }
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_TRIGGER,
+                ErrorCode.ERROR_DELETING_TRIGGER, () -> TriggerOperationHelper.executeDelete(request));
     }
 
     private OperationResponse processListTriggers(ListTriggersRequest request) {
@@ -311,21 +297,18 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
-        try {
-            locks.lock(dbName, collName);
-            final var hookError = BeforeHookHelper.beforeBulkSave(bulkSaveRequest, actingUser);
-            if (hookError != null) {
-                return hookError;
-            }
-            final var response = ClusterWriteHelper.afterBulkSave(dbName, collName,
-                    SaveOperationHelper.executeBulkSave(bulkSaveRequest));
-            TriggerHelper.afterBulkSave(dbName, collName, response, actingUser, bulkSaveRequest.getTriggerDepth());
-            return response;
-        } catch (Exception exception) {
-            return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
-        } finally {
-            locks.release(dbName, collName);
-        }
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING,
+                () -> {
+                    final var hookError = BeforeHookHelper.beforeBulkSave(bulkSaveRequest, actingUser);
+                    if (hookError != null) {
+                        return hookError;
+                    }
+                    final var response = ClusterWriteHelper.afterBulkSave(dbName, collName,
+                            SaveOperationHelper.executeBulkSave(bulkSaveRequest));
+                    TriggerHelper.afterBulkSave(dbName, collName, response, actingUser,
+                            bulkSaveRequest.getTriggerDepth());
+                    return response;
+                });
     }
 
     private OperationResponse processSaveOperation(SaveRequest saveRequest, Transaction activeTransaction,
@@ -340,8 +323,7 @@ public class OperationProcessor {
             return guardError;
         }
         final var isInsert = saveRequest.get_id() == null || saveRequest.get_id().isBlank();
-        try {
-            locks.lock(dbName, collName);
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
             final var hookError = BeforeHookHelper.beforeSave(saveRequest,
                     isInsert ? EventType.CREATED : EventType.UPDATED, actingUser);
             if (hookError != null) {
@@ -354,11 +336,7 @@ public class OperationProcessor {
                         List.of(saveResponse.get_id()), actingUser, saveRequest.getTriggerDepth());
             }
             return response;
-        } catch (Exception exception) {
-            return new OperationResponse(OperationType.SAVE, ErrorCode.ERROR_SAVING);
-        } finally {
-            locks.release(dbName, collName);
-        }
+        });
     }
 
     private OperationResponse processDeleteOperation(DeleteRequest deleteRequest, Transaction activeTransaction,
@@ -372,76 +350,56 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
-        try {
-            locks.lock(dbName, collName);
-            // Read before the delete: afterWrite needs the document that is about to disappear, and this
-            // is a no-op unless a DELETED trigger actually exists on the collection.
-            final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),
-                    deleteRequest.getTriggerDepth());
-            final var hookError = BeforeHookHelper.beforeDelete(deleteRequest, actingUser);
-            if (hookError != null) {
-                return hookError;
-            }
-            final var response = ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
-                    DeleteOperationHelper.executeDelete(deleteRequest));
-            if (response instanceof DeleteResponse) {
-                TriggerHelper.afterWrite(dbName, collName, EventType.DELETED, deleted, actingUser,
-                        deleteRequest.getTriggerDepth());
-            }
-            return response;
-        } catch (Exception exception) {
-            return new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_DELETING);
-        } finally {
-            locks.release(dbName, collName);
-        }
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE, ErrorCode.ERROR_DELETING,
+                () -> {
+                    // Read before the delete: afterWrite needs the document that is about to disappear, and this
+                    // is a no-op unless a DELETED trigger actually exists on the collection.
+                    final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),
+                            deleteRequest.getTriggerDepth());
+                    final var hookError = BeforeHookHelper.beforeDelete(deleteRequest, actingUser);
+                    if (hookError != null) {
+                        return hookError;
+                    }
+                    final var response = ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
+                            DeleteOperationHelper.executeDelete(deleteRequest));
+                    if (response instanceof DeleteResponse) {
+                        TriggerHelper.afterWrite(dbName, collName, EventType.DELETED, deleted, actingUser,
+                                deleteRequest.getTriggerDepth());
+                    }
+                    return response;
+                });
     }
 
     private OperationResponse processListUsers(ListUsersRequest request) {
-        List<String> readLocks = List.of();
-        try {
-            readLocks = locks.acquireReadLocks(request.isDirtyRead(),
-                    List.of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME)));
-            final var userStream = cache.getAllAdminUserEntries().stream()
-                    .map(user -> user.toResponseJson(cache.getAllAdminDbEntries().stream()
-                            .filter(db -> db.isOwner(user.get_id())).map(DbEntry::get_id).toList()));
-            final var results = AggregationOperationHelper.processStepsOnStream(request.getAggregationSteps(),
-                    userStream);
-            return results.isEmpty()
-                    ? new OperationResponse(OperationType.LIST_USERS, ErrorCode.NO_USERS_FOUND)
-                    : new ListUsersResponse("Ok", results);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.LIST_USERS, ErrorCode.ERROR_LISTING_USERS);
-        } finally {
-            locks.releaseReadLocks(readLocks);
-        }
+        final var lockSet = List
+                .of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME));
+        return OperationLocks.withReadLocks(request.isDirtyRead(), lockSet, OperationType.LIST_USERS,
+                ErrorCode.ERROR_LISTING_USERS, () -> {
+                    final var userStream = cache.getAllAdminUserEntries().stream()
+                            .map(user -> user.toResponseJson(cache.getAllAdminDbEntries().stream()
+                                    .filter(db -> db.isOwner(user.get_id())).map(DbEntry::get_id).toList()));
+                    final var results = AggregationOperationHelper.processStepsOnStream(request.getAggregationSteps(),
+                            userStream);
+                    return results.isEmpty()
+                            ? new OperationResponse(OperationType.LIST_USERS, ErrorCode.NO_USERS_FOUND)
+                            : new ListUsersResponse("Ok", results);
+                });
     }
 
     private OperationResponse processSaveSchema(SaveSchemaRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        try {
-            // Hold the collection write lock so the schema file write, cache update and any concurrent
-            // save are serialized (mirrors processCreateIndex); the work itself lives in the helper.
-            locks.lock(dbName, collName);
-            return SchemaOperationHelper.executeSaveSchema(request);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.SAVE_SCHEMA, ErrorCode.ERROR_SAVING_SCHEMA);
-        } finally {
-            locks.release(dbName, collName);
-        }
+        // Hold the collection write lock so the schema file write, cache update and any concurrent
+        // save are serialized (mirrors processCreateIndex); the work itself lives in the helper.
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_SCHEMA,
+                ErrorCode.ERROR_SAVING_SCHEMA, () -> SchemaOperationHelper.executeSaveSchema(request));
     }
 
     private OperationResponse processDeleteSchema(DeleteSchemaRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        try {
-            locks.lock(dbName, collName);
-            return SchemaOperationHelper.executeDeleteSchema(request);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.DELETE_SCHEMA, ErrorCode.ERROR_DELETING_SCHEMA);
-        } finally {
-            locks.release(dbName, collName);
-        }
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_SCHEMA,
+                ErrorCode.ERROR_DELETING_SCHEMA, () -> SchemaOperationHelper.executeDeleteSchema(request));
     }
 
 }

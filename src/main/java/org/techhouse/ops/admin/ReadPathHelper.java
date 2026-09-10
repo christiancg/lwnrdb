@@ -11,6 +11,7 @@ import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.AnalyzeHelper;
 import org.techhouse.ops.CollectionAccessHelper;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.ScriptOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
@@ -48,26 +49,19 @@ public final class ReadPathHelper {
                 return new FindByIdResponse("Ok", buffered);
             }
         }
-        List<String> readLocks = List.of();
-        try {
-            readLocks = locks.acquireReadLocks(findbyIdRequest.isDirtyRead(),
-                    List.of(Cache.getCollectionIdentifier(dbName, collName)));
-            final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-            final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
-            if (foundIndexEntry >= 0) {
-                final var primaryKeyIndexEntry = primaryKeyIndex.get(foundIndexEntry);
-                final var entry = cache.getById(dbName, collName, primaryKeyIndexEntry);
-                CollectionAccessHelper.recordPkIndexAccess(dbName, collName);
-                CollectionAccessHelper.recordCollectionAccess(dbName, collName);
-                return new FindByIdResponse("Ok", entry.getData());
-            } else {
-                return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
-            }
-        } catch (Exception exception) {
-            return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ERROR_RETRIEVING);
-        } finally {
-            locks.releaseReadLocks(readLocks);
-        }
+        final var lockSet = List.of(Cache.getCollectionIdentifier(dbName, collName));
+        return OperationLocks.withReadLocks(findbyIdRequest.isDirtyRead(), lockSet, OperationType.FIND_BY_ID,
+                ErrorCode.ERROR_RETRIEVING, () -> {
+                    final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+                    final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
+                    if (foundIndexEntry < 0) {
+                        return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
+                    }
+                    final var entry = cache.getById(dbName, collName, primaryKeyIndex.get(foundIndexEntry));
+                    CollectionAccessHelper.recordPkIndexAccess(dbName, collName);
+                    CollectionAccessHelper.recordCollectionAccess(dbName, collName);
+                    return new FindByIdResponse("Ok", entry.getData());
+                });
     }
 
     public static OperationResponse processAggregateOperation(AggregateRequest aggregateRequest,

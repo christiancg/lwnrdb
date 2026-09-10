@@ -10,6 +10,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
@@ -82,28 +83,23 @@ public final class CollectionOperationHelper {
     }
 
     public static OperationResponse processListCollectionsOperation(ListCollectionsRequest request) {
-        List<String> readLocks = List.of();
-        try {
-            final var dbName = request.getDatabaseName();
-            if (dbName == null || dbName.isBlank()) {
-                return new OperationResponse(OperationType.LIST_COLLECTIONS, "Database name is required",
-                        ErrorCode.VALIDATION_ERROR);
-            }
-            if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-                return new ListCollectionsResponse("Ok", List.of());
-            }
-            readLocks = locks.acquireReadLocks(request.isDirtyRead(), List.of(
-                    Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME)));
-            if (cache.getAdminDbEntry(dbName) == null) {
-                return new OperationResponse(OperationType.LIST_COLLECTIONS, "Database " + dbName + " not found",
-                        ErrorCode.DATABASE_NOT_FOUND);
-            }
-            final var names = cache.getCollectionNamesForDatabase(dbName);
-            return new ListCollectionsResponse("Ok", names);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.LIST_COLLECTIONS, ErrorCode.ERROR_LISTING_COLLECTIONS);
-        } finally {
-            locks.releaseReadLocks(readLocks);
+        final var dbName = request.getDatabaseName();
+        if (dbName == null || dbName.isBlank()) {
+            return new OperationResponse(OperationType.LIST_COLLECTIONS, "Database name is required",
+                    ErrorCode.VALIDATION_ERROR);
         }
+        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
+            return new ListCollectionsResponse("Ok", List.of());
+        }
+        final var lockSet = List
+                .of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME));
+        return OperationLocks.withReadLocks(request.isDirtyRead(), lockSet, OperationType.LIST_COLLECTIONS,
+                ErrorCode.ERROR_LISTING_COLLECTIONS, () -> {
+                    if (cache.getAdminDbEntry(dbName) == null) {
+                        return new OperationResponse(OperationType.LIST_COLLECTIONS,
+                                "Database " + dbName + " not found", ErrorCode.DATABASE_NOT_FOUND);
+                    }
+                    return new ListCollectionsResponse("Ok", cache.getCollectionNamesForDatabase(dbName));
+                });
     }
 }
