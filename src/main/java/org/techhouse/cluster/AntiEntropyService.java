@@ -6,11 +6,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AntiEntropyPayload;
@@ -39,36 +34,21 @@ public class AntiEntropyService implements MembershipListener {
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
-    private final ExecutorService reconcileExecutor = Executors.newSingleThreadExecutor(r -> {
-        final var t = new Thread(r, "cluster-anti-entropy");
-        t.setDaemon(true);
-        return t;
-    });
-    // Coalesces bursts of membership changes into at most one queued reconcile pass.
-    private final AtomicBoolean scheduled = new AtomicBoolean(false);
-    private ScheduledExecutorService periodicScheduler;
+    private final CoalescingSweep sweep = new CoalescingSweep(logger, "cluster-anti-entropy", "Anti-entropy",
+            this::reconcileAllCollections);
 
     // Starts the periodic background sweep that reconciles every collection against live peers on a fixed
     // interval (in addition to the membership-triggered pass), catching replicas left behind by a
     // replication timeout. No-op when clustering is disabled or the interval is not positive.
     public void start() {
-        if (!clusterConfig.isEnabled() || clusterConfig.antiEntropyIntervalMs() <= 0) {
+        if (!clusterConfig.isEnabled()) {
             return;
         }
-        periodicScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            final var t = new Thread(r, "cluster-anti-entropy-sweep");
-            t.setDaemon(true);
-            return t;
-        });
-        final var interval = clusterConfig.antiEntropyIntervalMs();
-        periodicScheduler.scheduleAtFixedRate(this::scheduleReconcile, interval, interval, TimeUnit.MILLISECONDS);
+        sweep.startPeriodic(clusterConfig.antiEntropyIntervalMs());
     }
 
     public void stop() {
-        if (periodicScheduler != null) {
-            periodicScheduler.shutdownNow();
-            periodicScheduler = null;
-        }
+        sweep.stopPeriodic();
     }
 
     @Override
@@ -76,7 +56,7 @@ public class AntiEntropyService implements MembershipListener {
         if (!clusterConfig.isEnabled()) {
             return;
         }
-        scheduleReconcile();
+        sweep.schedule();
     }
 
     // Triggers a document reconciliation pass without waiting for a membership change or the periodic sweep,
@@ -85,20 +65,7 @@ public class AntiEntropyService implements MembershipListener {
         if (!clusterConfig.isEnabled()) {
             return;
         }
-        scheduleReconcile();
-    }
-
-    private void scheduleReconcile() {
-        if (scheduled.compareAndSet(false, true)) {
-            reconcileExecutor.submit(() -> {
-                scheduled.set(false);
-                try {
-                    reconcileAllCollections();
-                } catch (Exception e) {
-                    logger.warning("Anti-entropy reconciliation failed: " + e.getMessage());
-                }
-            });
-        }
+        sweep.schedule();
     }
 
     private void reconcileAllCollections() {

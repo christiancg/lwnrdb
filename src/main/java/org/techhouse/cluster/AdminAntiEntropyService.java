@@ -1,10 +1,6 @@
 package org.techhouse.cluster;
 
 import java.util.ArrayList;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.membership.MembershipService;
@@ -35,19 +31,14 @@ public class AdminAntiEntropyService implements MembershipListener {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
-    private final ExecutorService reconcileExecutor = Executors.newSingleThreadExecutor(r -> {
-        final var t = new Thread(r, "cluster-admin-anti-entropy");
-        t.setDaemon(true);
-        return t;
-    });
+    private final CoalescingSweep sweep = new CoalescingSweep(logger, "cluster-admin-anti-entropy",
+            "Admin anti-entropy", this::reconcile);
     private final AdminSnapshotConformer conformer = new AdminSnapshotConformer();
-    private final AtomicBoolean scheduled = new AtomicBoolean(false);
     // False until this node has completed one admin reconciliation since being started, so a node that just
     // became the admin coordinator does not commit admin ops on a stale base (see ClusterAdminHelper.guard).
     private final AtomicBoolean adminSyncCompleted = new AtomicBoolean(false);
     // The gate is only enforced once the service is started (production wiring); otherwise it is inert.
     private volatile boolean started;
-    private ScheduledExecutorService periodicScheduler;
 
     public void start() {
         if (!clusterConfig.isEnabled()) {
@@ -55,26 +46,14 @@ public class AdminAntiEntropyService implements MembershipListener {
         }
         started = true;
         publishSyncState();
-        if (clusterConfig.antiEntropyIntervalMs() <= 0) {
-            return;
-        }
-        periodicScheduler = Executors.newSingleThreadScheduledExecutor(r -> {
-            final var t = new Thread(r, "cluster-admin-anti-entropy-sweep");
-            t.setDaemon(true);
-            return t;
-        });
-        final var interval = clusterConfig.antiEntropyIntervalMs();
-        periodicScheduler.scheduleAtFixedRate(this::scheduleReconcile, interval, interval, TimeUnit.MILLISECONDS);
+        sweep.startPeriodic(clusterConfig.antiEntropyIntervalMs());
     }
 
     public void stop() {
         started = false;
         adminSyncCompleted.set(false);
         publishSyncState();
-        if (periodicScheduler != null) {
-            periodicScheduler.shutdownNow();
-            periodicScheduler = null;
-        }
+        sweep.stopPeriodic();
     }
 
     // A coordinator must not serve coordinated admin ops until it has completed one reconciliation since
@@ -96,20 +75,7 @@ public class AdminAntiEntropyService implements MembershipListener {
         if (!clusterConfig.isEnabled()) {
             return;
         }
-        scheduleReconcile();
-    }
-
-    private void scheduleReconcile() {
-        if (scheduled.compareAndSet(false, true)) {
-            reconcileExecutor.submit(() -> {
-                scheduled.set(false);
-                try {
-                    reconcile();
-                } catch (Exception e) {
-                    logger.warning("Admin anti-entropy reconciliation failed: " + e.getMessage());
-                }
-            });
-        }
+        sweep.schedule();
     }
 
     public void reconcile() throws Exception {

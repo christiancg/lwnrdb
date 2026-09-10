@@ -353,7 +353,8 @@ public class AdminAntiEntropyServiceTest {
             service.onMembershipChanged(membershipService.membershipView());
             // The reconcile runs on the service's single-thread executor; draining it with a barrier task
             // (FIFO) deterministically waits for that reconcile to finish without busy-waiting.
-            final var executor = TestUtils.getPrivateField(service, "reconcileExecutor", ExecutorService.class);
+            final var sweep = TestUtils.getPrivateField(service, "sweep", Object.class);
+            final var executor = TestUtils.getPrivateField(sweep, "reconcileExecutor", ExecutorService.class);
             executor.submit(() -> null).get(3, TimeUnit.SECONDS);
             assertTrue(service.hasCompletedAdminSync());
         } finally {
