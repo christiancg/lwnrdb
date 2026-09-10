@@ -7,17 +7,15 @@ import java.util.Set;
 import java.util.UUID;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.BeforeHookContext;
 import org.techhouse.ops.BeforeHookOutcome;
-import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.EntrySizeGuard;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.resp.OperationResponse;
@@ -25,7 +23,6 @@ import org.techhouse.ops.resp.OperationResponse;
 public final class TransactionWrites {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
-    private static final Configuration configuration = Configuration.getInstance();
 
     private TransactionWrites() {
     }
@@ -67,14 +64,7 @@ public final class TransactionWrites {
         if (effective == original) {
             return null;
         }
-        final var maxEntrySize = configuration.getMaxEntrySize();
-        final var size = DbEntry.fromJsonObject(dbName, collName, effective).byteSize();
-        if (size <= maxEntrySize) {
-            return null;
-        }
-        return new OperationResponse(type,
-                "Entry size of " + size + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
-                ErrorCode.ENTRY_TOO_LARGE);
+        return EntrySizeGuard.check(dbName, collName, effective, type);
     }
 
     public static OperationResponse runDeleteBeforeHooks(Transaction transaction, String collId, String dbName,

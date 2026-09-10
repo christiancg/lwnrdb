@@ -16,6 +16,7 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.EntrySizeGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -54,12 +55,9 @@ public final class TransactionBuffer {
         try {
             final var object = request.getObject();
             final var entry = DbEntry.fromJsonObject(dbName, collName, object);
-            final var maxEntrySize = configuration.getMaxEntrySize();
-            if (entry.byteSize() > maxEntrySize) {
-                return new OperationResponse(
-                        OperationType.SAVE, "Entry size of " + entry.byteSize()
-                                + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
-                        ErrorCode.ENTRY_TOO_LARGE);
+            final var entrySizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
+            if (entrySizeError != null) {
+                return entrySizeError;
             }
             final var lockResult = ensureLock(transaction, OperationType.SAVE, dbName, collName, onLockTimeout);
             if (lockResult != null) {
@@ -98,15 +96,12 @@ public final class TransactionBuffer {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         try {
-            final var maxEntrySize = configuration.getMaxEntrySize();
             final var seenIds = new HashSet<String>();
             for (final var object : request.getObjects()) {
                 final var entry = DbEntry.fromJsonObject(dbName, collName, object);
-                if (entry.byteSize() > maxEntrySize) {
-                    return new OperationResponse(
-                            OperationType.BULK_SAVE, "Entry size of " + entry.byteSize()
-                                    + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
-                            ErrorCode.ENTRY_TOO_LARGE);
+                final var entrySizeError = EntrySizeGuard.check(entry, OperationType.BULK_SAVE);
+                if (entrySizeError != null) {
+                    return entrySizeError;
                 }
                 final var id = TransactionWrites.ensureId(object, null);
                 if (!seenIds.add(id)) {

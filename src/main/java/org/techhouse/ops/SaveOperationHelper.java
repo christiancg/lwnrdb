@@ -48,12 +48,9 @@ public final class SaveOperationHelper {
         final var collName = saveRequest.getCollectionName();
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
         entry.setVersion(WriteVersion.next());
-        final var maxEntrySize = configuration.getMaxEntrySize();
-        if (entry.byteSize() > maxEntrySize) {
-            return new OperationResponse(
-                    OperationType.SAVE, "Entry size of " + entry.byteSize()
-                            + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
-                    ErrorCode.ENTRY_TOO_LARGE);
+        final var sizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
+        if (sizeError != null) {
+            return sizeError;
         }
         final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         var foundIndexEntry = -1;
@@ -128,13 +125,10 @@ public final class SaveOperationHelper {
             }
             entries.add(entry);
         }
-        final var maxEntrySize = configuration.getMaxEntrySize();
         for (var entry : entries) {
-            if (entry.byteSize() > maxEntrySize) {
-                return new OperationResponse(
-                        OperationType.BULK_SAVE, "Entry size of " + entry.byteSize()
-                                + " bytes exceeds the maximum allowed size of " + maxEntrySize + " bytes",
-                        ErrorCode.ENTRY_TOO_LARGE);
+            final var sizeError = EntrySizeGuard.check(entry, OperationType.BULK_SAVE);
+            if (sizeError != null) {
+                return sizeError;
             }
         }
         final var seenIds = new HashSet<String>();
