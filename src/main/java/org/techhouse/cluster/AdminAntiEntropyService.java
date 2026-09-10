@@ -121,10 +121,7 @@ public class AdminAntiEntropyService implements MembershipListener {
             AdminSnapshotPayload best = null;
             var bestEpoch = adminEpoch.current();
             final var self = membershipService.getSelf();
-            for (final var member : membershipService.membershipView().aliveMembers()) {
-                if (self != null && member.getNodeId().equals(self.getNodeId())) {
-                    continue;
-                }
+            for (final var member : membershipService.membershipView().peers(self)) {
                 final var snapshot = requestSnapshot(member.address());
                 if (snapshot != null && snapshot.getEpoch() > bestEpoch) {
                     bestEpoch = snapshot.getEpoch();

@@ -83,10 +83,8 @@ public class Tx2pcCoordinator {
         final var self = membershipService.getSelf();
         final var type = commit ? ClusterMessageType.COMMIT_TX : ClusterMessageType.ABORT_TX;
         final var ack = commit ? ClusterMessageType.COMMIT_TX_ACK : ClusterMessageType.ABORT_TX_ACK;
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (self == null || !member.getNodeId().equals(self.getNodeId())) {
-                send(member.address().toString(), type, dtxId, dtxId, ack, null);
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
+            send(member.address().toString(), type, dtxId, dtxId, ack, null);
         }
         return OperationResponse.ok(OperationType.RESOLVE_TRANSACTION,
                 "Transaction " + (commit ? "committed" : "aborted"));

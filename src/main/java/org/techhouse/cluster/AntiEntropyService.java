@@ -159,10 +159,7 @@ public class AntiEntropyService implements MembershipListener {
         localTombstones.forEach((id, version) -> merge(best, id, version, true, null));
 
         final var self = membershipService.getSelf();
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (member.getNodeId().equals(self.getNodeId())) {
-                continue;
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
             final var response = requestDigest(member.address(), dbName, collName);
             if (response == null) {
                 continue;

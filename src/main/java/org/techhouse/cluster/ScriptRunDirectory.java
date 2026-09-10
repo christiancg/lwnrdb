@@ -39,10 +39,7 @@ public class ScriptRunDirectory {
             return rows;
         }
         final var self = membershipService.getSelf();
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (self != null && member.getNodeId().equals(self.getNodeId())) {
-                continue;
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
             final var memberAddress = member.address().toString();
             for (final var run : requestListScripts(member.address())) {
                 rows.add(toJson(run, memberAddress, now));
@@ -60,10 +57,7 @@ public class ScriptRunDirectory {
         }
         final var self = membershipService.getSelf();
         var cancelled = false;
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (self != null && member.getNodeId().equals(self.getNodeId())) {
-                continue;
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
             cancelled |= requestCancel(member.address(), runId);
         }
         return cancelled;

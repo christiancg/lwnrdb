@@ -70,10 +70,7 @@ public class Replicator {
         // The coordinator has already applied the change locally, so it counts as one towards the majority.
         final var requiredAcks = Math.max(0, ownershipManager.majority() - 1);
         final var latch = new CountDownLatch(requiredAcks);
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (member.getNodeId().equals(self.getNodeId())) {
-                continue;
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
             final var address = member.address();
             Thread.ofVirtual().name("cluster-replicate")
                     .start(() -> sendTo(address, messageFactory.get(), ackType, latch));

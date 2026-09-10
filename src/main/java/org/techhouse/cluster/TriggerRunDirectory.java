@@ -34,10 +34,7 @@ public class TriggerRunDirectory {
             return rows;
         }
         final var self = membershipService.getSelf();
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (self != null && member.getNodeId().equals(self.getNodeId())) {
-                continue;
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
             final var memberAddress = member.address().toString();
             for (final var run : requestList(member.address(), filter)) {
                 rows.add(toJson(run, memberAddress, now));
@@ -54,10 +51,7 @@ public class TriggerRunDirectory {
             return false;
         }
         final var self = membershipService.getSelf();
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (self != null && member.getNodeId().equals(self.getNodeId())) {
-                continue;
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
             if (requestResolve(member.address(), runId, decision)) {
                 return true;
             }
