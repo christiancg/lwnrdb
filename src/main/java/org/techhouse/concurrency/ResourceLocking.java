@@ -115,9 +115,16 @@ public class ResourceLocking {
         }
         final var sorted = identifiers.stream().distinct().sorted().toList();
         final var acquired = new ArrayList<String>();
-        for (var identifier : sorted) {
-            lockReadByName(identifier);
-            acquired.add(identifier);
+        try {
+            for (var identifier : sorted) {
+                lockReadByName(identifier);
+                acquired.add(identifier);
+            }
+        } catch (InterruptedException e) {
+            // The caller only ever releases the returned list, so a throw part-way through has to
+            // release what it already took or those locks are stranded for the process's lifetime.
+            releaseReadLocks(acquired);
+            throw e;
         }
         return acquired;
     }
