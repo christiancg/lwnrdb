@@ -65,9 +65,12 @@ public class AdminAntiEntropyProcedureTest {
     }
 
     private static void conform(AdminAntiEntropyService target, AdminSnapshotPayload snapshot) throws Exception {
-        final var method = AdminAntiEntropyService.class.getDeclaredMethod("conform", AdminSnapshotPayload.class);
+        final var conformerField = AdminAntiEntropyService.class.getDeclaredField("conformer");
+        conformerField.setAccessible(true);
+        final var conformer = conformerField.get(target);
+        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class);
         method.setAccessible(true);
-        method.invoke(target, snapshot);
+        method.invoke(conformer, snapshot);
     }
 
     private AdminSnapshotPayload snapshotWithout() {

@@ -15,5 +15,4 @@
     <suppress files="[\\/]src[\\/]test[\\/]" checks="FileLength"/>
 
     <!-- Pre-existing, outside the SimpleJS remediation scope. -->
-    <suppress files="org[\\/]techhouse[\\/]cluster[\\/]AdminAntiEntropyService\.java" checks="FileLength"/>
 </suppressions>
