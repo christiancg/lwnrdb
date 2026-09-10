@@ -5,6 +5,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.function.ToIntBiFunction;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -12,6 +13,7 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 
 public final class JsonUtils {
@@ -23,6 +25,74 @@ public final class JsonUtils {
     // emitted sorted by key (object equality is key-order independent); array elements keep their
     // order (array equality is order dependent); integral numbers drop their trailing ".0" so a
     // query value of 1 matches a stored 1.0. Used only to feed hashElement.
+    public static int sortFunctionAscending(JsonObject o1, JsonObject o2, String fieldName) {
+        return compareAtPath(o1, o2, fieldName, JsonUtils::ascendingPrimitives);
+    }
+
+    public static int sortFunctionDescending(JsonObject o1, JsonObject o2, String fieldName) {
+        return compareAtPath(o1, o2, fieldName, JsonUtils::descendingPrimitives);
+    }
+
+    // A missing field and a non-primitive value order the same way in both directions - only the
+    // primitive comparison reverses - so the direction is a parameter rather than a negated result.
+    private static int compareAtPath(JsonObject o1, JsonObject o2, String fieldName,
+            ToIntBiFunction<JsonPrimitive<?>, JsonPrimitive<?>> comparePrimitives) {
+        final var o1Field = JsonUtils.getFromPath(o1, fieldName);
+        final var o2Field = JsonUtils.getFromPath(o2, fieldName);
+        if (o1Field == JsonNull.INSTANCE && o2Field == JsonNull.INSTANCE) {
+            return 0;
+        }
+        if (o1Field == JsonNull.INSTANCE) {
+            return 1;
+        }
+        if (o2Field == JsonNull.INSTANCE) {
+            return -1;
+        }
+        if (!o1Field.isJsonPrimitive()) {
+            return -1;
+        }
+        if (!o2Field.isJsonPrimitive()) {
+            return 1;
+        }
+        return comparePrimitives.applyAsInt(o1Field.asJsonPrimitive(), o2Field.asJsonPrimitive());
+    }
+
+    private static int ascendingPrimitives(JsonPrimitive<?> o1Primitive, JsonPrimitive<?> o2Primitive) {
+        if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom()
+                && o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
+            return o1Primitive.asJsonCustom().getValue().compareTo(o2Primitive.asJsonCustom().getValue());
+        }
+        if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
+            return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
+        }
+        if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
+            return Double.compare(o1Primitive.asJsonNumber().getValue().doubleValue(),
+                    o2Primitive.asJsonNumber().getValue().doubleValue());
+        }
+        if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
+            return o1Primitive.asJsonBoolean().getValue() ? -1 : 1;
+        }
+        return 1;
+    }
+
+    private static int descendingPrimitives(JsonPrimitive<?> o1Primitive, JsonPrimitive<?> o2Primitive) {
+        if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom()
+                && o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
+            return o2Primitive.asJsonCustom().getValue().compareTo(o1Primitive.asJsonCustom().getValue());
+        }
+        if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
+            return o2Primitive.asJsonString().getValue().compareTo(o1Primitive.asJsonString().getValue());
+        }
+        if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
+            return Double.compare(o2Primitive.asJsonNumber().getValue().doubleValue(),
+                    o1Primitive.asJsonNumber().getValue().doubleValue());
+        }
+        if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
+            return o2Primitive.asJsonBoolean().getValue() ? 1 : -1;
+        }
+        return 1;
+    }
+
     public static String canonicalize(JsonBaseElement element) {
         final var sb = new StringBuilder();
         appendCanonical(element, sb);
@@ -147,73 +217,4 @@ public final class JsonUtils {
         return result;
     }
 
-    public static int sortFunctionAscending(JsonObject o1, JsonObject o2, String fieldName) {
-        final var o1Field = JsonUtils.getFromPath(o1, fieldName);
-        final var o2Field = JsonUtils.getFromPath(o2, fieldName);
-        if (o1Field == JsonNull.INSTANCE && o2Field == JsonNull.INSTANCE) {
-            return 0;
-        } else if (o1Field == JsonNull.INSTANCE) {
-            return 1;
-        } else if (o2Field == JsonNull.INSTANCE) {
-            return -1;
-        } else {
-            if (o1Field.isJsonPrimitive()) {
-                if (o2Field.isJsonPrimitive()) {
-                    final var o1Primitive = o1Field.asJsonPrimitive();
-                    final var o2Primitive = o2Field.asJsonPrimitive();
-                    if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom()
-                            && o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
-                        return o1Primitive.asJsonCustom().getValue().compareTo(o2Primitive.asJsonCustom().getValue());
-                    } else if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
-                        return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
-                    } else if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
-                        return Double.compare(o1Primitive.asJsonNumber().getValue().doubleValue(),
-                                o2Primitive.asJsonNumber().getValue().doubleValue());
-                    } else if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
-                        return o1Primitive.asJsonBoolean().getValue() ? -1 : 1;
-                    }
-                    return 1;
-                } else {
-                    return 1;
-                }
-            } else {
-                return -1;
-            }
-        }
-    }
-
-    public static int sortFunctionDescending(JsonObject o1, JsonObject o2, String fieldName) {
-        final var o1Field = JsonUtils.getFromPath(o1, fieldName);
-        final var o2Field = JsonUtils.getFromPath(o2, fieldName);
-        if (o1Field == JsonNull.INSTANCE && o2Field == JsonNull.INSTANCE) {
-            return 0;
-        } else if (o1Field == JsonNull.INSTANCE) {
-            return 1;
-        } else if (o2Field == JsonNull.INSTANCE) {
-            return -1;
-        } else {
-            if (o1Field.isJsonPrimitive()) {
-                if (o2Field.isJsonPrimitive()) {
-                    final var o1Primitive = o1Field.asJsonPrimitive();
-                    final var o2Primitive = o2Field.asJsonPrimitive();
-                    if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom()
-                            && o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
-                        return o2Primitive.asJsonCustom().getValue().compareTo(o1Primitive.asJsonCustom().getValue());
-                    } else if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
-                        return o2Primitive.asJsonString().getValue().compareTo(o1Primitive.asJsonString().getValue());
-                    } else if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
-                        return Double.compare(o2Primitive.asJsonNumber().getValue().doubleValue(),
-                                o1Primitive.asJsonNumber().getValue().doubleValue());
-                    } else if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
-                        return o2Primitive.asJsonBoolean().getValue() ? 1 : -1;
-                    }
-                    return 1;
-                } else {
-                    return 1;
-                }
-            } else {
-                return -1;
-            }
-        }
-    }
 }
