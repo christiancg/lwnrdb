@@ -167,10 +167,9 @@
                     <includeTests>true</includeTests>
                     <!-- CPD ratchet: nothing in the tree shares a block this large today, so the
                          build fails the moment a bigger one appears. The largest block left is a
-                         test fixture (unit/config, 480 tokens), followed by a second one at 324;
-                         the largest in main is 255. Lower this as the remaining test-fixture
-                         duplication goes. -->
-                    <minimumTokens>481</minimumTokens>
+                         test fixture (unit/simplejs/values, 309 tokens); the largest in main is 255
+                         (the Temporal builtins). Lower this as the remaining duplication goes. -->
+                    <minimumTokens>310</minimumTokens>
                     <printFailingErrors>true</printFailingErrors>
                     <failOnViolation>true</failOnViolation>
                     <linkXRef>false</linkXRef>
