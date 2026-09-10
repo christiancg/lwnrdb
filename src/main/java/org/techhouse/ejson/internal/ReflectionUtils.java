@@ -51,10 +51,17 @@ public class ReflectionUtils {
         }
     }
 
+    // Static fields are the class's own constants, not the instance's data. Including them would
+    // serialize every `public static final` onto the wire beside the real fields, and on the way back
+    // in would try to assign them from the document.
     private static <T> Field[] internalGetFields(Class<T> tClass) {
-        final var fieldList = List.of(tClass.getDeclaredFields());
-        fieldList.forEach(field -> field.setAccessible(true));
-        final List<Field> fields = new ArrayList<>(fieldList);
+        final List<Field> fields = new ArrayList<>();
+        for (final var field : tClass.getDeclaredFields()) {
+            if (!Modifier.isStatic(field.getModifiers())) {
+                field.setAccessible(true);
+                fields.add(field);
+            }
+        }
         final var superClass = tClass.getSuperclass();
         if (!superClass.equals(Object.class) && !superClass.equals(Record.class)) {
             fields.addAll(List.of(getFields(superClass)));
