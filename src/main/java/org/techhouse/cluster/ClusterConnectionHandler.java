@@ -117,15 +117,8 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handleForward(ClusterMessage request) {
-        final var response = new ClusterMessage();
-        try {
-            response.setType(ClusterMessageType.FORWARD_RESPONSE);
-            response.setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request))));
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to execute forwarded request: " + e.getMessage());
-        }
-        return response;
+        return ClusterMessages.reply(ClusterMessageType.FORWARD_RESPONSE, "Failed to execute forwarded request",
+                response -> response.setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request)))));
     }
 
     // Runs one operation of a forwarded transaction on this (owner) node, under a persistent synthetic client
@@ -249,85 +242,44 @@ public class ClusterConnectionHandler implements Runnable {
     // (COMMITTED/ABORTED/PREPARED/UNKNOWN) for the coordinator's presumed-abort check and for a peer's
     // cooperative termination.
     private ClusterMessage handleTxStatus(ClusterMessage request) {
-        final var response = new ClusterMessage();
-        try {
-            response.setType(ClusterMessageType.TX_STATUS_ACK);
-            response.setTxStatus(Tx2pcLog.status(request.getTxId()).name());
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to read transaction status: " + e.getMessage());
-        }
-        return response;
+        return ClusterMessages.reply(ClusterMessageType.TX_STATUS_ACK, "Failed to read transaction status",
+                response -> response.setTxStatus(Tx2pcLog.status(request.getTxId()).name()));
     }
 
     // Reports this node's own in-doubt (PREPARED) distributed transactions for a cluster-wide
     // LIST_TRANSACTIONS aggregation.
     private ClusterMessage handleListTx() {
-        final var response = new ClusterMessage();
-        try {
-            response.setType(ClusterMessageType.LIST_TX_ACK);
-            response.setInDoubtTransactions(tx2pcDirectory.localInDoubt());
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to list in-doubt transactions: " + e.getMessage());
-        }
-        return response;
+        return ClusterMessages.reply(ClusterMessageType.LIST_TX_ACK, "Failed to list in-doubt transactions",
+                response -> response.setInDoubtTransactions(tx2pcDirectory.localInDoubt()));
     }
 
     // Reports the script runs executing on this node for a cluster-wide LIST_SCRIPTS aggregation.
     private ClusterMessage handleListScripts() {
-        final var response = new ClusterMessage();
-        try {
-            response.setType(ClusterMessageType.LIST_SCRIPTS_ACK);
-            response.setRunningScripts(scriptRunDirectory.localRuns());
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to list running scripts: " + e.getMessage());
-        }
-        return response;
+        return ClusterMessages.reply(ClusterMessageType.LIST_SCRIPTS_ACK, "Failed to list running scripts",
+                response -> response.setRunningScripts(scriptRunDirectory.localRuns()));
     }
 
     // Cancels a run executing on this node. An id this node is not running is not an error: the operator
     // asked every member and only the one running it answers true.
     private ClusterMessage handleCancelScript(ClusterMessage request) {
-        final var response = new ClusterMessage();
-        try {
-            response.setType(ClusterMessageType.CANCEL_SCRIPT_ACK);
-            response.setCancelledRun(scriptRunRegistry.cancel(request.getCancelRunId()));
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to cancel the running script: " + e.getMessage());
-        }
-        return response;
+        return ClusterMessages.reply(ClusterMessageType.CANCEL_SCRIPT_ACK, "Failed to cancel the running script",
+                response -> response.setCancelledRun(scriptRunRegistry.cancel(request.getCancelRunId())));
     }
 
     // Reports the trigger runs recorded on this node. admin/trigger_runs is not replicated, so a run's
     // record exists on exactly one node and only that node can answer for it.
     private ClusterMessage handleListTriggerRuns(ClusterMessage request) {
-        final var response = new ClusterMessage();
-        try {
-            response.setType(ClusterMessageType.LIST_TRIGGER_RUNS_ACK);
-            response.setTriggerRuns(triggerRunDirectory.localRuns(statusFilter(request.getTriggerRunDecision())));
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to list trigger runs: " + e.getMessage());
-        }
-        return response;
+        return ClusterMessages.reply(ClusterMessageType.LIST_TRIGGER_RUNS_ACK, "Failed to list trigger runs",
+                response -> response
+                        .setTriggerRuns(triggerRunDirectory.localRuns(statusFilter(request.getTriggerRunDecision()))));
     }
 
     // Replays or discards a run recorded here. A run this node does not hold is not an error: the operator
     // asked every member and only the one holding it answers true.
     private ClusterMessage handleResolveTriggerRun(ClusterMessage request) {
-        final var response = new ClusterMessage();
-        try {
-            response.setType(ClusterMessageType.RESOLVE_TRIGGER_RUN_ACK);
-            response.setTriggerRunResolved(
-                    TriggerRunResolution.resolveLocal(request.getTriggerRunId(), request.getTriggerRunDecision()));
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to resolve the trigger run: " + e.getMessage());
-        }
-        return response;
+        return ClusterMessages.reply(ClusterMessageType.RESOLVE_TRIGGER_RUN_ACK, "Failed to resolve the trigger run",
+                response -> response.setTriggerRunResolved(
+                        TriggerRunResolution.resolveLocal(request.getTriggerRunId(), request.getTriggerRunDecision())));
     }
 
     private static TriggerRunStatus statusFilter(String value) {
@@ -344,33 +296,21 @@ public class ClusterConnectionHandler implements Runnable {
     // Reports this node's authoritative admin snapshot (epoch + databases/collections/users) for a rejoining
     // or lagging peer to conform to.
     private ClusterMessage handleAdminSnapshot() {
-        final var response = new ClusterMessage();
-        try {
-            response.setType(ClusterMessageType.ADMIN_SNAPSHOT_ACK);
-            response.setAdminSnapshot(adminAntiEntropyService.buildSnapshot());
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to build admin snapshot: " + e.getMessage());
-        }
-        return response;
+        return ClusterMessages.reply(ClusterMessageType.ADMIN_SNAPSHOT_ACK, "Failed to build admin snapshot",
+                response -> response.setAdminSnapshot(adminAntiEntropyService.buildSnapshot()));
     }
 
     private ClusterMessage handleReplicateAdmin(ClusterMessage request) {
-        final var response = new ClusterMessage();
-        try {
-            final var result = executeForwarded(request);
-            if (result.getStatus() == OperationStatus.OK) {
-                adminEpoch.adopt(request.getAdminEpoch());
-                response.setType(ClusterMessageType.REPLICATE_ADMIN_ACK);
-            } else {
-                response.setType(ClusterMessageType.ERROR);
-                response.setErrorMessage("Replicated admin op failed: " + result.getMessage());
-            }
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to apply replicated admin op: " + e.getMessage());
-        }
-        return response;
+        return ClusterMessages.reply(ClusterMessageType.REPLICATE_ADMIN_ACK, "Failed to apply replicated admin op",
+                response -> {
+                    final var result = executeForwarded(request);
+                    if (result.getStatus() == OperationStatus.OK) {
+                        adminEpoch.adopt(request.getAdminEpoch());
+                    } else {
+                        response.setType(ClusterMessageType.ERROR);
+                        response.setErrorMessage("Replicated admin op failed: " + result.getMessage());
+                    }
+                });
     }
 
     // Re-parses and executes a forwarded/replicated request directly through OperationProcessor (bypassing
@@ -413,29 +353,17 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handleDigest(ClusterMessage request) {
-        final var response = new ClusterMessage();
-        try {
+        return ClusterMessages.reply(ClusterMessageType.DIGEST_ACK, "Failed to build digest", response -> {
             final var query = request.getAntiEntropy();
-            response.setType(ClusterMessageType.DIGEST_ACK);
             response.setAntiEntropy(antiEntropyService.buildDigest(query.getDbName(), query.getCollName()));
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to build digest: " + e.getMessage());
-        }
-        return response;
+        });
     }
 
     private ClusterMessage handlePull(ClusterMessage request) {
-        final var response = new ClusterMessage();
-        try {
+        return ClusterMessages.reply(ClusterMessageType.PULL_ACK, "Failed to build pull response", response -> {
             final var query = request.getAntiEntropy();
-            response.setType(ClusterMessageType.PULL_ACK);
             response.setAntiEntropy(
                     antiEntropyService.buildPull(query.getDbName(), query.getCollName(), query.getIds()));
-        } catch (Exception e) {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to build pull response: " + e.getMessage());
-        }
-        return response;
+        });
     }
 }
