@@ -1,7 +1,6 @@
 package org.techhouse.ops;
 
-import java.util.ArrayList;
-import java.util.TreeSet;
+import java.util.stream.Collectors;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.concurrency.ResourceLocking;
@@ -25,29 +24,21 @@ public final class ReplicatedTxApplyHelper {
         if (payload == null || payload.getEntries().isEmpty()) {
             return false;
         }
-        final var collIds = new TreeSet<String>();
-        for (final var entry : payload.getEntries()) {
-            collIds.add(Cache.getCollectionIdentifier(entry.getDbName(), entry.getCollName()));
-        }
-        final var locked = new ArrayList<String>();
+        final var collIds = payload.getEntries().stream()
+                .map(entry -> Cache.getCollectionIdentifier(entry.getDbName(), entry.getCollName()))
+                .collect(Collectors.toSet());
         try {
-            for (final var collId : collIds) {
-                locks.lockWrite(collId);
-                locked.add(collId);
-            }
-            for (final var entry : payload.getEntries()) {
-                if (!ReplicatedApplyHelper.applyLocked(entry)) {
-                    return false;
+            return locks.withWriteLocks(collIds, () -> {
+                for (final var entry : payload.getEntries()) {
+                    if (!ReplicatedApplyHelper.applyLocked(entry)) {
+                        return false;
+                    }
                 }
-            }
-            return true;
+                return true;
+            });
         } catch (Exception e) {
             logger.error("Failed to apply replicated transaction batch", e);
             return false;
-        } finally {
-            for (final var collId : locked) {
-                locks.releaseWrite(collId);
-            }
         }
     }
 }

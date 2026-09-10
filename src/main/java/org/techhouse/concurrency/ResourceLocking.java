@@ -1,8 +1,10 @@
 package org.techhouse.concurrency;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.techhouse.cache.Cache;
@@ -61,6 +63,29 @@ public class ResourceLocking {
 
     public boolean tryLockWrite(String dbName, String collName) {
         return lockFor(Cache.getCollectionIdentifier(dbName, collName)).writeLock().tryLock();
+    }
+
+    public interface LockedAction<T> {
+        T run() throws Exception;
+    }
+
+    // Acquires each collection's write lock in a deterministic (sorted) order, so two callers holding
+    // overlapping sets can never deadlock against each other, and releases exactly what was acquired.
+    // These locks are thread-owned: the action must complete on this thread and must never suspend or
+    // hand off, or releaseWrite silently no-ops and strands the lock for the process's lifetime.
+    public <T> T withWriteLocks(Collection<String> collectionIds, LockedAction<T> action) throws Exception {
+        final var acquired = new ArrayList<String>();
+        try {
+            for (final var collId : new TreeSet<>(collectionIds)) {
+                lockWrite(collId);
+                acquired.add(collId);
+            }
+            return action.run();
+        } finally {
+            for (final var collId : acquired) {
+                releaseWrite(collId);
+            }
+        }
     }
 
     // Bounded write-lock acquisition used by transactions: a transaction acquires each touched

@@ -4,7 +4,6 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
-import java.util.TreeSet;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterCoordinator;
@@ -46,16 +45,10 @@ public final class TransactionRecovery {
         replayDurableSlice(dtxId, collections, () -> resolveMarkers(dtxId, true));
     }
 
-    // Replays a durably-recorded slice under every collection's write lock, acquired in sorted order so
-    // two concurrent recoveries cannot deadlock against each other.
+    // Replays a durably-recorded slice under every collection's write lock.
     private static void replayDurableSlice(String txId, List<String> collections, ThrowingRunnable markerCleanup)
             throws Exception {
-        final var acquired = new ArrayList<String>();
-        try {
-            for (final var collId : new TreeSet<>(collections)) {
-                locks.lockWrite(collId);
-                acquired.add(collId);
-            }
+        locks.withWriteLocks(collections, () -> {
             final var opIds = Tx2pcLog.sliceOpIds(txId);
             final var ops = AdminOperationHelper.readTransactionOps(opIds);
             ops.sort(Comparator.comparingLong(AdminTransactionEntry::getSeq));
@@ -67,11 +60,8 @@ public final class TransactionRecovery {
             AdminOperationHelper.deleteTransactionOps(opIds);
             markerCleanup.run();
             coordinator.replicateTransaction(reconstructed);
-        } finally {
-            for (final var collId : acquired) {
-                locks.releaseWrite(collId);
-            }
-        }
+            return null;
+        });
     }
 
     private interface ThrowingRunnable {
