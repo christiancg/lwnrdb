@@ -274,6 +274,22 @@ public class IndexConsistencyTest {
         assertEquals(1, result.getFirst().get("joined").asJsonArray().size());
     }
 
+    // A remote document whose indexed value has since changed must not be matched on its OLD value: the
+    // index still maps the old value to it until the background write lands, so the JOIN has to drop
+    // pending ids before re-deriving them from the current documents.
+    @Test
+    public void test_join_excludes_pending_remote_doc_whose_value_changed() throws IOException {
+        addDoc(TestGlobals.JOIN_COLL, "j1", "refKey", new JsonNumber(7));
+        enableIndex(TestGlobals.JOIN_COLL, "refKey");
+        // Same id re-saved with a different key: committed in cache, still indexed under 7.
+        addPendingDoc(TestGlobals.JOIN_COLL, "j1", "refKey", new JsonNumber(99));
+
+        final var matched = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.JOIN_COLL, "refKey",
+                Set.of(new JsonNumber(7)));
+        assertNotNull(matched);
+        assertFalse(matched.contains("j1"), "a pending doc whose value moved off the join key must not match");
+    }
+
     // ── evict-on-write convergence (Problem 3) ─────────────────────────────--
 
     // After the background entity event runs, the index is rewritten + cache evicted and the pending

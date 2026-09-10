@@ -13,7 +13,6 @@ import java.util.function.BiPredicate;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
-import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
@@ -27,6 +26,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.filter.FieldPredicateFactory;
+import org.techhouse.ops.index.PendingWriteReconciler;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
@@ -38,7 +38,6 @@ import org.techhouse.utils.JsonUtils;
 
 public class FilterOperatorHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
-    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
     public static Stream<JsonObject> processOperator(BaseOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName) throws IOException {
@@ -389,22 +388,12 @@ public class FilterOperatorHelper {
             analyzeContext.addIndexUsed(operator.getField());
             analyzeContext.addLock(AnalyzeContext.fieldLockId(dbName, collName, operator.getField()));
         }
-        // Snapshot pending ids AFTER the index lookup so a write that committed before the lookup is
-        // either already indexed (index accurate) or still pending (reconciled here).
-        final var pendingIds = pendingIndexWrites.idsFor(dbName, collName);
+        final var pendingIds = PendingWriteReconciler.pendingIds(dbName, collName);
         if (pendingIds.isEmpty()) {
             return raw;
         }
-        final var fieldName = operator.getField();
-        final var corrected = new HashSet<>(raw);
-        corrected.removeAll(pendingIds);
-        final var tester = FieldPredicateFactory.getTester(operator, operator.getFieldOperatorType());
-        for (var dbEntry : cache.getEntriesByIds(dbName, collName, pendingIds)) {
-            if (tester.test(dbEntry.getData(), fieldName)) {
-                corrected.add(dbEntry.get_id());
-            }
-        }
-        return corrected;
+        return PendingWriteReconciler.correctIds(raw, dbName, collName, pendingIds, operator.getField(),
+                FieldPredicateFactory.getTester(operator, operator.getFieldOperatorType()));
     }
 
     private static Set<String> rawIndexMatchingIds(FieldOperator operator, String dbName, String collName)

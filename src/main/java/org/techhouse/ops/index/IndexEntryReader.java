@@ -7,7 +7,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.analyze.AnalyzeContext;
-import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -28,7 +27,6 @@ import org.techhouse.utils.JsonUtils;
 public final class IndexEntryReader {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
-    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private static final IndexKind[] HASH_INDEX_KINDS = {IndexKind.OBJECT, IndexKind.ARRAY};
 
     private IndexEntryReader() {
@@ -71,9 +69,7 @@ public final class IndexEntryReader {
         if (!hashIds.isEmpty()) {
             addHashIndexEntries(combined, dbName, collName, fieldName, hashIds);
         }
-        // Snapshot pending ids AFTER the index read so any write that committed before the read is
-        // either already indexed (index accurate) or still pending (covered here).
-        final var pendingIds = pendingIndexWrites.idsFor(dbName, collName);
+        final var pendingIds = PendingWriteReconciler.pendingIds(dbName, collName);
         if (!pendingIds.isEmpty() && !reconcilePending(combined, dbName, collName, fieldName, pendingIds)) {
             return null;
         }
@@ -151,7 +147,7 @@ public final class IndexEntryReader {
         for (var entry : combined) {
             byValue.put(IndexValueCodec.indexValueToElement(entry.getValue()), entry);
         }
-        for (var dbEntry : cache.getEntriesByIds(dbName, collName, pendingIds)) {
+        for (var dbEntry : PendingWriteReconciler.pendingDocuments(dbName, collName, pendingIds)) {
             final var data = dbEntry.getData();
             if (!JsonUtils.hasInPath(data, fieldName)) {
                 continue;
@@ -226,17 +222,11 @@ public final class IndexEntryReader {
                 matchingIds.addAll(ids);
             }
         }
-        final var pendingIds = pendingIndexWrites.idsFor(dbName, collName);
-        for (var pendingId : pendingIds) {
-            for (var doc : cache.getEntriesByIds(dbName, collName, Set.of(pendingId))) {
-                if (JsonUtils.hasInPath(doc.getData(), fieldName)) {
-                    final var val = JsonUtils.getFromPath(doc.getData(), fieldName);
-                    if (localValues.contains(val)) {
-                        matchingIds.add(pendingId);
-                    }
-                }
-            }
+        final var pendingIds = PendingWriteReconciler.pendingIds(dbName, collName);
+        if (pendingIds.isEmpty()) {
+            return matchingIds;
         }
-        return matchingIds;
+        return PendingWriteReconciler.correctIds(matchingIds, dbName, collName, pendingIds, fieldName, (data,
+                field) -> JsonUtils.hasInPath(data, field) && localValues.contains(JsonUtils.getFromPath(data, field)));
     }
 }
