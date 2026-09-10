@@ -43,26 +43,27 @@ public final class BeforeHookHelper {
         if (!created && !updated) {
             return null;
         }
-        try (var creates = BeforeHookContext.open(dbName, collName, EventType.CREATED, actingUser);
-                var updates = BeforeHookContext.open(dbName, collName, EventType.UPDATED, actingUser)) {
-            final var existingIds = new HashSet<String>();
-            cache.getPkIndexAndLoadIfNecessary(dbName, collName).forEach(entry -> existingIds.add(entry.getValue()));
-            final var objects = new ArrayList<>(request.getObjects());
-            for (var i = 0; i < objects.size(); i++) {
-                final var object = objects.get(i);
-                final var id = idOf(object);
-                final var isInsert = id == null || !existingIds.contains(id);
-                final var outcome = (isInsert ? creates : updates).apply(object, id, OperationType.BULK_SAVE);
-                if (outcome.isRejected()) {
-                    return outcome.rejection();
+        return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING, () -> {
+            try (var creates = BeforeHookContext.open(dbName, collName, EventType.CREATED, actingUser);
+                    var updates = BeforeHookContext.open(dbName, collName, EventType.UPDATED, actingUser)) {
+                final var existingIds = new HashSet<String>();
+                cache.getPkIndexAndLoadIfNecessary(dbName, collName)
+                        .forEach(entry -> existingIds.add(entry.getValue()));
+                final var objects = new ArrayList<>(request.getObjects());
+                for (var i = 0; i < objects.size(); i++) {
+                    final var object = objects.get(i);
+                    final var id = idOf(object);
+                    final var isInsert = id == null || !existingIds.contains(id);
+                    final var outcome = (isInsert ? creates : updates).apply(object, id, OperationType.BULK_SAVE);
+                    if (outcome.isRejected()) {
+                        return outcome.rejection();
+                    }
+                    objects.set(i, outcome.document());
                 }
-                objects.set(i, outcome.document());
+                request.setObjects(objects);
+                return null;
             }
-            request.setObjects(objects);
-            return null;
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
-        }
+        });
     }
 
     public static OperationResponse beforeDelete(DeleteRequest request, String actingUser) {

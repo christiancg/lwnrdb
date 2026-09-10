@@ -52,7 +52,7 @@ public final class TransactionBuffer {
     public static OperationResponse bufferSave(SaveRequest request, Transaction transaction, Runnable onLockTimeout) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        try {
+        return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
             final var object = request.getObject();
             final var entry = DbEntry.fromJsonObject(dbName, collName, object);
             final var entrySizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
@@ -86,16 +86,14 @@ public final class TransactionBuffer {
             }
             transaction.recordSave(collId, id, effective);
             return new SaveResponse("Successfully saved", id);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.SAVE, ErrorCode.ERROR_TRANSACTION);
-        }
+        });
     }
 
     public static OperationResponse bufferBulkSave(BulkSaveRequest request, Transaction transaction,
             Runnable onLockTimeout) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        try {
+        return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
             final var seenIds = new HashSet<String>();
             for (final var object : request.getObjects()) {
                 final var entry = DbEntry.fromJsonObject(dbName, collName, object);
@@ -148,9 +146,7 @@ public final class TransactionBuffer {
                     payload);
             transaction.recordInserts(seq, inserted);
             return new BulkSaveResponse("Successfully saved entries", inserted, updated);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_TRANSACTION);
-        }
+        });
     }
 
     public static OperationResponse bufferDelete(DeleteRequest request, Transaction transaction,
@@ -158,7 +154,7 @@ public final class TransactionBuffer {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         final var id = request.get_id();
-        try {
+        return OperationResponse.respondOrError(OperationType.DELETE, ErrorCode.ERROR_TRANSACTION, () -> {
             final var lockResult = ensureLock(transaction, OperationType.DELETE, dbName, collName, onLockTimeout);
             if (lockResult != null) {
                 return lockResult;
@@ -183,9 +179,7 @@ public final class TransactionBuffer {
             bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE, dbName, collName, payload);
             transaction.recordDelete(collId, id);
             return new DeleteResponse("Entry with id " + id + " deleted successfully");
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_TRANSACTION);
-        }
+        });
     }
 
     // Persists one buffered operation to admin/transactions and records its id on the transaction so it

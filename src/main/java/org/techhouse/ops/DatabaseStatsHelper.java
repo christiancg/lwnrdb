@@ -30,27 +30,26 @@ public final class DatabaseStatsHelper {
     }
 
     public static OperationResponse processGetDatabaseStats() {
-        try {
-            final var stats = new JsonObject();
-            stats.add("memory", buildMemoryStats());
-            stats.add("inDoubtTransactions", buildInDoubtTransactions());
-            stats.add("triggers", buildTriggerStats());
-            stats.add("schedules", buildScheduleStats());
-            stats.add("scripts", buildScriptStats());
+        return OperationResponse.respondOrError(OperationType.GET_DATABASE_STATS, ErrorCode.ERROR_GATHERING_STATS,
+                () -> {
+                    final var stats = new JsonObject();
+                    stats.add("memory", buildMemoryStats());
+                    stats.add("inDoubtTransactions", buildInDoubtTransactions());
+                    stats.add("triggers", buildTriggerStats());
+                    stats.add("schedules", buildScheduleStats());
+                    stats.add("scripts", buildScriptStats());
 
-            final var dbNames = cache.getUserDatabaseNames();
-            final var dbArray = new JsonArray();
-            final var totals = new Totals();
-            for (var dbName : dbNames) {
-                dbArray.add(buildDatabaseStats(dbName, totals));
-            }
-            stats.add("totals", buildTotals(totals, dbNames.size()));
-            stats.add("databases", dbArray);
+                    final var dbNames = cache.getUserDatabaseNames();
+                    final var dbArray = new JsonArray();
+                    final var totals = new Totals();
+                    for (var dbName : dbNames) {
+                        dbArray.add(buildDatabaseStats(dbName, totals));
+                    }
+                    stats.add("totals", buildTotals(totals, dbNames.size()));
+                    stats.add("databases", dbArray);
 
-            return new GetDatabaseStatsResponse("Ok", stats);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.GET_DATABASE_STATS, ErrorCode.ERROR_GATHERING_STATS);
-        }
+                    return new GetDatabaseStatsResponse("Ok", stats);
+                });
     }
 
     // In-doubt distributed transactions still holding this node's write locks (a prepared 2PC participant

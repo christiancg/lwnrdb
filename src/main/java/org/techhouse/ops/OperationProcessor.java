@@ -231,19 +231,13 @@ public class OperationProcessor {
     }
 
     private OperationResponse processSaveProcedure(SaveProcedureRequest request, String actingUser) {
-        try {
-            return ProcedureOperationHelper.executeSave(request, actingUser);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.ERROR_SAVING_PROCEDURE);
-        }
+        return OperationResponse.respondOrError(OperationType.SAVE_PROCEDURE, ErrorCode.ERROR_SAVING_PROCEDURE,
+                () -> ProcedureOperationHelper.executeSave(request, actingUser));
     }
 
     private OperationResponse processDeleteProcedure(DeleteProcedureRequest request) {
-        try {
-            return ProcedureOperationHelper.executeDelete(request);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.DELETE_PROCEDURE, ErrorCode.ERROR_DELETING_PROCEDURE);
-        }
+        return OperationResponse.respondOrError(OperationType.DELETE_PROCEDURE, ErrorCode.ERROR_DELETING_PROCEDURE,
+                () -> ProcedureOperationHelper.executeDelete(request));
     }
 
     private OperationResponse processListProcedures(ListProceduresRequest request) {
@@ -293,19 +287,13 @@ public class OperationProcessor {
     }
 
     private OperationResponse processSaveSchedule(SaveScheduleRequest request, String actingUser) {
-        try {
-            return ScheduleOperationHelper.executeSave(request, actingUser);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.ERROR_SAVING_SCHEDULE);
-        }
+        return OperationResponse.respondOrError(OperationType.SAVE_SCHEDULE, ErrorCode.ERROR_SAVING_SCHEDULE,
+                () -> ScheduleOperationHelper.executeSave(request, actingUser));
     }
 
     private OperationResponse processDeleteSchedule(DeleteScheduleRequest request) {
-        try {
-            return ScheduleOperationHelper.executeDelete(request);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.DELETE_SCHEDULE, ErrorCode.ERROR_DELETING_SCHEDULE);
-        }
+        return OperationResponse.respondOrError(OperationType.DELETE_SCHEDULE, ErrorCode.ERROR_DELETING_SCHEDULE,
+                () -> ScheduleOperationHelper.executeDelete(request));
     }
 
     private OperationResponse processListSchedules(ListSchedulesRequest request) {

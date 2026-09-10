@@ -35,46 +35,32 @@ public final class RunDirectoryHelper {
     }
 
     public static OperationResponse processListScripts() {
-        try {
-            return new ListScriptsResponse("Ok", scriptRunDirectory.listClusterWide());
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.LIST_SCRIPTS, ErrorCode.SCRIPT_FAILED);
-        }
+        return OperationResponse.respondOrError(OperationType.LIST_SCRIPTS, ErrorCode.SCRIPT_FAILED,
+                () -> new ListScriptsResponse("Ok", scriptRunDirectory.listClusterWide()));
     }
 
     public static OperationResponse processCancelScript(CancelScriptRequest request) {
-        try {
-            return new CancelScriptResponse("Ok", scriptRunDirectory.cancelClusterWide(request.getRunId()));
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.CANCEL_SCRIPT, ErrorCode.SCRIPT_FAILED);
-        }
+        return OperationResponse.respondOrError(OperationType.CANCEL_SCRIPT, ErrorCode.SCRIPT_FAILED,
+                () -> new CancelScriptResponse("Ok", scriptRunDirectory.cancelClusterWide(request.getRunId())));
     }
 
     public static OperationResponse processListTriggerRuns(ListTriggerRunsRequest request) {
-        try {
+        return OperationResponse.respondOrError(OperationType.LIST_TRIGGER_RUNS, ErrorCode.SCRIPT_FAILED, () -> {
             final var filter = request.getStatus() == null || request.getStatus().isBlank()
                     ? null
                     : TriggerRunStatus.valueOf(request.getStatus().toUpperCase(java.util.Locale.ROOT));
             return new ListTriggerRunsResponse("Ok", triggerRunDirectory.listClusterWide(filter));
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.LIST_TRIGGER_RUNS, ErrorCode.SCRIPT_FAILED);
-        }
+        });
     }
 
     public static OperationResponse processResolveTriggerRun(ResolveTriggerRunRequest request) {
-        try {
-            return new ResolveTriggerRunResponse("Ok",
-                    triggerRunDirectory.resolveClusterWide(request.getRunId(), request.getDecision()));
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.RESOLVE_TRIGGER_RUN, ErrorCode.SCRIPT_FAILED);
-        }
+        return OperationResponse.respondOrError(OperationType.RESOLVE_TRIGGER_RUN, ErrorCode.SCRIPT_FAILED,
+                () -> new ResolveTriggerRunResponse("Ok",
+                        triggerRunDirectory.resolveClusterWide(request.getRunId(), request.getDecision())));
     }
 
     public static OperationResponse processListTransactions() {
-        try {
-            return new ListTransactionsResponse("Ok", tx2pcDirectory.listInDoubtClusterWide());
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.LIST_TRANSACTIONS, ErrorCode.ERROR_TRANSACTION);
-        }
+        return OperationResponse.respondOrError(OperationType.LIST_TRANSACTIONS, ErrorCode.ERROR_TRANSACTION,
+                () -> new ListTransactionsResponse("Ok", tx2pcDirectory.listInDoubtClusterWide()));
     }
 }

@@ -28,28 +28,27 @@ public final class CollectionOperationHelper {
     }
 
     public static OperationResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
-        try {
-            final var dbName = createCollectionRequest.getDatabaseName();
-            final var collName = createCollectionRequest.getCollectionName();
-            final var result = fs.createCollectionFile(dbName, collName);
-            if (result) {
-                // Register the collection's admin metadata (page collections + admin entry with its PK
-                // index entry) synchronously, so a subsequent CREATE_INDEX/SAVE observes it immediately.
-                // Doing it here rather than in a background task closes a race where the registration
-                // lagged, letting CREATE_INDEX run first, find no admin PK entry
-                // (getPkIndexAdminCollEntry == null) and silently skip registering the index while still
-                // returning OK, leaving the index built but unregistered. Collection creation and
-                // deletion are both fully synchronous.
-                if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
-                    AdminOperationHelper.createPageCollections(dbName, collName);
-                    AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
-                }
-                return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
-            }
-            return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
-        }
+        return OperationResponse.respondOrError(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION,
+                () -> {
+                    final var dbName = createCollectionRequest.getDatabaseName();
+                    final var collName = createCollectionRequest.getCollectionName();
+                    final var result = fs.createCollectionFile(dbName, collName);
+                    if (result) {
+                        // Register the collection's admin metadata (page collections + admin entry with its PK
+                        // index entry) synchronously, so a subsequent CREATE_INDEX/SAVE observes it immediately.
+                        // Doing it here rather than in a background task closes a race where the registration
+                        // lagged, letting CREATE_INDEX run first, find no admin PK entry
+                        // (getPkIndexAdminCollEntry == null) and silently skip registering the index while still
+                        // returning OK, leaving the index built but unregistered. Collection creation and
+                        // deletion are both fully synchronous.
+                        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+                            AdminOperationHelper.createPageCollections(dbName, collName);
+                            AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
+                        }
+                        return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
+                    }
+                    return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
+                });
     }
 
     public static OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {

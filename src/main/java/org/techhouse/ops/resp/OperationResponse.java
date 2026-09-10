@@ -41,6 +41,18 @@ public class OperationResponse {
         return new OperationResponse(type, OperationStatus.OK, message);
     }
 
+    public interface Attempt {
+        OperationResponse run() throws Exception;
+    }
+
+    public static OperationResponse respondOrError(OperationType type, ErrorCode errorCode, Attempt attempt) {
+        try {
+            return attempt.run();
+        } catch (Exception e) {
+            return new OperationResponse(type, errorCode);
+        }
+    }
+
     public OperationType getType() {
         return type;
     }

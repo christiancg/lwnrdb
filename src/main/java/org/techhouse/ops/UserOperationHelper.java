@@ -19,7 +19,7 @@ public class UserOperationHelper {
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
 
     public static OperationResponse processAuthenticate(AuthenticateRequest request, UUID clientId) {
-        try {
+        return OperationResponse.respondOrError(OperationType.AUTHENTICATE, ErrorCode.AUTHENTICATION_ERROR, () -> {
             final var username = request.getUsername();
             final var password = request.getPassword();
             final var user = cache.getAdminUserEntry(username);
@@ -30,9 +30,7 @@ public class UserOperationHelper {
 
             clientTracker.setAuthenticatedUser(clientId, username);
             return OperationResponse.ok(OperationType.AUTHENTICATE, "Authenticated");
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.AUTHENTICATE, ErrorCode.AUTHENTICATION_ERROR);
-        }
+        });
     }
 
     public static OperationResponse processCreateUser(CreateUserRequest request) {

@@ -52,15 +52,13 @@ public final class ListenOperationHelper {
     }
 
     public static OperationResponse processStopListenOperation(StopListenRequest request) {
-        try {
+        return OperationResponse.respondOrError(OperationType.STOP_LISTEN, ErrorCode.ERROR_LISTEN, () -> {
             final var listenId = java.util.UUID.fromString(request.getListenId());
             final var unregistered = listenManager.unregister(listenId);
             if (!unregistered) {
                 return new OperationResponse(OperationType.STOP_LISTEN, ErrorCode.LISTEN_NOT_FOUND);
             }
             return new StopListenResponse();
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.STOP_LISTEN, ErrorCode.ERROR_LISTEN);
-        }
+        });
     }
 }

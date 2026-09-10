@@ -36,41 +36,40 @@ public final class DatabaseOperationHelper {
 
     public static OperationResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest,
             UUID clientId) {
-        try {
-            final var dbName = createDatabaseRequest.getDatabaseName();
-            // Guard against re-creating an existing database: createDatabaseFolder returns true for an
-            // already-present folder, so without this check a duplicate CREATE_DATABASE would overwrite
-            // the existing admin entry (wiping its collection list and owners) and wrongly report success.
-            if (cache.getAdminDbEntry(dbName) != null) {
-                return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
-            }
-            final var result = fs.createDatabaseFolder(dbName);
-            if (result) {
-                final var username = clientTracker.getAuthenticatedUsername(clientId);
-                final var owners = username != null ? List.of(username) : List.<String>of();
-                final var newEntry = new AdminDbEntry(dbName, new java.util.ArrayList<>(),
-                        new java.util.ArrayList<>(owners));
-                AdminOperationHelper.saveDatabaseEntry(newEntry);
-                return OperationResponse.ok(OperationType.CREATE_DATABASE, "Database created successfully");
-            }
-            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
-        } catch (Exception exception) {
-            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.ERROR_CREATING_DATABASE);
-        }
+        return OperationResponse.respondOrError(OperationType.CREATE_DATABASE, ErrorCode.ERROR_CREATING_DATABASE,
+                () -> {
+                    final var dbName = createDatabaseRequest.getDatabaseName();
+                    // Guard against re-creating an existing database: createDatabaseFolder returns true for an
+                    // already-present folder, so without this check a duplicate CREATE_DATABASE would overwrite
+                    // the existing admin entry (wiping its collection list and owners) and wrongly report success.
+                    if (cache.getAdminDbEntry(dbName) != null) {
+                        return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
+                    }
+                    final var result = fs.createDatabaseFolder(dbName);
+                    if (result) {
+                        final var username = clientTracker.getAuthenticatedUsername(clientId);
+                        final var owners = username != null ? List.of(username) : List.<String>of();
+                        final var newEntry = new AdminDbEntry(dbName, new java.util.ArrayList<>(),
+                                new java.util.ArrayList<>(owners));
+                        AdminOperationHelper.saveDatabaseEntry(newEntry);
+                        return OperationResponse.ok(OperationType.CREATE_DATABASE, "Database created successfully");
+                    }
+                    return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
+                });
     }
 
     public static OperationResponse processSetDatabaseOwners(SetDatabaseOwnersRequest request) {
-        try {
-            final var dbName = request.getDatabaseName();
-            if (cache.getAdminDbEntry(dbName) == null) {
-                return new OperationResponse(OperationType.SET_DATABASE_OWNERS, "Database '" + dbName + "' not found",
-                        ErrorCode.DATABASE_NOT_FOUND);
-            }
-            AdminOperationHelper.updateDatabaseOwners(dbName, request.getOwners());
-            return OperationResponse.ok(OperationType.SET_DATABASE_OWNERS, "Database owners updated successfully");
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.SET_DATABASE_OWNERS, ErrorCode.ERROR_UPDATING_DATABASE_OWNERS);
-        }
+        return OperationResponse.respondOrError(OperationType.SET_DATABASE_OWNERS,
+                ErrorCode.ERROR_UPDATING_DATABASE_OWNERS, () -> {
+                    final var dbName = request.getDatabaseName();
+                    if (cache.getAdminDbEntry(dbName) == null) {
+                        return new OperationResponse(OperationType.SET_DATABASE_OWNERS,
+                                "Database '" + dbName + "' not found", ErrorCode.DATABASE_NOT_FOUND);
+                    }
+                    AdminOperationHelper.updateDatabaseOwners(dbName, request.getOwners());
+                    return OperationResponse.ok(OperationType.SET_DATABASE_OWNERS,
+                            "Database owners updated successfully");
+                });
     }
 
     public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
@@ -119,11 +118,9 @@ public final class DatabaseOperationHelper {
     }
 
     public static OperationResponse processListDatabasesOperation() {
-        try {
+        return OperationResponse.respondOrError(OperationType.LIST_DATABASES, ErrorCode.ERROR_LISTING_DATABASES, () -> {
             final var names = cache.getUserDatabaseNames();
             return new ListDatabasesResponse("Ok", names);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.LIST_DATABASES, ErrorCode.ERROR_LISTING_DATABASES);
-        }
+        });
     }
 }
