@@ -9,7 +9,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
-import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
@@ -190,8 +189,7 @@ public class AdminAntiEntropyService implements MembershipListener {
     }
 
     private AdminSnapshotPayload requestSnapshot(NodeAddress address) {
-        final var message = new ClusterMessage(null, ClusterMessageType.ADMIN_SNAPSHOT, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.ADMIN_SNAPSHOT);
         try {
             final var response = pool.request(address, message, clusterConfig.replicationAckTimeoutMs());
             if (response.getType() == ClusterMessageType.ADMIN_SNAPSHOT_ACK) {

@@ -3,7 +3,6 @@ package org.techhouse.cluster;
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.cluster.membership.MembershipService;
-import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.TriggerRunRow;
 import org.techhouse.config.Globals;
@@ -83,8 +82,7 @@ public class TriggerRunDirectory {
     }
 
     private List<TriggerRunRow> requestList(NodeAddress address, TriggerRunStatus filter) {
-        final var message = new ClusterMessage(null, ClusterMessageType.LIST_TRIGGER_RUNS, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.LIST_TRIGGER_RUNS);
         message.setTriggerRunDecision(filter == null ? null : filter.name());
         try {
             final var response = pool.request(address, message, clusterConfig.replicationAckTimeoutMs());
@@ -99,8 +97,7 @@ public class TriggerRunDirectory {
     }
 
     private boolean requestResolve(NodeAddress address, String runId, String decision) {
-        final var message = new ClusterMessage(null, ClusterMessageType.RESOLVE_TRIGGER_RUN, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.RESOLVE_TRIGGER_RUN);
         message.setTriggerRunId(runId);
         message.setTriggerRunDecision(decision);
         try {

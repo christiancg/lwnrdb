@@ -5,7 +5,6 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import org.techhouse.cluster.membership.MembershipService;
-import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.InDoubtTx;
 import org.techhouse.config.Globals;
@@ -79,8 +78,7 @@ public class Tx2pcDirectory {
     }
 
     private List<InDoubtTx> requestListTx(NodeAddress address) {
-        final var message = new ClusterMessage(null, ClusterMessageType.LIST_TX, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.LIST_TX);
         try {
             final var response = pool.request(address, message, clusterConfig.replicationAckTimeoutMs());
             if (response.getType() == ClusterMessageType.LIST_TX_ACK && response.getInDoubtTransactions() != null) {

@@ -4,7 +4,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import org.techhouse.cluster.membership.MembershipService;
-import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -147,8 +146,7 @@ public class Tx2pcRecovery implements MembershipListener {
                 return null;
             }
         }
-        final var message = new ClusterMessage(null, ClusterMessageType.TX_STATUS, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.TX_STATUS);
         message.setTxId(dtxId);
         try {
             final var response = pool.request(NodeAddress.parse(address), message,
@@ -163,8 +161,7 @@ public class Tx2pcRecovery implements MembershipListener {
     }
 
     private boolean sendCommit(String address, String dtxId) {
-        final var message = new ClusterMessage(null, ClusterMessageType.COMMIT_TX, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.COMMIT_TX);
         message.setTxSessionId(dtxId);
         message.setTxId(dtxId);
         try {

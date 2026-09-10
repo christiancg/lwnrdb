@@ -2,8 +2,6 @@ package org.techhouse.cluster;
 
 import java.util.Set;
 import java.util.UUID;
-import org.techhouse.cluster.membership.MembershipService;
-import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.ownership.OwnershipManager;
@@ -36,7 +34,6 @@ public class ClusterRouter {
     private final Logger logger = Logger.logFor(ClusterRouter.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
-    private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Tx2pcCoordinator tx2pcCoordinator = IocContainer.get(Tx2pcCoordinator.class);
@@ -169,8 +166,7 @@ public class ClusterRouter {
 
     private String forwardTx(String rawJson, String ownerAddress, OperationType type, String actingUser,
             UUID clientId) {
-        final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_TX_REQUEST, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.FORWARD_TX_REQUEST);
         message.setForwardBody(ForwardBody.encode(rawJson));
         message.setActingUser(actingUser);
         message.setTxSessionId(clientId.toString());
@@ -214,8 +210,7 @@ public class ClusterRouter {
         if (target == null) {
             return null;
         }
-        final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_REQUEST, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.FORWARD_REQUEST);
         message.setForwardBody(ForwardBody.encode(rawJson));
         message.setActingUser(actingUser);
         // The whole script budget, not replicationAckTimeoutMs: that is sized for a single write ack and
@@ -238,8 +233,7 @@ public class ClusterRouter {
     }
 
     private String forwardToOwner(OperationType type, String rawJson, String ownerAddress, String actingUser) {
-        final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_REQUEST, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.FORWARD_REQUEST);
         message.setForwardBody(ForwardBody.encode(rawJson));
         message.setActingUser(actingUser);
         try {
