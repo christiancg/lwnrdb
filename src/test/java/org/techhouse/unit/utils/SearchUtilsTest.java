@@ -496,4 +496,27 @@ public class SearchUtilsTest {
         Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.SMALLER_THAN, tSmall);
         assertTrue(result.isEmpty());
     }
+    // The scalar and JsonCustom range paths share one binary search and differ only in how two values
+    // compare, so identically-ordered data must answer identically through either.
+    @Test
+    public void test_custom_and_double_ranges_agree() {
+        final List<FieldIndexEntry<JsonCustom<?>>> customEntries = List.of(
+                new FieldIndexEntry<>("db", "col", new JsonTime("#time(10:00:00)"), Set.of("a")),
+                new FieldIndexEntry<>("db", "col", new JsonTime("#time(11:00:00)"), Set.of("b")),
+                new FieldIndexEntry<>("db", "col", new JsonTime("#time(12:00:00)"), Set.of("c")),
+                new FieldIndexEntry<>("db", "col", new JsonTime("#time(13:00:00)"), Set.of("d")));
+        final List<FieldIndexEntry<Double>> doubleEntries = List.of(
+                new FieldIndexEntry<>("db", "col", 10d, Set.of("a")),
+                new FieldIndexEntry<>("db", "col", 11d, Set.of("b")),
+                new FieldIndexEntry<>("db", "col", 12d, Set.of("c")),
+                new FieldIndexEntry<>("db", "col", 13d, Set.of("d")));
+        final JsonCustom<?> customOperand = new JsonTime("#time(12:00:00)");
+
+        for (final var operator : List.of(FieldOperatorType.GREATER_THAN, FieldOperatorType.GREATER_THAN_EQUALS,
+                FieldOperatorType.SMALLER_THAN, FieldOperatorType.SMALLER_THAN_EQUALS)) {
+            assertEquals(SearchUtils.findingByOperator(doubleEntries, operator, 12d),
+                    SearchUtils.findingByOperator(customEntries, operator, customOperand),
+                    "the custom and scalar range paths disagree for " + operator);
+        }
+    }
 }
