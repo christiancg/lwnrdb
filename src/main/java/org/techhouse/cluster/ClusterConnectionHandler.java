@@ -7,6 +7,8 @@ import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Executors;
+import java.util.concurrent.locks.ReentrantLock;
 import javax.net.ssl.SSLException;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
@@ -47,11 +49,18 @@ public class ClusterConnectionHandler implements Runnable {
 
     @Override
     public void run() {
-        try (socket) {
+        // Single-threaded, so the requests handed to it stay in arrival order; virtual, so a blocked handler
+        // costs no platform thread. Declared after the socket so it closes first: close() drains what is
+        // queued, and draining while the socket is still open is what lets those answers still be written.
+        // A replicated write must not be dropped because the peer hung up.
+        try (socket; var ordered = Executors.newSingleThreadExecutor(Thread.ofVirtual().factory())) {
             final var reader = new BufferedReader(
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
             final var writer = new BufferedWriter(
                     new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
+            // One lock because gossip answers off this thread: two writers interleaving their JSON would
+            // corrupt the frame stream. Replying out of order is fine - the peer dispatches on correlationId.
+            final var writerLock = new ReentrantLock();
             String line;
             while ((line = reader.readLine()) != null) {
                 if (line.isBlank()) {
@@ -61,16 +70,51 @@ public class ClusterConnectionHandler implements Runnable {
                 if (request == null) {
                     continue;
                 }
-                final var response = handle(request);
-                response.setCorrelationId(request.getCorrelationId());
-                writer.write(eJson.toJson(response));
-                writer.newLine();
-                writer.flush();
+                if (request.getType() == ClusterMessageType.GOSSIP) {
+                    // Gossip alone is allowed to overtake. A peer sends everything over one connection, and
+                    // handling a request on this thread stopped the loop reading the next one, so a slow
+                    // request - a replicated write waiting on a collection lock, say - held up whatever the
+                    // peer sent after it until each timed out at replicationAckTimeoutMs. When the casualty
+                    // was gossip the peer stopped looking alive, and aliveCount() is what write quorum is
+                    // measured from, so an unrelated slow write cost the cluster its quorum. Overtaking is
+                    // safe for gossip precisely because it is ordered against nothing: it merges per node id
+                    // under ConcurrentHashMap.compute, which already runs concurrently for every other
+                    // peer's connection.
+                    Thread.ofVirtual().start(() -> respondSafely(writer, writerLock, request));
+                } else {
+                    // Everything else keeps the order the peer sent it in - replication correctness rests on
+                    // it - but on a single worker rather than on this thread, so that reading the next
+                    // request never waits on handling this one.
+                    ordered.execute(() -> respondSafely(writer, writerLock, request));
+                }
             }
         } catch (SSLException e) {
             logger.warning("Rejected cluster connection: TLS handshake failed");
         } catch (IOException e) {
             logger.warning("Cluster connection error: " + e.getMessage());
+        }
+    }
+
+    private void respond(BufferedWriter writer, ReentrantLock writerLock, ClusterMessage request) throws IOException {
+        final var response = handle(request);
+        response.setCorrelationId(request.getCorrelationId());
+        writerLock.lock();
+        try {
+            writer.write(eJson.toJson(response));
+            writer.newLine();
+            writer.flush();
+        } finally {
+            writerLock.unlock();
+        }
+    }
+
+    // The off-thread caller: nothing above it can close the connection on a write failure, and a peer that
+    // hung up mid-request is the ordinary case rather than an error worth tearing anything down for.
+    private void respondSafely(BufferedWriter writer, ReentrantLock writerLock, ClusterMessage request) {
+        try {
+            respond(writer, writerLock, request);
+        } catch (IOException e) {
+            logger.warning("Could not answer a " + request.getType() + " request: " + e.getMessage());
         }
     }
 
