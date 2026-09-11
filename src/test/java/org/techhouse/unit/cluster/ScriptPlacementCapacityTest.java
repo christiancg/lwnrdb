@@ -102,20 +102,20 @@ public class ScriptPlacementCapacityTest {
         assertEquals("c", placement.choose(DB).getNodeId());
     }
 
-    // Two nodes at the same ratio still resolve deterministically, so two edges sampling the same pair agree.
+    // Two nodes at the same ratio are equally good, so the draw order decides and the first sample wins.
     @Test
-    public void test_equal_ratios_break_on_node_id() throws Exception {
+    public void test_equal_ratios_break_on_the_first_sample() throws Exception {
         membership(node("a-self", 1, 99, 100), node("c", 2, 2, 4), node("b", 3, 8, 16));
         scriptedRandom.give();
-        assertEquals("b", placement.choose(DB).getNodeId());
+        assertEquals("c", placement.choose(DB).getNodeId());
     }
 
-    // Both full: neither is preferable, so the tie-break decides rather than the ratio.
+    // Both full: neither is preferable, so the draw order decides rather than the ratio.
     @Test
     public void test_two_saturated_samples_still_choose_one() throws Exception {
         membership(node("a-self", 1, 99, 100), node("c", 2, 4, 4), node("b", 3, 32, 32));
         scriptedRandom.give();
-        assertEquals("b", placement.choose(DB).getNodeId());
+        assertEquals("c", placement.choose(DB).getNodeId());
     }
 
     private static final class ScriptedRandom implements RandomGenerator {

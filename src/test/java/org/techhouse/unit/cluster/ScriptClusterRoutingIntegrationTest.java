@@ -128,8 +128,8 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         assertTrue(scriptPlacement.getLocalityPreferred() > preferredBefore);
     }
 
-    // The equivalence claim: the same fixture at weight 0 falls back to the nodeId tiebreak, which keeps the
-    // run here, and locality is recorded as having changed nothing.
+    // The equivalence claim: the same fixture at weight 0 is decided by load alone, which keeps the run here,
+    // and locality is recorded as having changed nothing.
     @Test
     public void test_locality_weight_zero_leaves_placement_load_only() throws Exception {
         TestUtils.setPrivateField(config, "scriptsEnabled", true);

@@ -124,12 +124,14 @@ public class ScriptPlacementTest {
         assertEquals("c", chosen.getNodeId());
     }
 
+    // A tie goes to the first of the two samples, so the same pair drawn in the other order picks the other
+    // node. That is what keeps an idle cluster - where every score ties - spread evenly.
     @Test
-    public void test_ties_break_on_node_id_deterministically() throws Exception {
+    public void test_ties_break_on_the_first_sample() throws Exception {
         membership(node("a-self", 1, 9, NodeState.ALIVE), node("c", 2, 4, NodeState.ALIVE),
                 node("b", 3, 4, NodeState.ALIVE));
         samples(1, 1);
-        assertEquals("b", placement.choose(DB).getNodeId());
+        assertEquals("c", placement.choose(DB).getNodeId());
         samples(2, 1);
         assertEquals("b", placement.choose(DB).getNodeId());
     }

@@ -60,6 +60,10 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 CLUSTER_SECRET = "integration-cluster-secret"
 
+# Kept as a constant because a test has to reason in gossip rounds: a dead node's NodeInfo stays
+# frozen at whatever it last published, and how long that takes to happen is this interval.
+GOSSIP_INTERVAL_S = 0.5
+
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
 
@@ -330,7 +334,7 @@ def wait_for_cluster(timeout_s: float = 60.0):
 
     if not wait_until(_converged, timeout_s, interval_s=1.0):
         for n in nodes:
-            n.bu.dump_log()
+            n.dump_log()
         raise RuntimeError("cluster did not converge in time")
     print("  Cluster converged.")
 
@@ -365,7 +369,7 @@ class Node:
             f"clusterSeeds={seeds}\n"
             "clusterExpectedSize=3\n"
             f"clusterSecret={CLUSTER_SECRET}\n"
-            "gossipIntervalMs=500\n"
+            f"gossipIntervalMs={int(GOSSIP_INTERVAL_S * 1000)}\n"
             "suspectTimeoutMs=2000\n"
             "deadTimeoutMs=4000\n"
             "replicationAckTimeoutMs=5000\n"
@@ -411,7 +415,7 @@ class Node:
             if self.proc.poll() is not None:
                 break
             time.sleep(0.2)
-        self.bu.dump_log()
+        self.dump_log()
         self.proc.kill()
         raise RuntimeError(f"node-{self.index} did not come up in time")
 
@@ -441,13 +445,20 @@ class Node:
                 self.proc.kill()
         self.alive = False
 
-    def dump_log(self):
+    def dump_log(self, tail_bytes: int = 4000):
         try:
             with open(self.log_path, "rb") as fp:
-                tail = fp.read()[-4000:].decode(errors="replace")
+                tail = fp.read()[-tail_bytes:].decode(errors="replace")
             print(f"--- node-{self.index} log tail ---\n{tail}\n--- end ---", file=sys.stderr)
         except OSError:
             pass
+
+
+def dump_all_logs(tail_bytes: int = 20000):
+    """Print every node's log tail. The server mirrors each log entry to stdout and the suite
+    redirects that into server.log, so this is the whole operational log, not just startup."""
+    for n in nodes:
+        n.dump_log(tail_bytes)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1012,9 +1023,22 @@ def test_script_placement_falls_back_when_the_target_dies():
     check("forwarding is live before the crash",
                wait_until_forwarding_is_live(driver, timeout_s=60.0))
 
-    # Drive the runs from a background thread that is already going when the process dies. Starting
-    # the loop after kill() loses the race: the driver can drop node-2 from the placement set before
-    # the first run is even issued, and then every run is legitimately local.
+    # Kill the victim while nothing is being placed. A dead node's gossiped NodeInfo freezes at its
+    # last published values, and placement scores a node by its load ratio: a victim frozen at one
+    # running script scores below every live node sitting at zero, so it would never be sampled
+    # again and the failed forward this test is about could never happen. Letting the cluster go
+    # quiet for a few gossip intervals first means the victim freezes at an idle load and stays a
+    # candidate for as long as it is still in the membership view.
+    time.sleep(3 * GOSSIP_INTERVAL_S)
+
+    before = script_stats(driver).get("forwardFallbacks", 0)
+    print(f"  Killing node-{victim.index} (hard crash) ...")
+    victim.kill()
+
+    # Only now drive the runs. The driver keeps the victim in its placement set until the failure
+    # detector gives up on it - suspectTimeoutMs after the last successful gossip - which at this
+    # rate is tens of runs, and placement samples uniformly among the three, so a forward into the
+    # dead node happens almost immediately.
     stop = threading.Event()
     statuses = set()
 
@@ -1030,12 +1054,8 @@ def test_script_placement_falls_back_when_the_target_dies():
         finally:
             conn.close()
 
-    before = script_stats(driver).get("forwardFallbacks", 0)
     worker = threading.Thread(target=hammer, daemon=True)
     worker.start()
-    time.sleep(0.5)
-    print(f"  Killing node-{victim.index} (hard crash) ...")
-    victim.kill()
 
     # Generous: a forward that dies mid-request can wait out scriptTimeoutMs + replicationAckTimeoutMs
     # before it throws, and only then is the fallback recorded.
@@ -1443,11 +1463,15 @@ def main():
         drop_db(nodes[0].client_port, DB)
         drop_db(nodes[0].client_port, CANARY_DB)
         drop_db(nodes[0].client_port, LOCALITY_DB)
+    except BaseException:
+        print("\n[ERROR] the suite raised - dumping node logs", file=sys.stderr)
+        dump_all_logs()
+        raise
     finally:
         for n in nodes:
             n.stop()
 
-    bu.summary()
+    bu.summary(on_failure=dump_all_logs)
 
 
 if __name__ == "__main__":

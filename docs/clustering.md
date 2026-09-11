@@ -136,8 +136,13 @@ scoped database's collections the candidate owns, computed per placement from ad
 metadata already in memory and the ring already in memory — no new wire field, no extra
 round trip, and deliberately not cached, since a few ring lookups are microseconds against
 a run measured in milliseconds. Saturation is checked **before** the score: a sample
-already at its cap loses outright, because it could only answer `503-6`. Ties break on
-`nodeId`, so two edges sampling the same pair agree.
+already at its cap loses outright, because it could only answer `503-6`. A pair nothing
+separates goes to the first of the two samples, which — since the pair is drawn as an
+ordered pair — is uniform over the eligible set. A stable order such as `nodeId` would make
+two edges sampling the same pair agree, but at the cost that matters more: gossip refreshes
+`scriptLoad` once per `gossipIntervalMs` and a short script is long over by then, so on an
+idle cluster every pair ties and a stable order would send every run to the same node and
+never once to the node that sorts last.
 
 Sampling rather than picking the global best is what avoids herding: every edge sees the
 same gossiped view, stale by up to one `gossipIntervalMs`, so a global minimum would send

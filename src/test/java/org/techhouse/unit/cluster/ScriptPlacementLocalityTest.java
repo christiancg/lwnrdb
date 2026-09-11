@@ -172,7 +172,7 @@ public class ScriptPlacementLocalityTest {
     }
 
     // Capacity 0 is an uncapped or older node: there is no denominator, so the pair compares absolute load
-    // and share only settles what the nodeId tiebreak would otherwise decide.
+    // and share only settles what the draw order would otherwise decide.
     @Test
     public void test_uncapped_node_pair_uses_absolute_load_then_share() throws Exception {
         membership(node("a-self", 1, 9, 0), node("b", 2, 3, 0), node("c", 3, 5, 0));
@@ -183,15 +183,15 @@ public class ScriptPlacementLocalityTest {
         membership(node("a-self", 1, 9, 0), node("b", 2, 3, 0), node("c", 3, 3, 0));
         ownedEntirelyBy("c");
         scriptedRandom.give(1, 1);
-        assertEquals("c", placement.choose(DB).getNodeId(), "equal loads: share wins over the nodeId tiebreak");
+        assertEquals("c", placement.choose(DB).getNodeId(), "equal loads: share wins over the draw order");
     }
 
     @Test
-    public void test_share_tie_breaks_on_node_id() throws Exception {
+    public void test_share_tie_breaks_on_the_first_sample() throws Exception {
         membership(node("a-self", 1, 9, 10), node("c", 2, 4, 10), node("b", 3, 4, 10));
         ownedHalfEach();
         scriptedRandom.give(1, 1);
-        assertEquals("b", placement.choose(DB).getNodeId());
+        assertEquals("c", placement.choose(DB).getNodeId());
     }
 
     @Test

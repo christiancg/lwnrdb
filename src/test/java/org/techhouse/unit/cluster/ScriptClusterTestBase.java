@@ -34,6 +34,8 @@ import org.techhouse.test.TestUtils;
 // user to run them as, and collections owned by this node or a peer.
 abstract class ScriptClusterTestBase {
     static final String ADMIN = "scriptrouteadmin";
+    private static final int SCRIPT_CAPACITY = 10;
+    private static final int PEER_LOAD = 2;
     final ClusterTestHarness cluster = new ClusterTestHarness();
     final Configuration config = Configuration.getInstance();
     final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
@@ -52,6 +54,14 @@ abstract class ScriptClusterTestBase {
 
     static NodeInfo node(String id, int port, int scriptLoad) {
         final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad);
+        node.setAdminEpoch(IocContainer.get(AdminEpoch.class).current());
+        return node;
+    }
+
+    // A node reporting a cap, so placement compares load ratios against it rather than absolute load. The
+    // cap itself is arbitrary and shared by both sides of the pair; only the ratio between them decides.
+    static NodeInfo cappedNode(String id, int port, int scriptLoad) {
+        final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, SCRIPT_CAPACITY);
         node.setAdminEpoch(IocContainer.get(AdminEpoch.class).current());
         return node;
     }
@@ -133,14 +143,15 @@ abstract class ScriptClusterTestBase {
         TestUtils.setPrivateField(config, "scriptLocalityWeight", 0);
     }
 
-    // Both nodes report the same load and no capacity, and the peer's id sorts after "self", so the nodeId
-    // tiebreak would keep the run here: whatever moves it can only be the ownership share.
+    // The peer carries the higher load, so load alone decides the pair and keeps the run here - no tie, and
+    // so no dependence on how an undecided pair is resolved. Whatever moves the run to the peer can only be
+    // the ownership share: at weight 100 the peer's 1.0 share outweighs its PEER_LOAD/SCRIPT_CAPACITY ratio.
     void configureMembershipWithAPeerOwningTheWholeDatabase() throws Exception {
         final var collections = IocContainer.get(Cache.class).getCollectionNamesForDatabase(TestGlobals.DB);
         assertFalse(collections.isEmpty(), "the fixture database must have at least one collection");
         for (var i = 0; i < 500; i++) {
-            final var peer = node("z-owner-" + i, cluster.serverPort(), 0);
-            configureMembership(2, node("self", 19990, 0), peer);
+            final var peer = cappedNode("z-owner-" + i, cluster.serverPort(), PEER_LOAD);
+            configureMembership(2, cappedNode("self", 19990, 0), peer);
             if (collections.stream()
                     .allMatch(coll -> peer.getNodeId().equals(ownership.ownerFor(TestGlobals.DB, coll)))) {
                 return;

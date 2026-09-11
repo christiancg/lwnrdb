@@ -111,10 +111,17 @@ public class ScriptPlacement {
 
     private NodeInfo better(NodeInfo a, NodeInfo b, Map<String, Double> shares, int weight) {
         final var winner = blended(a, b, shares, weight);
-        if (!winner.getNodeId().equals(blended(a, b, shares, 0).getNodeId())) {
+        final var loadOnly = blended(a, b, shares, 0);
+        if (winner != null && (loadOnly == null || !winner.getNodeId().equals(loadOnly.getNodeId()))) {
             localityPreferred.increment();
         }
-        return winner;
+        // Nothing separates the pair, so the run goes to the first sample rather than to a node-id order.
+        // betterOfTwoSamples draws an ordered pair, which makes the first element uniform over the eligible
+        // set. That matters because gossip refreshes scriptLoad once per interval and a short script is long
+        // over by then: on an idle cluster every pair ties, and a stable node-id order would send every run
+        // to the lowest id and never once to the highest. Two nodes sampling the same pair no longer agree,
+        // which nothing relies on - each node places only its own runs.
+        return winner != null ? winner : a;
     }
 
     private static NodeInfo blended(NodeInfo a, NodeInfo b, Map<String, Double> shares, int weight) {
@@ -136,7 +143,7 @@ public class ScriptPlacement {
                 return shareA > shareB ? a : b;
             }
         }
-        return a.getNodeId().compareTo(b.getNodeId()) <= 0 ? a : b;
+        return null;
     }
 
     private static double score(NodeInfo node, Map<String, Double> shares, int weight) {
