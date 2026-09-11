@@ -64,6 +64,11 @@ CLUSTER_SECRET = "integration-cluster-secret"
 # frozen at whatever it last published, and how long that takes to happen is this interval.
 GOSSIP_INTERVAL_S = 0.5
 
+# How the crash-during-placement test fills the short window between killing a node and the driver
+# dropping it: concurrent connections, for long enough to cover suspectTimeoutMs several times over.
+HAMMER_CONNECTIONS = 4
+HAMMER_SECONDS = 5.0
+
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
 
@@ -1023,22 +1028,31 @@ def test_script_placement_falls_back_when_the_target_dies():
     check("forwarding is live before the crash",
                wait_until_forwarding_is_live(driver, timeout_s=60.0))
 
-    # Kill the victim while nothing is being placed. A dead node's gossiped NodeInfo freezes at its
-    # last published values, and placement scores a node by its load ratio: a victim frozen at one
-    # running script scores below every live node sitting at zero, so it would never be sampled
-    # again and the failed forward this test is about could never happen. Letting the cluster go
-    # quiet for a few gossip intervals first means the victim freezes at an idle load and stays a
-    # candidate for as long as it is still in the membership view.
-    time.sleep(3 * GOSSIP_INTERVAL_S)
+    # Kill the victim only once the driver's view of it is idle. A dead node's gossiped NodeInfo freezes
+    # at its last published values, and placement scores a node by its load ratio: a victim frozen at one
+    # running script scores below every live node sitting at zero, so placement would never sample it
+    # again and the failed forward this test is about could not happen. So: confirm it is idle, let a
+    # full gossip round carry that to the driver, confirm it stayed idle, then kill immediately. The
+    # second confirmation is the point - a single straggler completing during the wait re-arms exactly
+    # the condition being avoided, and only a check adjacent to the kill catches that.
+    def _victim_idle():
+        return script_stats(victim.client_port).get("running", 0) == 0
 
     before = script_stats(driver).get("forwardFallbacks", 0)
+    check("the victim is idle before the crash", wait_until(_victim_idle, timeout_s=15.0))
+    time.sleep(2 * GOSSIP_INTERVAL_S)
+    check("the victim stayed idle for a full gossip round", _victim_idle())
+
     print(f"  Killing node-{victim.index} (hard crash) ...")
     victim.kill()
 
-    # Only now drive the runs. The driver keeps the victim in its placement set until the failure
-    # detector gives up on it - suspectTimeoutMs after the last successful gossip - which at this
-    # rate is tens of runs, and placement samples uniformly among the three, so a forward into the
-    # dead node happens almost immediately.
+    # Only now drive the runs, and drive them from several connections at once. The window is the one
+    # thing this test cannot widen: the driver keeps the victim in its placement set only until the
+    # failure detector gives up on it, suspectTimeoutMs after the last successful gossip. Placement
+    # picks one of two random samples, so any single run reaches the victim only some of the time, and
+    # one connection issuing them one after another fits too few tries into that window to be sure of
+    # landing on it. Concurrent connections raise the count inside the same window rather than
+    # stretching the window, which is what turns "usually observed" into "observed".
     stop = threading.Event()
     statuses = set()
 
@@ -1047,23 +1061,32 @@ def test_script_placement_falls_back_when_the_target_dies():
         try:
             while not stop.is_set():
                 statuses.add(run_script(None, "return 1 + 1;", conn=conn).get("status"))
-                # Throttled on purpose: the point is only to keep runs flowing across the crash, and
-                # a flat-out loop over the whole window below buries a 512m node under thousands of
-                # runs and OOMs it. ~20/s is more than enough to catch the placement.
+                # Throttled on purpose: the point is only to keep runs flowing across the crash, and a
+                # flat-out loop buries a 512m node under thousands of runs and OOMs it. ~20/s per
+                # connection, so ~HAMMER_CONNECTIONS x that in total, is more than enough.
                 stop.wait(0.05)
         finally:
             conn.close()
 
-    worker = threading.Thread(target=hammer, daemon=True)
-    worker.start()
+    workers = [threading.Thread(target=hammer, daemon=True) for _ in range(HAMMER_CONNECTIONS)]
+    for worker in workers:
+        worker.start()
 
-    # Generous: a forward that dies mid-request can wait out scriptTimeoutMs + replicationAckTimeoutMs
-    # before it throws, and only then is the fallback recorded.
+    # Two waits, because the traffic and the observation need different budgets. The victim is out of
+    # the placement set within a second or two, so traffic past HAMMER_SECONDS cannot produce a new
+    # failed forward and would only pile runs onto the surviving nodes. The count itself can lag well
+    # behind: a forward that dies mid-request waits out scriptTimeoutMs + replicationAckTimeoutMs
+    # before it throws, and the fallback is only recorded then - so keep watching after traffic stops.
     fell_back = wait_until(
         lambda: script_stats(driver).get("forwardFallbacks", 0) > before,
-        timeout_s=35.0)
+        timeout_s=HAMMER_SECONDS)
     stop.set()
-    worker.join(60.0)
+    for worker in workers:
+        worker.join(60.0)
+    if not fell_back:
+        fell_back = wait_until(
+            lambda: script_stats(driver).get("forwardFallbacks", 0) > before,
+            timeout_s=30.0)
     fallbacks = script_stats(driver).get("forwardFallbacks", 0) - before
 
     check("scripts keep succeeding while a placement target is down", statuses == {"OK"},
