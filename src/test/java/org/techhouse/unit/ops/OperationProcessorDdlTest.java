@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -50,6 +51,7 @@ import org.techhouse.test.TestUtils;
 
 public class OperationProcessorDdlTest {
     final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
+    final Cache cache = IocContainer.get(Cache.class);
 
     @BeforeAll
     static void setUpBeforeClass() throws Exception {
@@ -178,6 +180,32 @@ public class OperationProcessorDdlTest {
         assertNotNull(dropResponse);
         assertEquals(OperationType.DROP_COLLECTION, dropResponse.getType());
         assertEquals(OperationStatus.OK, dropResponse.getStatus());
+    }
+
+    // A replicated CREATE_DATABASE returns early on an entry this node already has, so a node can hold the
+    // admin entry without the folder. createCollectionFile only mkdirs one level, so the collection would be
+    // left unwritable here while the write quorum, met by the other nodes, still answered the client OK.
+    @Test
+    public void test_create_collection_restores_a_missing_database_folder() {
+        processor.processMessage(new CreateDatabaseRequest("folderRepairDb"));
+        final var dbFolder = new File(TestGlobals.PATH + File.separator + "folderRepairDb");
+        assertTrue(dbFolder.delete(), "the freshly created database folder is empty and must delete");
+        assertNotNull(cache.getAdminDbEntry("folderRepairDb"), "the admin entry must outlive the folder");
+
+        final var response = processor.processMessage(new CreateCollectionRequest("folderRepairDb", "repairedColl"));
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertTrue(new File(dbFolder, "repairedColl").isDirectory());
+    }
+
+    // The other side of that repair: with no admin entry there is no such database, and the missing parent
+    // folder is the only thing refusing the create - so it has to keep refusing it.
+    @Test
+    public void test_create_collection_on_an_unknown_database_still_fails() {
+        final var response = processor.processMessage(new CreateCollectionRequest("noSuchDb", "orphanColl"));
+
+        assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertNull(cache.getAdminCollectionEntry("noSuchDb", "orphanColl"));
     }
 
     @Test

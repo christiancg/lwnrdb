@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -67,6 +68,16 @@ public class AdminSnapshotConformerTest {
         return json;
     }
 
+    private static void deleteRecursively(File file) {
+        final var children = file.listFiles();
+        if (children != null) {
+            for (final var child : children) {
+                deleteRecursively(child);
+            }
+        }
+        assertTrue(file.delete());
+    }
+
     private static JsonObject userJson() {
         return new AdminUserEntry("alice", "hash-alice", false, Set.of(), Map.of(), Map.of()).getData();
     }
@@ -81,6 +92,26 @@ public class AdminSnapshotConformerTest {
         assertTrue(dbEntry.getOwners().contains("alice"));
         assertNotNull(cache.getAdminCollectionEntry("newdb", "newcoll"));
         assertTrue(cache.getCollectionNamesForDatabase("newdb").contains("newcoll"));
+    }
+
+    // Metadata and directory can drift apart - a node that recorded the admin entry but whose folder never
+    // landed answers a routed write with "no such file or directory" rather than a miss. Both creations are
+    // idempotent, so every sweep must re-run them; gating them on the admin entry being absent would let the
+    // first pass write the entry and every later pass skip the repair, making the drift permanent.
+    @Test
+    public void test_conform_recreates_a_directory_that_went_missing_under_an_existing_admin_entry() throws Exception {
+        final var snapshot = snapshot(List.of(dbJson("driftdb", List.of())),
+                List.of(collJson("driftdb", "driftcoll", Set.of())), List.of());
+        conformer.conform(snapshot);
+        final var collFolder = new File(TestGlobals.PATH + File.separator + "driftdb" + File.separator + "driftcoll");
+        assertTrue(collFolder.isDirectory(), "the first conform must have created the collection folder");
+
+        deleteRecursively(collFolder);
+        assertFalse(collFolder.exists());
+
+        conformer.conform(snapshot);
+
+        assertTrue(collFolder.isDirectory(), "a later sweep must restore the folder under its admin entry");
     }
 
     @Test

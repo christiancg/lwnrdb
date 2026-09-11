@@ -72,8 +72,11 @@ final class AdminSnapshotConformer {
             snapshotDbs.put(db.get_id(), db);
         }
         for (final var db : snapshotDbs.values()) {
+            // Outside the entry check on purpose, and idempotent: the folder is what a routed write opens, so
+            // a node holding the admin entry without it answers "no such file or directory" instead of a miss.
+            // Creating it only when the entry is absent would let one failed create stay broken forever.
+            fs.createDatabaseFolder(db.get_id());
             if (cache.getAdminDbEntry(db.get_id()) == null) {
-                fs.createDatabaseFolder(db.get_id());
                 AdminOperationHelper.saveDatabaseEntry(
                         new AdminDbEntry(db.get_id(), new ArrayList<>(), new ArrayList<>(db.getOwners())));
             } else {
@@ -203,8 +206,10 @@ final class AdminSnapshotConformer {
             JsonObject desiredSchema, JsonObject snapshotTriggers) throws Exception {
         locks.lock(dbName, collName);
         try {
+            // Same reason as the database folder above: idempotent, and run on every sweep so a collection
+            // whose directory went missing under a live admin entry is repaired rather than left unwritable.
+            fs.createCollectionFile(dbName, collName);
             if (cache.getAdminCollectionEntry(dbName, collName) == null) {
-                fs.createCollectionFile(dbName, collName);
                 AdminOperationHelper.createPageCollections(dbName, collName);
                 AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
             }

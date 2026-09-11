@@ -35,6 +35,14 @@ public final class CollectionOperationHelper {
                 () -> {
                     final var dbName = createCollectionRequest.getDatabaseName();
                     final var collName = createCollectionRequest.getCollectionName();
+                    // A node can hold the database's admin entry without its folder - a replicated CREATE_DATABASE
+                    // returns early on an entry it already has, so the folder never lands. createCollectionFile
+                    // only mkdirs one level, so it would fail here and leave the collection unwritable while the
+                    // write quorum, met by the other nodes, still answered OK. Absent an entry there is no such
+                    // database and the missing parent must keep failing the create.
+                    if (cache.getAdminDbEntry(dbName) != null) {
+                        fs.createDatabaseFolder(dbName);
+                    }
                     final var result = fs.createCollectionFile(dbName, collName);
                     if (result) {
                         // Register the collection's admin metadata (page collections + admin entry with its PK
