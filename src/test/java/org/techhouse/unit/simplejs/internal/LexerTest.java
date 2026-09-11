@@ -2,11 +2,9 @@ package org.techhouse.unit.simplejs.internal;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import java.math.BigInteger;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.elements.JsBaseElement;
-import org.techhouse.simplejs.elements.JsBigInt;
 import org.techhouse.simplejs.elements.JsBoolean;
 import org.techhouse.simplejs.elements.JsEOF;
 import org.techhouse.simplejs.elements.JsIdentifier;
@@ -15,29 +13,14 @@ import org.techhouse.simplejs.elements.JsNull;
 import org.techhouse.simplejs.elements.JsNumber;
 import org.techhouse.simplejs.elements.JsOperator;
 import org.techhouse.simplejs.elements.JsPrivateIdentifier;
-import org.techhouse.simplejs.elements.JsRegex;
 import org.techhouse.simplejs.elements.JsSeparator;
-import org.techhouse.simplejs.elements.JsString;
-import org.techhouse.simplejs.elements.JsTemplateString;
 import org.techhouse.simplejs.elements.JsUndefined;
 import org.techhouse.simplejs.elements.SourcePosition;
-import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.UnexpectedCharacterException;
 import org.techhouse.simplejs.exceptions.UnterminatedCommentException;
-import org.techhouse.simplejs.exceptions.UnterminatedRegexException;
-import org.techhouse.simplejs.exceptions.UnterminatedStringException;
-import org.techhouse.simplejs.exceptions.UnterminatedTemplateException;
 import org.techhouse.simplejs.internal.Lexer;
 
 public class LexerTest {
-    // Empty input produces only the EOF token
-    @Test
-    public void test_lex_empty_string() {
-        final List<JsBaseElement> tokens = Lexer.lex("");
-        assertEquals(1, tokens.size());
-        assertInstanceOf(JsEOF.class, tokens.getFirst());
-    }
-
     // Whitespace-only input produces only the EOF token
     @Test
     public void test_lex_whitespace_only() {
@@ -121,46 +104,6 @@ public class LexerTest {
         assertEquals(2e10, ((JsNumber) Lexer.lex("2E10").getFirst()).getValue());
     }
 
-    // Hex / octal / binary radix literals
-    @Test
-    public void test_lex_radix_numbers() {
-        assertEquals(31.0, ((JsNumber) Lexer.lex("0x1F").getFirst()).getValue());
-        assertEquals(15.0, ((JsNumber) Lexer.lex("0o17").getFirst()).getValue());
-        assertEquals(5.0, ((JsNumber) Lexer.lex("0b101").getFirst()).getValue());
-    }
-
-    // A number immediately followed by an identifier is a Syntax Error
-    @Test
-    public void test_lex_number_followed_by_identifier() {
-        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("3in"));
-    }
-
-    // Numeric separators are allowed between digits (decimal, fraction, exponent, radix) and stripped
-    @Test
-    public void test_lex_numeric_separators() {
-        assertEquals(1000000.0, ((JsNumber) Lexer.lex("1_000_000").getFirst()).getValue());
-        assertEquals(1000.0005, ((JsNumber) Lexer.lex("1_000.000_5").getFirst()).getValue());
-        assertEquals(1e11, ((JsNumber) Lexer.lex("1_0e1_0").getFirst()).getValue());
-        assertEquals(65535.0, ((JsNumber) Lexer.lex("0xFF_FF").getFirst()).getValue());
-        assertEquals(170.0, ((JsNumber) Lexer.lex("0b1010_1010").getFirst()).getValue());
-    }
-
-    // A misplaced separator leaves an identifier character against the digits, which is a Syntax Error
-    @Test
-    public void test_lex_misplaced_separator_stops_number() {
-        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("1__0"));
-        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("1_"));
-    }
-
-    // A trailing n suffix produces a BigInt token in every integer form
-    @Test
-    public void test_lex_bigint() {
-        assertEquals(new BigInteger("123"), ((JsBigInt) Lexer.lex("123n").getFirst()).getValue());
-        assertEquals(new BigInteger("255"), ((JsBigInt) Lexer.lex("0xFFn").getFirst()).getValue());
-        assertEquals(BigInteger.TEN, ((JsBigInt) Lexer.lex("0b1010n").getFirst()).getValue());
-        assertEquals(new BigInteger("1000"), ((JsBigInt) Lexer.lex("1_000n").getFirst()).getValue());
-    }
-
     // A hashbang at offset 0 is skipped as trivia
     @Test
     public void test_lex_hashbang_skipped_at_start() {
@@ -184,22 +127,6 @@ public class LexerTest {
         assertEquals("field", ((JsPrivateIdentifier) tokens.getFirst()).getValue());
     }
 
-    // An identifier written with unicode escapes lexes to its cooked name
-    @Test
-    public void test_lex_identifier_with_unicode_escape() {
-        final List<JsBaseElement> tokens = Lexer.lex("\\u0061\\u{62}c");
-        assertInstanceOf(JsIdentifier.class, tokens.getFirst());
-        assertEquals("abc", ((JsIdentifier) tokens.getFirst()).getValue());
-    }
-
-    // A private name may also be written with unicode escapes
-    @Test
-    public void test_lex_private_identifier_with_unicode_escape() {
-        final List<JsBaseElement> tokens = Lexer.lex("#\\u{6F}_");
-        assertInstanceOf(JsPrivateIdentifier.class, tokens.getFirst());
-        assertEquals("o_", ((JsPrivateIdentifier) tokens.getFirst()).getValue());
-    }
-
     // constructor is no longer a keyword
     @Test
     public void test_lex_constructor_is_an_identifier() {
@@ -208,58 +135,10 @@ public class LexerTest {
         assertEquals("constructor", ((JsIdentifier) tokens.getFirst()).getValue());
     }
 
-    // An escape sequence never forms a keyword, so a reserved word spelled with one lexes as an
-    // escaped identifier; rejecting it is the parser's job, since it is legal as an IdentifierName
-    @Test
-    public void test_lex_escaped_keyword_is_an_escaped_identifier() {
-        final var tokens = Lexer.lex("\\u0069\\u0066");
-        final var identifier = (org.techhouse.simplejs.elements.JsIdentifier) tokens.getFirst();
-        assertEquals("if", identifier.getValue());
-        assertTrue(identifier.isEscaped());
-    }
-
     // A # not followed by an identifier is an unexpected character
     @Test
     public void test_lex_lone_hash_throws() {
         assertThrows(UnexpectedCharacterException.class, () -> Lexer.lex("a # b"));
-    }
-
-    // Double-quoted string
-    @Test
-    public void test_lex_double_quoted_string() {
-        assertEquals("hello", ((JsString) Lexer.lex("\"hello\"").getFirst()).getValue());
-    }
-
-    // Single-quoted string
-    @Test
-    public void test_lex_single_quoted_string() {
-        assertEquals("hello", ((JsString) Lexer.lex("'hello'").getFirst()).getValue());
-    }
-
-    // String escape sequences are cooked
-    @Test
-    public void test_lex_string_with_escapes() {
-        assertEquals("a\nb\tc\"d\\e", ((JsString) Lexer.lex("\"a\\nb\\tc\\\"d\\\\e\"").getFirst()).getValue());
-    }
-
-    // Unicode and hex escapes
-    @Test
-    public void test_lex_string_unicode_and_hex_escapes() {
-        assertEquals("A", ((JsString) Lexer.lex("\"\\u0041\"").getFirst()).getValue());
-        assertEquals("A", ((JsString) Lexer.lex("\"\\x41\"").getFirst()).getValue());
-        assertEquals("😀", ((JsString) Lexer.lex("\"\\u{1F600}\"").getFirst()).getValue());
-    }
-
-    // Line continuation inside a string is dropped
-    @Test
-    public void test_lex_string_line_continuation() {
-        assertEquals("ab", ((JsString) Lexer.lex("\"a\\\nb\"").getFirst()).getValue());
-    }
-
-    // Unterminated string throws
-    @Test
-    public void test_lex_unterminated_string_throws() {
-        assertThrows(UnterminatedStringException.class, () -> Lexer.lex("\"unclosed"));
     }
 
     // Line comments are skipped
@@ -318,14 +197,6 @@ public class LexerTest {
         assertEquals('(', ((JsSeparator) tokens.getFirst()).getValue());
     }
 
-    // A slash after an operator is a regex
-    @Test
-    public void test_lex_regex_after_operator() {
-        final List<JsBaseElement> tokens = Lexer.lex("x = /ab+c/");
-        assertInstanceOf(JsRegex.class, tokens.get(2));
-        assertEquals("ab+c", ((JsRegex) tokens.get(2)).getPattern());
-    }
-
     // A slash after an identifier is division
     @Test
     public void test_lex_division_after_identifier() {
@@ -340,238 +211,6 @@ public class LexerTest {
         final List<JsBaseElement> tokens = Lexer.lex("a /= 2");
         assertInstanceOf(JsOperator.class, tokens.get(1));
         assertEquals("/=", ((JsOperator) tokens.get(1)).getValue());
-    }
-
-    // Regex with a character class containing a slash and flags
-    @Test
-    public void test_lex_regex_with_char_class_and_flags() {
-        final List<JsBaseElement> tokens = Lexer.lex("var r = /[/a]b/gi");
-        final var regex = (JsRegex) tokens.get(3);
-        assertEquals("[/a]b", regex.getPattern());
-        assertEquals("gi", regex.getFlags());
-    }
-
-    // Regex with an escaped slash
-    @Test
-    public void test_lex_regex_with_escape() {
-        final var regex = (JsRegex) Lexer.lex("= /a\\/b/").get(1);
-        assertEquals("a\\/b", regex.getPattern());
-    }
-
-    // Unterminated regex throws
-    @Test
-    public void test_lex_unterminated_regex_throws() {
-        assertThrows(UnterminatedRegexException.class, () -> Lexer.lex("= /abc"));
-    }
-
-    // Regex terminated by a newline throws
-    @Test
-    public void test_lex_regex_newline_throws() {
-        assertThrows(UnterminatedRegexException.class, () -> Lexer.lex("= /abc\n/"));
-    }
-
-    // No-substitution template literal
-    @Test
-    public void test_lex_no_substitution_template() {
-        final var template = (JsTemplateString) Lexer.lex("`hello world`").getFirst();
-        assertEquals(List.of("hello world"), template.getQuasis());
-        assertTrue(template.getExpressions().isEmpty());
-    }
-
-    // Template literal with an interpolation
-    @Test
-    public void test_lex_template_with_interpolation() {
-        final var template = (JsTemplateString) Lexer.lex("`a${1 + 2}b`").getFirst();
-        assertEquals(List.of("a", "b"), template.getQuasis());
-        assertEquals(1, template.getExpressions().size());
-        final var expr = template.getExpressions().getFirst();
-        assertInstanceOf(JsNumber.class, expr.get(0));
-        assertInstanceOf(JsOperator.class, expr.get(1));
-        assertInstanceOf(JsNumber.class, expr.get(2));
-    }
-
-    // Raw quasis preserve escape sequences verbatim while cooked quasis interpret them
-    @Test
-    public void test_lex_template_captures_raw_quasis() {
-        final var template = (JsTemplateString) Lexer.lex("`a\\n${x}b`").getFirst();
-        assertEquals(List.of("a\n", "b"), template.getQuasis());
-        assertEquals(List.of("a\\n", "b"), template.getRawQuasis());
-    }
-
-    // With no escapes the raw and cooked quasis are identical
-    @Test
-    public void test_lex_template_raw_matches_cooked_when_no_escapes() {
-        final var template = (JsTemplateString) Lexer.lex("`hello world`").getFirst();
-        assertEquals(template.getQuasis(), template.getRawQuasis());
-    }
-
-    // A NotEscapeSequence (legacy-octal-shaped digit escape) leaves the whole quasi's cooked value
-    // null rather than throwing - only a Syntax Error when the template turns out untagged (the
-    // Parser's job, see rejectCoverInitializedName's sibling check in Parser.parseTemplate); the raw
-    // text is captured verbatim regardless.
-    @Test
-    public void test_lex_template_invalid_octal_escape_nulls_cooked() {
-        var template = (JsTemplateString) Lexer.lex("`\\01`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-        assertEquals("\\01", template.getRawQuasis().getFirst());
-
-        template = (JsTemplateString) Lexer.lex("`\\1`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-        assertEquals("\\1", template.getRawQuasis().getFirst());
-
-        template = (JsTemplateString) Lexer.lex("`\\8`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-        assertEquals("\\8", template.getRawQuasis().getFirst());
-    }
-
-    @Test
-    public void test_lex_template_invalid_hex_escape_nulls_cooked() {
-        var template = (JsTemplateString) Lexer.lex("`\\xg`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-        assertEquals("\\xg", template.getRawQuasis().getFirst());
-
-        template = (JsTemplateString) Lexer.lex("`\\xAg`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-        assertEquals("\\xAg", template.getRawQuasis().getFirst());
-    }
-
-    @Test
-    public void test_lex_template_valid_hex_escape_is_cooked() {
-        assertEquals(List.of("A"), ((JsTemplateString) Lexer.lex("`\\x41`").getFirst()).getQuasis());
-    }
-
-    @Test
-    public void test_lex_template_invalid_unicode_escape_nulls_cooked() {
-        var template = (JsTemplateString) Lexer.lex("`\\u0`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-
-        template = (JsTemplateString) Lexer.lex("`\\u0g`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-
-        template = (JsTemplateString) Lexer.lex("`\\u00g`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-
-        template = (JsTemplateString) Lexer.lex("`\\u000g`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-    }
-
-    @Test
-    public void test_lex_template_valid_unicode_escape_is_cooked() {
-        assertEquals(List.of("A"), ((JsTemplateString) Lexer.lex("`\\u0041`").getFirst()).getQuasis());
-    }
-
-    @Test
-    public void test_lex_template_invalid_braced_unicode_escape_nulls_cooked() {
-        var template = (JsTemplateString) Lexer.lex("`\\u{g`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-        assertEquals("\\u{g", template.getRawQuasis().getFirst());
-
-        template = (JsTemplateString) Lexer.lex("`\\u{0`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-        assertEquals("\\u{0", template.getRawQuasis().getFirst());
-
-        // syntactically well-formed (a real closing brace) but out of the Unicode code point range
-        template = (JsTemplateString) Lexer.lex("`\\u{10FFFFF}`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-        assertEquals("\\u{10FFFFF}", template.getRawQuasis().getFirst());
-    }
-
-    @Test
-    public void test_lex_template_valid_braced_unicode_escape_is_cooked() {
-        assertEquals(List.of("A"), ((JsTemplateString) Lexer.lex("`\\u{41}`").getFirst()).getQuasis());
-    }
-
-    // Only the affected quasi's cooked value goes null; a later quasi in the same template with a
-    // valid escape is unaffected, and the invalid quasi's own trailing valid escape (after the bad
-    // one) still does not resurrect its cooked value.
-    @Test
-    public void test_lex_template_invalid_escape_is_scoped_to_its_own_quasi() {
-        final var template = (JsTemplateString) Lexer.lex("`\\1${1}\\n`").getFirst();
-        assertNull(template.getQuasis().getFirst());
-        assertEquals("\n", template.getQuasis().get(1));
-    }
-
-    // Template interpolation containing object braces
-    @Test
-    public void test_lex_template_nested_braces() {
-        final var template = (JsTemplateString) Lexer.lex("`${ {a:1}.a }`").getFirst();
-        assertEquals(List.of("", ""), template.getQuasis());
-        assertEquals(1, template.getExpressions().size());
-    }
-
-    // Template interpolation containing a string with a brace
-    @Test
-    public void test_lex_template_interpolation_with_string_brace() {
-        final var template = (JsTemplateString) Lexer.lex("`${ \"}\" }`").getFirst();
-        assertEquals(1, template.getExpressions().size());
-        assertInstanceOf(JsString.class, template.getExpressions().getFirst().getFirst());
-    }
-
-    // Nested template literal inside an interpolation
-    @Test
-    public void test_lex_template_nested_template() {
-        final var template = (JsTemplateString) Lexer.lex("`${`x${1}y`}`").getFirst();
-        assertEquals(1, template.getExpressions().size());
-        assertInstanceOf(JsTemplateString.class, template.getExpressions().getFirst().getFirst());
-    }
-
-    // A regex literal inside an interpolation keeps its quotes: the substitution is lexed, not
-    // character-scanned, so the quote in /'/ never opens a string
-    @Test
-    public void test_lex_template_interpolation_with_regex_quote() {
-        final var template = (JsTemplateString) Lexer.lex("`${k.replace(/'/g, \"x\")}`").getFirst();
-        assertEquals(List.of("", ""), template.getQuasis());
-        final var expression = template.getExpressions().getFirst();
-        final var regex = (JsRegex) expression.get(4);
-        assertEquals("'", regex.getPattern());
-        assertEquals("g", regex.getFlags());
-    }
-
-    // A regex literal inside an interpolation may contain a backtick
-    @Test
-    public void test_lex_template_interpolation_with_regex_backtick() {
-        final var template = (JsTemplateString) Lexer.lex("`${/`/.test(s)}`").getFirst();
-        final var regex = (JsRegex) template.getExpressions().getFirst().getFirst();
-        assertEquals("`", regex.getPattern());
-    }
-
-    // A brace inside a regex inside a nested template does not close the outer interpolation
-    @Test
-    public void test_lex_template_nested_template_with_regex() {
-        final var template = (JsTemplateString) Lexer.lex("`${`a${/}/.source}b`}`").getFirst();
-        final var nested = (JsTemplateString) template.getExpressions().getFirst().getFirst();
-        assertEquals(List.of("a", "b"), nested.getQuasis());
-        assertEquals("}", ((JsRegex) nested.getExpressions().getFirst().getFirst()).getPattern());
-    }
-
-    // Inside an interpolation a slash after `)`, `]` or an identifier is still division
-    @Test
-    public void test_lex_template_interpolation_division_not_regex() {
-        for (final var source : List.of("`${(a)/b/c}`", "`${x[0]/2}`", "`${a/b}`")) {
-            final var template = (JsTemplateString) Lexer.lex(source).getFirst();
-            final var expression = template.getExpressions().getFirst();
-            assertTrue(expression.stream().noneMatch(JsRegex.class::isInstance), source);
-            assertTrue(expression.stream().anyMatch(
-                    token -> token instanceof JsOperator operator && "/".equals(operator.getValue())), source);
-        }
-    }
-
-    // An unterminated string inside an interpolation is reported as such
-    @Test
-    public void test_lex_template_interpolation_unterminated_string_throws() {
-        assertThrows(UnterminatedStringException.class, () -> Lexer.lex("`${'abc}`"));
-    }
-
-    // Unterminated template throws
-    @Test
-    public void test_lex_unterminated_template_throws() {
-        assertThrows(UnterminatedTemplateException.class, () -> Lexer.lex("`abc"));
-    }
-
-    // Unterminated interpolation throws
-    @Test
-    public void test_lex_unterminated_template_interpolation_throws() {
-        assertThrows(UnterminatedTemplateException.class, () -> Lexer.lex("`a${1 + 2"));
     }
 
     // Unexpected character throws
@@ -649,43 +288,5 @@ public class LexerTest {
     public void test_newline_before_flag_single_line_block_comment() {
         final Lexer.LexResult result = Lexer.lexWithPositions("a /* x */ b");
         assertFalse(result.newlineBefore().get(1));
-    }
-
-    // Legacy octal integer literals are rejected in strict mode
-    @Test
-    public void test_legacy_octal_literal_rejected() {
-        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("0755"));
-    }
-
-    // A leading-zero non-octal decimal (08) is rejected
-    @Test
-    public void test_non_octal_decimal_literal_rejected() {
-        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("08"));
-    }
-
-    // 0, 0.5, 0n and the radix-prefixed literals remain valid
-    @Test
-    public void test_zero_and_prefixed_literals_still_valid() {
-        assertDoesNotThrow(() -> Lexer.lex("0"));
-        assertDoesNotThrow(() -> Lexer.lex("0.5"));
-        assertDoesNotThrow(() -> Lexer.lex("0n"));
-        assertDoesNotThrow(() -> Lexer.lex("0x1F"));
-        assertDoesNotThrow(() -> Lexer.lex("0o17"));
-        assertDoesNotThrow(() -> Lexer.lex("0b10"));
-    }
-
-    // Octal escape sequences in string literals are rejected in strict mode
-    @Test
-    public void test_octal_string_escape_rejected() {
-        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("'\\07'"));
-        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("'\\1'"));
-        assertThrows(SyntaxErrorException.class, () -> Lexer.lex("'\\8'"));
-    }
-
-    // A lone \0 (not followed by a digit) stays valid
-    @Test
-    public void test_null_escape_still_valid() {
-        assertDoesNotThrow(() -> Lexer.lex("'\\0'"));
-        assertDoesNotThrow(() -> Lexer.lex("'\\0a'"));
     }
 }

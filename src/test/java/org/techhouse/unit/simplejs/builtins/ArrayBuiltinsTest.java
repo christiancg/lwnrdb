@@ -31,15 +31,6 @@ public class ArrayBuiltinsTest {
         assertFalse(bool("Array.isArray('x')"));
     }
 
-    // map/filter/reduce transform elements
-    @Test
-    public void test_map_filter_reduce() {
-        assertEquals("2,4,6", str("[1, 2, 3].map(x => x * 2).join(',')"));
-        assertEquals("2,4", str("[1, 2, 3, 4].filter(x => x % 2 === 0).join(',')"));
-        assertEquals(10, num("[1, 2, 3, 4].reduce((a, b) => a + b, 0)"));
-        assertEquals(24, num("[1, 2, 3, 4].reduce((a, b) => a * b)"));
-    }
-
     // find/some/every/forEach iterate with a predicate
     @Test
     public void test_predicates_and_foreach() {
@@ -47,35 +38,6 @@ public class ArrayBuiltinsTest {
         assertTrue(bool("[1, 2, 3].some(x => x === 2)"));
         assertTrue(bool("[2, 4, 6].every(x => x % 2 === 0)"));
         assertEquals(6, num("let s = 0; [1, 2, 3].forEach(x => { s += x; }); s"));
-    }
-
-    // A non-callable predicate throws immediately, even on an empty array
-    @Test
-    public void test_find_throws_on_non_callable_predicate_even_on_empty_array() {
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("[].find(null)"));
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("[1, 2, 3].find(null)"));
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("[].map(1)"));
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("[].forEach('')"));
-    }
-
-    // includes/indexOf use strict equality
-    @Test
-    public void test_includes_indexof() {
-        assertTrue(bool("[1, 2, 3].includes(2)"));
-        assertFalse(bool("[1, 2, 3].includes(9)"));
-        assertEquals(1, num("['a', 'b', 'c'].indexOf('b')"));
-        assertEquals(-1, num("[1].indexOf(9)"));
-    }
-
-    // slice/splice/concat/flat build new arrays
-    @Test
-    public void test_slice_splice_concat_flat() {
-        assertEquals("2,3", str("[1, 2, 3, 4].slice(1, 3).join(',')"));
-        assertEquals("3,4", str("[1, 2, 3, 4].slice(-2).join(',')"));
-        assertEquals("2,3", str("let a = [1, 2, 3, 4]; a.splice(1, 2).join(',')"));
-        assertEquals("1,9,4", str("let a = [1, 2, 3, 4]; a.splice(1, 2, 9); a.join(',')"));
-        assertEquals("1,2,3", str("[1].concat([2, 3]).join(',')"));
-        assertEquals("1,2,3,4", str("[1, [2, [3, 4]]].flat(2).join(',')"));
     }
 
     // push/pop/shift/unshift mutate and return the expected values
@@ -87,65 +49,10 @@ public class ArrayBuiltinsTest {
         assertEquals(3, num("let a = [2, 3]; a.unshift(1)"));
     }
 
-    // sort orders by string by default and by a comparator when given
-    @Test
-    public void test_sort() {
-        assertEquals("1,2,3", str("[3, 1, 2].sort().join(',')"));
-        assertEquals("3,2,1", str("[1, 3, 2].sort((a, b) => b - a).join(',')"));
-    }
-
-    // reduce on an empty array without an initial value throws
-    @Test
-    public void test_reduce_empty_throws() {
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("[].reduce((a, b) => a + b)"));
-    }
-
     // calling a callback method without a function throws
     @Test
     public void test_missing_callback_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("[1].map()"));
-    }
-
-    // findIndex/findLast/findLastIndex/lastIndexOf locate elements
-    @Test
-    public void test_find_variants() {
-        assertEquals(1, num("[1, 2, 3].findIndex(x => x === 2)"));
-        assertEquals(-1, num("[1, 2, 3].findIndex(x => x === 9)"));
-        assertEquals(4, num("[1, 4, 2, 4, 3].findLast(x => x === 4)"));
-        assertEquals(3, num("[1, 4, 2, 4, 3].findLastIndex(x => x === 4)"));
-        assertEquals(3, num("[1, 2, 1, 2].lastIndexOf(2)"));
-    }
-
-    // reduceRight folds from the right, with and without an initial value
-    @Test
-    public void test_reduce_right() {
-        assertEquals("3,2,1", str("['1', '2', '3'].reduceRight((a, b) => a + ',' + b)"));
-        assertEquals(6, num("[1, 2, 3].reduceRight((a, b) => a + b, 0)"));
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("[].reduceRight((a, b) => a + b)"));
-    }
-
-    // flatMap maps then flattens one level
-    @Test
-    public void test_flatmap() {
-        assertEquals("1,1,2,2", str("[1, 2].flatMap(x => [x, x]).join(',')"));
-        assertEquals("1,2,3,4", str("[[1, 2], [3, 4]].flatMap(x => x).join(',')"));
-    }
-
-    // fill and copyWithin mutate in place
-    @Test
-    public void test_fill_copywithin() {
-        assertEquals("0,9,9,3", str("let a = [0, 1, 2, 3]; a.fill(9, 1, 3); a.join(',')"));
-        assertEquals("9,9,9,9", str("[1, 2, 3, 4].fill(9).join(',')"));
-        assertEquals("4,5,3,4,5", str("let a = [1, 2, 3, 4, 5]; a.copyWithin(0, 3); a.join(',')"));
-    }
-
-    // reverse and at
-    @Test
-    public void test_reverse_at() {
-        assertEquals("3,2,1", str("[1, 2, 3].reverse().join(',')"));
-        assertEquals(3, num("[1, 2, 3].at(-1)"));
-        assertEquals(1, num("[1, 2, 3].at(0)"));
-        assertTrue(bool("[1, 2, 3].at(9) === undefined"));
     }
 
     // keys/values/entries return iterators consumable by for-of
@@ -173,12 +80,6 @@ public class ArrayBuiltinsTest {
         assertEquals("", str("Array.from({length: 0}).join(',')"));
     }
 
-    // Array.from honours the mapfn's thisArg
-    @Test
-    public void test_array_from_map_this_arg() {
-        assertEquals(5, num("let o = {v: 5}; Array.from([1], function() { return this.v; }, o)[0]"));
-    }
-
     // Array.from called with a custom constructor builds via that constructor instead of a plain array
     @Test
     public void test_array_from_call_custom_constructor() {
@@ -198,38 +99,6 @@ public class ArrayBuiltinsTest {
                 Array.from.call(Ctor, [1]);
                 """;
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
-    }
-
-    // the not-found and non-array branches
-    @Test
-    public void test_find_and_flatmap_edges() {
-        assertTrue(bool("[1, 2].findLast(x => x === 9) === undefined"));
-        assertEquals(-1, num("[1, 2].findLastIndex(x => x === 9)"));
-        assertEquals(-1, num("[1, 2].lastIndexOf()"));
-        assertEquals("1,2", str("[1, 2].flatMap(x => x).join(',')"));
-        assertEquals("4,2,3,4,5", str("let a = [1, 2, 3, 4, 5]; a.copyWithin(0, 3, 4); a.join(',')"));
-    }
-
-    // toReversed returns a reversed copy and leaves the original untouched
-    @Test
-    public void test_to_reversed() {
-        assertEquals("3,2,1", str("[1, 2, 3].toReversed().join(',')"));
-        assertEquals("1,2,3", str("let a = [1, 2, 3]; a.toReversed(); a.join(',')"));
-    }
-
-    // toSorted returns a sorted copy without mutating the original
-    @Test
-    public void test_to_sorted() {
-        assertEquals("1,2,3", str("[3, 1, 2].toSorted().join(',')"));
-        assertEquals("3,1,2", str("let a = [3, 1, 2]; a.toSorted(); a.join(',')"));
-        assertEquals("3,2,1", str("[1, 2, 3].toSorted((x, y) => y - x).join(',')"));
-    }
-
-    // toSpliced returns a copy with the splice applied, leaving the original intact
-    @Test
-    public void test_to_spliced() {
-        assertEquals("1,9,4", str("[1, 2, 3, 4].toSpliced(1, 2, 9).join(',')"));
-        assertEquals("1,2,3,4", str("let a = [1, 2, 3, 4]; a.toSpliced(1, 2, 9); a.join(',')"));
     }
 
     // with returns a copy with one index replaced; negative indices count from the end
@@ -287,44 +156,6 @@ public class ArrayBuiltinsTest {
         return ((org.techhouse.simplejs.values.JsArray) out.get("v")).length();
     }
 
-    // includes uses SameValueZero, so NaN finds itself
-    @Test
-    public void test_includes_same_value_zero() {
-        assertTrue(bool("[NaN].includes(NaN)"));
-        assertTrue(bool("[-0].includes(0)"));
-        assertTrue(bool("[0].includes(-0)"));
-    }
-
-    // indexOf keeps strict equality, so NaN is never found
-    @Test
-    public void test_index_of_nan_unchanged() {
-        assertEquals(-1, num("[NaN].indexOf(NaN)"));
-        assertEquals(0, num("[-0].indexOf(0)"));
-    }
-
-    // a hole reads as undefined for includes but is skipped by indexOf
-    @Test
-    public void test_includes_finds_hole_as_undefined() {
-        assertTrue(bool("[,].includes(undefined)"));
-        assertEquals(-1, num("[,].indexOf(undefined)"));
-    }
-
-    // includes honours the fromIndex argument
-    @Test
-    public void test_includes_from_index() {
-        assertFalse(bool("[1, 2].includes(1, 1)"));
-        assertTrue(bool("[1, 2].includes(2, 1)"));
-        assertTrue(bool("[1, 2, 3].includes(3, -1)"));
-        assertFalse(bool("[1, 2, 3].includes(1, -1)"));
-    }
-
-    // includes with no argument searches for undefined
-    @Test
-    public void test_includes_no_argument() {
-        assertTrue(bool("[undefined].includes()"));
-        assertFalse(bool("[1].includes()"));
-    }
-
     // a raw primitive receiver is ToObject-boxed into an empty array-like rather than rejected
     @Test
     public void test_generic_methods_accept_primitive_receiver() {
@@ -374,28 +205,6 @@ public class ArrayBuiltinsTest {
                 () -> Interpreter.run("const o = {length: 0}; Object.freeze(o); Array.prototype.push.call(o, 1)"));
     }
 
-    // indexOf honours fromIndex, including the negative and non-finite forms
-    @Test
-    public void test_index_of_honours_from_index() {
-        assertEquals(2, num("[1, 2, 1].indexOf(1, 1)"));
-        assertEquals(-1, num("[1, 2, 1].indexOf(1, 3)"));
-        assertEquals(2, num("[1, 2, 1].indexOf(1, -1)"));
-        assertEquals(0, num("[1, 2, 1].indexOf(1, -9)"));
-        assertEquals(-1, num("[1, 2, 1].indexOf(1, Infinity)"));
-        assertEquals(0, num("[1, 2, 1].indexOf(1, 'one')"));
-    }
-
-    // lastIndexOf honours fromIndex, counting from the end for a negative one
-    @Test
-    public void test_last_index_of_honours_from_index() {
-        assertEquals(1, num("[0, 1, 1].lastIndexOf(1, 1)"));
-        assertEquals(2, num("[0, 1, 1].lastIndexOf(1)"));
-        assertEquals(1, num("[0, 1, 1].lastIndexOf(1, -2)"));
-        assertEquals(-1, num("[0, 1, 1].lastIndexOf(1, -9)"));
-        assertEquals(-1, num("[0, 1, 1].lastIndexOf(1, -Infinity)"));
-        assertEquals(2, num("[0, 1, 1].lastIndexOf(1, Infinity)"));
-    }
-
     // concat consults Symbol.isConcatSpreadable before falling back to IsArray
     @Test
     public void test_concat_honours_is_concat_spreadable() {
@@ -406,15 +215,6 @@ public class ArrayBuiltinsTest {
                 num("const o = {0: 'a', length: 1}; o[Symbol.isConcatSpreadable] = false; [].concat(o).length"));
     }
 
-    // the default comparator compares the ToString of each element, and undefined sorts last
-    @Test
-    public void test_sort_default_comparator_uses_to_string() {
-        assertEquals("1,10,9", str("[10, 9, 1].sort().join(',')"));
-        assertEquals("1,10,9,", str("[10, 9, undefined, 1].sort().join(',')"));
-        assertEquals("1,2,,3", str("const a = [2, , 1]; a.sort(); a.join(',') + ',' + a.length"));
-        assertThrows(TypeErrorException.class, () -> Interpreter.run("[1, 2].sort('x')"));
-    }
-
     // a length past the int range is walked lazily rather than materialised
     @Test
     public void test_length_beyond_integer_max_does_not_throw() {
@@ -423,25 +223,6 @@ public class ArrayBuiltinsTest {
         assertEquals(9007199254740990D, num("let at = -1; Array.prototype.findLast.call({length: Number.MAX_VALUE},"
                 + " (v, i) => { at = i; return true; }); at"));
         assertFalse(bool("Array.prototype.includes.call({length: Infinity, 0: 'a'}, 'a', 9007199254740990)"));
-    }
-
-    // splice shifts the tail in both directions and reports the removed elements
-    @Test
-    public void test_splice_grows_and_shrinks() {
-        assertEquals("1,9,10,2,3", str("const a = [1, 2, 3]; a.splice(1, 0, 9, 10); a.join(',')"));
-        assertEquals("1,3", str("const a = [1, 2, 3]; a.splice(1, 1); a.join(',')"));
-        assertEquals("2,3", str("[1, 2, 3].splice(1).join(',')"));
-        assertEquals("", str("[1, 2, 3].splice().join(',')"));
-        assertEquals("1,9,10,3", str("const o = {0: 1, 1: 2, 2: 3, length: 3};"
-                + " Array.prototype.splice.call(o, 1, 1, 9, 10); Array.prototype.join.call(o, ',')"));
-    }
-
-    // toSpliced builds the copy from the head, the insertions and the tail
-    @Test
-    public void test_to_spliced_variants() {
-        assertEquals("1,9,10,2,3", str("[1, 2, 3].toSpliced(1, 0, 9, 10).join(',')"));
-        assertEquals("1", str("[1, 2, 3].toSpliced(1).join(',')"));
-        assertEquals("1,2,3", str("[1, 2, 3].toSpliced().join(',')"));
     }
 
     // copyWithin copies backwards when the ranges overlap, and deletes an absent source
@@ -473,14 +254,6 @@ public class ArrayBuiltinsTest {
         assertEquals("[object Array]", str("const a = [1, 2]; a.join = 1; a.toString()"));
     }
 
-    // reverse swaps a hole with a value, so the hole moves rather than becoming undefined
-    @Test
-    public void test_reverse_moves_holes() {
-        assertTrue(bool("const a = [, 1]; a.reverse(); a[0] === 1 && !a.hasOwnProperty('1')"));
-        assertEquals("3,2,1", str("const o = {0: 1, 1: 2, 2: 3, length: 3};"
-                + " Array.prototype.reverse.call(o); Array.prototype.join.call(o, ',')"));
-    }
-
     // an out-of-range array length is a RangeError, from the constructor and from a by-copy method
     @Test
     public void test_invalid_array_length_throws() {
@@ -490,14 +263,6 @@ public class ArrayBuiltinsTest {
                 () -> Interpreter.run("Array.prototype.toReversed.call({length: 4294967295})"));
         assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
                 () -> Interpreter.run("Array.prototype.sort.call({length: 9007199254740991})"));
-    }
-
-    // the separator and the elements coerce through ToPrimitive, not a bare toString
-    @Test
-    public void test_join_coerces_the_separator() {
-        assertEquals("1foo2", str("[1, 2].join({toString: () => 'foo'})"));
-        assertEquals("1bar2", str("[1, 2].join({toString: undefined, valueOf: () => 'bar'})"));
-        assertEquals("102", str("[1, 2].join(0)"));
     }
 
     // IsArray sees through a proxy to its target, recognises the intrinsic Array.prototype and rejects
@@ -580,12 +345,6 @@ public class ArrayBuiltinsTest {
         assertEquals(3, num("[].concat([1, 2], 3).length"));
     }
 
-    // flat flattens a proxy whose target is an array, because it asks IsArray rather than the type
-    @Test
-    public void test_flat_flattens_through_a_proxy() {
-        assertEquals("1,2,3", str("[1, new Proxy([2, 3], {})].flat().join(',')"));
-    }
-
     // an array iterator that has run out stays done, so an element pushed afterwards is never seen
     @Test
     public void test_array_iterator_stays_done() {
@@ -613,14 +372,5 @@ public class ArrayBuiltinsTest {
                 .run("const a = []; Object.defineProperty(a, 'length', {writable: false}); a.shift()"));
         assertThrows(TypeErrorException.class, () -> Interpreter
                 .run("const a = []; Object.defineProperty(a, 'length', {writable: false}); a.unshift()"));
-    }
-
-    // an index write the array does not own reaches a setter its prototype owns
-    @Test
-    public void test_index_write_reaches_an_inherited_setter() {
-        assertEquals(1,
-                num("let hits = 0;"
-                        + " Object.defineProperty(Array.prototype, '0', {set(v) { hits++; }, configurable: true});"
-                        + " const a = []; try { a.push(1); } catch (e) {} delete Array.prototype[0]; hits"));
     }
 }

@@ -20,14 +20,10 @@
         <property name="eachLine" value="true"/>
     </module>
 
-    <!-- A file nobody can read is a file nobody can review. Everything over the limit is
-         listed in config/checkstyle-suppressions.xml with a reason; that list only shrinks. -->
+    <!-- A file nobody can read is a file nobody can review. This applies to main and test sources
+         alike, with no exemptions: split the file rather than reintroducing a suppression list. -->
     <module name="FileLength">
         <property name="max" value="500"/>
-    </module>
-
-    <module name="SuppressionFilter">
-        <property name="file" value="${config_loc}/checkstyle-suppressions.xml"/>
     </module>
 
     <module name="TreeWalker">

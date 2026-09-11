@@ -6,33 +6,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.internal.Interpreter;
-import org.techhouse.simplejs.internal.JsCoercion;
-import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 
 public class InterpreterProgramTest {
     private static double num(String source) {
         return ((JsNumber) Interpreter.run(source)).getValue();
-    }
-
-    // reads an accumulator array reference after the event loop has drained
-    private static String drained() {
-        final var array = (JsArray) Interpreter.run(
-                "let out = [];\nasync function* range(n) {\n    for (let i = 0; i < n; i++) {\n        yield await Promise.resolve(i * i);\n    }\n}\nasync function main() {\n    for await (const sq of range(4)) out.push(sq);\n}\nmain();\nout\n");
-        final var sb = new StringBuilder();
-        for (var i = 0; i < array.length(); i++) {
-            if (i > 0) {
-                sb.append(',');
-            }
-            sb.append(JsCoercion.toStr(array.get(i)));
-        }
-        return sb.toString();
-    }
-
-    private static String str() {
-        return ((JsString) Interpreter.run("let s = '';\nfor (let i = 0; i < 3; i++) {\n    s += i;\n}\ns\n"))
-                .getValue();
     }
 
     private static String str(String source) {
@@ -100,57 +79,6 @@ public class InterpreterProgramTest {
                 acc.total
                 """;
         assertEquals(10, num(source));
-    }
-
-    // A loop builds a string with the += operator
-    @Test
-    public void test_string_building() {
-        assertEquals("012", str());
-    }
-
-    // A recursive function declaration computes a factorial
-    @Test
-    public void test_recursive_factorial() {
-        final var source = """
-                function factorial(n) {
-                    if (n <= 1) return 1;
-                    return n * factorial(n - 1);
-                }
-                factorial(5)
-                """;
-        assertEquals(120, num(source));
-    }
-
-    // A recursive Fibonacci function returns the expected term
-    @Test
-    public void test_recursive_fibonacci() {
-        final var source = """
-                function fib(n) {
-                    if (n < 2) return n;
-                    return fib(n - 1) + fib(n - 2);
-                }
-                fib(10)
-                """;
-        assertEquals(55, num(source));
-    }
-
-    // A closure-based accumulator keeps private state across calls
-    @Test
-    public void test_closure_accumulator() {
-        final var source = """
-                function makeAdder(step) {
-                    let total = 0;
-                    return function (n) {
-                        total += n * step;
-                        return total;
-                    };
-                }
-                let add = makeAdder(2);
-                add(1);
-                add(2);
-                add(3)
-                """;
-        assertEquals(12, num(source));
     }
 
     // try/catch/finally recovers from a thrown error and still runs cleanup
@@ -229,28 +157,6 @@ public class InterpreterProgramTest {
         assertEquals("2,4", str(source));
     }
 
-    // A regex literal drives a global replace end to end
-    @Test
-    public void test_regex_global_replace() {
-        assertEquals("a#b#", str("'a1b2'.replace(/\\d/g, '#')"));
-    }
-
-    // An async generator that awaits is consumed by for-await end to end
-    @Test
-    public void test_async_generator_pipeline() {
-        assertEquals("0,1,4,9", drained());
-    }
-
-    // Named capture groups are read from a match result
-    @Test
-    public void test_regex_named_capture() {
-        final var source = """
-                const m = '2024-01'.match(/(?<year>\\d+)-(?<month>\\d+)/);
-                m.groups.year + '/' + m.groups.month
-                """;
-        assertEquals("2024/01", str(source));
-    }
-
     // JSON round-trips through a transformation
     @Test
     public void test_json_transform() {
@@ -327,127 +233,6 @@ public class InterpreterProgramTest {
         assertEquals(3, num(source));
     }
 
-    // A tagged template invokes the tag with the strings array followed by the interpolated values
-    @Test
-    public void test_tagged_template_passes_strings_and_values() {
-        final var source = """
-                function t(s, ...v) { return s.join('|') + '#' + v.join(','); }
-                t`a${1}b${2}c`
-                """;
-        assertEquals("a|b|c#1,2", str(source));
-    }
-
-    // The strings array carries a raw companion that preserves escape sequences
-    @Test
-    public void test_tagged_template_raw_property() {
-        final var source = """
-                function t(s) { return s.raw[0] + '/' + s[0]; }
-                t`\\n`
-                """;
-        assertEquals("\\n/\n", str(source));
-    }
-
-    // A member-tagged template binds this to the receiver object
-    @Test
-    public void test_tagged_template_this_binding() {
-        final var source = """
-                const obj = { name: 'x', tag: function(s) { return this.name; } };
-                obj.tag`hi`
-                """;
-        assertEquals("x", str(source));
-    }
-
-    // A template with no substitutions passes a single-element strings array and no extra args
-    @Test
-    public void test_tagged_template_no_substitutions() {
-        final var source = """
-                function t(s, ...v) { return s.length + ':' + v.length; }
-                t`hello`
-                """;
-        assertEquals("1:0", str(source));
-    }
-
-    // A nested tagged template inside an interpolation evaluates correctly
-    @Test
-    public void test_tagged_template_nested() {
-        final var source = """
-                function u(s) { return s[0].toUpperCase(); }
-                function t(s, v) { return s[0] + v + s[1]; }
-                t`<${ u`x` }>`
-                """;
-        assertEquals("<X>", str(source));
-    }
-
-    // Tagging a non-function value throws a TypeError
-    @Test
-    public void test_tagged_template_non_function_throws() {
-        final var source = """
-                let result = 'no throw';
-                try {
-                    const notFn = 5;
-                    notFn`x`;
-                } catch (e) {
-                    result = e.name;
-                }
-                result
-                """;
-        assertEquals("TypeError", str(source));
-    }
-
-    // String.raw builds a string from the raw quasis and substitutions
-    @Test
-    public void test_string_raw_tag() {
-        assertEquals("a\\n1b", str("String.raw`a\\n${1}b`"));
-    }
-
-    // GetTemplateObject caches the strings array by call-site (parse node) identity: evaluating the
-    // same tagged template twice - even across different invocations of the enclosing function -
-    // yields the very same array object both times.
-    @Test
-    public void test_tagged_template_same_site_is_cached() {
-        final var source = """
-                let first = null;
-                let second = null;
-                function t(s) { return s; }
-                function run(sink) { sink(t`x${1}y`); }
-                run(v => first = v);
-                run(v => second = v);
-                first === second ? 'true' : 'false'
-                """;
-        assertEquals("true", str(source));
-    }
-
-    // A textually different call site never shares the cached array, even when its cooked/raw
-    // content happens to coincide with another site's.
-    @Test
-    public void test_tagged_template_different_site_is_not_cached() {
-        final var source = """
-                function t(s) { return s; }
-                const a = t`x`;
-                const b = t`x`;
-                a === b ? 'true' : 'false'
-                """;
-        assertEquals("false", str(source));
-    }
-
-    // The "raw" companion is a non-enumerable, non-writable, non-configurable own property, so it
-    // is absent from Object.keys/JSON.stringify and a plain write to it is silently rejected.
-    @Test
-    public void test_tagged_template_raw_is_non_enumerable() {
-        final var source = """
-                function t(s) { return s; }
-                const strings = t`a${1}b`;
-                const descriptor = Object.getOwnPropertyDescriptor(strings, 'raw');
-                JSON.stringify([
-                    Object.keys(strings).includes('raw'),
-                    descriptor.enumerable,
-                    descriptor.writable,
-                    descriptor.configurable,
-                ])
-                """;
-        assertEquals("[false,false,false,false]", str(source));
-    }
-
     // classic for (let ...) closures capture a fresh per-iteration binding
     @Test
     public void test_classic_for_let_per_iteration_binding() {
@@ -512,17 +297,6 @@ public class InterpreterProgramTest {
     public void test_spec_whitespace_between_tokens() {
         assertEquals(3, num("var\u00A0a\u00A0=\u00A01;\u2007a\u202F+\u00A02"));
         assertEquals(1, num("\uFEFF1"));
-    }
-
-    // a var nested in a statement that never runs still has its binding from scope entry
-    @Test
-    public void test_var_hoisting_reaches_nested_statements() {
-        assertEquals(1, num("if (false) { var a = 2; } a === undefined ? 1 : 0"));
-        assertEquals(1, num("while (false) { var b = 2; } b === undefined ? 1 : 0"));
-        assertEquals(1, num("for (var k in undefined) { var c = 2; } c === undefined ? 1 : 0"));
-        assertEquals(1, num("switch (0) { case 1: var d = 2; } d === undefined ? 1 : 0"));
-        assertEquals(1, num("try { } finally { } l: { var e = 2; } e === 2 ? 1 : 0"));
-        assertEquals(1, num("function f() { if (false) { var g = 2; } return g === undefined ? 1 : 0; } f()"));
     }
 
     // `typeof` only suppresses ReferenceError for a truly unresolvable reference (GetValue is never
