@@ -1148,7 +1148,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `421-2` | `ERROR` | A transaction may only touch collections owned by a single node |
 | `503-1` | `ERROR` | Max number of connections reached |
 | `503-2` | `ERROR` | Cluster does not have a write quorum |
-| `503-3` | `ERROR` | Timed out waiting for the replication quorum |
+| `503-3` | `ERROR` | Timed out waiting for the replication quorum *(the local commit **stands** and anti-entropy reconciles the lagging replicas — the write happened, so this is not a "it did not apply" error; blind retries are safe for `SAVE`/`DELETE`, which are idempotent, but not for a read-modify-write script)* |
 | `503-4` | `ERROR` | The collection's owner node is unreachable |
 | `503-5` | `ERROR` | Admin coordinator is synchronizing, retry shortly |
 | `503-6` | `ERROR` | Too many scripts running, retry shortly *(the message names the scope that refused it: `node`, `user` or `database`)* |
