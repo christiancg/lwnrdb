@@ -739,6 +739,7 @@ def geo_suite(c):
 REG_UNICODE = "idxagg_reg_unicode"
 REG_SINGLE = "idxagg_reg_single"
 REG_CONJ = "idxagg_reg_conj"
+REG_NUMERIC = "idxagg_reg_numeric"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -817,11 +818,52 @@ def probe_conjunction_after_a_filter_step(c):
           detail=f"expected ['a', 'c'], got {got}")
 
 
+
+def probe_low_cardinality_numeric_index(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NUMERIC})
+    save_doc(c, REG_NUMERIC, {"_id": "seed", "bucket": 99, "big": 1, "ratio": 0.5})
+    for field in ("bucket", "big", "ratio"):
+        c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_NUMERIC, "fieldName": field})
+    wait_for_indexes(c, [(REG_NUMERIC, f) for f in ("bucket", "big", "ratio")])
+
+    for i in range(6):
+        save_doc(c, REG_NUMERIC, {"_id": f"n{i}", "bucket": i % 2, "big": 10000000000, "ratio": 0.25})
+    wait_for_background()
+
+    for value, expected in ((0, ["n0", "n2", "n4"]), (1, ["n1", "n3", "n5"])):
+        got = reg_filter(c, REG_NUMERIC, "bucket", value)
+        check(f"every document written after CREATE_INDEX with bucket={value} stays in the numeric index",
+              got == expected, detail=f"expected {expected}, got {got}")
+
+    all_new = sorted(f"n{i}" for i in range(6))
+    got = reg_filter(c, REG_NUMERIC, "big", 10000000000)
+    check("an integral value above Integer.MAX_VALUE indexes every document sharing it",
+          got == all_new, detail=f"expected {all_new}, got {got}")
+
+    got = reg_filter(c, REG_NUMERIC, "ratio", 0.25)
+    check("a fractional value indexes every document sharing it",
+          got == all_new, detail=f"expected {all_new}, got {got}")
+
+    with_seed = sorted(all_new + ["seed"])
+    got = reg_filter(c, REG_NUMERIC, "bucket", 0, "GREATER_THAN_EQUALS")
+    check("a range query over a low-cardinality numeric index sees every document",
+          got == with_seed, detail=f"expected {with_seed}, got {got}")
+
+    save_doc(c, REG_NUMERIC, {"_id": "n1", "bucket": 5, "big": 10000000000, "ratio": 0.25})
+    wait_for_background()
+    got = reg_filter(c, REG_NUMERIC, "bucket", 1)
+    check("re-pointing one document leaves the other ids under the old numeric value",
+          got == ["n3", "n5"], detail=f"expected ['n3', 'n5'], got {got}")
+    check("the re-pointed document answers under its new numeric value",
+          reg_filter(c, REG_NUMERIC, "bucket", 5) == ["n1"])
+
+
 def regression_suite(c):
     section("Correctness regressions: non-ASCII index values, single-valued index ranges, "
-            "conjunctions over a filtered stream")
+            "low-cardinality numeric indexes, conjunctions over a filtered stream")
     probe_non_ascii_indexed_values(c)
     probe_single_valued_index_ranges(c)
+    probe_low_cardinality_numeric_index(c)
     probe_conjunction_after_a_filter_step(c)
 
 

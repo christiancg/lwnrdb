@@ -9,11 +9,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
-import org.techhouse.ejson.elements.JsonCustom;
 
 final class FieldIndexStore {
     private static final byte[] NEWLINE_BYTES = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
@@ -89,10 +87,13 @@ final class FieldIndexStore {
         lock.lock();
         try (var writer = new BufferedWriter(new FileWriter(indexFile, StandardCharsets.UTF_8, true),
                 Globals.BUFFER_SIZE)) {
-            var strData = entries.stream().map(FieldIndexEntry::toFileEntry)
-                    .collect(Collectors.joining(Globals.NEWLINE));
-            strData += Globals.NEWLINE;
-            writer.append(strData);
+            for (final var entry : entries) {
+                writer.append(entry.toFileEntry());
+                writer.append(Globals.NEWLINE);
+            }
+            if (entries.isEmpty()) {
+                writer.append(Globals.NEWLINE);
+            }
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
@@ -208,20 +209,7 @@ final class FieldIndexStore {
     }
 
     private <K> String getStringValue(FieldIndexEntry<K> entry) {
-        final var value = entry.getValue();
-        String strValue;
-        if (value instanceof JsonCustom<?> jsonCustom) {
-            strValue = jsonCustom.getValue();
-        } else if (value instanceof Number number) {
-            if (number.doubleValue() % 1 == 0) {
-                strValue = String.valueOf(number.longValue());
-            } else {
-                strValue = String.valueOf(number.doubleValue());
-            }
-        } else {
-            strValue = value.toString();
-        }
-        return strValue;
+        return FieldIndexEntry.indexKeyOf(entry.getValue());
     }
 
     private void shiftOtherEntries(RandomAccessFile writer, byte[] wholeFile, int indexOfExisting) throws IOException {

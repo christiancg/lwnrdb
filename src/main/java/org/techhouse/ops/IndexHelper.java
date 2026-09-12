@@ -364,7 +364,8 @@ public class IndexHelper {
             Class<T> tClass) throws IOException {
         final var indexEntries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, tClass);
         if (indexEntries != null) {
-            return indexEntries.stream().filter(indexEntry -> indexEntry.getValue().equals(value)).findFirst()
+            return indexEntries.stream()
+                    .filter(indexEntry -> FieldIndexEntry.sameIndexedValue(indexEntry.getValue(), value)).findFirst()
                     .orElse(null);
         }
         return null;

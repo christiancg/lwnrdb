@@ -1,21 +1,14 @@
 package org.techhouse.fs;
 
 import java.io.IOException;
-import java.util.AbstractMap;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
-import java.util.concurrent.ConcurrentMap;
 import java.util.function.Function;
-import java.util.stream.Collectors;
-import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.log.Logger;
-import org.techhouse.utils.ReflectionUtils;
 
 // Index files are written non-atomically, so a crash mid-write can leave a torn line: every loader
 // here drops it and rewrites the survivors, rather than failing every later read.
@@ -26,33 +19,6 @@ final class FieldIndexLoader {
 
     FieldIndexLoader(FilePaths paths) {
         this.paths = paths;
-    }
-
-    ConcurrentMap<String, List<FieldIndexEntry<?>>> readAllWholeFieldIndexFiles(String dbName, String collName,
-            String fieldName) {
-        final var collectionFolder = paths.collectionFolder(dbName, collName);
-        if (!collectionFolder.exists()) {
-            return null;
-        }
-        final var indexFiles = collectionFolder.listFiles((_, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION)
-                && !name.contains(Globals.PK_FIELD) && name.contains(fieldName));
-        if (indexFiles == null) {
-            return null;
-        }
-        return Arrays.stream(indexFiles).map(file -> {
-            try {
-                final var type = file.getName().split("-")[2].split("\\.")[0];
-                return new AbstractMap.SimpleEntry<>(type, FileLocks.readAllLinesLocked(file));
-            } catch (IOException e) {
-                return null;
-            }
-        }).filter(Objects::nonNull).map(entry -> {
-            final var className = entry.getKey();
-            final var clazz = ReflectionUtils.getClassFromSimpleName(className);
-            return new AbstractMap.SimpleEntry<>(className,
-                    entry.getValue().stream().map(s -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, clazz))
-                            .collect(Collectors.toList()));
-        }).collect(Collectors.toConcurrentMap(AbstractMap.SimpleEntry::getKey, e -> new ArrayList<>(e.getValue())));
     }
 
     <T> List<FieldIndexEntry<T>> readWholeFieldIndexFiles(String dbName, String collName, String fieldName,
@@ -72,17 +38,15 @@ final class FieldIndexLoader {
     private <T> List<FieldIndexEntry<T>> load(String dbName, String collName, String indexTypeLabel, String fieldName,
             String label, Function<String, FieldIndexEntry<T>> parser, Comparator<FieldIndexEntry<T>> order)
             throws IOException {
-        if (!paths.collectionFolder(dbName, collName).exists()) {
-            return null;
-        }
         final var indexFile = paths.indexFile(dbName, collName, fieldName, indexTypeLabel);
-        if (!indexFile.exists()) {
+        final var lines = FileLocks.readAllLinesIfExists(indexFile);
+        if (lines == null) {
             return null;
         }
         final var entries = new ArrayList<FieldIndexEntry<T>>();
         final var keepLines = new ArrayList<String>();
         var dropped = false;
-        for (var line : FileLocks.readAllLinesLocked(indexFile)) {
+        for (var line : lines) {
             if (line.isBlank()) {
                 continue;
             }
