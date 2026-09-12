@@ -180,6 +180,6 @@ public final class SearchUtils {
     }
 
     private enum GreaterSmallerEqualsType {
-        GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS,
+        GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS
     }
 }

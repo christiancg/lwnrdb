@@ -19,12 +19,9 @@
         <exclude name="AvoidFieldNameMatchingMethodName"/>
         <exclude name="AvoidFieldNameMatchingTypeName"/>
         <exclude name="NullAssignment"/>
-        <exclude name="AvoidCatchingThrowable"/>
         <exclude name="AvoidAccessibilityAlteration"/>
         <exclude name="MissingSerialVersionUID"/>
-        <exclude name="UseProperClassLoader"/>
         <exclude name="TestClassWithoutTestCases"/>
-        <exclude name="DoNotTerminateVM"/>
         <exclude name="CompareObjectsWithEquals"/>
         <exclude name="AssignmentInOperand"/>
         <exclude name="ConstructorCallsOverridableMethod"/>
@@ -41,9 +38,6 @@
              sentinel for index and config lookups (callers branch on null,
              distinct from an existing-but-empty collection). -->
         <exclude name="ReturnEmptyCollectionRatherThanNull"/>
-        <!-- Empty catch blocks are already covered by Checkstyle's EmptyBlock
-             (which accepts an explanatory comment); avoid double reporting. -->
-        <exclude name="EmptyCatchBlock"/>
         <!-- Android-only rule (looks for a hardcoded "/sdcard" path), so it can
              never fire here. It is the one rule that atomizes a string literal's
              cooked value through Saxon, which throws on the unpaired surrogates
@@ -71,13 +65,72 @@
         <exclude name="AvoidUsingVolatile"/>
     </rule>
 
+    <!-- Crypto misuse. Cheap to keep honest now that there is a TLS layer and a
+         password hasher; both rules are clean today. -->
+    <rule ref="category/java/security.xml"/>
+
     <!-- A few high-value best practices -->
     <rule ref="category/java/bestpractices.xml/UnusedLocalVariable"/>
     <rule ref="category/java/bestpractices.xml/UnusedPrivateField"/>
     <rule ref="category/java/bestpractices.xml/UnusedPrivateMethod"/>
     <rule ref="category/java/bestpractices.xml/UnusedAssignment"/>
+    <rule ref="category/java/bestpractices.xml/UnusedLabel"/>
     <rule ref="category/java/bestpractices.xml/PrimitiveWrapperInstantiation"/>
     <rule ref="category/java/bestpractices.xml/CheckResultSet"/>
     <rule ref="category/java/bestpractices.xml/DoubleBraceInitialization"/>
     <rule ref="category/java/bestpractices.xml/MissingOverride"/>
+    <rule ref="category/java/bestpractices.xml/OneDeclarationPerLine"/>
+    <rule ref="category/java/bestpractices.xml/ConstantsInInterface"/>
+    <rule ref="category/java/bestpractices.xml/EnumComparison"/>
+    <rule ref="category/java/bestpractices.xml/ForLoopCanBeForeach"/>
+    <rule ref="category/java/bestpractices.xml/WhileLoopWithLiteralBoolean"/>
+    <rule ref="category/java/bestpractices.xml/AvoidReassigningCatchVariables"/>
+    <rule ref="category/java/bestpractices.xml/AvoidPrintStackTrace"/>
+    <rule ref="category/java/bestpractices.xml/SimplifiableTestAssertion"/>
+    <!-- A @SuppressWarnings or NOPMD that no longer suppresses anything is a lie
+         about the code; this is what keeps the handful the tree carries honest. -->
+    <rule ref="category/java/bestpractices.xml/UnnecessaryWarningSuppression"/>
+
+    <!-- Charset and shared-digest correctness. Every byte this engine writes is a
+         document, an index line or a wire frame, so a decode that resolves its
+         charset from the platform default is a portability bug, not a style nit;
+         a shared MessageDigest field would be a concurrency bug in the object and
+         array hash indexes. -->
+    <rule ref="category/java/bestpractices.xml/UseStandardCharsets"/>
+    <rule ref="category/java/bestpractices.xml/AvoidMessageDigestField"/>
+    <rule ref="category/java/bestpractices.xml/AvoidStringBufferField"/>
+    <rule ref="category/java/bestpractices.xml/UseTryWithResources"/>
+    <rule ref="category/java/bestpractices.xml/UseCollectionIsEmpty"/>
+
+    <!-- Design rules that are clean today and cheap to keep clean. Mutable static
+         state in particular would undercut the IoC singletons everything fetches. -->
+    <rule ref="category/java/design.xml/MutableStaticState"/>
+    <rule ref="category/java/design.xml/ImmutableField"/>
+    <rule ref="category/java/design.xml/SingularField"/>
+    <rule ref="category/java/design.xml/UselessOverridingMethod"/>
+    <rule ref="category/java/design.xml/SimplifiedTernary"/>
+    <rule ref="category/java/design.xml/SimplifyBooleanExpressions"/>
+    <rule ref="category/java/design.xml/SimplifyConditional"/>
+    <rule ref="category/java/design.xml/LogicInversion"/>
+    <rule ref="category/java/design.xml/AvoidRethrowingException"/>
+    <rule ref="category/java/design.xml/AvoidThrowingNewInstanceOfSameException"/>
+    <rule ref="category/java/design.xml/ClassWithOnlyPrivateConstructorsShouldBeFinal"/>
+    <rule ref="category/java/design.xml/DoNotExtendJavaLangError"/>
+
+    <!-- Dead-weight removal. The code style category as a whole stays off (Spotless
+         and Checkstyle own formatting and naming); these are the members of it that
+         delete code rather than rearrange it. UnnecessaryBlock and UnnecessaryModifier
+         are deliberately absent - Checkstyle's AvoidNestedBlocks and RedundantModifier
+         already report them. -->
+    <rule ref="category/java/codestyle.xml/EmptyControlStatement"/>
+    <rule ref="category/java/codestyle.xml/UnnecessaryConstructor"/>
+    <rule ref="category/java/codestyle.xml/UnnecessaryLocalBeforeReturn"/>
+    <rule ref="category/java/codestyle.xml/UnnecessaryReturn"/>
+    <rule ref="category/java/codestyle.xml/UnnecessaryAnnotationValueElement"/>
+    <rule ref="category/java/codestyle.xml/VariableCanBeInlined"/>
+    <rule ref="category/java/codestyle.xml/IdenticalCatchBranches"/>
+    <rule ref="category/java/codestyle.xml/LambdaCanBeMethodReference"/>
+    <rule ref="category/java/codestyle.xml/UselessQualifiedThis"/>
+    <rule ref="category/java/codestyle.xml/ExtendsObject"/>
+    <rule ref="category/java/codestyle.xml/ForLoopShouldBeWhileLoop"/>
 </ruleset>

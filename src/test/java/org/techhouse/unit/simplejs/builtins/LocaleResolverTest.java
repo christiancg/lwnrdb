@@ -31,7 +31,7 @@ public class LocaleResolverTest {
     public void test_base_sensitivity_ignores_accents() {
         assertEquals(0, run("return 'a'.localeCompare('á', 'en', { sensitivity: 'base' });").getValue().asJsonNumber()
                 .asInteger());
-        assertTrue(run("return 'a'.localeCompare('á', 'en');").getValue().asJsonNumber().asInteger() != 0);
+        assertNotEquals(0, run("return 'a'.localeCompare('á', 'en');").getValue().asJsonNumber().asInteger());
     }
 
     @Test

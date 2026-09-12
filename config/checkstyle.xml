@@ -40,19 +40,25 @@
             <property name="processJavadoc" value="true"/>
         </module>
         <module name="IllegalImport"/>
+        <module name="PackageDeclaration"/>
 
         <!-- Tightened to 100 once the lexer/parser splits land. -->
         <module name="MethodLength">
             <property name="max" value="200"/>
             <property name="countEmpty" value="false"/>
         </module>
+        <module name="LambdaBodyLength">
+            <property name="max" value="60"/>
+        </module>
 
         <!-- Coding problems -->
         <module name="EqualsHashCode"/>
         <module name="CovariantEquals"/>
+        <module name="EqualsAvoidNull"/>
         <module name="StringLiteralEquality"/>
         <module name="SimplifyBooleanExpression"/>
         <module name="SimplifyBooleanReturn"/>
+        <module name="UnnecessaryNullCheckWithInstanceOf"/>
         <module name="EmptyStatement"/>
         <module name="FallThrough"/>
         <module name="MissingSwitchDefault"/>
@@ -60,22 +66,48 @@
         <module name="OneStatementPerLine"/>
         <module name="MultipleVariableDeclarations"/>
         <module name="NoFinalizer"/>
+        <module name="NoClone"/>
+        <module name="SuperClone"/>
+        <module name="SuperFinalize"/>
+        <module name="IllegalInstantiation"/>
+        <module name="IllegalThrows"/>
         <module name="UnnecessarySemicolonInEnumeration"/>
         <module name="UnnecessarySemicolonInTryWithResources"/>
         <module name="UnnecessarySemicolonAfterTypeMemberDeclaration"/>
         <module name="UnnecessarySemicolonAfterOuterTypeDeclaration"/>
+        <module name="NoEnumTrailingComma"/>
+        <module name="NoArrayTrailingComma"/>
+
+        <!-- Nesting a block, a try or a loop that deep is a split waiting to happen.
+             Both are set at the depth the tree already respects, so they only tighten. -->
+        <module name="AvoidNestedBlocks"/>
+        <module name="NestedTryDepth">
+            <property name="max" value="2"/>
+        </module>
+        <module name="NestedForDepth">
+            <property name="max" value="2"/>
+        </module>
 
         <!-- Class design -->
         <module name="FinalClass"/>
         <module name="InterfaceIsType"/>
         <module name="OneTopLevelClass"/>
+        <module name="OuterTypeFilename"/>
+        <module name="OuterTypeNumber"/>
         <module name="MutableException"/>
 
         <!-- Style / conventions -->
         <module name="ModifierOrder"/>
         <module name="RedundantModifier"/>
+        <module name="MissingDeprecated"/>
         <module name="UpperEll"/>
         <module name="ArrayTypeStyle"/>
+        <!-- Escapes that have a shorter, unambiguous form (\n, \t, \", \\) must use it,
+             so an escape that survives in a literal is one that had to be written that way. -->
+        <module name="IllegalTokenText">
+            <property name="tokens" value="STRING_LITERAL, CHAR_LITERAL"/>
+            <property name="format" value="\\u00(09|0(a|A)|0(c|C)|0(d|D)|22|27|5(C|c))|\\(0(10|11|12|14|15|42|47)|134)"/>
+        </module>
         <module name="EmptyBlock">
             <property name="option" value="text"/>
             <property name="tokens" value="LITERAL_TRY, LITERAL_FINALLY, LITERAL_IF, LITERAL_ELSE, LITERAL_FOR, LITERAL_WHILE, LITERAL_DO, INSTANCE_INIT, STATIC_INIT"/>
@@ -111,5 +143,13 @@
             <property name="format" value="^_?[a-z][a-zA-Z0-9]*$"/>
         </module>
         <module name="StaticVariableName"/>
+        <!-- The record/pattern/type-parameter half of the same conventions, which the
+             checks above do not reach. -->
+        <module name="PatternVariableName"/>
+        <module name="RecordComponentName"/>
+        <module name="RecordTypeParameterName"/>
+        <module name="ClassTypeParameterName"/>
+        <module name="MethodTypeParameterName"/>
+        <module name="InterfaceTypeParameterName"/>
     </module>
 </module>

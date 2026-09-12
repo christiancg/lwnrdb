@@ -17,8 +17,9 @@ import org.techhouse.ejson.internal.ReflectionUtils;
 public class ReflectionUtilsTest {
     @Test
     public void test_get_set_field_values() throws IllegalAccessException {
+        @SuppressWarnings("unused")
         class TestClass {
-            private final String testField = "initial"; // NOPMD - reflection/serialization test fixture
+            private final String testField = "initial";
         }
 
         TestClass instance = new TestClass();
@@ -34,14 +35,9 @@ public class ReflectionUtilsTest {
 
     @Test
     public void test_access_private_members() {
+        @SuppressWarnings("unused")
         final class PrivateClass {
-            private String privateField = "initial"; // NOPMD - reflection/serialization test fixture
-            public String getPrivateField() {
-                return privateField;
-            }
-            public void setPrivateField(String privateField) {
-                this.privateField = privateField;
-            }
+            private final String privateField = "initial";
         }
         Constructor<?>[] constructors = ReflectionUtils.getConstructors(PrivateClass.class);
         Field[] fields = ReflectionUtils.getFields(PrivateClass.class);

@@ -17,10 +17,14 @@
         <Bug pattern="EI_EXPOSE_REP,EI_EXPOSE_REP2,MS_EXPOSE_REP"/>
     </Match>
 
-    <!-- The ejson layer casts JsonBaseElement subtypes after checking the
-         element's own type tag (isJsonObject(), isJsonArray(), etc.), which
-         SpotBugs cannot correlate. The casts are guarded by design. -->
+    <!-- The ejson, ops and simplejs layers cast JsonBaseElement subtypes (and the
+         request/operator hierarchies parsed from them) after checking the element's
+         own type tag (isJsonObject(), isJsonArray(), etc.), which SpotBugs cannot
+         correlate. The casts are guarded by design. Scoped to those three packages
+         on purpose: an unchecked cast in fs/, cluster/, cache/ or conn/ has no such
+         tag behind it and must still fail the build. -->
     <Match>
+        <Class name="~org\.techhouse\.(ejson|ops|simplejs)\..*"/>
         <Bug pattern="BC_UNCONFIRMED_CAST"/>
     </Match>
 

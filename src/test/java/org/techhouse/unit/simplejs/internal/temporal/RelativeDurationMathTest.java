@@ -2,6 +2,7 @@ package org.techhouse.unit.simplejs.internal.temporal;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.math.BigInteger;
 import java.time.ZoneId;
@@ -78,8 +79,8 @@ public class RelativeDurationMathTest {
         // 2020-11-01T01:30 occurs twice in America/New_York (clocks fall back 02:00 -> 01:00)
         final var foldNanos = RelativeDurationMath.toEpochNanos(foldAnchor, new Iso8601Fields(2020, 11, 1),
                 new IsoTimeFields(1, 30, 0, 0, 0, 0));
-        assertEquals(true, gapNanos.signum() > 0);
-        assertEquals(true, foldNanos.signum() > 0);
+        assertTrue(gapNanos.signum() > 0);
+        assertTrue(foldNanos.signum() > 0);
     }
 
     @Test
@@ -124,14 +125,14 @@ public class RelativeDurationMathTest {
     public void test_total_in_unit_calendar_unit_fractional() {
         final var anchor = RelativeDurationMath.Anchor.plain(new Iso8601Fields(2020, 1, 1), MIDNIGHT);
         final var total = RelativeDurationMath.totalInUnit(anchor, new Iso8601Fields(2021, 7, 2), MIDNIGHT, Unit.YEAR);
-        assertEquals(true, total > 1.0 && total < 2.0);
+        assertTrue(total > 1.0 && total < 2.0);
     }
 
     @Test
     public void test_total_in_unit_negative_direction() {
         final var anchor = RelativeDurationMath.Anchor.plain(new Iso8601Fields(2021, 1, 1), MIDNIGHT);
         final var total = RelativeDurationMath.totalInUnit(anchor, new Iso8601Fields(2019, 7, 2), MIDNIGHT, Unit.YEAR);
-        assertEquals(true, total < 0.0);
+        assertTrue(total < 0.0);
     }
 
     @Test

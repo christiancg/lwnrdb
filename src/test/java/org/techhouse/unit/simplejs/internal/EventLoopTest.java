@@ -37,7 +37,7 @@ public class EventLoopTest {
     @Test
     public void test_drain_empty() {
         final var loop = new EventLoop();
-        assertDoesNotThrow(() -> loop.drain());
+        assertDoesNotThrow(() -> loop.drain()); // NOPMD - overloaded drain() makes the method ref ambiguous
     }
 
     @Test

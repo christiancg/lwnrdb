@@ -14,29 +14,14 @@ public class JsonWriterTest {
     }
     @Test
     public void test_convert_pojo_to_json_string() {
+        @SuppressWarnings("unused")
         class TestPojo {
-            private String name; // NOPMD - reflection/serialization test fixture
-            private int value; // NOPMD - reflection/serialization test fixture
-
-            public void setName(String name) {
-                this.name = name;
-            }
-            public String getName() {
-                return name;
-            }
-            public void setValue(int value) {
-                this.value = value;
-            }
-            public int getValue() {
-                return value;
-            }
+            private final String name = "test";
+            private final int value = 123;
         }
         JsonWriter writer = new JsonWriter();
-        TestPojo pojo = new TestPojo();
-        pojo.setName("test");
-        pojo.setValue(123);
 
-        String json = writer.toJson(pojo, TestPojo.class);
+        String json = writer.toJson(new TestPojo(), TestPojo.class);
 
         assertEquals("{\"name\":\"test\",\"value\":123}", json);
     }
