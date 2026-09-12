@@ -1406,6 +1406,58 @@
       "allDeclaredMethods": true,
       "allDeclaredConstructors": true,
       "unsafeAllocated": true
+    },
+    {
+      "type": "org.techhouse.bckg_ops.BackgroundTaskManager",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.bckg_ops.PendingIndexWrites",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cache.AdminCache",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cache.Cache",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cache.MemoryManagement",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cache.UsageTracker",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.cache.UserCache",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.concurrency.ResourceLocking",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.conn.ClientTracker",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.ejson.EJson",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.fs.FileSystem",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.listen.ListenManager",
+      "allDeclaredConstructors": true
+    },
+    {
+      "type": "org.techhouse.ops.OperationProcessor",
+      "allDeclaredConstructors": true
     }
   ]
 }
