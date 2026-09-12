@@ -92,8 +92,6 @@ public class FileSystemProcedureTest {
         assertEquals(java.util.List.of("first", "second"), fs.listProcedureNames(TestGlobals.DB));
     }
 
-    // The free-cascade claim: a DROP_DATABASE deletes the database folder's children generically, and
-    // .procedures is one of them - which is why it must be a folder and not a loose file.
     @Test
     public void test_delete_database_removes_procedures_folder() throws Exception {
         fs.createDatabaseFolder("procdropdb");
@@ -121,7 +119,6 @@ public class FileSystemProcedureTest {
         assertTrue(fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // A DROP_COLLECTION deletes every file in the collection folder, the trigger file among them
     @Test
     public void test_delete_collection_files_removes_triggers_file() throws Exception {
         fs.createCollectionFile(TestGlobals.DB, "trigdropcoll");

@@ -103,8 +103,6 @@ public class TransactionOperationHelperTest {
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
 
-        // Hold the collection write lock from another thread so the transaction's first buffered write
-        // cannot acquire it within the timeout.
         final var acquired = new CountDownLatch(1);
         final var release = new CountDownLatch(1);
         final var holder = new Thread(() -> {
@@ -126,7 +124,6 @@ public class TransactionOperationHelperTest {
         try {
             final var response = processor.processMessage(saveRequest("txn-timeout-1"), clientId);
             assertEquals("409-5", response.getErrorCode());
-            // The transaction was auto-rolled-back, so it is no longer active.
             assertNull(clientTracker.getActiveTransaction(clientId));
         } finally {
             release.countDown();
@@ -144,7 +141,6 @@ public class TransactionOperationHelperTest {
         TransactionOperationHelper.cleanupOnDisconnect(clientId);
 
         assertNull(clientTracker.getActiveTransaction(clientId));
-        // Lock released — reacquire and release directly.
         assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL));
         locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
     }
@@ -174,7 +170,6 @@ public class TransactionOperationHelperTest {
         TransactionOperationHelper.cleanupOrphansAtStartup();
 
         assertTrue(cache.getTransactionPkIndexes().isEmpty());
-        // A second run with nothing buffered exercises the empty early-return path.
         TransactionOperationHelper.cleanupOrphansAtStartup();
         assertTrue(cache.getTransactionPkIndexes().isEmpty());
     }
@@ -189,8 +184,6 @@ public class TransactionOperationHelperTest {
         assertEquals(1, result.size());
     }
 
-    // Removes any buffered op records left behind by a forced-failure test so they don't leak into
-    // other tests' view of admin/transactions.
     private void deleteAllBufferedOps() throws Exception {
         final var cache = IocContainer.get(Cache.class);
         AdminOperationHelper.deleteTransactionOps(new ArrayList<>(cache.getTransactionPkIndexes().keySet()));
@@ -206,7 +199,6 @@ public class TransactionOperationHelperTest {
             final var response = processor.processMessage(new CommitTransactionRequest(), clientId);
             assertEquals("500-24", response.getErrorCode());
         }
-        // The failed commit still released locks and cleared the transaction.
         assertNull(clientTracker.getActiveTransaction(clientId));
         assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL));
         locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
@@ -234,7 +226,6 @@ public class TransactionOperationHelperTest {
         processor.processMessage(saveRequest("txn-disc-err"), clientId);
         try (var mocked = mockStatic(AdminOperationHelper.class)) {
             mocked.when(() -> AdminOperationHelper.deleteTransactionOps(any())).thenThrow(new RuntimeException("boom"));
-            // Must not propagate the failure; still clears state and releases locks.
             TransactionOperationHelper.cleanupOnDisconnect(clientId);
         }
         assertNull(clientTracker.getActiveTransaction(clientId));
@@ -252,7 +243,6 @@ public class TransactionOperationHelperTest {
             final var response = processor.processMessage(saveRequest("txn-buf-err"), clientId);
             assertEquals("500-24", response.getErrorCode());
         }
-        // The buffer failed after acquiring the lock but without rolling back; rollback to release it.
         processor.processMessage(new RollbackTransactionRequest(), clientId);
         deleteAllBufferedOps();
     }
@@ -279,7 +269,6 @@ public class TransactionOperationHelperTest {
     @Test
     public void test_buffer_delete_error_returns_500_24() throws Exception {
         final var clientId = newClient();
-        // Commit a document so the delete inside the transaction is visible and reaches the buffer step.
         processor.processMessage(new StartTransactionRequest(), clientId);
         processor.processMessage(saveRequest("txn-deleteme"), clientId);
         processor.processMessage(new CommitTransactionRequest(), clientId);

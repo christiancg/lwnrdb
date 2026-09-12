@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
 public class WrongFormatCustomTypeExceptionTest {
-    // Create exception with className and cause exception parameters
     @Test
     public void test_create_exception_with_classname_and_cause() {
         String className = "TestClass";
@@ -19,7 +18,6 @@ public class WrongFormatCustomTypeExceptionTest {
         assertEquals(cause, exception.getCause());
     }
 
-    // Pass null as className parameter
     @Test
     public void test_create_exception_with_null_classname() {
         String className = null;

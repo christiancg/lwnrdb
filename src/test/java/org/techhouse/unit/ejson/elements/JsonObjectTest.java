@@ -13,7 +13,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
 public class JsonObjectTest {
-    // Add string property and verify it is stored correctly
     @Test
     public void test_add_string_property_stores_value() {
         JsonObject jsonObject = new JsonObject();
@@ -27,7 +26,6 @@ public class JsonObjectTest {
         assertEquals(propertyValue, element.asJsonString().getValue());
     }
 
-    // Add property with null key should throw NullPointerException
     @Test
     public void test_add_property_with_null_key_throws_exception() {
         JsonObject jsonObject = new JsonObject();
@@ -36,7 +34,6 @@ public class JsonObjectTest {
         assertThrows(NullPointerException.class, () -> jsonObject.addProperty(null, value));
     }
 
-    // Add JsonBaseElement with non-null value to JsonObject
     @Test
     public void test_add_non_null_value_to_json_object() {
         JsonObject jsonObject = new JsonObject();
@@ -49,7 +46,6 @@ public class JsonObjectTest {
         assertFalse(jsonObject.get(property).isJsonNull());
     }
 
-    // Add property with empty string key
     @Test
     public void test_add_with_empty_string_key() {
         JsonObject jsonObject = new JsonObject();
@@ -62,7 +58,6 @@ public class JsonObjectTest {
         assertEquals(1, jsonObject.size());
     }
 
-    // Add string property and value to empty JsonObject
     @Test
     public void test_add_string_property_to_empty_object() {
         JsonObject jsonObject = new JsonObject();
@@ -75,7 +70,6 @@ public class JsonObjectTest {
         assertEquals(value, result.getValue());
     }
 
-    // Add property with empty string value
     @Test
     public void test_add_property_with_empty_string_value() {
         JsonObject jsonObject = new JsonObject();
@@ -88,7 +82,6 @@ public class JsonObjectTest {
         assertEquals(value, result.getValue());
     }
 
-    // Add property with empty string value
     @Test
     public void test_add_property_with_empty_value() {
         JsonObject jsonObject = new JsonObject();
@@ -101,7 +94,6 @@ public class JsonObjectTest {
         assertEquals(value, result.getValue());
     }
 
-    // Adding a string property with non-empty value creates JsonString element
     @Test
     public void test_add_string_property_creates_json_string() {
         JsonObject jsonObject = new JsonObject();
@@ -115,7 +107,6 @@ public class JsonObjectTest {
         assertEquals(propertyValue, ((JsonString) element).getValue());
     }
 
-    // Add Integer property with valid key and value
     @Test
     public void test_add_valid_integer_property() {
         JsonObject jsonObject = new JsonObject();
@@ -126,7 +117,6 @@ public class JsonObjectTest {
         assertEquals(25, result.asInteger());
     }
 
-    // Add number property with valid key and value
     @Test
     public void test_add_valid_number_property() {
         JsonObject jsonObject = new JsonObject();
@@ -167,7 +157,6 @@ public class JsonObjectTest {
         assertEquals(23, result.asInteger());
     }
 
-    // Add Integer property with null key
     @Test
     public void test_add_property_with_null_key() {
         JsonObject jsonObject = new JsonObject();
@@ -175,7 +164,6 @@ public class JsonObjectTest {
         assertThrows(NullPointerException.class, () -> jsonObject.addProperty(null, 42));
     }
 
-    // Add property with valid Number value creates JsonNumber and stores in members map
     @Test
     public void test_add_property_with_valid_number() {
         JsonObject jsonObject = new JsonObject();
@@ -189,7 +177,6 @@ public class JsonObjectTest {
         assertEquals(testValue.intValue(), storedValue.asInteger());
     }
 
-    // Add property with null Number value creates JsonNumber with null value
     @Test
     public void test_add_property_with_null_number() {
         JsonObject jsonObject = new JsonObject();
@@ -203,7 +190,6 @@ public class JsonObjectTest {
         assertNull(storedValue.asInteger());
     }
 
-    // Add Long property with positive value to JsonObject
     @Test
     public void test_add_long_property_with_positive_value() {
         JsonObject jsonObject = new JsonObject();
@@ -216,7 +202,6 @@ public class JsonObjectTest {
         assertEquals(value, result.getValue());
     }
 
-    // Add property with null key
     @Test
     public void test_add_long_property_with_null_key() {
         JsonObject jsonObject = new JsonObject();
@@ -226,7 +211,6 @@ public class JsonObjectTest {
         assertThrows(NullPointerException.class, () -> jsonObject.addProperty(property, value));
     }
 
-    // Remove existing property from JsonObject
     @Test
     public void test_remove_existing_property() {
         JsonObject jsonObject = new JsonObject();
@@ -239,7 +223,6 @@ public class JsonObjectTest {
         assertTrue(jsonObject.has("age"));
     }
 
-    // Remove non-existent property
     @Test
     public void test_remove_nonexistent_property() {
         JsonObject jsonObject = new JsonObject();
@@ -251,7 +234,6 @@ public class JsonObjectTest {
         assertFalse(jsonObject.has("age"));
     }
 
-    // Return set of entries from non-empty JsonObject with multiple key-value pairs
     @Test
     public void test_entry_set_returns_all_entries() {
         JsonObject jsonObject = new JsonObject();
@@ -270,7 +252,6 @@ public class JsonObjectTest {
                 .anyMatch(e -> e.getKey().equals("key3") && e.getValue().asJsonBoolean().getValue().equals(true)));
     }
 
-    // Verify returned set is unmodifiable/immutable
     @Test
     public void test_entry_set_is_immutable() {
         JsonObject jsonObject = new JsonObject();
@@ -281,7 +262,6 @@ public class JsonObjectTest {
                 () -> entries.add(Map.entry("key2", new JsonString("value2"))));
     }
 
-    // Return correct size for JsonObject with multiple members
     @Test
     public void test_size_with_multiple_members() {
         JsonObject jsonObject = new JsonObject();
@@ -292,7 +272,6 @@ public class JsonObjectTest {
         assertEquals(3, jsonObject.size());
     }
 
-    // Return size for JsonObject with large number of members
     @Test
     public void test_size_with_large_members() {
         JsonObject jsonObject = new JsonObject();
@@ -303,7 +282,6 @@ public class JsonObjectTest {
         assertEquals(1000, jsonObject.size());
     }
 
-    // Return true for newly created JsonObject with no members
     @Test
     public void test_empty_json_object_is_empty() {
         JsonObject jsonObject = new JsonObject();
@@ -311,7 +289,6 @@ public class JsonObjectTest {
         assertTrue(jsonObject.isEmpty());
     }
 
-    // Return true after adding and removing same property
     @Test
     public void test_json_object_empty_after_add_remove() {
         JsonObject jsonObject = new JsonObject();
@@ -321,7 +298,6 @@ public class JsonObjectTest {
         assertTrue(jsonObject.isEmpty());
     }
 
-    // Returns true when checking for an existing member name
     @Test
     public void test_has_returns_true_for_existing_member() {
         JsonObject jsonObject = new JsonObject();
@@ -332,7 +308,6 @@ public class JsonObjectTest {
         assertTrue(result);
     }
 
-    // Check behavior with null member name
     @Test
     public void test_has_with_null_member_name() {
         JsonObject jsonObject = new JsonObject();
@@ -342,7 +317,6 @@ public class JsonObjectTest {
         assertFalse(result);
     }
 
-    // Return JsonBaseElement value when key exists in members map
     @Test
     public void test_get_returns_value_when_key_exists() {
         JsonObject jsonObject = new JsonObject();
@@ -354,7 +328,6 @@ public class JsonObjectTest {
         assertEquals(value, result);
     }
 
-    // Compare JsonObject with itself returns true
     @Test
     public void test_equals_same_object_returns_true() {
         JsonObject jsonObject = new JsonObject();
@@ -365,7 +338,6 @@ public class JsonObjectTest {
         assertTrue(result);
     }
 
-    // Compare JsonObject with null returns false
     @Test
     public void test_equals_null_returns_false() {
         JsonObject jsonObject = new JsonObject();
@@ -376,7 +348,6 @@ public class JsonObjectTest {
         assertFalse(result);
     }
 
-    // Returns consistent hash code for same JsonObject content
     @Test
     public void test_same_content_returns_same_hashcode() {
         JsonObject obj1 = new JsonObject();
@@ -390,7 +361,6 @@ public class JsonObjectTest {
         assertEquals(obj1.hashCode(), obj2.hashCode());
     }
 
-    // Returns valid hash code for empty JsonObject
     @Test
     public void test_empty_object_hashcode() {
         JsonObject emptyObj1 = new JsonObject();
@@ -400,7 +370,6 @@ public class JsonObjectTest {
         assertTrue(emptyObj1.hashCode() >= 0);
     }
 
-    // Deep copy creates new JsonObject instance with same key-value pairs as original
     @Test
     public void test_deep_copy_creates_equal_object() {
         JsonObject original = new JsonObject();
@@ -417,7 +386,6 @@ public class JsonObjectTest {
         assertEquals(original.get("long"), copy.get("long"));
     }
 
-    // Deep copy of JsonObject containing null values
     @Test
     public void test_deep_copy_with_null_values() {
         JsonObject original = new JsonObject();
@@ -433,7 +401,6 @@ public class JsonObjectTest {
         assertEquals(new JsonString("test"), copy.get("normalValue"));
     }
 
-    // Add boolean property with true value
     @Test
     public void test_add_boolean_property_with_true_value() {
         JsonObject jsonObject = new JsonObject();

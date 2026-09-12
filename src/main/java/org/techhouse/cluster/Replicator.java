@@ -21,7 +21,6 @@ public class Replicator {
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
 
-    // Replicates a committed document write to a majority of peers.
     public ReplicationOutcome broadcast(ReplicationPayload payload) {
         return awaitQuorum(ClusterMessageType.REPLICATE_ACK, () -> {
             final var message = replicateMessage(ClusterMessageType.REPLICATE);
@@ -30,7 +29,6 @@ public class Replicator {
         });
     }
 
-    // Replicates a committed transaction's writes to a majority of peers as one atomic batch.
     public ReplicationOutcome broadcastTx(TxReplicationPayload payload) {
         return awaitQuorum(ClusterMessageType.REPLICATE_TX_ACK, () -> {
             final var message = replicateMessage(ClusterMessageType.REPLICATE_TX);
@@ -39,7 +37,6 @@ public class Replicator {
         });
     }
 
-    // Replicates a committed admin/users record (upsert or delete) to a majority of peers.
     public ReplicationOutcome broadcastUser(ReplicationPayload payload) {
         return awaitQuorum(ClusterMessageType.REPLICATE_USER_ACK, () -> {
             final var message = replicateMessage(ClusterMessageType.REPLICATE_USER);
@@ -49,7 +46,6 @@ public class Replicator {
         });
     }
 
-    // Replicates an admin/DDL operation to a majority of peers, to be re-executed there as actingUser.
     public ReplicationOutcome broadcastAdmin(String rawJson, String actingUser) {
         return awaitQuorum(ClusterMessageType.REPLICATE_ADMIN_ACK, () -> {
             final var message = replicateMessage(ClusterMessageType.REPLICATE_ADMIN);
@@ -70,10 +66,7 @@ public class Replicator {
         // The coordinator has already applied the change locally, so it counts as one towards the majority.
         final var requiredAcks = Math.max(0, ownershipManager.majority() - 1);
         final var latch = new CountDownLatch(requiredAcks);
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (member.getNodeId().equals(self.getNodeId())) {
-                continue;
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
             final var address = member.address();
             Thread.ofVirtual().name("cluster-replicate")
                     .start(() -> sendTo(address, messageFactory.get(), ackType, latch));

@@ -6,11 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * The field-bag surfaces of the Temporal types: `with`, `from` on an object, and the conversions between the
- * types. A field bag has to be checked rather than defaulted - an empty one, an unknown month code, or two
- * fields disagreeing about the same month are all refusals, not a best guess.
- */
 public class TemporalFieldSurfaceTest {
     private static final String ZONED = "Temporal.ZonedDateTime.from('2026-01-02T03:04:05.123456789+00:00[UTC]')";
 
@@ -39,7 +34,6 @@ public class TemporalFieldSurfaceTest {
         assertEquals("TypeError", attempt(ZONED + ".with({})"));
     }
 
-    // month and monthCode both name the month, so they may not disagree
     @Test
     public void test_zoned_with_refuses_a_contradictory_month() {
         assertEquals("RangeError", attempt(ZONED + ".with({ month: 3, monthCode: 'M04' })"));
@@ -50,7 +44,6 @@ public class TemporalFieldSurfaceTest {
         assertEquals("RangeError", attempt(ZONED + ".with({ monthCode: 'Q03' })"));
     }
 
-    // The zone is not a field: changing it would move the instant rather than the wall clock
     @Test
     public void test_zoned_with_refuses_the_time_zone() {
         assertEquals("TypeError", attempt(ZONED + ".with({ timeZone: 'UTC' })"));
@@ -75,7 +68,6 @@ public class TemporalFieldSurfaceTest {
                 str(ZONED + ".round({ smallestUnit: 'hour', roundingIncrement: 6 }).toString()"));
     }
 
-    // A day increment above one has nothing to divide, so it is refused rather than ignored
     @Test
     public void test_zoned_rounding_refuses_a_day_increment_above_one() {
         assertEquals("RangeError", attempt(ZONED + ".round({ smallestUnit: 'day', roundingIncrement: 2 })"));
@@ -130,7 +122,6 @@ public class TemporalFieldSurfaceTest {
         assertEquals("TypeError", attempt("Temporal.PlainYearMonth.from({ year: 2026 })"));
     }
 
-    // A time bag needs at least one field, but the rest default to zero
     @Test
     public void test_plain_time_from_an_object_needs_one_field() {
         assertEquals("03:04:00", str("Temporal.PlainTime.from({ hour: 3, minute: 4 }).toString()"));

@@ -28,7 +28,7 @@ import org.techhouse.test.TestUtils;
 
 public class MemoryManagementTest {
 
-    private long savedMaxMemoryBytes;
+    private volatile long savedMaxMemoryBytes;
 
     @BeforeEach
     public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
@@ -42,7 +42,7 @@ public class MemoryManagementTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", savedMaxMemoryBytes);
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.stopSweepThread();
-        TestUtils.setPrivateField(mm, "counters", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(TestUtils.usageTrackerOf(mm), "counters", new ConcurrentHashMap<>());
         TestUtils.standardTearDown();
     }
 
@@ -167,7 +167,6 @@ public class MemoryManagementTest {
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, "userDb", "coll", null);
         mm.recordAccess(AccessKind.PK_INDEX, "userDb", "coll", null);
-        // size the cap to exactly the PK index size so the collection must go.
         final var pkBytes = cache.listCacheableResources().stream().filter(r -> r.kind() == AccessKind.PK_INDEX)
                 .mapToLong(CacheableResource::estimatedSizeBytes).sum();
         setMaxMemory(pkBytes);
@@ -280,7 +279,7 @@ public class MemoryManagementTest {
         org.techhouse.ops.AdminOperationHelper
                 .upsertCollectionUsage(new org.techhouse.bckg_ops.events.CollectionUsageEvent(AccessKind.COLLECTION,
                         "userDb", "userColl", null, System.currentTimeMillis()));
-        TestUtils.setPrivateField(mm, "counters", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(TestUtils.usageTrackerOf(mm), "counters", new ConcurrentHashMap<>());
         mm.loadProfileFromAdmin();
         assertNotNull(mm.getCounter(AccessKind.COLLECTION, "userDb", "userColl", null));
     }
@@ -431,7 +430,6 @@ public class MemoryManagementTest {
             mm.recordAccess(AccessKind.COLLECTION, "userDb", "hot", null);
         }
         mm.recordAccess(AccessKind.COLLECTION, "userDb", "cold", null);
-        // Cap leaves no room: any incoming page must trigger eviction of the LFU resource.
         setMaxMemory(1L);
         mm.ensureHeadroomForBytes(1L);
         final var remaining = cache.listCacheableResources();

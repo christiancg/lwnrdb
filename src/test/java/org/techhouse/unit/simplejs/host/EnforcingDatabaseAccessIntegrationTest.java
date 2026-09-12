@@ -82,7 +82,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         return pipeline;
     }
 
-    // An authorized save is committed and can be read back
     @Test
     public void test_authorized_save_and_read() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -92,14 +91,12 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertEquals("hello", stored.get("value").asJsonString().getValue());
     }
 
-    // findById returns null for a missing document
     @Test
     public void test_find_missing_returns_null() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
         assertNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "does-not-exist"));
     }
 
-    // An unauthorized user's save is denied with a thrown JS error
     @Test
     public void test_unauthorized_save_denied() {
         final var db = new EnforcingDatabaseAccess(NOBODY, null);
@@ -108,7 +105,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertInstanceOf(JsObject.class, error.getValue());
     }
 
-    // A save that violates the collection schema is rejected with a thrown JS error
     @Test
     public void test_schema_violation_rejected() {
         final var schema = new JsonObject();
@@ -122,14 +118,12 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertThrows(JsThrowException.class, () -> db.save(TestGlobals.DB, TestGlobals.COLL, doc("u3")));
     }
 
-    // An unknown acting user is rejected
     @Test
     public void test_unknown_user_rejected() {
         final var db = new EnforcingDatabaseAccess("ghost", null);
         assertThrows(JsThrowException.class, db::listDatabases);
     }
 
-    // listCollections and listDatabases return the expected entries for an admin
     @Test
     public void test_list_operations() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -137,7 +131,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertTrue(db.listCollections(TestGlobals.DB).contains(TestGlobals.COLL));
     }
 
-    // delete removes a stored document
     @Test
     public void test_delete() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -146,7 +139,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "u4"));
     }
 
-    // End-to-end: a script importing db saves and returns a value, denied for a user without permission
     @Test
     public void test_script_end_to_end() {
         final var engine = new SimpleJs();
@@ -163,7 +155,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertTrue(denied.isError());
     }
 
-    // aggregate() returns the matching documents from a FILTER pipeline
     @Test
     public void test_aggregate_returns_results() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -179,7 +170,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertEquals("agg-match", results.getFirst().get("_id").asJsonString().getValue());
     }
 
-    // aggregate() returns an empty list (not null) when the pipeline matches no documents
     @Test
     public void test_aggregate_returns_empty_list_when_no_results() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -188,8 +178,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertEquals(List.of(), results);
     }
 
-    // A rejection that is not an authorization/schema denial (here an oversized entry) must still reach
-    // the script
     @Test
     public void test_save_oversized_entry_throws() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -199,14 +187,12 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertThrows(JsThrowException.class, () -> db.save(TestGlobals.DB, TestGlobals.COLL, big));
     }
 
-    // A database that does not exist is a refused operation, not an empty collection list
     @Test
     public void test_list_collections_for_nonexistent_database_throws() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
         assertThrows(JsThrowException.class, () -> db.listCollections("this-db-does-not-exist"));
     }
 
-    // dispatch() routes through processMessage with an explicit (non-null) clientId
     @Test
     public void test_dispatch_with_explicit_client_id() {
         final var db = new EnforcingDatabaseAccess(ADMIN, UUID.randomUUID());
@@ -222,7 +208,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
     }
 
-    // bulkSave inserts new ids, updates existing ones and reports both lists
     @Test
     public void test_bulk_save_reports_inserted_and_updated() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -234,7 +219,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertNotNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "bulk-new"));
     }
 
-    // An oversized document rejects the whole batch rather than reading as "nothing changed"
     @Test
     public void test_bulk_save_oversized_document_is_rejected() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -245,7 +229,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "bulk-big"));
     }
 
-    // A duplicate id inside one batch is rejected
     @Test
     public void test_bulk_save_duplicate_id_in_one_batch_is_rejected() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -253,7 +236,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
                 () -> db.bulkSave(TestGlobals.DB, TestGlobals.COLL, List.of(doc("bulk-dup"), doc("bulk-dup"))));
     }
 
-    // A user without READ_WRITE is denied before the batch reaches the ops layer
     @Test
     public void test_bulk_save_denied_for_unauthorized_user() {
         final var db = new EnforcingDatabaseAccess(NOBODY, null);
@@ -261,7 +243,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
                 () -> db.bulkSave(TestGlobals.DB, TestGlobals.COLL, List.of(doc("bulk-denied"))));
     }
 
-    // A committed transaction applies every buffered write and releases the collection lock
     @Test
     public void test_transaction_commits_atomically() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -274,7 +255,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertCollectionLockFree();
     }
 
-    // A rolled-back transaction leaves the collection untouched and releases the lock
     @Test
     public void test_transaction_rollback_leaves_no_partial_write() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -285,7 +265,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertCollectionLockFree();
     }
 
-    // A non-admin can open a script transaction: the three control ops carry no database to authorize
     @Test
     public void test_transaction_control_ops_skip_authorization() {
         final var db = new EnforcingDatabaseAccess(NOBODY, null);
@@ -332,7 +311,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertCollectionLockFree();
     }
 
-    // A second beginTransaction on the same access object is rejected before it reaches START
     @Test
     public void test_nested_begin_transaction_is_rejected() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -345,8 +323,6 @@ public class EnforcingDatabaseAccessIntegrationTest {
         assertCollectionLockFree();
     }
 
-    // A save that the server refuses (here: a collection that was never created) must throw rather than
-    // return null, which a script cannot distinguish from a successful write
     @Test
     public void test_failed_save_throws_instead_of_returning_null() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
@@ -360,14 +336,12 @@ public class EnforcingDatabaseAccessIntegrationTest {
                 () -> db.bulkSave(TestGlobals.DB, "neverCreated", java.util.List.of(doc("s2"))));
     }
 
-    // Deleting a document that is not there leaves the intended state, so it stays a no-op
     @Test
     public void test_delete_of_absent_document_is_a_no_op() {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
         assertDoesNotThrow(() -> db.delete(TestGlobals.DB, TestGlobals.COLL, "never-existed"));
     }
 
-    // ... but a delete the server refuses for any other reason surfaces
     @Test
     public void test_failed_delete_throws() {
         final var db = new EnforcingDatabaseAccess(NOBODY, null);

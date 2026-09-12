@@ -25,7 +25,6 @@ public class TemporalZonedDateTimeProgramTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // A basic construction round-trips through its own field accessors
     @Test
     public void test_construction() {
         assertEquals("2024,3,10,9,15,30,UTC",
@@ -35,7 +34,6 @@ public class TemporalZonedDateTimeProgramTest {
                         + "+ z.timeZoneId"));
     }
 
-    // The offset/hoursInDay accessors reflect the target time zone, not just UTC
     @Test
     public void test_offset_and_hours_in_day_accessors() {
         assertEquals("2020-06-15T10:00:00-04:00[America/New_York]",
@@ -45,7 +43,6 @@ public class TemporalZonedDateTimeProgramTest {
         assertEquals(23, num("Temporal.ZonedDateTime.from('2020-03-08T00:00:00-05:00[America/New_York]').hoursInDay"));
     }
 
-    // toInstant/toPlainDate/toPlainTime/toPlainDateTime split the value into its component types
     @Test
     public void test_conversions_split_into_component_types() {
         assertTrue(bool("var z = new Temporal.ZonedDateTime("
@@ -56,8 +53,8 @@ public class TemporalZonedDateTimeProgramTest {
                 + "z.toPlainDateTime().equals(new Temporal.PlainDateTime(2024, 3, 10, 9, 15, 30))"));
     }
 
-    // add() across a DST spring-forward boundary in America/New_York: adding a calendar day keeps the
-    // same wall-clock time (the zone absorbs the gap), while adding 24 exact hours lands an hour later
+    // Adding a calendar day keeps the same wall-clock time (the zone absorbs the gap), while adding 24 exact
+    // hours lands an hour later.
     @Test
     public void test_add_across_dst_boundary() {
         assertEquals("0,1",
@@ -66,14 +63,12 @@ public class TemporalZonedDateTimeProgramTest {
                         + "byDay.hour + ',' + byHours.hour"));
     }
 
-    // subtract() is add()'s inverse for a pure exact-time (hours-only) duration
     @Test
     public void test_subtract_is_add_inverse_for_exact_time() {
         assertTrue(bool("var z = Temporal.ZonedDateTime.from('2020-06-15T10:00:00-04:00[America/New_York]');"
                 + "z.add({hours: 5}).subtract({hours: 5}).equals(z)"));
     }
 
-    // compare() agrees with equals() on ordering, independent of the time zone used to display them
     @Test
     public void test_compare_agrees_with_equals() {
         assertTrue(bool(
@@ -81,7 +76,6 @@ public class TemporalZonedDateTimeProgramTest {
                         + "Temporal.ZonedDateTime.compare(a, b) === 0 && a.equals(b) === false"));
     }
 
-    // getTimeZoneTransition finds the next real DST transition and it is strictly later
     @Test
     public void test_get_time_zone_transition_finds_next_dst_change() {
         assertTrue(bool("var z = new Temporal.ZonedDateTime(0n, 'America/New_York');"
@@ -89,13 +83,11 @@ public class TemporalZonedDateTimeProgramTest {
                 + "Temporal.ZonedDateTime.compare(next, z) > 0"));
     }
 
-    // A zone with no transitions (UTC) has no next/previous transition
     @Test
     public void test_get_time_zone_transition_null_for_utc() {
         assertTrue(bool("new Temporal.ZonedDateTime(0n, 'UTC').getTimeZoneTransition('next') === null"));
     }
 
-    // A RangeError thrown from the constructor surfaces through SimpleJs.run's error contract
     @Test
     public void test_range_error_surfaces_through_simple_js_run() {
         final var result = new SimpleJs().run("return new Temporal.ZonedDateTime(0n, 'Not/AZone');",
@@ -105,7 +97,6 @@ public class TemporalZonedDateTimeProgramTest {
         assertTrue(result.getErrorMessage() != null && !result.getErrorMessage().isEmpty());
     }
 
-    // A TypeError thrown from calling the constructor without `new` surfaces the same way
     @Test
     public void test_type_error_surfaces_through_simple_js_run() {
         final var result = new SimpleJs().run("return Temporal.ZonedDateTime(0n, 'UTC');", SimpleHostBindings.empty());
@@ -113,7 +104,6 @@ public class TemporalZonedDateTimeProgramTest {
         assertEquals("TypeError", result.getErrorName());
     }
 
-    // A successful script round-trips a Temporal.ZonedDateTime value as its canonical string via EJson
     @Test
     public void test_successful_result_serializes_as_iso_string() {
         final var result = new SimpleJs().run("return new Temporal.ZonedDateTime(0n, 'UTC');",
@@ -122,8 +112,6 @@ public class TemporalZonedDateTimeProgramTest {
         assertEquals("\"1970-01-01T00:00:00+00:00[UTC]\"", new org.techhouse.ejson.EJson().toJson(result.getValue()));
     }
 
-    // until with largestUnit "years" balances a calendar-unit difference on the local wall-clock date
-    // (implicit relativeTo - the receiver itself)
     @Test
     public void test_until_with_years_largest_unit() {
         assertEquals("3,6,17",
@@ -132,7 +120,6 @@ public class TemporalZonedDateTimeProgramTest {
                         + "var d = a.until(b, {largestUnit: 'years'}); d.years + ',' + d.months + ',' + d.days"));
     }
 
-    // rounding at "months" with largestUnit "years" carries into a full extra year
     @Test
     public void test_until_rounds_months_carries_into_years() {
         assertEquals(2,
@@ -141,7 +128,6 @@ public class TemporalZonedDateTimeProgramTest {
                         + "a.until(b, {largestUnit: 'years', smallestUnit: 'months', roundingMode: 'expand'}).years"));
     }
 
-    // since is the negation of until across a calendar-unit largestUnit
     @Test
     public void test_since_is_negation_of_until() {
         assertTrue(bool("var a = Temporal.ZonedDateTime.from('2020-01-01T00:00[UTC]');"

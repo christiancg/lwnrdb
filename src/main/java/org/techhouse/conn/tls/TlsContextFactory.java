@@ -16,11 +16,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.ex.TlsConfigurationException;
 import org.techhouse.log.Logger;
 
-/**
- * Builds the {@link SSLServerSocketFactory} used by the server when TLS is enabled. The keystore is
- * loaded from the configured path; if it is missing a development-only self-signed keystore is
- * generated there and a prominent security warning is logged so the admin installs a proper one.
- */
 public final class TlsContextFactory {
     private static final Logger logger = Logger.logFor(TlsContextFactory.class);
 
@@ -42,11 +37,7 @@ public final class TlsContextFactory {
         }
     }
 
-    /**
-     * Client-side factory for the node-to-node channel. The configured keystore is used as both key and
-     * trust material, so nodes must share the same PKCS12 keystore (or a common CA) for the TLS cluster
-     * channel to establish; per-node self-signed keystores will not trust each other.
-     */
+    // The keystore is both key and trust material: nodes must share one keystore (or a common CA) to connect.
     public static SSLSocketFactory createSocketFactory(Configuration config) {
         final var keystorePath = Paths.get(config.getTlsKeystorePath());
         final var password = config.getTlsKeystorePassword().toCharArray();

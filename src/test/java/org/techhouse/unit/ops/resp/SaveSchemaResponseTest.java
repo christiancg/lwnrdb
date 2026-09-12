@@ -10,7 +10,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.SaveSchemaResponse;
 
 public class SaveSchemaResponseTest {
-    // Response carries OK status, message and warnings
     @Test
     public void test_response_with_warnings() {
         final var response = new SaveSchemaResponse("saved", List.of("w1"));
@@ -20,7 +19,6 @@ public class SaveSchemaResponseTest {
         assertEquals(List.of("w1"), response.getWarnings());
     }
 
-    // Empty warnings list is preserved
     @Test
     public void test_response_without_warnings() {
         final var response = new SaveSchemaResponse("saved", List.of());

@@ -22,7 +22,6 @@ import org.techhouse.simplejs.elements.JsTemplateString;
 import org.techhouse.simplejs.elements.JsUndefined;
 
 public class JsBaseElementTest {
-    // Each element subclass reports the matching JsType
     @Test
     public void test_get_type_for_each_subclass() {
         assertEquals(JsType.KEYWORD, new JsKeyword("if").getType());

@@ -12,42 +12,15 @@ import org.techhouse.ejson.type_adapters.impl.ReflectionTypeAdapter;
 
 public class ReflectionTypeAdapterTest {
     @BeforeEach
-    public void setUp() {
-        new EJson();
-    }
 
-    // Serialize object with primitive fields to JSON string
     @Test
     public void test_serialize_primitive_fields() {
         new EJson();
+        @SuppressWarnings("unused")
         class TestClass {
-            private int intField = 42;
-            private boolean boolField = true;
-            private double doubleField = 3.14;
-
-            public int getIntField() {
-                return intField;
-            }
-
-            public void setIntField(int intField) {
-                this.intField = intField;
-            }
-
-            public boolean isBoolField() {
-                return boolField;
-            }
-
-            public void setBoolField(boolean boolField) {
-                this.boolField = boolField;
-            }
-
-            public double getDoubleField() {
-                return doubleField;
-            }
-
-            public void setDoubleField(double doubleField) {
-                this.doubleField = doubleField;
-            }
+            private final int intField = 42;
+            private final boolean boolField = true;
+            private final double doubleField = 3.14;
         }
 
         ReflectionTypeAdapter<TestClass> adapter = new ReflectionTypeAdapter<>(TestClass.class);
@@ -58,28 +31,12 @@ public class ReflectionTypeAdapterTest {
         assertEquals("{\"intField\":42,\"boolField\":true,\"doubleField\":3.14}", json);
     }
 
-    // Handle null field values during serialization and deserialization
     @Test
     public void test_handle_null_fields() {
+        @SuppressWarnings("unused")
         class TestClass {
-            private String nullField = null;
-            private Integer nullInteger = null;
-
-            public String getNullField() {
-                return nullField;
-            }
-
-            public void setNullField(String nullField) {
-                this.nullField = nullField;
-            }
-
-            public Integer getNullInteger() {
-                return nullInteger;
-            }
-
-            public void setNullInteger(Integer nullInteger) {
-                this.nullInteger = nullInteger;
-            }
+            private final String nullField = null;
+            private final Integer nullInteger = null;
         }
 
         ReflectionTypeAdapter<TestClass> adapter = new ReflectionTypeAdapter<>(TestClass.class);
@@ -97,9 +54,17 @@ public class ReflectionTypeAdapterTest {
         assertNotNull(deserializedObj);
         assertNull(deserializedObj.nullField);
         assertNull(deserializedObj.nullInteger);
+
+        // The fields are final, so this is also what proves the deserializer can still assign them:
+        // asserting only the nulls above would pass just as well if the assignment silently failed.
+        final var populated = new JsonObject();
+        populated.addProperty("nullField", "value");
+        populated.addProperty("nullInteger", 5);
+        final var assigned = adapter.fromJson(populated);
+        assertEquals("value", assigned.nullField);
+        assertEquals(Integer.valueOf(5), assigned.nullInteger);
     }
 
-    // Constructor successfully initializes with valid Class<T> parameter
     @Test
     public void test_constructor_initializes_with_valid_class() {
         ReflectionTypeAdapter<String> adapter = new ReflectionTypeAdapter<>(String.class);
@@ -107,43 +72,18 @@ public class ReflectionTypeAdapterTest {
         assertNotNull(adapter);
     }
 
-    // Constructor handles null class parameter
     @Test
     public void test_constructor_handles_null_class() {
         assertThrows(NullPointerException.class, () -> new ReflectionTypeAdapter<>(null));
     }
 
-    // Converts simple object with primitive fields to valid JSON string
     @Test
     public void test_converts_simple_object_to_json() {
+        @SuppressWarnings("unused")
         class TestClass {
-            private int intField = 42;
-            private String stringField = "test";
-            private boolean boolField = true;
-
-            public int getIntField() {
-                return intField;
-            }
-
-            public void setIntField(int intField) {
-                this.intField = intField;
-            }
-
-            public String getStringField() {
-                return stringField;
-            }
-
-            public void setStringField(String stringField) {
-                this.stringField = stringField;
-            }
-
-            public boolean isBoolField() {
-                return boolField;
-            }
-
-            public void setBoolField(boolean boolField) {
-                this.boolField = boolField;
-            }
+            private final int intField = 42;
+            private final String stringField = "test";
+            private final boolean boolField = true;
         }
 
         ReflectionTypeAdapter<TestClass> adapter = new ReflectionTypeAdapter<>(TestClass.class);
@@ -154,28 +94,12 @@ public class ReflectionTypeAdapterTest {
         assertEquals("{\"intField\":42,\"stringField\":\"test\",\"boolField\":true}", result);
     }
 
-    // Handles null object value fields by converting them to "null" string
     @Test
     public void test_converts_null_fields_to_null_string() {
+        @SuppressWarnings("unused")
         class TestClass {
-            private String nullField = null;
-            private Integer nullInteger = null;
-
-            public String getNullField() {
-                return nullField;
-            }
-
-            public void setNullField(String nullField) {
-                this.nullField = nullField;
-            }
-
-            public Integer getNullInteger() {
-                return nullInteger;
-            }
-
-            public void setNullInteger(Integer nullInteger) {
-                this.nullInteger = nullInteger;
-            }
+            private final String nullField = null;
+            private final Integer nullInteger = null;
         }
 
         ReflectionTypeAdapter<TestClass> adapter = new ReflectionTypeAdapter<>(TestClass.class);
@@ -186,9 +110,9 @@ public class ReflectionTypeAdapterTest {
         assertEquals("{\"nullField\":null,\"nullInteger\":null}", result);
     }
 
-    // Successfully converts JsonObject to target class instance with matching field names
     @Test
     public void test_converts_json_object_to_target_class() {
+        @SuppressWarnings("unused")
         class TestClass {
             private String stringField;
             private Integer intField;
@@ -197,16 +121,8 @@ public class ReflectionTypeAdapterTest {
                 return stringField;
             }
 
-            public void setStringField(String stringField) {
-                this.stringField = stringField;
-            }
-
             public Integer getIntField() {
                 return intField;
-            }
-
-            public void setIntField(Integer intField) {
-                this.intField = intField;
             }
         }
 
@@ -222,19 +138,11 @@ public class ReflectionTypeAdapterTest {
         assertEquals(Integer.valueOf(123), result.getIntField());
     }
 
-    // Returns null when input is not a JsonObject type
     @Test
     public void test_returns_null_for_non_object_input() {
+        @SuppressWarnings("unused")
         class TestClass {
             private String field;
-
-            public String getField() {
-                return field;
-            }
-
-            public void setField(String field) {
-                this.field = field;
-            }
         }
 
         JsonArray jsonArray = new JsonArray();
@@ -244,5 +152,23 @@ public class ReflectionTypeAdapterTest {
         TestClass result = adapter.fromJson(jsonArray);
 
         assertNull(result);
+    }
+
+    // Emitting statics put every `public static final` on the wire beside the real fields, and on the
+    // way back the deserializer would try to assign them from the document.
+    @Test
+    public void test_static_fields_are_not_serialized() {
+        final var json = new EJson().toJson(new WithConstants());
+
+        assertFalse(json.contains("DECISION_ACCEPT"), "a static constant leaked onto the wire: " + json);
+        assertFalse(json.contains("COUNTER"), "a static field leaked onto the wire: " + json);
+        assertTrue(json.contains("\"decision\":\"accept\""), "the instance field is missing: " + json);
+    }
+
+    @SuppressWarnings("unused")
+    public static class WithConstants {
+        public static final String DECISION_ACCEPT = "accept";
+        private static final int COUNTER = 7;
+        private final String decision = "accept";
     }
 }

@@ -4,6 +4,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -68,7 +69,8 @@ public class LogWriter {
     public static void writeLogEntry(String logEntry) {
         try {
             final var file = currentLogFile();
-            try (var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+            try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
+                    Globals.BUFFER_SIZE)) {
                 if (file.length() > 0) {
                     writer.write(Globals.NEWLINE);
                 }

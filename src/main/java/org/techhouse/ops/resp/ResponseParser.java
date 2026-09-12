@@ -37,8 +37,6 @@ public final class ResponseParser {
             case LIST_COLLECTIONS -> new ListCollectionsResponse(message, strings(object, "collections"));
             case LIST_DATABASES -> new ListDatabasesResponse(message, strings(object, "databases"));
             case START_TRANSACTION -> new StartTransactionResponse(message, text(object, "transactionId"));
-            case COMMIT_TRANSACTION -> new CommitTransactionResponse(message);
-            case ROLLBACK_TRANSACTION -> new RollbackTransactionResponse(message);
             default -> new OperationResponse(type, status, message);
         };
     }

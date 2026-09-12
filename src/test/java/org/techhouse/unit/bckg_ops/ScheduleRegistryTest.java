@@ -103,8 +103,6 @@ public class ScheduleRegistryTest {
         assertTrue(registry.get(TestGlobals.DB, "b").getNextRunAt() > now);
     }
 
-    // Reloading an unchanged definition must not push the next occurrence out, otherwise the periodic
-    // refresh would starve a schedule whose interval is shorter than scheduleRefreshMs.
     @Test
     public void test_reload_preserves_the_next_run_of_an_unchanged_schedule() throws Exception {
         writeSchedule(TestGlobals.DB, "a", null, 2000L);
@@ -121,7 +119,6 @@ public class ScheduleRegistryTest {
         assertEquals(0L, registry.get(TestGlobals.DB, "a").getNextRunAt());
     }
 
-    // A definition whose cron this version cannot parse is dropped rather than fired on a guess.
     @Test
     public void test_an_unparseable_cron_is_not_registered() throws Exception {
         writeSchedule(TestGlobals.DB, "a", "not a cron", 0L);

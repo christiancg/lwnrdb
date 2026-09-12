@@ -11,7 +11,6 @@ import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
 public class FieldOperatorTest {
-    // Constructor initializes with valid FieldOperatorType, field name and JsonBaseElement value
     @Test
     public void test_constructor_initializes_with_valid_parameters() {
         FieldOperatorType operatorType = FieldOperatorType.EQUALS;
@@ -26,7 +25,6 @@ public class FieldOperatorTest {
         assertEquals(value, operator.getValue());
     }
 
-    // Constructor handles null field name
     @Test
     public void test_constructor_accepts_null_field_name() {
         FieldOperatorType operatorType = FieldOperatorType.EQUALS;
@@ -40,7 +38,6 @@ public class FieldOperatorTest {
         assertEquals(value, operator.getValue());
     }
 
-    // Test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         FieldOperatorType operatorType = FieldOperatorType.CONTAINS;
@@ -49,12 +46,10 @@ public class FieldOperatorTest {
 
         FieldOperator operator = new FieldOperator(operatorType, fieldName, value);
 
-        // Test getters
         assertEquals(operatorType, operator.getFieldOperatorType());
         assertEquals(fieldName, operator.getField());
         assertEquals(value, operator.getValue());
 
-        // Test setters
         FieldOperatorType newOperatorType = FieldOperatorType.NOT_EQUALS;
         String newFieldName = "newField";
         JsonBaseElement newValue = new JsonString("newValue");

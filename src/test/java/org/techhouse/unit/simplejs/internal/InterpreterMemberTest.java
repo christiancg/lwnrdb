@@ -17,9 +17,6 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 
-// Property access dispatch (MemberEvaluator): symbol-keyed member lookups on exotic value types,
-// class instance/static symbol tables, receiver-aware get/set delegation (Reflect), and the
-// async-generator step-settlement paths (resolve/reject on next/return/throw).
 public class InterpreterMemberTest {
     private static double num(String source) {
         return ((JsNumber) Interpreter.run(source)).getValue();
@@ -47,7 +44,6 @@ public class InterpreterMemberTest {
         return sb.toString();
     }
 
-    // A typed array's [Symbol.iterator] member is a callable that yields its elements
     @Test
     public void test_typed_array_symbol_iterator_member() {
         final var source = """
@@ -61,7 +57,6 @@ public class InterpreterMemberTest {
         assertEquals("1,2,3", str(source));
     }
 
-    // A class-defined symbol-keyed instance getter is found through the class symbol table
     @Test
     public void test_instance_symbol_getter_via_class_table() {
         final var source = """
@@ -71,7 +66,6 @@ public class InterpreterMemberTest {
         assertEquals(42, num(source));
     }
 
-    // A class-defined symbol-keyed static getter is found through the class symbol table
     @Test
     public void test_static_symbol_getter_via_class_table() {
         final var source = """
@@ -81,57 +75,46 @@ public class InterpreterMemberTest {
         assertEquals(5, num(source));
     }
 
-    // Reflect.get with an explicit receiver on a non-JsObject target (an array) still resolves
     @Test
     public void test_reflect_get_on_array_with_receiver_delegates() {
         assertEquals(2, num("Reflect.get([1, 2, 3], '1', {})"));
     }
 
-    // Reading any property off undefined throws a catchable TypeError
     @Test
     public void test_reading_property_of_undefined_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("undefined.foo"));
     }
 
-    // A deleted builtin-function metadata property (name/length) falls through to Function.prototype's
-    // own name=""/length=0 instead of answering undefined directly (functionMember's isMetadataDeleted
-    // branch used to hard-return undefined rather than continuing past FunctionProtoBuiltins.metadata).
+    // Regression: functionMember's isMetadataDeleted branch used to hard-return undefined instead of
+    // continuing past FunctionProtoBuiltins.metadata to Function.prototype's own name/length.
     @Test
     public void test_deleted_function_metadata_falls_through_to_function_prototype() {
         assertEquals("string,", str("delete parseInt.name; typeof parseInt.name + ',' + parseInt.name"));
     }
 
-    // A typed array exposes BYTES_PER_ELEMENT per its kind
     @Test
     public void test_typed_array_bytes_per_element() {
         assertEquals(1, num("new Int8Array(1).BYTES_PER_ELEMENT"));
         assertEquals(4, num("new Int32Array(1).BYTES_PER_ELEMENT"));
     }
 
-    // Reflect.set with an explicit receiver writes to the receiver, leaving the array target alone
     @Test
     public void test_reflect_set_on_array_with_receiver_delegates() {
         assertTrue(bool());
     }
 
-    // Setting any property on undefined throws a catchable TypeError
     @Test
     public void test_setting_property_of_undefined_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("undefined.x = 1;"));
     }
 
-    // PutValue on a primitive base: OrdinarySetWithOwnDescriptor's "Receiver is not an Object" step
-    // means a data-property write to a primitive can never succeed (there is nowhere to create an
-    // own property), so in this always-strict engine it throws rather than silently no-opping -
-    // matching Number/String/Boolean/Symbol all consistently (see Interpreter.setPrimitiveMember).
+    // OrdinarySetWithOwnDescriptor's "Receiver is not an Object" step means a data-property write to a
+    // primitive can never succeed, so this always-strict engine throws rather than silently no-opping.
     @Test
     public void test_writing_property_on_number_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("let n = 5; n.foo = 9;"));
     }
 
-    // A prototype-chain accessor setter must run even when the receiver is a callable: writing to
-    // Function.prototype's poisoned `caller`/`arguments` pair through a bound function throws,
-    // rather than silently landing as a new own property on the bound function.
     @Test
     public void test_callable_receiver_consults_inherited_accessor_setter() {
         assertThrows(TypeErrorException.class,
@@ -139,15 +122,11 @@ public class InterpreterMemberTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("function f() {} f.arguments = 12;"));
     }
 
-    // An inherited own writable data property is still writable through a callable receiver
     @Test
     public void test_callable_receiver_own_property_write_still_works() {
         assertEquals(3, num("function f() {} f.x = 3; f.x"));
     }
 
-    // Object.create(typedArray)[index] = v writes through the typed array's own [[Set]], which -
-    // for a receiver that differs from the view itself - creates an ordinary own property on the
-    // receiver instead of ever writing through the view or an inherited accessor on its prototype
     @Test
     public void test_typed_array_as_prototype_receiver_set() {
         final var source = """
@@ -159,8 +138,6 @@ public class InterpreterMemberTest {
         assertEquals("0,42,true", joined(source));
     }
 
-    // The same typed-array-in-chain short-circuit applies when the receiver is a plain array
-    // (setArrayMember), not only a plain object (setObjectMember)
     @Test
     public void test_typed_array_as_prototype_of_array_receiver_set() {
         final var source = """
@@ -172,8 +149,6 @@ public class InterpreterMemberTest {
         assertEquals("0,42,1", joined(source));
     }
 
-    // A canonical-but-out-of-range numeric key on the typed-array parent is a pure no-op: it must
-    // never fall through to an inherited accessor further up the chain (the per-kind prototype)
     @Test
     public void test_typed_array_invalid_canonical_index_in_chain_is_a_noop() {
         final var source = """
@@ -191,8 +166,6 @@ public class InterpreterMemberTest {
         assertEquals("false,false", joined(source));
     }
 
-    // A proxy sitting in a prototype chain has its "set" trap dispatched (with the original
-    // receiver forwarded), rather than being skipped as if it had no own-property table at all
     @Test
     public void test_proxy_in_prototype_chain_dispatches_set_trap() {
         final var source = """
@@ -211,8 +184,6 @@ public class InterpreterMemberTest {
         assertEquals("1,true", joined(source));
     }
 
-    // `1 in array` walks the array's explicit [[Prototype]] (a proxy), not the intrinsic
-    // Array.prototype the array would otherwise fall back to
     @Test
     public void test_in_operator_on_array_with_proxy_prototype_dispatches_has_trap() {
         final var source = """
@@ -225,8 +196,6 @@ public class InterpreterMemberTest {
         assertEquals("false,1", joined(source));
     }
 
-    // Reflect.set with a JsProxy receiver dispatches the proxy's defineProperty trap rather than
-    // silently failing (a plain JsProxy has no ordinary [[GetOwnProperty]]/[[DefineOwnProperty]])
     @Test
     public void test_reflect_set_with_proxy_receiver_dispatches_define_property_trap() {
         final var source = """
@@ -245,7 +214,6 @@ public class InterpreterMemberTest {
         assertEquals("0,42,1", joined(source));
     }
 
-    // Calling throw() on an async generator that already ran to completion rejects immediately
     @Test
     public void test_async_generator_throw_after_completion_rejects() {
         final var source = """
@@ -260,9 +228,6 @@ public class InterpreterMemberTest {
         assertEquals("err:boom", joined(source));
     }
 
-    // A synchronous throw before any yield/await rejects the first next() step, via the
-    // coroutine's resume observer (observeAsyncGenerator), which always intercepts before
-    // driveAsyncGenerator's own try/catch would ever see the escape
     @Test
     public void test_sync_throw_in_async_generator_rejects_step() {
         final var source = """
@@ -274,8 +239,6 @@ public class InterpreterMemberTest {
         assertEquals("err:boom", joined(source));
     }
 
-    // A finally-block error thrown while cancelling a suspended generator with no pending step is
-    // swallowed rather than escaping the interpreter
     @Test
     public void test_cancel_with_no_pending_promise_is_swallowed() {
         final var source = """
@@ -297,8 +260,6 @@ public class InterpreterMemberTest {
         assertEquals("cleanup", joined(source));
     }
 
-    // An unrecognized runtime escape (a resource-limit abort) after an await resumption is
-    // re-thrown rather than settled as a rejected step
     @Test
     public void test_unrecognized_escape_after_await_propagates() {
         final var limits = new ResourceLimits(-1, 50, -1, true);
@@ -313,30 +274,17 @@ public class InterpreterMemberTest {
                 () -> Interpreter.run(source, new SimpleHostBindings(new JsonObject(), null, null, limits)));
     }
 
-    // A function's own "prototype" metadata (synthesised from a dedicated field, not stored in the
-    // generic property table - see OrdinaryProperties.hasPrototypeProperty) is always non-
-    // configurable, so its delete must be rejected rather than silently succeeding because the table
-    // itself never held the key.
     @Test
     public void test_deleting_constructor_prototype_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("function F() {} delete F.prototype;"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("function* g() {} delete g.prototype;"));
     }
 
-    // An arrow function is not a constructor and has no own "prototype" metadata at all, so deleting
-    // the (already absent) key is an ordinary no-op success, not a rejection - unlike a plain
-    // function or a generator, which do own one.
     @Test
     public void test_deleting_prototype_on_non_constructor_is_a_noop_success() {
         assertEquals("true", str("String(delete (() => {}).prototype)"));
     }
 
-    // A delete reaching a JsFunction/JsNativeFunction through a no-trap Proxy (rather than through
-    // ExpressionEvaluator.evalDelete's own dedicated JsCallableProperties branch) goes through the
-    // generic JsValue.deleteOwnProperty, which JsFunction/JsNativeFunction override to keep the two
-    // delete paths consistent: "name"/"length" mark the metadata deleted (so hasOwnProperty stops
-    // reporting them, not just the underlying table) and "prototype" is rejected outright when the
-    // callable actually owns one.
     @Test
     public void test_proxy_delete_of_function_length_clears_metadata() {
         final var source = """
@@ -385,9 +333,8 @@ public class InterpreterMemberTest {
         assertEquals("true", str(source));
     }
 
-    // A deleted "length"/"name" on a native function must fall through to Function.prototype's own
-    // length=0/name="" (not answer undefined directly) - functionMember's isMetadataDeleted branch
-    // used to hard-return undefined instead of continuing past FunctionProtoBuiltins.metadata.
+    // Regression: functionMember's isMetadataDeleted branch used to hard-return undefined instead of
+    // continuing past FunctionProtoBuiltins.metadata.
     @Test
     public void test_deleted_native_function_length_falls_through_to_function_prototype() {
         final var source = """
@@ -401,8 +348,6 @@ public class InterpreterMemberTest {
         assertEquals("true,0,true,", str(source));
     }
 
-    // A plain function's "prototype" is only lazily materialised for a constructible or generator
-    // function - an async (non-generator) function has no own prototype at all.
     @Test
     public void test_async_function_prototype_is_undefined() {
         final var source = """
@@ -412,8 +357,6 @@ public class InterpreterMemberTest {
         assertEquals("undefined", str(source));
     }
 
-    // A non-writable data property found on the prototype chain rejects the whole write outright,
-    // rather than letting it fall through and create a new own property on the receiver.
     @Test
     public void test_inherited_non_writable_data_property_rejects_the_write() {
         final var source = """
@@ -427,10 +370,8 @@ public class InterpreterMemberTest {
         assertEquals("true,unwritable,false", str(source));
     }
 
-    // An own non-writable data property on a callable (a native namespace's own static, not one
-    // reached through the prototype chain) must reject a plain assignment the same way: previously
-    // setMember's JsCallableProperties branch called setEnumerableProperty unconditionally and
-    // always reported success, so the write silently landed as a no-op instead of throwing.
+    // Regression: setMember's JsCallableProperties branch called setEnumerableProperty unconditionally
+    // and always reported success, so the write silently landed as a no-op instead of throwing.
     @Test
     public void test_callable_own_non_writable_data_property_rejects_the_write() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Number.MAX_VALUE = 42;"));

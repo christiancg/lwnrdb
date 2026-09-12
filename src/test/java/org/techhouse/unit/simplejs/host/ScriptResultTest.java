@@ -13,7 +13,6 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.simplejs.host.ScriptResult;
 
 public class ScriptResultTest {
-    // A value result carries the EJson value and is not an error
     @Test
     public void test_value_result() {
         final var result = ScriptResult.value(new JsonString("hello"));
@@ -41,7 +40,6 @@ public class ScriptResultTest {
         assertNull(ScriptResult.error("TypeError", "boom").getErrorStack());
     }
 
-    // An error result carries name + message and no value
     @Test
     public void test_error_result() {
         final var result = ScriptResult.error("TypeError", "boom");
@@ -51,7 +49,6 @@ public class ScriptResultTest {
         assertEquals("boom", result.getErrorMessage());
     }
 
-    // The legacy two-argument factories carry empty, untruncated logs
     @Test
     public void test_legacy_factories_yield_empty_logs() {
         assertTrue(ScriptResult.value(new JsonString("x")).getLogs().isEmpty());
@@ -60,7 +57,6 @@ public class ScriptResultTest {
         assertFalse(ScriptResult.error("TypeError", "boom").isLogsTruncated());
     }
 
-    // A value result carries the captured logs and the truncation flag
     @Test
     public void test_value_result_carries_logs() {
         final var result = ScriptResult.value(new JsonString("x"), List.of("a", "b"), true);
@@ -68,7 +64,6 @@ public class ScriptResultTest {
         assertTrue(result.isLogsTruncated());
     }
 
-    // An error result carries the captured logs too
     @Test
     public void test_error_result_carries_logs() {
         final var result = ScriptResult.error("Error", "boom", List.of("a"), false);
@@ -89,7 +84,6 @@ public class ScriptResultTest {
         assertThrows(UnsupportedOperationException.class, () -> result.getLogs().add("c"));
     }
 
-    // A null log list is normalized to an empty one
     @Test
     public void test_null_logs_become_empty() {
         assertTrue(ScriptResult.value(new JsonString("x"), null, false).getLogs().isEmpty());

@@ -7,7 +7,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CloseConnectionRequest;
 
 public class CloseConnectionRequestTest {
-    // Verify constructor creates instance with CLOSE_CONNECTION operation type
     @Test
     public void test_constructor_sets_close_connection_type() {
         CloseConnectionRequest request = new CloseConnectionRequest();

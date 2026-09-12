@@ -10,12 +10,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 
-/**
- * Durable two-phase-commit recovery log for Phase 5b, stored as marker records in the already-wired
- * {@code admin/transactions} collection (a participant's PREPARED marker and the coordinator's COMMIT
- * decision). Markers live beside the transaction's buffered slice ops and are removed by the same helpers.
- * The coordinator marker's presence is the commit point: present ⇒ committed, absent ⇒ presumed-abort.
- */
+// The coordinator marker's presence is the commit point: present means committed, absent means presumed-abort.
 public final class Tx2pcLog {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final String COORDINATOR_ADDRESS_FIELD = "coordinatorAddress";
@@ -27,8 +22,6 @@ public final class Tx2pcLog {
     private static final String OUTCOME_COMMITTED = "committed";
     private static final String OUTCOME_ABORTED = "aborted";
 
-    // What a node knows about a distributed transaction, as reported over TX_STATUS for cooperative
-    // termination: COMMITTED/ABORTED are definitive; PREPARED means still in-doubt here; UNKNOWN means no record.
     public enum Status {
         COMMITTED, ABORTED, PREPARED, UNKNOWN
     }
@@ -51,8 +44,6 @@ public final class Tx2pcLog {
                 AdminTransactionEntry.MARKER_PARTICIPANT, AdminTransactionEntry.OP_TYPE_PARTICIPANT_PREPARED, payload));
     }
 
-    // Records a resolved participant's outcome (retained so peers can report it during cooperative termination),
-    // replacing the PREPARED marker.
     public static void recordOutcome(String dtxId, boolean committed) throws Exception {
         final var payload = new JsonObject();
         payload.addProperty(OUTCOME_FIELD, committed ? OUTCOME_COMMITTED : OUTCOME_ABORTED);
@@ -65,7 +56,6 @@ public final class Tx2pcLog {
         AdminOperationHelper.deleteTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)));
     }
 
-    // This node's knowledge of a distributed transaction, for TX_STATUS.
     public static Status status(String dtxId) throws Exception {
         if (isCommitted(dtxId)) {
             return Status.COMMITTED;
@@ -83,7 +73,6 @@ public final class Tx2pcLog {
         return entries.isEmpty() ? null : entries.getFirst().getPayload().get(OUTCOME_FIELD).asJsonString().getValue();
     }
 
-    // Drops outcome markers older than the retention window (their transactions are long resolved).
     public static void garbageCollectOutcomes(long retentionMs) throws Exception {
         final var cutoff = System.currentTimeMillis() - retentionMs;
         for (final var dtxId : dtxIdsWithSuffix(AdminTransactionEntry.MARKER_OUTCOME)) {
@@ -158,8 +147,7 @@ public final class Tx2pcLog {
         return readStringArray(entries.getFirst().getPayload(), PARTICIPANTS_FIELD);
     }
 
-    // The buffered slice op ids for a transaction: keys of the form {dtxId}|{seq} (numeric trailing token),
-    // excluding the marker records.
+    // Slice op ids are {dtxId}|{seq}; the numeric-suffix test is what excludes the marker records.
     public static List<String> sliceOpIds(String dtxId) {
         final var prefix = dtxId + Globals.COLL_IDENTIFIER_SEPARATOR;
         final var result = new ArrayList<String>();

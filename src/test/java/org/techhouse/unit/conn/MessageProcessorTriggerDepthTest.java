@@ -9,6 +9,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -32,10 +33,6 @@ import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * A client must not be able to claim a cascade depth: only EnforcingDatabaseAccess (a running trigger) sets
- * one, so whatever arrives on the wire is discarded at the edge.
- */
 public class MessageProcessorTriggerDepthTest {
     private static final String ADMIN = "depthadmin";
     private static final String PASSWORD = "password123";
@@ -87,11 +84,11 @@ public class MessageProcessorTriggerDepthTest {
     private List<String> exchange(String... requests) throws Exception {
         final var out = new ByteArrayOutputStream();
         final var message = String.join("\n", requests) + "\n";
-        final var socket = mockSocket(new ByteArrayInputStream(message.getBytes()), out);
+        final var socket = mockSocket(new ByteArrayInputStream(message.getBytes(StandardCharsets.UTF_8)), out);
         final var thread = new Thread(new MessageProcessor(socket));
         thread.start();
         thread.join(10000);
-        return List.of(out.toString().split("\n"));
+        return List.of(out.toString(StandardCharsets.UTF_8).split("\n"));
     }
 
     private List<TriggerEvent> settle() {

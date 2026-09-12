@@ -53,6 +53,9 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             return null;
         }
         try {
+            if (clazz.isRecord()) {
+                return ReflectionUtils.createRecordInstance(clazz, obj);
+            }
             final var instance = ReflectionUtils.createInstance(clazz, obj);
             final var fields = ReflectionUtils.getFields(clazz);
             for (var field : fields) {
@@ -72,7 +75,7 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
         Object value = ReflectionUtils.getFieldValue(field, instance);
         if (value != null) {
             final var pClass = field.getType();
-            return hardCast(value, pClass, field); // This should be fine
+            return hardCast(value, pClass, field);
         } else {
             return "null";
         }
@@ -102,7 +105,8 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
     private static <T> void assignValueToField(Field field, T obj, JsonBaseElement parsed) throws Exception {
         final var isFinal = field.accessFlags().contains(java.lang.reflect.AccessFlag.FINAL);
         final var fieldValue = ReflectionUtils.getFieldValue(field, obj);
-        // Skip final fields already set by a constructor call — only assign them if null (UnsafeAllocator path)
+        // A final field already set by a constructor must not be reassigned; only the UnsafeAllocator
+        // path leaves it null.
         if (isFinal && fieldValue != null) {
             return;
         }

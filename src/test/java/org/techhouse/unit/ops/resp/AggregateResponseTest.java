@@ -11,7 +11,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.AggregateResponse;
 
 public class AggregateResponseTest {
-    // Create AggregateResponse with valid results list and OK status
     @Test
     public void test_create_aggregate_response_with_valid_results() {
         List<JsonObject> results = new ArrayList<>();
@@ -31,7 +30,6 @@ public class AggregateResponseTest {
         assertEquals(results, response.getResults());
     }
 
-    // Create AggregateResponse with null results list
     @Test
     public void test_create_aggregate_response_with_null_results() {
         AggregateResponse response = new AggregateResponse("No results found", null);
@@ -42,7 +40,6 @@ public class AggregateResponseTest {
         assertNull(response.getResults());
     }
 
-    // Create AggregateResponse with empty results list and OK status
     @Test
     public void test_create_with_empty_results_and_ok_status() {
         List<JsonObject> emptyResults = new ArrayList<>();
@@ -52,7 +49,6 @@ public class AggregateResponseTest {
         assertTrue(response.getResults().isEmpty());
     }
 
-    // Verify OperationType is always AGGREGATE
     @Test
     public void test_operation_type_is_aggregate() {
         List<JsonObject> results = new ArrayList<>();
@@ -60,7 +56,6 @@ public class AggregateResponseTest {
         assertEquals(OperationType.AGGREGATE, response.getType());
     }
 
-    // test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         List<JsonObject> results = new ArrayList<>();
@@ -73,13 +68,11 @@ public class AggregateResponseTest {
 
         AggregateResponse response = new AggregateResponse("Success", results);
 
-        // Test getters
         assertEquals(OperationType.AGGREGATE, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals("Success", response.getMessage());
         assertEquals(results, response.getResults());
 
-        // Test setters
         response.setResults(new ArrayList<>());
         assertEquals(0, response.getResults().size());
     }

@@ -45,15 +45,13 @@ public class AdminCacheProcedureTest {
         return definition;
     }
 
-    // Nothing is loaded at startup, so a first access reads the file
     @Test
     public void test_get_procedure_loads_lazily_from_disk() throws Exception {
         final var written = write("lazy");
         assertEquals(written, cache.getProcedure(TestGlobals.DB, "lazy"));
     }
 
-    // Absence is negatively cached, so a misspelled name in a loop reads the disk once. Proven by
-    // writing the file after the miss: the cache must still answer null.
+    // Proven by writing the file after the miss: the negative entry must still answer null.
     @Test
     public void test_absence_is_negatively_cached() throws Exception {
         assertNull(cache.getProcedure(TestGlobals.DB, "later"));
@@ -93,7 +91,6 @@ public class AdminCacheProcedureTest {
         assertNull(cache.getProcedure(TestGlobals.DB, "p"));
     }
 
-    // A malformed file must not fail every later read of that name
     @Test
     public void test_malformed_procedure_file_reads_as_absent() throws Exception {
         fs.writeProcedure(TestGlobals.DB, "broken", "not json at all");

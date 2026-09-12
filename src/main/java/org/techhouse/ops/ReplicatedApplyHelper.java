@@ -10,11 +10,7 @@ import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
 
-/**
- * Applies a replicated write received from a collection's owner onto this (replica) node. Reuses the same
- * execute* helpers as the normal write path under the collection write lock; it never re-replicates because
- * replication is triggered only from the owner's OperationProcessor write handlers, not from the helpers.
- */
+// Never re-replicates: replication fires only from the owner's OperationProcessor write handlers.
 public final class ReplicatedApplyHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -40,8 +36,7 @@ public final class ReplicatedApplyHelper {
         }
     }
 
-    // Applies a single replication entry assuming the caller already holds the collection write lock. Used by
-    // the transaction-batch apply path, which locks every involved collection up front for one atomic window.
+    // The caller must already hold the collection write lock.
     static boolean applyLocked(ReplicationPayload payload) throws Exception {
         return switch (payload.getOp()) {
             case UPSERT -> applyUpsert(payload);
@@ -64,11 +59,9 @@ public final class ReplicatedApplyHelper {
             request.set_id(id);
             // A missing id (ENTRY_NOT_FOUND) is treated as already-applied: the end state (absent) matches.
             DeleteOperationHelper.executeDelete(request);
-            // Record the tombstone with the owner's version even when the doc was absent, so this replica
-            // will not resurrect it during anti-entropy and stays convergent on the delete.
+            // Tombstone with the owner's version even when absent, so anti-entropy cannot resurrect it.
             if (versions != null && i < versions.size()) {
-                // Versions arriving over the wire deserialize as a boxed Integer/Long/Double; the Number
-                // supertype reads the value as a long regardless of the concrete boxed type.
+                // Versions deserialize as a boxed Integer/Long/Double, so read them through Number.
                 final Number version = versions.get(i);
                 fs.appendTombstone(payload.getDbName(), payload.getCollName(), id, version.longValue());
                 WriteVersion.observe(version.longValue());

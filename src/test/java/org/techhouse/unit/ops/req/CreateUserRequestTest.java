@@ -97,7 +97,6 @@ public class CreateUserRequestTest {
         assertEquals("MANAGE", request.getRawScriptPermissions().get("mydb").asJsonString().getValue());
     }
 
-    // A request that omits the field reads as no grants rather than failing
     @Test
     public void test_absent_script_permissions_reads_as_empty() {
         final var request = (CreateUserRequest) org.techhouse.ops.req.RequestParser

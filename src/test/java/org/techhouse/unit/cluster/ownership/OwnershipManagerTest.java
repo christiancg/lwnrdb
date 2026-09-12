@@ -116,7 +116,6 @@ public class OwnershipManagerTest {
         other.setSelfNodeId("other");
         other.onMembershipChanged(
                 new MembershipView(List.of(node("self", NodeState.ALIVE), node("other", NodeState.ALIVE))));
-        // Exactly one of the two nodes considers itself the coordinator.
         assertTrue(manager.isAdminCoordinator() ^ other.isAdminCoordinator());
     }
 

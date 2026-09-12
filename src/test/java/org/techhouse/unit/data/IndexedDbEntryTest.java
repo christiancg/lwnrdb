@@ -5,16 +5,15 @@ import static org.junit.jupiter.api.Assertions.*;
 import org.junit.jupiter.api.Test;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
+import org.techhouse.data.JsonDocumentEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.test.TestUtils;
 
 public class IndexedDbEntryTest {
-    // Convert IndexedDbEntry to DbEntry correctly with matching fields
     @Test
     public void test_convert_to_db_entry() {
-        // Arrange
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("key", "value");
         IndexedDbEntry indexedDbEntry = new IndexedDbEntry();
@@ -23,40 +22,32 @@ public class IndexedDbEntryTest {
         indexedDbEntry.setCollectionName("testCollection");
         indexedDbEntry.setData(jsonObject);
 
-        // Act
         DbEntry dbEntry = indexedDbEntry.toDbEntry();
 
-        // Assert
         assertEquals("123", dbEntry.get_id());
         assertEquals("testDB", dbEntry.getDatabaseName());
         assertEquals("testCollection", dbEntry.getCollectionName());
         assertEquals(jsonObject, dbEntry.getData());
     }
 
-    // Handle null values for databaseName, collectionName, or data gracefully
     @Test
     public void test_handle_null_values() {
-        // Arrange
         IndexedDbEntry indexedDbEntry = new IndexedDbEntry();
         indexedDbEntry.set_id("123");
         indexedDbEntry.setDatabaseName(null);
         indexedDbEntry.setCollectionName(null);
         indexedDbEntry.setData(null);
 
-        // Act
         DbEntry dbEntry = indexedDbEntry.toDbEntry();
 
-        // Assert
         assertEquals("123", dbEntry.get_id());
         assertNull(dbEntry.getDatabaseName());
         assertNull(dbEntry.getCollectionName());
         assertNull(dbEntry.getData());
     }
 
-    // Converts data to JSON string with existing _id
     @Test
     public void test_to_file_entry_with_existing_id() {
-        // Arrange
         JsonObject data = new JsonObject();
         data.addProperty("name", "test");
         String existingId = "12345";
@@ -64,25 +55,19 @@ public class IndexedDbEntryTest {
         entry.set_id(existingId);
         entry.setData(data);
 
-        // Act
         String jsonResult = entry.toFileEntry();
 
-        // Assert
         assertTrue(jsonResult.contains("\"_id\":\"12345\""));
     }
 
-    // Handles null data gracefully
     @Test
     public void test_to_file_entry_with_null_data() {
-        // Arrange
         IndexedDbEntry entry = new IndexedDbEntry();
         entry.setData(null);
 
-        // Act & Assert
         assertThrows(NullPointerException.class, entry::toFileEntry);
     }
 
-    // Converts IndexedDbEntry to DbEntry with matching _id
     @Test
     public void test_convert_to_db_entry_with_matching_id() {
         IndexedDbEntry indexedDbEntry = new IndexedDbEntry();
@@ -101,7 +86,6 @@ public class IndexedDbEntryTest {
         assertEquals(data, dbEntry.getData());
     }
 
-    // Handles null _id in IndexedDbEntry
     @Test
     public void test_handle_null_id_in_indexed_db_entry() {
         IndexedDbEntry indexedDbEntry = new IndexedDbEntry();
@@ -120,7 +104,6 @@ public class IndexedDbEntryTest {
         assertEquals(data, dbEntry.getData());
     }
 
-    // Handles null _id in IndexedDbEntry
     @Test
     public void test_getters() {
         IndexedDbEntry indexedDbEntry = new IndexedDbEntry();
@@ -140,11 +123,9 @@ public class IndexedDbEntryTest {
         assertEquals(pkIndexEntry, indexedDbEntry.getIndex());
     }
 
-    // Handles null _id in IndexedDbEntry
     @Test
     public void test_e_json_is_not_null() throws NoSuchFieldException, IllegalAccessException {
-        IndexedDbEntry indexedDbEntry = new IndexedDbEntry();
-        final var eJson = TestUtils.getPrivateField(indexedDbEntry, "eJson", EJson.class);
+        final var eJson = TestUtils.getPrivateStaticField(JsonDocumentEntry.class, "eJson", EJson.class);
         assertNotNull(eJson);
     }
 

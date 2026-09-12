@@ -8,6 +8,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import org.junit.jupiter.api.AfterEach;
@@ -45,12 +46,12 @@ public class MessageProcessorListenTest {
 
     private String runMessages(String messages) throws Exception {
         final var out = new ByteArrayOutputStream();
-        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes()), out);
+        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
         final var mp = new MessageProcessor(socket);
         final var t = new Thread(mp);
         t.start();
         t.join(3000);
-        return out.toString();
+        return out.toString(StandardCharsets.UTF_8);
     }
 
     private void createListenAdmin(String username) {
@@ -64,7 +65,6 @@ public class MessageProcessorListenTest {
         UserOperationHelper.processCreateUser(req);
     }
 
-    // Authenticated LISTEN returns a listenId and resultHash over the wire
     @Test
     public void test_listen_returns_listenId_and_hash() throws Exception {
         createListenAdmin("listen_wire_admin");
@@ -80,7 +80,6 @@ public class MessageProcessorListenTest {
         assertTrue(response.contains("OK"), "Response should be OK");
     }
 
-    // Unauthenticated LISTEN returns UNAUTHENTICATED
     @Test
     public void test_unauthenticated_listen_returns_unauthenticated() throws Exception {
         final var messages = "{\"type\":\"LISTEN\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
@@ -91,7 +90,6 @@ public class MessageProcessorListenTest {
         assertTrue(response.contains("UNAUTHENTICATED"), "Unauthenticated LISTEN should return UNAUTHENTICATED");
     }
 
-    // LISTEN with invalid request (null aggregationSteps) returns ERROR
     @Test
     public void test_listen_invalid_request_returns_error() throws Exception {
         createListenAdmin("listen_invalid_admin");
@@ -104,7 +102,6 @@ public class MessageProcessorListenTest {
         assertTrue(response.contains("ERROR"), "Should return ERROR for missing aggregationSteps");
     }
 
-    // STOP_LISTEN with unknown listenId returns 404-7
     @Test
     public void test_stop_listen_unknown_id_returns_404() throws Exception {
         createListenAdmin("stop_listen_admin");
@@ -119,24 +116,19 @@ public class MessageProcessorListenTest {
         assertTrue(response.contains("NOT_FOUND"), "Status should be NOT_FOUND");
     }
 
-    // LISTEN followed by STOP_LISTEN returns OK for both
     @Test
     public void test_listen_then_stop_listen_returns_ok() throws Exception {
         createListenAdmin("listen_stop_admin");
-        // We run LISTEN first and capture the listenId from the response, then STOP_LISTEN.
-        // Since runMessages reads all output after the thread finishes, we send both in sequence.
-        // The LISTEN response contains the listenId that we hard-code via a two-step approach:
-        // first LISTEN, parse listenId, then STOP. Here we just verify both are in the output.
         final var out = new ByteArrayOutputStream();
         final var listenMsg = "{\"type\":\"AUTHENTICATE\",\"username\":\"listen_stop_admin\",\"password\":\"password123\"}\n"
                 + "{\"type\":\"LISTEN\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + TestGlobals.COLL + "\",\"aggregationSteps\":[]}\n";
-        final var socket = mockSocket(new ByteArrayInputStream(listenMsg.getBytes()), out);
+        final var socket = mockSocket(new ByteArrayInputStream(listenMsg.getBytes(StandardCharsets.UTF_8)), out);
         final var mp = new MessageProcessor(socket);
         final var t = new Thread(mp);
         t.start();
         t.join(3000);
-        final var listenResponse = out.toString();
+        final var listenResponse = out.toString(StandardCharsets.UTF_8);
 
         assertTrue(listenResponse.contains("listenId"), "LISTEN response must contain listenId");
     }

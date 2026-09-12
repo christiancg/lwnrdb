@@ -60,6 +60,15 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 CLUSTER_SECRET = "integration-cluster-secret"
 
+# Kept as a constant because a test has to reason in gossip rounds: a dead node's NodeInfo stays
+# frozen at whatever it last published, and how long that takes to happen is this interval.
+GOSSIP_INTERVAL_S = 0.5
+
+# How the crash-during-placement test fills the short window between killing a node and the driver
+# dropping it: concurrent connections, for long enough to cover suspectTimeoutMs several times over.
+HAMMER_CONNECTIONS = 4
+HAMMER_SECONDS = 5.0
+
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
 
@@ -330,7 +339,7 @@ def wait_for_cluster(timeout_s: float = 60.0):
 
     if not wait_until(_converged, timeout_s, interval_s=1.0):
         for n in nodes:
-            n.bu.dump_log()
+            n.dump_log()
         raise RuntimeError("cluster did not converge in time")
     print("  Cluster converged.")
 
@@ -365,7 +374,7 @@ class Node:
             f"clusterSeeds={seeds}\n"
             "clusterExpectedSize=3\n"
             f"clusterSecret={CLUSTER_SECRET}\n"
-            "gossipIntervalMs=500\n"
+            f"gossipIntervalMs={int(GOSSIP_INTERVAL_S * 1000)}\n"
             "suspectTimeoutMs=2000\n"
             "deadTimeoutMs=4000\n"
             "replicationAckTimeoutMs=5000\n"
@@ -411,7 +420,7 @@ class Node:
             if self.proc.poll() is not None:
                 break
             time.sleep(0.2)
-        self.bu.dump_log()
+        self.dump_log()
         self.proc.kill()
         raise RuntimeError(f"node-{self.index} did not come up in time")
 
@@ -441,13 +450,20 @@ class Node:
                 self.proc.kill()
         self.alive = False
 
-    def dump_log(self):
+    def dump_log(self, tail_bytes: int = 4000):
         try:
             with open(self.log_path, "rb") as fp:
-                tail = fp.read()[-4000:].decode(errors="replace")
+                tail = fp.read()[-tail_bytes:].decode(errors="replace")
             print(f"--- node-{self.index} log tail ---\n{tail}\n--- end ---", file=sys.stderr)
         except OSError:
             pass
+
+
+def dump_all_logs(tail_bytes: int = 20000):
+    """Print every node's log tail. The server mirrors each log entry to stdout and the suite
+    redirects that into server.log, so this is the whole operational log, not just startup."""
+    for n in nodes:
+        n.dump_log(tail_bytes)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1012,9 +1028,31 @@ def test_script_placement_falls_back_when_the_target_dies():
     check("forwarding is live before the crash",
                wait_until_forwarding_is_live(driver, timeout_s=60.0))
 
-    # Drive the runs from a background thread that is already going when the process dies. Starting
-    # the loop after kill() loses the race: the driver can drop node-2 from the placement set before
-    # the first run is even issued, and then every run is legitimately local.
+    # Kill the victim only once the driver's view of it is idle. A dead node's gossiped NodeInfo freezes
+    # at its last published values, and placement scores a node by its load ratio: a victim frozen at one
+    # running script scores below every live node sitting at zero, so placement would never sample it
+    # again and the failed forward this test is about could not happen. So: confirm it is idle, let a
+    # full gossip round carry that to the driver, confirm it stayed idle, then kill immediately. The
+    # second confirmation is the point - a single straggler completing during the wait re-arms exactly
+    # the condition being avoided, and only a check adjacent to the kill catches that.
+    def _victim_idle():
+        return script_stats(victim.client_port).get("running", 0) == 0
+
+    before = script_stats(driver).get("forwardFallbacks", 0)
+    check("the victim is idle before the crash", wait_until(_victim_idle, timeout_s=15.0))
+    time.sleep(2 * GOSSIP_INTERVAL_S)
+    check("the victim stayed idle for a full gossip round", _victim_idle())
+
+    print(f"  Killing node-{victim.index} (hard crash) ...")
+    victim.kill()
+
+    # Only now drive the runs, and drive them from several connections at once. The window is the one
+    # thing this test cannot widen: the driver keeps the victim in its placement set only until the
+    # failure detector gives up on it, suspectTimeoutMs after the last successful gossip. Placement
+    # picks one of two random samples, so any single run reaches the victim only some of the time, and
+    # one connection issuing them one after another fits too few tries into that window to be sure of
+    # landing on it. Concurrent connections raise the count inside the same window rather than
+    # stretching the window, which is what turns "usually observed" into "observed".
     stop = threading.Event()
     statuses = set()
 
@@ -1023,27 +1061,32 @@ def test_script_placement_falls_back_when_the_target_dies():
         try:
             while not stop.is_set():
                 statuses.add(run_script(None, "return 1 + 1;", conn=conn).get("status"))
-                # Throttled on purpose: the point is only to keep runs flowing across the crash, and
-                # a flat-out loop over the whole window below buries a 512m node under thousands of
-                # runs and OOMs it. ~20/s is more than enough to catch the placement.
+                # Throttled on purpose: the point is only to keep runs flowing across the crash, and a
+                # flat-out loop buries a 512m node under thousands of runs and OOMs it. ~20/s per
+                # connection, so ~HAMMER_CONNECTIONS x that in total, is more than enough.
                 stop.wait(0.05)
         finally:
             conn.close()
 
-    before = script_stats(driver).get("forwardFallbacks", 0)
-    worker = threading.Thread(target=hammer, daemon=True)
-    worker.start()
-    time.sleep(0.5)
-    print(f"  Killing node-{victim.index} (hard crash) ...")
-    victim.kill()
+    workers = [threading.Thread(target=hammer, daemon=True) for _ in range(HAMMER_CONNECTIONS)]
+    for worker in workers:
+        worker.start()
 
-    # Generous: a forward that dies mid-request can wait out scriptTimeoutMs + replicationAckTimeoutMs
-    # before it throws, and only then is the fallback recorded.
+    # Two waits, because the traffic and the observation need different budgets. The victim is out of
+    # the placement set within a second or two, so traffic past HAMMER_SECONDS cannot produce a new
+    # failed forward and would only pile runs onto the surviving nodes. The count itself can lag well
+    # behind: a forward that dies mid-request waits out scriptTimeoutMs + replicationAckTimeoutMs
+    # before it throws, and the fallback is only recorded then - so keep watching after traffic stops.
     fell_back = wait_until(
         lambda: script_stats(driver).get("forwardFallbacks", 0) > before,
-        timeout_s=35.0)
+        timeout_s=HAMMER_SECONDS)
     stop.set()
-    worker.join(60.0)
+    for worker in workers:
+        worker.join(60.0)
+    if not fell_back:
+        fell_back = wait_until(
+            lambda: script_stats(driver).get("forwardFallbacks", 0) > before,
+            timeout_s=30.0)
     fallbacks = script_stats(driver).get("forwardFallbacks", 0) - before
 
     check("scripts keep succeeding while a placement target is down", statuses == {"OK"},
@@ -1443,11 +1486,15 @@ def main():
         drop_db(nodes[0].client_port, DB)
         drop_db(nodes[0].client_port, CANARY_DB)
         drop_db(nodes[0].client_port, LOCALITY_DB)
+    except BaseException:
+        print("\n[ERROR] the suite raised - dumping node logs", file=sys.stderr)
+        dump_all_logs()
+        raise
     finally:
         for n in nodes:
             n.stop()
 
-    bu.summary()
+    bu.summary(on_failure=dump_all_logs)
 
 
 if __name__ == "__main__":

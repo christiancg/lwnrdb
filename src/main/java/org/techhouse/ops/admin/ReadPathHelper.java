@@ -1,0 +1,117 @@
+package org.techhouse.ops.admin;
+
+import java.util.Collections;
+import java.util.List;
+import org.techhouse.analyze.AnalyzeContext;
+import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.data.Transaction;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
+import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.AnalyzeHelper;
+import org.techhouse.ops.CollectionAccessHelper;
+import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OperationLocks;
+import org.techhouse.ops.OperationType;
+import org.techhouse.ops.ScriptOperationHelper;
+import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.resp.AggregateAnalyzeResponse;
+import org.techhouse.ops.resp.AggregateResponse;
+import org.techhouse.ops.resp.FindByIdResponse;
+import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.simplejs.exceptions.ScriptCallableException;
+
+public final class ReadPathHelper {
+    private static final Logger logger = Logger.logFor(ReadPathHelper.class);
+    private static final Cache cache = IocContainer.get(Cache.class);
+    private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+
+    private ReadPathHelper() {
+    }
+
+    public static OperationResponse processFindByIdOperation(FindByIdRequest findbyIdRequest,
+            Transaction activeTransaction) {
+        final var dbName = findbyIdRequest.getDatabaseName();
+        final var collName = findbyIdRequest.getCollectionName();
+        final var id = findbyIdRequest.get_id();
+        if (activeTransaction != null) {
+            final var overlay = activeTransaction.overlayFor(Cache.getCollectionIdentifier(dbName, collName));
+            if (overlay != null && overlay.containsKey(id)) {
+                final var buffered = overlay.get(id);
+                if (Transaction.isTombstone(buffered)) {
+                    return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
+                }
+                return new FindByIdResponse("Ok", buffered);
+            }
+        }
+        final var lockSet = List.of(Cache.getCollectionIdentifier(dbName, collName));
+        return OperationLocks.withReadLocks(findbyIdRequest.isDirtyRead(), lockSet, OperationType.FIND_BY_ID,
+                ErrorCode.ERROR_RETRIEVING, () -> {
+                    final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+                    final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
+                    if (foundIndexEntry < 0) {
+                        return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
+                    }
+                    final var entry = cache.getById(dbName, collName, primaryKeyIndex.get(foundIndexEntry));
+                    CollectionAccessHelper.recordPkIndexAccess(dbName, collName);
+                    CollectionAccessHelper.recordCollectionAccess(dbName, collName);
+                    return new FindByIdResponse("Ok", entry.getData());
+                });
+    }
+
+    public static OperationResponse processAggregateOperation(AggregateRequest aggregateRequest,
+            Transaction activeTransaction) {
+        List<String> readLocks = List.of();
+        final var analyzeContext = aggregateRequest.isAnalyze() ? new AnalyzeContext() : null;
+        if (analyzeContext != null) {
+            AnalyzeContext.set(analyzeContext);
+        }
+        final var dbName = aggregateRequest.getDatabaseName();
+        final var collName = aggregateRequest.getCollectionName();
+        final var overlay = activeTransaction != null
+                ? activeTransaction.overlayFor(Cache.getCollectionIdentifier(dbName, collName))
+                : null;
+        try {
+            readLocks = locks.acquireReadLocks(aggregateRequest.isDirtyRead(),
+                    AggregationOperationHelper.aggregateLockSet(aggregateRequest));
+            if (analyzeContext != null) {
+                readLocks.forEach(analyzeContext::addLock);
+            }
+            final List<org.techhouse.ejson.elements.JsonObject> results;
+            if (overlay != null && !overlay.isEmpty()) {
+                // Passing a prepared source stream also disables the index-backed source fast-paths, so
+                // the transaction's overlaid documents are honoured exactly.
+                final var committed = cache.initializeStreamIfNecessary(null, dbName, collName);
+                final var source = TransactionOperationHelper.applyOverlayToStream(activeTransaction,
+                        Cache.getCollectionIdentifier(dbName, collName), committed);
+                results = AggregationOperationHelper.processAggregation(aggregateRequest, source);
+            } else {
+                results = AggregationOperationHelper.processAggregation(aggregateRequest);
+            }
+            CollectionAccessHelper.recordCollectionAccess(aggregateRequest.getDatabaseName(),
+                    aggregateRequest.getCollectionName());
+            if (analyzeContext != null) {
+                // In analyze mode an empty result still answers with the analysis rather than NO_RESULTS.
+                return new AggregateAnalyzeResponse("Ok", results,
+                        AnalyzeHelper.build(aggregateRequest, analyzeContext));
+            }
+            return results.isEmpty()
+                    ? new OperationResponse(OperationType.AGGREGATE, ErrorCode.NO_RESULTS)
+                    : new AggregateResponse("Ok", results);
+        } catch (ScriptCallableException scriptFailure) {
+            return new OperationResponse(OperationType.AGGREGATE, scriptFailure.getMessage(),
+                    ScriptOperationHelper.errorCodeFor(scriptFailure.getErrorName()));
+        } catch (Exception e) {
+            logger.error(OperationType.AGGREGATE + " failed with " + ErrorCode.ERROR_AGGREGATING.getCode(), e);
+            return new OperationResponse(OperationType.AGGREGATE, ErrorCode.ERROR_AGGREGATING);
+        } finally {
+            locks.releaseReadLocks(readLocks);
+            if (analyzeContext != null) {
+                AnalyzeContext.clear();
+            }
+        }
+    }
+}

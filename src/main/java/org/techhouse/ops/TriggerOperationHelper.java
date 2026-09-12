@@ -17,7 +17,6 @@ import org.techhouse.ops.req.DeleteTriggerRequest;
 import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.req.TestTriggerRequest;
-import org.techhouse.ops.resp.DeleteTriggerResponse;
 import org.techhouse.ops.resp.ListTriggersResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveTriggerResponse;
@@ -205,7 +204,7 @@ public final class TriggerOperationHelper {
         final var remaining = new ArrayList<>(cache.getTriggersFor(dbName, collName));
         remaining.removeIf(trigger -> trigger.getName().equals(request.getName()));
         persist(dbName, collName, remaining);
-        return new DeleteTriggerResponse("Trigger deleted successfully");
+        return OperationResponse.ok(OperationType.DELETE_TRIGGER, "Trigger deleted successfully");
     }
 
     public static OperationResponse executeList(ListTriggersRequest request) {

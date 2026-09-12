@@ -6,8 +6,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.Event;
 import org.techhouse.bckg_ops.events.EventType;
 
-// Event is abstract; tested via a minimal concrete subclass so the test is not coupled to any
-// particular production event type. The base equals/hashCode are defined purely on the event type.
+// Event is abstract; a minimal concrete subclass keeps this uncoupled from any production event type.
 public class EventTest {
 
     private static final class TestEvent extends Event {

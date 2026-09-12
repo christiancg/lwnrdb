@@ -7,7 +7,6 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 
 public class NumberRoundTripIntegrationTest {
-    // A document holding out-of-long-range numbers survives a serialize/parse round trip
     @Test
     public void test_save_then_read_large_number_preserves_value() {
         final var eJson = new EJson();
@@ -27,7 +26,6 @@ public class NumberRoundTripIntegrationTest {
         assertEquals(Double.MIN_VALUE, parsed.get("min").asJsonNumber().getValue().doubleValue());
     }
 
-    // Documents written before the formatter change, in Java exponent notation, still parse
     @Test
     public void test_old_java_format_still_parses() {
         final var eJson = new EJson();
@@ -38,7 +36,6 @@ public class NumberRoundTripIntegrationTest {
         assertEquals(1e-7, parsed.get("c").asJsonNumber().getValue().doubleValue());
     }
 
-    // The new exponential rendering is itself re-readable by the lexer
     @Test
     public void test_new_format_round_trips_through_the_lexer() {
         final var eJson = new EJson();

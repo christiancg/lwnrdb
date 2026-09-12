@@ -44,11 +44,6 @@ import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The cap's central invariant: it bounds client-initiated runs only. A trigger's pending-run record is
- * consumed by the transaction that applies its effects, so a run refused for want of a permit would be a
- * dropped trigger rather than a retried one - and a scheduled run has no caller to hand a 503-6 to.
- */
 public class TriggerAdmissionExemptionTest {
     private static final String OWNER = "exemptowner";
     private static final String OUTPUT_COLL = "exemptOutput";
@@ -177,7 +172,6 @@ public class TriggerAdmissionExemptionTest {
         }
         assertNotNull(outputRow("trigger-under-saturation"), "the trigger was dropped by the script cap");
         assertTrue(Objects.requireNonNull(outputRow("trigger-under-saturation")).get("ok").asJsonBoolean().getValue());
-        // Nothing was refused: the trigger path never consults the pool at all.
         assertEquals(0, admission.getRejected());
     }
 

@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.data.PkIndexEntry;
 
 public class PkIndexEntryTest {
-    // Convert PkIndexEntry to a file entry string using toFileEntry
     @Test
     public void test_to_file_entry_conversion() {
         PkIndexEntry entry = new PkIndexEntry("testDB", "testCollection", "testValue", 123L, 456L, 0);
@@ -31,7 +30,6 @@ public class PkIndexEntryTest {
         assertEquals(1720000000123L, parsed.getVersion());
     }
 
-    // Handle empty or null strings in fromIndexFileEntry
     @Test
     public void test_from_index_file_entry_with_empty_string() {
         String line = "";

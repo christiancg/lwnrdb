@@ -7,7 +7,6 @@ import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
 
 public class CountAggregationStepTest {
-    // Constructor initializes with COUNT type
     @Test
     public void test_constructor_sets_count_type() {
         CountAggregationStep step = new CountAggregationStep();

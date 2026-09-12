@@ -9,9 +9,8 @@ import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.host.ScriptResult;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 
-// Real script snippets through SimpleJs.run exercising every Temporal.Now.* member (phase T8).
-// Exact current-time values can never be asserted (the clock keeps moving between the script and
-// the assertion), so every check here is plausibility/type/shape-based rather than an exact match.
+// Exact current-time values can never be asserted (the clock moves between the script and the assertion),
+// so every check here is plausibility/shape-based.
 public class TemporalNowProgramTest {
     private final SimpleJs engine = new SimpleJs();
 

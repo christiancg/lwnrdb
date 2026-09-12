@@ -18,7 +18,6 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.ScheduleOperationHelper;
 
 public class ScheduleExecutor {
-    private static final long SHUTDOWN_TIMEOUT_SECONDS = 3L;
     private final Logger logger = Logger.logFor(ScheduleExecutor.class);
     private final Configuration configuration = Configuration.getInstance();
     private final ScheduleRegistry registry = IocContainer.get(ScheduleRegistry.class);
@@ -177,17 +176,9 @@ public class ScheduleExecutor {
             scheduler.shutdownNow();
             scheduler = null;
         }
-        pool.shutdownNow();
-        try {
-            if (!pool.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                logger.warning("Schedule workers did not terminate within the timeout; abandoning them");
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        pool = RestartablePool.shutdownAndReplace(pool, logger, "Schedule");
         queue.clear();
         running.clear();
-        pool = Executors.newVirtualThreadPerTaskExecutor();
         dispatcher = null;
         logger.info("Stopped the scheduler");
     }

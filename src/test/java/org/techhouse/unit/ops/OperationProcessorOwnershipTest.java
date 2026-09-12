@@ -33,7 +33,6 @@ public class OperationProcessorOwnershipTest {
 
     @Test
     public void test_create_database_sets_authenticated_user_as_owner() throws Exception {
-        // Create a user and authenticate them
         final var createReq = new CreateUserRequest();
         createReq.setUsername("db_creator");
         createReq.setPassword("password123");
@@ -43,7 +42,6 @@ public class OperationProcessorOwnershipTest {
         createReq.setCollectionPermissions(new java.util.HashMap<>());
         UserOperationHelper.processCreateUser(createReq);
 
-        // Simulate authenticated clientId
         final var clientTracker = IocContainer.get(org.techhouse.conn.ClientTracker.class);
         final var fakeSocket = org.mockito.Mockito.mock(java.net.Socket.class);
         final var fakeAddr = org.mockito.Mockito.mock(java.net.InetAddress.class);
@@ -61,7 +59,6 @@ public class OperationProcessorOwnershipTest {
         assertNotNull(dbEntry);
         assertTrue(dbEntry.isOwner("db_creator"), "Creator should be set as owner");
 
-        // Clean up
         clientTracker.removeById(clientId);
     }
 

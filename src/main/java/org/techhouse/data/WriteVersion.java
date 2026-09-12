@@ -3,10 +3,8 @@ package org.techhouse.data;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Node-global last-write-wins version source (epoch millis, forced strictly monotonic). {@link #next()}
- * assigns the version for a locally-coordinated write; {@link #observe(long)} advances the clock past any
- * version received via replication, so a node that later coordinates writes never assigns a version below
- * one it has already seen (keeping versions monotonic across ownership handoff).
+ * Every replicated version must be observed here, or a node that later coordinates writes assigns one below
+ * a version it has already seen and last-write-wins resolves backwards.
  */
 public final class WriteVersion {
     private static final AtomicLong last = new AtomicLong(0);

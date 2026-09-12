@@ -16,8 +16,6 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsValue;
 
-// The InterpreterOps seam builtins call back through, kept out of Interpreter so the class reads as
-// evaluation rather than as one 130-line adapter.
 public final class InterpreterOpsBridge implements org.techhouse.simplejs.builtins.InterpreterOps {
     private final Interpreter interp;
 

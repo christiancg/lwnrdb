@@ -55,7 +55,6 @@ public class LargeNumberRoundTripIntegrationTest {
         assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
     }
 
-    // A saved document keeps its out-of-range numbers through a positioned read
     @Test
     public void test_save_and_find_by_id_preserve_large_numbers() {
         processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, COLL));
@@ -70,7 +69,6 @@ public class LargeNumberRoundTripIntegrationTest {
         assertEquals(42d, amountOf("small"));
     }
 
-    // The same values match through an index-backed aggregation, before and after a reindex
     @Test
     public void test_aggregate_and_reindex_on_large_numbers() {
         processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, INDEXED_COLL));

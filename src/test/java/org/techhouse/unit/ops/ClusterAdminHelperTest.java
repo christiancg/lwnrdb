@@ -68,7 +68,6 @@ public class ClusterAdminHelperTest {
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
     }
 
-    // Arms the sync gate (as start() would in production) with the given completion state.
     private void armAdminSync(boolean completed) throws Exception {
         TestUtils.setPrivateField(adminAntiEntropyService, "started", true);
         TestUtils.setPrivateField(adminAntiEntropyService, "adminSyncCompleted", new AtomicBoolean(completed));
@@ -122,7 +121,6 @@ public class ClusterAdminHelperTest {
         assertSame(response, ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response));
     }
 
-    // Procedure and trigger DDL are coordinator-serialized exactly as SAVE_SCHEMA/DELETE_SCHEMA are
     @Test
     public void test_procedure_and_trigger_ops_are_coordinated_admin_ops() {
         assertTrue(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.SAVE_PROCEDURE));
@@ -131,7 +129,6 @@ public class ClusterAdminHelperTest {
         assertTrue(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.DELETE_TRIGGER));
     }
 
-    // Calling one is not: it runs where it lands and its own operations route themselves, like RUN_SCRIPT
     @Test
     public void test_call_procedure_and_lists_are_not_coordinated_admin_ops() {
         assertFalse(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.CALL_PROCEDURE));

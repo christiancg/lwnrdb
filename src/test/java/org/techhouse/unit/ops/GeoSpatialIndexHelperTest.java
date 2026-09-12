@@ -10,8 +10,6 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.GeoSpatialIndexHelper;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 
-// Unit coverage of the branches GeoSpatialIndexHelper resolves without touching the cache: an operator
-// whose matching set a bounding box cannot prune returns null so the caller falls back to a full scan.
 public class GeoSpatialIndexHelperTest {
     @Test
     public void test_distance_greater_than_is_not_index_accelerable() throws Exception {

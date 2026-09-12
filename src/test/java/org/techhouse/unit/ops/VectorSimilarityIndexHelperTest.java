@@ -10,9 +10,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.VectorSimilarityIndexHelper;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 
-// Unit coverage of the branches VectorSimilarityIndexHelper resolves without touching the cache: an
-// operator that is not the nearest ranking operator, and an "exact" query, both return null so the
-// caller falls back to a full scan.
 public class VectorSimilarityIndexHelperTest {
     @Test
     public void test_non_nearest_operator_is_not_index_accelerable() throws Exception {

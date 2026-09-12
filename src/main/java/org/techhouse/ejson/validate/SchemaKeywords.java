@@ -44,7 +44,6 @@ final class SchemaKeywords {
     static final String REF = "$ref";
     static final String DEFS = "$defs";
     static final String FORMAT = "format";
-    // EJson extension: asserts a field is one of the registered custom types (geo, vector, datetime, time).
     static final String CUSTOM_TYPE = "customType";
 
     static final String T_OBJECT = "object";
@@ -57,12 +56,11 @@ final class SchemaKeywords {
 
     static final Set<String> TYPE_NAMES = Set.of(T_OBJECT, T_ARRAY, T_STRING, T_NUMBER, T_INTEGER, T_BOOLEAN, T_NULL);
 
-    // Keywords accepted but non-constraining (annotations / identifiers). Any value is tolerated.
     static final Set<String> ANNOTATIONS = Set.of("$schema", "$id", "$anchor", "$comment", "title", "description",
             "default", "examples", "readOnly", "writeOnly", "deprecated");
 
-    // Known 2020-12 keywords that this validator does not implement. Rejected by the meta-validator so a
-    // schema author is never misled into believing an unenforced constraint is applied.
+    // Rejected rather than ignored, so a schema author is never misled into believing an unenforced
+    // constraint is applied.
     static final Set<String> UNSUPPORTED = Set.of("unevaluatedProperties", "unevaluatedItems", "$dynamicRef",
             "$dynamicAnchor", "$vocabulary", "$recursiveRef", "$recursiveAnchor");
 }

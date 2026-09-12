@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonString;
 
 public class JsonStringTest {
-    // Create JsonString with empty constructor should initialize with empty string value
     @Test
     public void test_empty_constructor_initializes_empty_string() {
         JsonString jsonString = new JsonString();
@@ -15,7 +14,6 @@ public class JsonStringTest {
         assertEquals("", jsonString.getValue());
     }
 
-    // Create JsonString with null value
     @Test
     public void test_constructor_with_null_value() {
         JsonString jsonString = new JsonString(null);
@@ -23,7 +21,6 @@ public class JsonStringTest {
         assertNull(jsonString.getValue());
     }
 
-    // Constructor should set the value field to the provided string parameter
     @Test
     public void test_constructor_sets_value_field() {
         String testValue = "test string";
@@ -32,7 +29,6 @@ public class JsonStringTest {
         assertEquals(testValue, jsonString.getValue());
     }
 
-    // Constructor should handle null input value
     @Test
     public void test_constructor_handles_null_input() {
         JsonString jsonString = new JsonString(null);

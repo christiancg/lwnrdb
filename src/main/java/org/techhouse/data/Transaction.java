@@ -11,29 +11,17 @@ import java.util.Set;
 import java.util.UUID;
 import org.techhouse.ejson.elements.JsonObject;
 
-/**
- * Per-connection state for an in-progress transaction. Buffered writes are persisted as operation
- * records in the {@code admin/transactions} collection (durable source of truth), while this object
- * holds the fast-access state the connection thread needs: the collection write locks it currently
- * holds (acquired lazily on first write to each collection and released at commit/rollback), the ids
- * of the buffered operation records, and an in-memory overlay of the buffered mutations used to
- * serve read-your-writes for the transaction's own reads.
- */
 public class Transaction {
-    // Sentinel stored in the overlay to represent a buffered delete (a tombstone hiding the committed
-    // document from the transaction's own reads until commit).
     private static final JsonObject TOMBSTONE = new JsonObject();
 
     private final UUID transactionId;
     private final UUID clientId;
     private int seq;
     private final Set<String> heldLocks = new HashSet<>();
-    // The cascade depth writes committed by this transaction fire their triggers at, so a trigger's own
-    // transaction cannot restart the chain at zero and cascade forever.
+    // Carried so a trigger's own transaction cannot restart the cascade at zero and loop forever.
     private int triggerDepth;
     private final List<String> bufferedOpIds = new ArrayList<>();
-    // collId -> (id -> buffered document | TOMBSTONE). LinkedHashMap keeps insertion order so pure
-    // inserts stream in a stable order after the committed documents during an aggregation read.
+    // LinkedHashMap, not HashMap: inserts must stream in a stable order after the committed documents.
     private final Map<String, LinkedHashMap<String, JsonObject>> overlay = new HashMap<>();
     private final Map<Long, Set<String>> insertedIdsByOp = new HashMap<>();
 
@@ -82,8 +70,7 @@ public class Transaction {
         return bufferedOpIds;
     }
 
-    // seq of a buffered save -> the ids that operation inserts rather than updates. Decided when the write
-    // is buffered, because once the commit has applied it the store can no longer tell an insert from an
+    // Decided at buffer time: after the commit applies, the store can no longer tell an insert from an
     // update, and that is what decides whether the write fires CREATED or UPDATED.
     public void recordInserts(long seq, Collection<String> ids) {
         if (!ids.isEmpty()) {
@@ -103,13 +90,10 @@ public class Transaction {
         overlay.computeIfAbsent(collId, _ -> new LinkedHashMap<>()).put(id, TOMBSTONE);
     }
 
-    // The buffered mutations for a collection (id -> document | TOMBSTONE), or null if the transaction
-    // has not written to that collection.
     public Map<String, JsonObject> overlayFor(String collId) {
         return overlay.get(collId);
     }
 
-    // The collection identifiers the transaction has buffered writes for.
     public Set<String> touchedCollections() {
         return overlay.keySet();
     }

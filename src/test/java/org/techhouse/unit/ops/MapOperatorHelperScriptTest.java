@@ -117,7 +117,6 @@ public class MapOperatorHelperScriptTest {
         }
     }
 
-    // The script sees a converted copy, so a mutation inside it can never reach the stored document.
     @Test
     public void test_script_cannot_mutate_the_source_document() {
         try (var context = new PipelineScriptContext()) {

@@ -21,7 +21,6 @@ import org.techhouse.simplejs.host.ScriptResult;
 public class ScriptCancellationTest {
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
 
-    // The engine-level seam: everything else about the sandbox is the standalone default.
     private record CancellableBindings(ResourceLimits limits, CancellationToken cancellation,
             Consumer<String> console) implements HostBindings {
 
@@ -41,7 +40,6 @@ public class ScriptCancellationTest {
         return simpleJs.run(source, new CancellableBindings(limits, token, null));
     }
 
-    // Cancellation is reported as its own outcome, not as the timeout it would otherwise become
     @Test
     public void test_busy_loop_is_cancelled() throws Exception {
         final var cancelled = new AtomicBoolean();
@@ -60,7 +58,7 @@ public class ScriptCancellationTest {
         assertEquals("Script was cancelled", result[0].getErrorMessage());
     }
 
-    // The ScriptAbortException property: a script cannot trap its own cancellation
+    // Cancellation arrives as ScriptAbortException, which user code cannot trap
     @Test
     public void test_cancellation_is_not_catchable() {
         final var result = run("try { while (true) { } } catch (e) { return 'caught'; }", () -> true, -1);
@@ -124,7 +122,6 @@ public class ScriptCancellationTest {
         assertEquals(2, result.getValue().asJsonNumber().getValue().intValue());
     }
 
-    // A cancelled run still reports the console output it produced before it was stopped
     @Test
     public void test_keeps_the_logs_produced_before_the_cancellation() throws Exception {
         final var cancelled = new AtomicBoolean();

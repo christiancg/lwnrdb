@@ -8,15 +8,12 @@ import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonCustom;
 
-public class FieldIndexEntry<T> implements Comparable<T> {
-    private String databaseName;
-    private String collectionName;
+public class FieldIndexEntry<T> extends CollectionScopedEntry implements Comparable<T> {
     private T value;
     private Set<String> ids;
 
     public FieldIndexEntry(String databaseName, String collectionName, T value, Set<String> ids) {
-        this.databaseName = databaseName;
-        this.collectionName = collectionName;
+        super(databaseName, collectionName);
         this.value = value;
         this.ids = ids;
     }
@@ -50,22 +47,6 @@ public class FieldIndexEntry<T> implements Comparable<T> {
                 Arrays.stream(idsStr.split(Globals.ID_SEPARATOR)).collect(Collectors.toSet()));
     }
 
-    public String getDatabaseName() {
-        return databaseName;
-    }
-
-    public void setDatabaseName(String databaseName) {
-        this.databaseName = databaseName;
-    }
-
-    public String getCollectionName() {
-        return collectionName;
-    }
-
-    public void setCollectionName(String collectionName) {
-        this.collectionName = collectionName;
-    }
-
     public T getValue() {
         return value;
     }
@@ -83,6 +64,7 @@ public class FieldIndexEntry<T> implements Comparable<T> {
     }
 
     @Override
+    @SuppressWarnings("NullableProblems")
     public int compareTo(T otherIndexValue) {
         Objects.requireNonNull(otherIndexValue);
         return switch (value) {

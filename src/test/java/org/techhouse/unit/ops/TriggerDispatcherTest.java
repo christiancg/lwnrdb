@@ -40,10 +40,6 @@ import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The dispatcher's own behaviour, definer rights above all: the trigger must behave the same regardless of
- * who performed the write, which is exactly what invoker rights could not offer.
- */
 public class TriggerDispatcherTest {
     private static final String OWNER = "trigowner";
     private static final String WRITER = "trigwriter";
@@ -63,7 +59,6 @@ public class TriggerDispatcherTest {
                 .saveCollectionEntry(new org.techhouse.data.admin.AdminCollEntry(TestGlobals.DB, AUDIT_COLL));
         AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of(OWNER));
         createUser(OWNER, new HashMap<>());
-        // The writer may write the source collection but has no access to the audit collection at all.
         final var writerPerms = new HashMap<String, PermissionLevel>();
         createUser(WRITER, writerPerms);
         final var collPerms = new HashMap<String, PermissionLevel>();
@@ -123,7 +118,6 @@ public class TriggerDispatcherTest {
                 OWNER);
     }
 
-    // Same audit row, but the procedure also returns a value far larger than any result cap
     private void storeBigResultProcedure() throws Exception {
         ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, "audit",
                 "import db from 'db'; import args from 'args';" + "db.save(db.name, '" + AUDIT_COLL
@@ -164,7 +158,6 @@ public class TriggerDispatcherTest {
         return null;
     }
 
-    // A trigger's result is discarded, so the result cap must not fail a run for a value nobody reads
     @Test
     public void test_trigger_runs_are_not_result_capped() throws Exception {
         TestUtils.setPrivateField(configuration, "scriptMaxResultBytes", 256L);
@@ -178,8 +171,6 @@ public class TriggerDispatcherTest {
         }
     }
 
-    // The whole point of definer rights: a writer with no access to the audit collection still produces
-    // the audit row, because the trigger runs as the user who installed it.
     @Test
     public void test_runs_with_definer_authority_not_writers_authority() throws Exception {
         storeAuditProcedure();
@@ -191,7 +182,6 @@ public class TriggerDispatcherTest {
         assertEquals(OWNER, row.get("definer").asJsonString().getValue());
     }
 
-    // The property invoker rights broke: the effect must not depend on who wrote
     @Test
     public void test_behaves_identically_for_low_and_high_privilege_writers() throws Exception {
         storeAuditProcedure();
@@ -245,7 +235,6 @@ public class TriggerDispatcherTest {
         assertNull(auditRow("disabled"));
     }
 
-    // The trigger record may have been dropped while the event was queued
     @Test
     public void test_skips_trigger_removed_while_queued() throws Exception {
         storeAuditProcedure();
@@ -265,7 +254,6 @@ public class TriggerDispatcherTest {
         assertNull(auditRow("no-procedure"));
     }
 
-    // Every write a trigger issues carries depth+1, which is what bounds a cascade
     @Test
     public void test_stamps_issued_requests_with_incremented_depth() throws Exception {
         ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, "audit",
@@ -279,7 +267,6 @@ public class TriggerDispatcherTest {
         assertEquals(1d, row.get("depth").asJsonNumber().getValue().doubleValue());
     }
 
-    // A trigger failure never reaches the write that fired it - it already committed
     @Test
     public void test_script_failure_is_logged_and_swallowed() throws Exception {
         ProcedureOperationHelper.executeSave(
@@ -305,7 +292,6 @@ public class TriggerDispatcherTest {
         }
     }
 
-    // A retryable failure with no record to mark cannot be retried either: there is nothing to replay.
     @Test
     public void test_a_failure_without_a_record_is_terminal() throws Exception {
         TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", false);
@@ -334,7 +320,6 @@ public class TriggerDispatcherTest {
         assertEquals("CREATED", row.get("event").asJsonString().getValue());
     }
 
-    // Batch mode hands the whole batch to one run
     @Test
     public void test_batch_mode_passes_documents() throws Exception {
         ProcedureOperationHelper
@@ -352,7 +337,6 @@ public class TriggerDispatcherTest {
                 Objects.requireNonNull(auditRow("batch")).get("count").asJsonNumber().getValue().doubleValue());
     }
 
-    // The trigger's own budget, tighter than scriptTimeoutMs because nobody is waiting on it
     @Test
     public void test_trigger_timeout_is_applied() throws Exception {
         ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, "audit", "while (true) { }"),

@@ -24,14 +24,12 @@ public class NumberBuiltinsTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // Number coerces its argument
     @Test
     public void test_number_coercion() {
         assertEquals(5, num("Number('5')"));
         assertEquals(0, num("Number()"));
     }
 
-    // Number.isNaN and Number.isInteger do not coerce
     @Test
     public void test_isnan_isinteger() {
         assertTrue(bool("Number.isNaN(0 / 0)"));
@@ -42,7 +40,6 @@ public class NumberBuiltinsTest {
         assertTrue(bool("Number.isFinite(1)"));
     }
 
-    // global parseInt honors base prefixes and radix
     @Test
     public void test_parseint() {
         assertEquals(42, num("parseInt('42')"));
@@ -52,7 +49,6 @@ public class NumberBuiltinsTest {
         assertTrue(Double.isNaN(num("parseInt('xyz')")));
     }
 
-    // global parseFloat reads a leading float
     @Test
     public void test_parsefloat() {
         assertEquals(3.14, num("parseFloat('3.14abc')"));
@@ -60,7 +56,6 @@ public class NumberBuiltinsTest {
         assertTrue(Double.isNaN(num("parseFloat('abc')")));
     }
 
-    // global isNaN and isFinite coerce their argument
     @Test
     public void test_global_isnan_isfinite() {
         assertTrue(bool("isNaN('x')"));
@@ -69,7 +64,6 @@ public class NumberBuiltinsTest {
         assertFalse(bool("isFinite(1 / 0)"));
     }
 
-    // toFixed rounds half up to the requested number of digits
     @Test
     public void test_tofixed() {
         assertEquals("3.14", str("(3.14159).toFixed(2)"));
@@ -78,7 +72,6 @@ public class NumberBuiltinsTest {
         assertEquals("NaN", str("(0 / 0).toFixed(2)"));
     }
 
-    // toPrecision renders significant digits; no arg falls back to toString
     @Test
     public void test_toprecision() {
         assertEquals("123", str("(123.456).toPrecision(3)"));
@@ -87,7 +80,6 @@ public class NumberBuiltinsTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("(1).toPrecision(0)"));
     }
 
-    // toString honors a radix
     @Test
     public void test_tostring_radix() {
         assertEquals("ff", str("(255).toString(16)"));
@@ -97,20 +89,17 @@ public class NumberBuiltinsTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("(1).toString(40)"));
     }
 
-    // toExponential renders exponential notation
     @Test
     public void test_toexponential() {
         assertEquals("1.2345e+4", str("(12345).toExponential()"));
         assertEquals("1.23e+4", str("(12345).toExponential(2)"));
     }
 
-    // valueOf returns the primitive number
     @Test
     public void test_valueof() {
         assertEquals(5, num("(5).valueOf()"));
     }
 
-    // toString with a radix handles fractional, negative, NaN and infinite values
     @Test
     public void test_tostring_radix_edges() {
         assertEquals("11.1", str("(3.5).toString(2)"));
@@ -119,7 +108,6 @@ public class NumberBuiltinsTest {
         assertEquals("-Infinity", str("(-1 / 0).toString(2)"));
     }
 
-    // toFixed/toPrecision/toExponential render NaN and infinities
     @Test
     public void test_nonfinite_formatting() {
         assertEquals("NaN", str("(0 / 0).toFixed(2)"));
@@ -130,7 +118,6 @@ public class NumberBuiltinsTest {
         assertEquals("-Infinity", str("(-1 / 0).toExponential()"));
     }
 
-    // Number carries the documented constants
     @Test
     public void test_constants() {
         assertEquals(9007199254740991d, num("Number.MAX_SAFE_INTEGER"));
@@ -140,7 +127,6 @@ public class NumberBuiltinsTest {
         assertTrue(num("Number.EPSILON") > 0);
     }
 
-    // BigInt coerces integers, booleans and integer strings
     @Test
     public void test_bigint_coercion() {
         assertTrue(bool("BigInt(10) === 10n"));
@@ -153,26 +139,22 @@ public class NumberBuiltinsTest {
         assertTrue(bool("typeof BigInt(5) === 'bigint'"));
     }
 
-    // BigInt rejects a non-integer number with a RangeError
     @Test
     public void test_bigint_non_integer_throws() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("BigInt(1.5)"));
     }
 
-    // BigInt rejects an unparseable string with a SyntaxError
     @Test
     public void test_bigint_bad_string_throws() {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("BigInt('x')"));
     }
 
-    // BigInt runs the object through ToPrimitive first, so it fails on the resulting string
     @Test
     public void test_bigint_object_throws() {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("BigInt({})"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt(Symbol())"));
     }
 
-    // toLocaleString formats with the default locale; digits survive grouping, specials stay readable
     @Test
     public void test_to_locale_string() {
         assertEquals("1234", str("(1234).toLocaleString().replace(/[^0-9]/g, '')"));
@@ -181,7 +163,6 @@ public class NumberBuiltinsTest {
         assertEquals("-∞", str("(Number.NEGATIVE_INFINITY).toLocaleString()"));
     }
 
-    // toFixed rounds the binary double, not its shortest decimal form
     @Test
     public void test_to_fixed_binary_rounding() {
         assertEquals("1.00", str("(1.005).toFixed(2)"));
@@ -191,7 +172,6 @@ public class NumberBuiltinsTest {
         assertEquals("1.50", str("(1.5).toFixed(2)"));
     }
 
-    // toFixed rejects a digit count outside 0..100
     @Test
     public void test_to_fixed_digit_range() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("(1).toFixed(-1)"));
@@ -202,7 +182,6 @@ public class NumberBuiltinsTest {
         assertEquals("-Infinity", str("(-Infinity).toFixed(2)"));
     }
 
-    // isSafeInteger at the boundaries
     @Test
     public void test_is_safe_integer() {
         assertTrue(bool("Number.isSafeInteger(9007199254740991)"));
@@ -213,7 +192,6 @@ public class NumberBuiltinsTest {
         assertFalse(bool("Number.isSafeInteger(Infinity)"));
     }
 
-    // BigInt instance methods and the asIntN/asUintN statics
     @Test
     public void test_bigint_methods() {
         assertEquals("ff", str("(255n).toString(16)"));
@@ -228,7 +206,6 @@ public class NumberBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt.asIntN(8, 1)"));
     }
 
-    // toFixed falls back to the plain ToString above 1e21
     @Test
     public void test_to_fixed_above_1e21() {
         assertEquals("1e+21", str("(1e21).toFixed(2)"));
@@ -237,7 +214,6 @@ public class NumberBuiltinsTest {
         assertEquals("100000000000000000000.00", str("(1e20).toFixed(2)"));
     }
 
-    // A radix conversion of a large integral value is not clamped to Long.MAX_VALUE
     @Test
     public void test_to_string_radix_large_value() {
         assertEquals("ff", str("(255).toString(16)"));
@@ -246,7 +222,6 @@ public class NumberBuiltinsTest {
         assertEquals("3635c9adc5dea00000", str("(1e21).toString(16)"));
     }
 
-    // Number ToString follows the spec thresholds through the interpreter
     @Test
     public void test_number_to_string_spec_form() {
         assertEquals("1e+21", str("String(1e21)"));
@@ -256,7 +231,6 @@ public class NumberBuiltinsTest {
         assertEquals("x1e+21", str("'x' + 1e21"));
     }
 
-    // The global NaN, Infinity and undefined bindings
     @Test
     public void test_global_number_bindings() {
         assertTrue(bool("typeof NaN === 'number'"));
@@ -265,8 +239,7 @@ public class NumberBuiltinsTest {
         assertTrue(bool("typeof undefined === 'undefined'"));
     }
 
-    // Number.parseInt/parseFloat must be the *same* function object as the global parseInt/
-    // parseFloat (21.1.2.15/21.1.2.16 vs 18.2.5/18.2.4), even though GlobalScope wires the global
+    // Same function object as the global parseInt/parseFloat, even though GlobalScope wires the global
     // and the Number namespace through two independent calls into NumberBuiltins.
     @Test
     public void test_number_parse_functions_share_identity_with_the_globals() {
@@ -274,7 +247,6 @@ public class NumberBuiltinsTest {
         assertTrue(bool("Number.parseFloat === parseFloat"));
     }
 
-    // The shared identity still behaves correctly for both call sites
     @Test
     public void test_number_parse_functions_still_work() {
         assertEquals(42, num("Number.parseInt('42px')"));
@@ -283,8 +255,6 @@ public class NumberBuiltinsTest {
         assertEquals(3.14, num("parseFloat('3.14em')"));
     }
 
-    // Two independent script runs (separate realms) each get their own function object - the
-    // per-realm cache must not leak identity across scripts.
     @Test
     public void test_number_parse_functions_are_not_shared_across_realms() {
         assertNotEquals(Interpreter.run("Number.parseInt"), Interpreter.run("Number.parseInt"));

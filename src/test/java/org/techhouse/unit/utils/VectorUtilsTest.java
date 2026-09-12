@@ -43,7 +43,6 @@ public class VectorUtilsTest {
         assertTrue(first.chars().allMatch(c -> c == '0' || c == '1'));
     }
 
-    // Positive scaling keeps the direction, so the signature is unchanged.
     @Test
     public void test_simhash_is_scale_invariant() {
         assertEquals(VectorUtils.simHash(new double[]{1.0, 2.0, 3.0}, 16),

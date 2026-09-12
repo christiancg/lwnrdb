@@ -33,10 +33,6 @@ import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The cap under real concurrency: enough overlapping runs to exceed it, on the real setup, asserting both
- * that the ceiling holds and that the wait is what decides between queueing and rejecting.
- */
 public class ScriptAdmissionIntegrationTest {
     private static final String ADMIN = "admissionclient";
     private static final String SLOW_SCRIPT = "export default new Promise(r => setTimeout(() => r(1), 200));";
@@ -147,8 +143,6 @@ public class ScriptAdmissionIntegrationTest {
         assertEquals(rejected, admission.getRejected());
     }
 
-    // The ordered shutdown stops accepting first, so no new run can acquire a permit; a permit still held
-    // by an in-flight run must not hold the shutdown past its budget either.
     @Test
     public void test_shutdown_completes_while_a_permit_is_held() {
         admission.reconfigure(1, 0L);
@@ -165,8 +159,6 @@ public class ScriptAdmissionIntegrationTest {
         assertEquals(1, admission.available());
     }
 
-    // The same burst, with a wait long enough to outlast the queue: the cap still bounds concurrency, but
-    // nobody is turned away.
     @Test
     public void test_burst_is_absorbed_by_the_wait() throws Exception {
         admission.reconfigure(2, 5_000L);

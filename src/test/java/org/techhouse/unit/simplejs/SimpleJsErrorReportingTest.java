@@ -8,10 +8,6 @@ import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.host.ScriptResult;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 
-/**
- * The single place a failure becomes a reportable name + message. Every engine exception has to arrive as a
- * name a caller can switch on: an unnamed one would reach the wire as an internal error.
- */
 public class SimpleJsErrorReportingTest {
     private static final SimpleJs simpleJs = new SimpleJs();
 
@@ -75,7 +71,6 @@ public class SimpleJsErrorReportingTest {
         assertEquals("SyntaxError", nameOf("return /abc"));
     }
 
-    // A promise returned at top level is awaited, so one that can never settle is a failure, not a null
     @Test
     public void test_a_result_promise_that_never_settles_is_reported() {
         assertEquals("ScriptPendingResultError", nameOf("return new Promise(() => {});"));
@@ -88,7 +83,6 @@ public class SimpleJsErrorReportingTest {
         assertEquals("boom", result.getErrorMessage());
     }
 
-    // A thrown value with no `name` anywhere on its chain falls back to its constructor's name
     @Test
     public void test_a_thrown_object_falls_back_to_its_constructor_name() {
         assertEquals("Object", nameOf("throw { message: 'boom' };"));

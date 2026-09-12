@@ -13,17 +13,11 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
-import org.techhouse.ops.resp.CommitTransactionResponse;
 import org.techhouse.ops.resp.OperationResponse;
-import org.techhouse.ops.resp.ResolveTransactionResponse;
-import org.techhouse.ops.resp.RollbackTransactionResponse;
 
 /**
- * Edge-side two-phase-commit coordinator for a transaction spanning more than one owner (Phase 5b). Runs
- * PREPARE across all participants (the local node if it holds a slice, plus each remote owner), and on a
- * unanimous yes durably records the commit decision ({@link Tx2pcLog}) before driving COMMIT; any no vote or
- * unreachable participant aborts them all. The single-owner case is handled by the 5a fast path in
- * {@link ClusterRouter} and never reaches here.
+ * The commit decision is recorded durably ({@link Tx2pcLog}) before COMMIT is driven, which is what
+ * recovery relies on; any no vote or unreachable participant aborts them all.
  */
 public class Tx2pcCoordinator {
     private final Logger logger = Logger.logFor(Tx2pcCoordinator.class);
@@ -67,12 +61,9 @@ public class Tx2pcCoordinator {
         }
         deleteCoordinatorMarkerQuietly(dtxId);
         finishEdge(clientId, local);
-        return new CommitTransactionResponse("Transaction committed");
+        return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
     }
 
-    // Operator escape hatch: force an in-doubt distributed transaction to a decision. Records the decision
-    // (commit only) so it is durable and consistent with recovery, resolves any local slice, and broadcasts
-    // COMMIT_TX/ABORT_TX to every alive member (a no-op on nodes that hold no slice for it).
     public OperationResponse forceResolve(String dtxId, boolean commit) {
         try {
             if (commit && !Tx2pcLog.isCommitted(dtxId)) {
@@ -86,12 +77,11 @@ public class Tx2pcCoordinator {
         final var self = membershipService.getSelf();
         final var type = commit ? ClusterMessageType.COMMIT_TX : ClusterMessageType.ABORT_TX;
         final var ack = commit ? ClusterMessageType.COMMIT_TX_ACK : ClusterMessageType.ABORT_TX_ACK;
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (self == null || !member.getNodeId().equals(self.getNodeId())) {
-                send(member.address().toString(), type, dtxId, dtxId, ack, null);
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
+            send(member.address().toString(), type, dtxId, dtxId, ack, null);
         }
-        return new ResolveTransactionResponse("Transaction " + (commit ? "committed" : "aborted"));
+        return OperationResponse.ok(OperationType.RESOLVE_TRANSACTION,
+                "Transaction " + (commit ? "committed" : "aborted"));
     }
 
     public OperationResponse rollback(UUID clientId) {
@@ -105,7 +95,7 @@ public class Tx2pcCoordinator {
         final var remotes = new ArrayList<>(clientTracker.transactionParticipants(clientId));
         abortAll(clientId, sessionId, dtxId, local, remotes);
         finishEdge(clientId, local);
-        return new RollbackTransactionResponse("Transaction rolled back");
+        return OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction rolled back");
     }
 
     private boolean prepareAll(UUID clientId, String sessionId, String dtxId, boolean local, ArrayList<String> remotes,
@@ -131,9 +121,6 @@ public class Tx2pcCoordinator {
         }
     }
 
-    // Clears the edge coordinator's own transaction state once 2PC has finished. For a local participant the
-    // commitPrepared/abort call already cleared it; this covers the remote-only case whose in-memory marker
-    // transaction would otherwise linger.
     private void finishEdge(UUID clientId, boolean local) {
         if (!local) {
             clientTracker.clearActiveTransaction(clientId);

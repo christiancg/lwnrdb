@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -21,7 +20,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
-import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -31,7 +29,6 @@ import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
 public class AdminCacheTest {
-
     @BeforeEach
     public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
         TestUtils.standardInitialSetup();
@@ -42,14 +39,11 @@ public class AdminCacheTest {
         TestUtils.standardTearDown();
     }
 
-    // Loading admin data populates the databases and collections maps correctly
     @Test
     public void test_load_admin_data_populates_maps_correctly()
             throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
         AdminCache cache = new AdminCache();
 
-        // Act
         cache.loadAdminData();
 
         final var jsonDb = new JsonObject();
@@ -78,19 +72,15 @@ public class AdminCacheTest {
         };
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
 
-        // Assert
         Assertions.assertFalse(databases.isEmpty());
         Assertions.assertFalse(collections.isEmpty());
     }
 
-    // Loading admin data when the file system is empty
     @Test
     public void test_load_admin_data_when_file_system_is_empty()
             throws IOException, IllegalAccessException, NoSuchFieldException {
-        // Arrange
         AdminCache cache = new AdminCache();
 
-        // Act
         cache.loadAdminData();
 
         final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {
@@ -99,12 +89,10 @@ public class AdminCacheTest {
         final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
         };
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
-        // Assert
         Assertions.assertTrue(databases.isEmpty());
         Assertions.assertTrue(collections.isEmpty());
     }
 
-    // Retrieve PkIndexEntry for existing database name
     @Test
     public void test_retrieve_pk_index_entry_existing_dbname() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -122,7 +110,6 @@ public class AdminCacheTest {
         assertEquals(expectedEntry, result);
     }
 
-    // Database name is an empty string
     @Test
     public void test_retrieve_pk_index_entry_empty_dbname() {
         AdminCache cache = new AdminCache();
@@ -132,7 +119,6 @@ public class AdminCacheTest {
         assertNull(result);
     }
 
-    // Adding a valid PkIndexEntry to databasesPkIndex
     @Test
     public void test_add_valid_pk_index_entry() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -146,7 +132,6 @@ public class AdminCacheTest {
         assertEquals(entry, databasesPkIndex.get("value1"));
     }
 
-    // Retrieve an existing AdminDbEntry by its database name
     @Test
     public void test_retrieve_existing_admin_db_entry() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -164,7 +149,6 @@ public class AdminCacheTest {
         assertEquals("testDb", result.get_id());
     }
 
-    // Database name is an empty string
     @Test
     public void test_empty_database_name() {
         AdminCache cache = new AdminCache();
@@ -174,7 +158,6 @@ public class AdminCacheTest {
         assertNull(result);
     }
 
-    // Retrieve existing PkIndexEntry for a valid collection identifier
     @Test
     public void test_retrieve_existing_pk_index_entry() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -192,7 +175,6 @@ public class AdminCacheTest {
         assertEquals(expectedEntry, result);
     }
 
-    // Adds a PkIndexEntry to collectionsPkIndex map
     @Test
     public void test_adds_pk_index_entry_to_map() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -206,7 +188,6 @@ public class AdminCacheTest {
         assertEquals(entry, collectionsPkIndex.get("value1"));
     }
 
-    // Retrieves an AdminCollEntry when the collection exists in the cache
     @Test
     public void test_retrieves_admin_coll_entry_when_exists_in_cache()
             throws NoSuchFieldException, IllegalAccessException {
@@ -227,7 +208,6 @@ public class AdminCacheTest {
         assertEquals(expectedEntry, result);
     }
 
-    // Handles null values for dbName and collName gracefully
     @Test
     public void test_handles_null_values_gracefully() {
         AdminCache cache = new AdminCache();
@@ -241,9 +221,8 @@ public class AdminCacheTest {
         assertNull(result3);
     }
 
-    // A collection dropped while a background index event is still in flight is no longer in the
-    // cache; getIndexesForCollection must return an empty set (not throw) so background maintenance
-    // becomes a clean no-op.
+    // A collection dropped mid-event is no longer cached; this must answer empty rather than throw, so
+    // background maintenance becomes a clean no-op.
     @Test
     public void test_get_indexes_for_missing_collection_returns_empty() {
         AdminCache cache = new AdminCache();
@@ -252,11 +231,9 @@ public class AdminCacheTest {
 
         assertNotNull(result);
         assertTrue(result.isEmpty());
-        // hasIndex builds on the same method and must report false rather than throwing.
         assertFalse(cache.hasIndex("goneDb", "goneColl", "anyField"));
     }
 
-    // When the collection exists, its registered indexes are returned as-is.
     @Test
     public void test_get_indexes_for_existing_collection_returns_indexes()
             throws NoSuchFieldException, IllegalAccessException {
@@ -276,53 +253,6 @@ public class AdminCacheTest {
         assertFalse(cache.hasIndex(dbName, collName, "missing"));
     }
 
-    // shiftPkPositionsAfterCompaction dispatches to the collections PK map and shifts only same-page
-    // entries after the removed position, in place.
-    @Test
-    public void test_shift_pk_positions_for_collections_map() throws NoSuchFieldException, IllegalAccessException {
-        AdminCache cache = new AdminCache();
-        final var before = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "c1", 0,
-                10, 0);
-        final var after = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "c2", 10,
-                10, 0);
-        final var type = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
-        };
-        final var map = TestUtils.getPrivateField(cache, "collectionsPkIndex", type);
-        map.put("c1", before);
-        map.put("c2", after);
-
-        cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, 0, 0, 10);
-
-        assertEquals(0, before.getPosition());
-        assertEquals(0, after.getPosition(), "entry after removed position shifts left by removed length");
-    }
-
-    // shiftPkPositionsAfterCompaction dispatches to the per-collection pages PK list for a page-metadata name.
-    @Test
-    public void test_shift_pk_positions_for_pages_collection() throws NoSuchFieldException, IllegalAccessException {
-        AdminCache cache = new AdminCache();
-        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "db", "coll");
-        final var entry = new PkIndexEntry(Globals.ADMIN_PAGES_DB_NAME, pagesCollName, "p1", 30, 10, 0);
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
-        };
-        TestUtils.getPrivateField(cache, "pagesPkIndexes", type).put(
-                Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, pagesCollName),
-                new ArrayList<>(List.of(entry)));
-
-        cache.shiftPkPositionsAfterCompaction(pagesCollName, 0, 0, 10);
-
-        assertEquals(20, entry.getPosition());
-    }
-
-    // An unknown page-metadata collection that is not cached is a no-op (does not throw).
-    @Test
-    public void test_shift_pk_positions_for_unknown_pages_collection_is_noop() {
-        AdminCache cache = new AdminCache();
-        assertDoesNotThrow(() -> cache.shiftPkPositionsAfterCompaction(
-                String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "no", "coll"), 0, 0, 10));
-    }
-
-    // Successfully adds AdminDbEntry and PkIndexEntry to respective maps
     @Test
     public void test_successfully_adds_entries_to_maps() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -342,7 +272,6 @@ public class AdminCacheTest {
         assertEquals(pkIndexEntry, databasesPkIndex.get("testDb"));
     }
 
-    // Successfully removes an entry from databases map when dbName exists
     @Test
     public void test_remove_entry_when_dbname_exists() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -366,7 +295,6 @@ public class AdminCacheTest {
         assertFalse(databasesPkIndex.containsKey(dbName));
     }
 
-    // Successfully adds an AdminCollEntry and PkIndexEntry to their respective maps
     @Test
     public void test_successfully_adds_entries_to_collections_maps()
             throws NoSuchFieldException, IllegalAccessException {
@@ -387,7 +315,6 @@ public class AdminCacheTest {
         assertEquals(indexEntry, collectionsPkIndex.get(dbEntry.get_id()));
     }
 
-    // Removing an existing collection identifier from collections map
     @Test
     public void test_remove_existing_collection_identifier() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -411,7 +338,6 @@ public class AdminCacheTest {
         assertFalse(collectionsPkIndex.containsKey(collIdentifier));
     }
 
-    // Removing a collection identifier that does not exist in either map
     @Test
     public void test_remove_nonexistent_collection_identifier() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -430,7 +356,6 @@ public class AdminCacheTest {
         assertFalse(collectionsPkIndex.containsKey(collIdentifier));
     }
 
-    // Returns true if the specified field index exists in the collection
     @Test
     public void test_field_index_exists() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -475,99 +400,6 @@ public class AdminCacheTest {
     }
 
     @Test
-    public void test_select_page_for_insert_returns_zero_when_empty() {
-        AdminCache cache = new AdminCache();
-        long target = cache.selectPageForInsert("myDb", "myColl", 100);
-        assertEquals(0L, target);
-    }
-
-    @Test
-    public void test_select_page_for_insert_first_fit_picks_first_page_with_room()
-            throws NoSuchFieldException, IllegalAccessException {
-        AdminCache cache = new AdminCache();
-        final var p0 = new AdminPageEntry("myDb", "myColl", 0L);
-        p0.setPageSize(Long.parseLong(System.getProperty("maxPageBytesOverride", "2097150"))); // near-full
-        p0.setEntryCount(10);
-        final var p1 = new AdminPageEntry("myDb", "myColl", 1L);
-        p1.setPageSize(200L);
-        p1.setEntryCount(1);
-        final var p2 = new AdminPageEntry("myDb", "myColl", 2L);
-        p2.setPageSize(Long.parseLong(System.getProperty("maxPageBytesOverride", "2097100"))); // also near-full
-        p2.setEntryCount(5);
-
-        final var list = new ArrayList<AdminPageEntry>();
-        list.add(p0);
-        list.add(p1);
-        list.add(p2);
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<AdminPageEntry>>>() {
-        };
-        final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
-        pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
-
-        long target = cache.selectPageForInsert("myDb", "myColl", 100);
-        assertEquals(1L, target, "Should pick first page with room");
-    }
-
-    @Test
-    public void test_select_page_for_insert_allocates_new_page_when_none_fit()
-            throws NoSuchFieldException, IllegalAccessException {
-        AdminCache cache = new AdminCache();
-        final var p0 = new AdminPageEntry("myDb", "myColl", 0L);
-        p0.setPageSize(2_097_150L); // 2MB-2 bytes, very near max default of 2MB
-        p0.setEntryCount(10);
-        final var p1 = new AdminPageEntry("myDb", "myColl", 1L);
-        p1.setPageSize(2_097_150L);
-        p1.setEntryCount(10);
-
-        final var list = new ArrayList<AdminPageEntry>();
-        list.add(p0);
-        list.add(p1);
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<AdminPageEntry>>>() {
-        };
-        final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
-        pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
-
-        long target = cache.selectPageForInsert("myDb", "myColl", 100_000); // 100KB, doesn't fit anywhere
-        assertEquals(2L, target, "Should allocate new page when no existing page has room");
-    }
-
-    @Test
-    public void test_select_page_for_insert_with_pending_bytes() throws NoSuchFieldException, IllegalAccessException {
-        AdminCache cache = new AdminCache();
-        final var p0 = new AdminPageEntry("myDb", "myColl", 0L);
-        p0.setPageSize(1_000_000L);
-        p0.setEntryCount(10);
-
-        final var list = new ArrayList<AdminPageEntry>();
-        list.add(p0);
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<AdminPageEntry>>>() {
-        };
-        final var pagesMap = TestUtils.getPrivateField(cache, "pages", type);
-        pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
-
-        // 1MB existing + 500KB pending + 100KB new = 1.6MB, still under 2MB cap
-        long target = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 500_000L));
-        assertEquals(0L, target, "Within-batch pending bytes still leave room on page 0");
-
-        // 1MB existing + 1.5MB pending + 100KB new = 2.6MB, exceeds 2MB cap
-        long target2 = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 1_500_000L));
-        assertEquals(1L, target2, "Pending bytes can push selection to a new page");
-    }
-
-    @Test
-    public void test_remove_admin_page_entries_clears_both_maps() {
-        AdminCache cache = new AdminCache();
-        cache.addAdminPageEntries("myDb", "myColl", new AdminPageEntry("myDb", "myColl", 0L));
-        cache.getAdminPagePkIndexes("myDb", "myColl")
-                .add(new PkIndexEntry("admin", "pages_myColl", "myDb|myColl|0", 0L, 10L, 0L));
-
-        assertNotNull(cache.getAdminPageEntries("myDb", "myColl"));
-        cache.removeAdminPageEntries("myDb", "myColl");
-        assertNull(cache.getAdminPageEntries("myDb", "myColl"));
-    }
-
-    // getCollectionNamesForDatabase returns only collections belonging to the given database
-    @Test
     public void test_get_collection_names_for_database() throws IOException, InterruptedException {
         TestUtils.createTestDatabaseAndCollection();
         AdminCache cache = IocContainer.get(AdminCache.class);
@@ -576,7 +408,6 @@ public class AdminCacheTest {
         assertTrue(names.contains(TestGlobals.COLL));
     }
 
-    // getCollectionNamesForDatabase does not return collections from other databases
     @Test
     public void test_get_collection_names_excludes_other_databases() throws IOException, InterruptedException {
         TestUtils.createTestDatabaseAndCollection();
@@ -586,70 +417,35 @@ public class AdminCacheTest {
         assertTrue(names.isEmpty());
     }
 
-    // getAdminPageEntry returns the correct page entry
-    @Test
-    public void test_get_admin_page_entry_returns_correct_entry() {
-        AdminCache cache = new AdminCache();
-        cache.updatePageSizeInMemory("db", "coll", 0L, 100L);
-        var entry = cache.getAdminPageEntry("db", "coll", 0L);
-        assertNotNull(entry);
-        assertEquals(0L, entry.getPage());
-    }
-
-    // getAdminPageEntry returns null for a page number that does not exist
-    @Test
-    public void test_get_admin_page_entry_returns_null_for_missing_page() {
-        AdminCache cache = new AdminCache();
-        cache.updatePageSizeInMemory("db", "coll", 0L, 100L);
-        var entry = cache.getAdminPageEntry("db", "coll", 99L);
-        assertNull(entry);
-    }
-
-    // getAdminPageEntry returns null when no pages exist for the collection
-    @Test
-    public void test_get_admin_page_entry_returns_null_when_no_pages() {
-        AdminCache cache = new AdminCache();
-        var entry = cache.getAdminPageEntry("db", "coll", 0L);
-        assertNull(entry);
-    }
-
     @Test
     public void test_load_admin_data_with_existing_users_populates_users_map() throws Exception {
-        // Persist a user to disk
         final var userEntry = new org.techhouse.data.admin.AdminUserEntry("cachetest_user", "hash", false,
                 new java.util.HashSet<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
         org.techhouse.ops.AdminOperationHelper.saveUserEntry(userEntry);
 
-        // Clear in-memory user maps so loadAdminData must reload from disk
         AdminCache cache = IocContainer.get(AdminCache.class);
         TestUtils.setPrivateField(cache, "users", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(cache, "usersPkIndex", new ConcurrentHashMap<>());
 
-        // Reload — should find the persisted user
         cache.loadAdminData();
 
         assertNotNull(cache.getAdminUserEntry("cachetest_user"));
     }
 
-    // loadAdminData with pre-existing databases and collections populates all maps
     @Test
     public void test_load_admin_data_with_existing_databases_and_collections() throws Exception {
-        // Save a database and collection to disk
         TestUtils.createTestDatabaseAndCollection();
 
-        // Clear the in-memory cache so loadAdminData must reload from disk
         AdminCache cache = IocContainer.get(AdminCache.class);
         TestUtils.setPrivateField(cache, "databases", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(cache, "collections", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(cache, "databasesPkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(cache, "collectionsPkIndex", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "pages", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(cache, "pagesPkIndexes", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(TestUtils.pageCacheOf(cache), "pages", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(TestUtils.pageCacheOf(cache), "pagesPkIndexes", new ConcurrentHashMap<>());
 
-        // Reload admin data — should find the saved database and collection
         cache.loadAdminData();
 
-        // Verify databases and collections were loaded
         assertNotNull(cache.getAdminDbEntry(TestGlobals.DB));
         assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
     }
@@ -664,33 +460,5 @@ public class AdminCacheTest {
         assertTrue(cache.getCollectionUsagePkIndexes().containsKey("usage-id"));
         cache.removePkIndexCollectionUsage("usage-id");
         assertNull(cache.getPkIndexCollectionUsage("usage-id"));
-    }
-
-    @Test
-    public void test_select_page_for_insert_packs_into_pending_only_page() {
-        // Fresh collection: no committed page metadata yet. The first entry allocates page 0; the
-        // second must reuse that pending page 0 (it fits) instead of scattering onto page 1.
-        AdminCache cache = new AdminCache();
-        long first = cache.selectPageForInsert("myDb", "myColl", 100);
-        assertEquals(0L, first, "First insert allocates page 0");
-        long second = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 100L));
-        assertEquals(0L, second, "Second insert reuses the pending (not-yet-committed) page 0");
-    }
-
-    @Test
-    public void test_select_page_for_insert_allocates_new_when_pending_only_page_full() {
-        // The pending page 0 is nearly full, so a new entry that won't fit must go to page 1 even
-        // though page 0 exists only in the in-flight batch (not committed to pageEntries).
-        AdminCache cache = new AdminCache();
-        long target = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 2_097_100L));
-        assertEquals(1L, target, "Full pending-only page forces a new page allocation");
-    }
-
-    @Test
-    public void test_select_page_for_insert_prefers_lowest_pending_only_page() {
-        // Two pending-only pages: page 0 is full, page 1 has room -> ascending first-fit picks page 1.
-        AdminCache cache = new AdminCache();
-        long target = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 2_097_150L, 1L, 100L));
-        assertEquals(1L, target, "First pending page with room is chosen in ascending order");
     }
 }

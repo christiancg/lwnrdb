@@ -41,7 +41,6 @@ public class AdminDbEntryOwnersTest {
 
     @Test
     public void test_from_json_backward_compat_no_owners_field() {
-        // Simulate old entry without owners field
         final var original = new AdminDbEntry("old_db");
         original.getData().remove("owners");
         final var restored = AdminDbEntry.fromJsonObject(original.getData());

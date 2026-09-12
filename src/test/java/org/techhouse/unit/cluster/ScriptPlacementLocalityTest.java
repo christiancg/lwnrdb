@@ -27,12 +27,6 @@ import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
 
-/**
- * Placement blends the share of the scoped database's collections a candidate owns with its load ratio:
- * {@code (weight / 100) * share - loadRatio}, higher wins. Weight {@code 0} must reproduce the load-only
- * ordering exactly, saturation must still win before locality is consulted, and an unknown or empty database
- * must degenerate to pure load rather than fail.
- */
 public class ScriptPlacementLocalityTest {
     private static final long EPOCH = 42L;
     private static final String DB = "locality_db";
@@ -44,10 +38,10 @@ public class ScriptPlacementLocalityTest {
     private ScriptPlacement placement;
     private StubCache stubCache;
     private StubOwnership stubOwnership;
-    private boolean origEnabled;
-    private boolean origRouting;
-    private int origWeight;
-    private long origEpoch;
+    private volatile boolean origEnabled;
+    private volatile boolean origRouting;
+    private volatile int origWeight;
+    private volatile long origEpoch;
 
     private static NodeInfo node(String id, int port, int scriptLoad, int scriptCapacity) {
         final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, scriptCapacity);
@@ -138,7 +132,6 @@ public class ScriptPlacementLocalityTest {
         assertEquals("c", placement.choose(DB).getNodeId(), "0.5 * 1 - 0.6 loses to 0 - 0");
     }
 
-    // A saturated node could only answer 503-6, so owning the whole database must not route into it.
     @Test
     public void test_saturated_owner_loses_to_an_unsaturated_non_owner() throws Exception {
         weight(100);
@@ -171,8 +164,6 @@ public class ScriptPlacementLocalityTest {
         assertEquals(0L, placement.getLocalityPreferred());
     }
 
-    // Capacity 0 is an uncapped or older node: there is no denominator, so the pair compares absolute load
-    // and share only settles what the nodeId tiebreak would otherwise decide.
     @Test
     public void test_uncapped_node_pair_uses_absolute_load_then_share() throws Exception {
         membership(node("a-self", 1, 9, 0), node("b", 2, 3, 0), node("c", 3, 5, 0));
@@ -183,15 +174,15 @@ public class ScriptPlacementLocalityTest {
         membership(node("a-self", 1, 9, 0), node("b", 2, 3, 0), node("c", 3, 3, 0));
         ownedEntirelyBy("c");
         scriptedRandom.give(1, 1);
-        assertEquals("c", placement.choose(DB).getNodeId(), "equal loads: share wins over the nodeId tiebreak");
+        assertEquals("c", placement.choose(DB).getNodeId(), "equal loads: share wins over the draw order");
     }
 
     @Test
-    public void test_share_tie_breaks_on_node_id() throws Exception {
+    public void test_share_tie_breaks_on_the_first_sample() throws Exception {
         membership(node("a-self", 1, 9, 10), node("c", 2, 4, 10), node("b", 3, 4, 10));
         ownedHalfEach();
         scriptedRandom.give(1, 1);
-        assertEquals("b", placement.choose(DB).getNodeId());
+        assertEquals("c", placement.choose(DB).getNodeId());
     }
 
     @Test
@@ -208,8 +199,6 @@ public class ScriptPlacementLocalityTest {
         assertEquals(1L, placement.getLocalityPreferred());
     }
 
-    // Locality keeping the run on the node that received it is the best outcome and the one no other counter
-    // can see: choose() answers null, exactly as it would have without locality.
     @Test
     public void test_self_wins_on_locality_returns_null() throws Exception {
         membership(node("a-self", 1, 4, 10), node("b", 2, 0, 10), node("c", 3, 0, 10));
@@ -228,7 +217,6 @@ public class ScriptPlacementLocalityTest {
         assertEquals("b", placement.choose(DB).getNodeId(), "1 * 1 - 0.9 still beats 0 - 0");
     }
 
-    // The shares map is built per call and never shared, so concurrent placement needs no synchronisation.
     @Test
     public void test_concurrent_placement_is_safe() throws Exception {
         membership(node("a-self", 1, 9, 10), node("b", 2, 4, 10), node("c", 3, 0, 10));
@@ -306,7 +294,6 @@ public class ScriptPlacementLocalityTest {
         }
     }
 
-    // Always samples the same pair, so several threads racing on one placement instance must all agree.
     private static final class FixedRandom implements RandomGenerator {
         @Override
         public int nextInt(int bound) {

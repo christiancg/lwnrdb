@@ -80,10 +80,6 @@ public class AuthorizationCheckerProcedureTest {
         return request;
     }
 
-    // A schedule runs with its installer's authority, so installing one carries the same privilege as
-    // installing a trigger and belongs on the same list.
-    // Executing a hook is a management action, not a read: it is grouped with the installers so a RUN-level
-    // user cannot run arbitrary code through it.
     private static TestTriggerRequest testTrigger() {
         return new TestTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "t", "CREATED", new JsonObject());
     }

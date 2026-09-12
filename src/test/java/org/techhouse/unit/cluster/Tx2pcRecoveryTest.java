@@ -81,7 +81,6 @@ public class Tx2pcRecoveryTest {
         TestUtils.standardTearDown();
     }
 
-    // Seeds a durable one-op prepared slice (a SAVE of the given id) plus its PREPARED marker.
     private void seedPreparedSlice(String dtxId, String id) throws Exception {
         seedPreparedSlice(dtxId, id, SELF_ADDRESS);
     }
@@ -123,7 +122,6 @@ public class Tx2pcRecoveryTest {
     public void test_undecided_transaction_is_presumed_abort() throws Exception {
         final var dtxId = "44444444-4444-4444-4444-444444444444";
         seedPreparedSlice(dtxId, "rec-abort");
-        // No coordinator marker → presumed abort.
 
         recovery.recover();
 
@@ -133,7 +131,6 @@ public class Tx2pcRecoveryTest {
 
     @Test
     public void test_committed_transaction_with_mixed_ops_replayed() throws Exception {
-        // A doc to be deleted by the recovered transaction.
         final var seed = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         final var seedObj = new JsonObject();
         seedObj.add("_id", new JsonString("mix-del"));
@@ -176,7 +173,6 @@ public class Tx2pcRecoveryTest {
 
         recovery.recover();
 
-        // Coordinator unreachable → decision unknown → still prepared, not applied.
         org.junit.jupiter.api.Assertions.assertTrue(Tx2pcLog.isPrepared(dtxId));
         assertEquals(OperationStatus.NOT_FOUND, findStatus("rec-indoubt"));
     }
@@ -188,7 +184,6 @@ public class Tx2pcRecoveryTest {
 
         recovery.recover();
 
-        // The lone participant is unreachable, so the commit decision is kept for a later retry.
         org.junit.jupiter.api.Assertions.assertTrue(Tx2pcLog.isCommitted(dtxId));
     }
 
@@ -198,12 +193,9 @@ public class Tx2pcRecoveryTest {
         final var dtxId = "55555555-5555-5555-5555-555555555555";
         seedPreparedSlice(dtxId, "rec-noop");
         recovery.recover();
-        // Untouched: still prepared, not applied.
         assertTrue(Tx2pcLog.isPrepared(dtxId));
     }
 
-    // Injects a pool where the coordinator (port 1) is unreachable and the peer (port 2) reports the given
-    // status — the cooperative-termination scenario.
     private void injectCooperativePool(Tx2pcLog.Status peerStatus) throws Exception {
         final var pool = mock(PeerConnectionPool.class);
         when(pool.request(any(), any(), anyLong())).thenAnswer(invocation -> {

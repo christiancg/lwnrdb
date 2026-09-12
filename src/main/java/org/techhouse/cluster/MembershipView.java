@@ -34,6 +34,13 @@ public final class MembershipView {
         return alive;
     }
 
+    // Null-safe on self: a node's own identity is only set when it joins, so a sweep firing before that
+    // would otherwise dereference null.
+    public List<NodeInfo> peers(NodeInfo self) {
+        return aliveMembers().stream().filter(member -> self == null || !member.getNodeId().equals(self.getNodeId()))
+                .toList();
+    }
+
     public List<String> aliveNodeIds() {
         return aliveMembers().stream().map(NodeInfo::getNodeId).sorted().toList();
     }

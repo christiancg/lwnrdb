@@ -29,7 +29,6 @@ public class ListenAuthorizationTest {
         return new AdminUserEntry("reader", "hash", false, new HashSet<>(), new HashMap<>(), collPerms);
     }
 
-    // Admin can LISTEN on any collection
     @Test
     public void listen_admin_isAllowed() {
         final var req = listenRequest();
@@ -37,7 +36,6 @@ public class ListenAuthorizationTest {
         assertTrue(AuthorizationChecker.check(req, adminUser()).isAllowed());
     }
 
-    // User without READ permission is denied
     @Test
     public void listen_noPermissions_isDenied() {
         final var req = listenRequest();
@@ -45,7 +43,6 @@ public class ListenAuthorizationTest {
         assertFalse(AuthorizationChecker.check(req, noPermsUser()).isAllowed());
     }
 
-    // User with READ on the collection is allowed
     @Test
     public void listen_withReadPermission_isAllowed() {
         final var req = listenRequest();
@@ -53,7 +50,6 @@ public class ListenAuthorizationTest {
         assertTrue(AuthorizationChecker.check(req, readUser()).isAllowed());
     }
 
-    // STOP_LISTEN is free for any authenticated user
     @Test
     public void stopListen_noPermissions_isAllowed() {
         final var req = new StopListenRequest();
@@ -62,7 +58,6 @@ public class ListenAuthorizationTest {
         assertTrue(AuthorizationChecker.check(req, noPermsUser()).isAllowed());
     }
 
-    // STOP_LISTEN is allowed for admin too
     @Test
     public void stopListen_admin_isAllowed() {
         final var req = new StopListenRequest();

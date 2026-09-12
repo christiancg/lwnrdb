@@ -35,10 +35,6 @@ import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The dispatcher's own behaviour. Definer rights above all: a scheduled run has no caller, so it must behave
- * identically regardless of who happens to be connected.
- */
 public class ScheduleDispatcherTest {
     private static final String OWNER = "schedowner";
     private static final String OUTSIDER = "schedoutsider";
@@ -59,7 +55,6 @@ public class ScheduleDispatcherTest {
         AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, OUTPUT_COLL));
         AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of(OWNER));
         createUser(OWNER);
-        // No permissions at all, so a job installed by this user cannot write the output collection.
         createUser(OUTSIDER);
     }
 
@@ -140,8 +135,6 @@ public class ScheduleDispatcherTest {
         return response instanceof FindByIdResponse found ? found.getObject() : null;
     }
 
-    // A scheduled job has no caller, so it runs as its installer. The pair below is the whole property:
-    // the same procedure and the same arguments write or do not write purely on the definer's authority.
     @Test
     public void test_runs_with_definer_authority() throws Exception {
         storeWritingProcedure();
@@ -238,7 +231,6 @@ public class ScheduleDispatcherTest {
         assertNotNull(outputRow("in-transaction"));
     }
 
-    // A scheduled run's result is discarded, so the result cap must not fail a run for a value nobody reads.
     @Test
     public void test_scheduled_runs_are_not_result_capped() throws Exception {
         TestUtils.setPrivateField(configuration, "scriptMaxResultBytes", 256L);

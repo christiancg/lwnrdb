@@ -10,48 +10,23 @@ public class ClusterMessage {
     private NodeInfo sender;
     private List<NodeInfo> members;
     private ReplicationPayload replication;
-    // Raw request JSON on a FORWARD_REQUEST; raw response JSON on a FORWARD_RESPONSE.
     private String forwardBody;
-    // Authenticated username the edge resolved, carried on forwarded/replicated admin ops so the executing
-    // node applies them as the same acting user (e.g. CREATE_DATABASE owner assignment).
     private String actingUser;
-    // Digest / pull payload on DIGEST(_ACK) and PULL(_ACK) messages used by anti-entropy reconciliation.
     private AntiEntropyPayload antiEntropy;
-    // Stable per-connection transaction session id (the edge client id) on a FORWARD_TX_REQUEST, so the
-    // owner keeps the same buffered transaction across the session's forwarded operations.
     private String txSessionId;
-    // The distributed-transaction id (the coordinator's transaction UUID) on 2PC control messages, used as
-    // the correlation key for the durable recovery-log markers.
     private String txId;
-    // The full participant-address set on a PREPARE_TX, so a stuck participant can poll its peers during
-    // cooperative termination.
     private List<String> txParticipants;
-    // A participant's knowledge of a transaction on a TX_STATUS_ACK (COMMITTED/ABORTED/PREPARED/UNKNOWN).
     private String txStatus;
-    // A committed transaction's atomic write batch on a REPLICATE_TX message.
     private TxReplicationPayload txReplication;
-    // This node's in-doubt (PREPARED) distributed transactions on a LIST_TX_ACK, aggregated cluster-wide by
-    // the node handling a LIST_TRANSACTIONS request.
     private List<InDoubtTx> inDoubtTransactions;
-    // This node's script runs executing right now on a LIST_SCRIPTS_ACK, aggregated cluster-wide by the node
-    // handling a LIST_SCRIPTS request.
     private List<RunningScript> runningScripts;
-    // The run id to cancel on a CANCEL_SCRIPT message.
     private String cancelRunId;
-    // This node's recorded trigger runs on a LIST_TRIGGER_RUNS_ACK, aggregated cluster-wide by the node
-    // handling a LIST_TRIGGER_RUNS request.
     private List<TriggerRunRow> triggerRuns;
-    // The run id and decision (replay/discard) on a RESOLVE_TRIGGER_RUN message, and whether the receiving
-    // node held that record on the ack.
     private String triggerRunId;
     private String triggerRunDecision;
     private boolean triggerRunResolved;
-    // Whether the receiving node was executing that run and has asked it to stop, on a CANCEL_SCRIPT_ACK.
     private boolean cancelledRun;
-    // This node's authoritative admin state (epoch + databases/collections/users) on an ADMIN_SNAPSHOT_ACK.
     private AdminSnapshotPayload adminSnapshot;
-    // The admin coordinator's current admin epoch, shipped on REPLICATE_ADMIN/REPLICATE_USER so live replicas
-    // advance without pulling a snapshot.
     private long adminEpoch;
     private String errorMessage;
 

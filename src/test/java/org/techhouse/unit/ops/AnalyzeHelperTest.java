@@ -45,7 +45,6 @@ public class AnalyzeHelperTest {
         assertEquals(List.of("status"), result.getIndexesUsed());
         assertEquals(7, result.getDocumentsScanned());
         assertTrue(result.getLocksAcquired().contains("myDb|myColl|status"));
-        // Index was used, so no "no index" suggestion and the filter is first → no suggestions at all.
         assertTrue(result.getSuggestions().isEmpty());
     }
 
@@ -112,7 +111,6 @@ public class AnalyzeHelperTest {
         req.setAnalyze(true);
         req.setAggregationSteps(List.of());
         final var result = AnalyzeHelper.build(req, new AnalyzeContext());
-        // Empty pipeline → no candidate fields, but a no-index notice is still produced.
         assertEquals(List.of("No index was used for this query."), result.getSuggestions());
     }
 

@@ -1,5 +1,8 @@
 package org.techhouse.data;
 
+import static org.techhouse.data.JsonFieldReader.booleanOrDefault;
+import static org.techhouse.data.JsonFieldReader.stringOrNull;
+
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -12,38 +15,26 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
-public class TriggerDefinition {
+public class TriggerDefinition extends StoredDefinition {
     public static final String MODE_DOCUMENT = "document";
     public static final String MODE_BATCH = "batch";
     public static final String TIMING_AFTER = "after";
     public static final String TIMING_BEFORE = "before";
 
     private static final String TRIGGERS_FIELD = "triggers";
-    private static final String NAME_FIELD = "name";
     private static final String EVENTS_FIELD = "events";
     private static final String PROCEDURE_NAME_FIELD = "procedureName";
     private static final String MODE_FIELD = "mode";
     private static final String TIMING_FIELD = "timing";
     private static final String ALLOW_CASCADE_FIELD = "allowCascade";
-    private static final String ENABLED_FIELD = "enabled";
     private static final String DEFINER_FIELD = "definer";
-    private static final String VERSION_FIELD = "version";
-    private static final String CREATED_AT_FIELD = "createdAt";
-    private static final String UPDATED_AT_FIELD = "updatedAt";
-    private static final String UPDATED_BY_FIELD = "updatedBy";
 
-    private String name;
     private Set<EventType> events;
     private String procedureName;
     private String mode;
     private String timing;
     private boolean allowCascade;
-    private boolean enabled;
     private String definer;
-    private long version;
-    private long createdAt;
-    private long updatedAt;
-    private String updatedBy;
 
     public TriggerDefinition() {
         this.events = new LinkedHashSet<>();
@@ -77,7 +68,7 @@ public class TriggerDefinition {
 
     public static TriggerDefinition fromJsonObject(JsonObject object) {
         final var result = new TriggerDefinition();
-        result.name = stringOrNull(object, NAME_FIELD);
+        result.readCommonFields(object);
         result.events = new LinkedHashSet<>();
         if (object.has(EVENTS_FIELD) && object.get(EVENTS_FIELD).isJsonArray()) {
             for (final var element : object.get(EVENTS_FIELD).asJsonArray().asList()) {
@@ -90,12 +81,7 @@ public class TriggerDefinition {
         final var timing = stringOrNull(object, TIMING_FIELD);
         result.timing = timing == null ? TIMING_AFTER : timing;
         result.allowCascade = booleanOrDefault(object, ALLOW_CASCADE_FIELD, false);
-        result.enabled = booleanOrDefault(object, ENABLED_FIELD, true);
         result.definer = stringOrNull(object, DEFINER_FIELD);
-        result.version = longOrZero(object, VERSION_FIELD);
-        result.createdAt = longOrZero(object, CREATED_AT_FIELD);
-        result.updatedAt = longOrZero(object, UPDATED_AT_FIELD);
-        result.updatedBy = stringOrNull(object, UPDATED_BY_FIELD);
         return result;
     }
 
@@ -114,11 +100,7 @@ public class TriggerDefinition {
             json.add(DEFINER_FIELD, new JsonString(definer));
         }
         json.add(VERSION_FIELD, new JsonNumber(version));
-        json.add(CREATED_AT_FIELD, new JsonNumber(createdAt));
-        json.add(UPDATED_AT_FIELD, new JsonNumber(updatedAt));
-        if (updatedBy != null) {
-            json.add(UPDATED_BY_FIELD, new JsonString(updatedBy));
-        }
+        writeAuditFields(json);
         return json;
     }
 
@@ -154,31 +136,6 @@ public class TriggerDefinition {
         return array;
     }
 
-    private static String stringOrNull(JsonObject object, String field) {
-        if (!object.has(field) || object.get(field).isJsonNull()) {
-            return null;
-        }
-        return object.get(field).asJsonString().getValue();
-    }
-
-    private static boolean booleanOrDefault(JsonObject object, String field, boolean fallback) {
-        if (!object.has(field) || object.get(field).isJsonNull()) {
-            return fallback;
-        }
-        return object.get(field).asJsonBoolean().getValue();
-    }
-
-    private static long longOrZero(JsonObject object, String field) {
-        if (!object.has(field) || object.get(field).isJsonNull()) {
-            return 0L;
-        }
-        return object.get(field).asJsonNumber().getValue().longValue();
-    }
-
-    public String getName() {
-        return name;
-    }
-
     public Set<EventType> getEvents() {
         return events;
     }
@@ -207,28 +164,8 @@ public class TriggerDefinition {
         return allowCascade;
     }
 
-    public boolean isEnabled() {
-        return enabled;
-    }
-
     public String getDefiner() {
         return definer;
-    }
-
-    public long getVersion() {
-        return version;
-    }
-
-    public long getCreatedAt() {
-        return createdAt;
-    }
-
-    public long getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public String getUpdatedBy() {
-        return updatedBy;
     }
 
     @Override

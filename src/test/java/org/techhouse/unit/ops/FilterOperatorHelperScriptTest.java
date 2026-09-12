@@ -116,8 +116,6 @@ public class FilterOperatorHelperScriptTest {
         assertNull(FilterOperatorHelper.resolveIdsViaIndex(conjunction, TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // The conjunction runs against the collection (each branch reads it independently), which is how a
-    // FILTER is reached as the pipeline's first step.
     @Test
     public void test_conjunction_combines_a_field_operator_and_a_script() throws IOException {
         seedCollection();

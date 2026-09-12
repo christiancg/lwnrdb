@@ -14,7 +14,6 @@ public class LexerProgramTest {
         return Lexer.lex(source).stream().map(JsBaseElement::getType).toList();
     }
 
-    // A full function declaration lexes to the expected ordered token stream
     @Test
     public void test_lex_full_function_declaration() {
         final var source = "function add(a, b) { const sum = a + b; return sum; }";
@@ -25,7 +24,6 @@ public class LexerProgramTest {
                 JsType.KEYWORD, JsType.IDENTIFIER, JsType.SEPARATOR, JsType.SEPARATOR, JsType.EOF), types);
     }
 
-    // A multi-line program with comments, a template and a regex lexes correctly
     @Test
     public void test_lex_program_with_comments_template_and_regex() {
         final var source = """
@@ -42,7 +40,6 @@ public class LexerProgramTest {
         assertInstanceOf(JsEOF.class, tokens.getLast());
     }
 
-    // Arrow functions and optional chaining / nullish coalescing
     @Test
     public void test_lex_arrow_and_optional_chaining() {
         final var types = types("const f = a => a?.b ?? 0;");

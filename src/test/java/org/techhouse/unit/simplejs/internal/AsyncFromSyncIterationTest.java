@@ -7,8 +7,6 @@ import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsArray;
 
-// %AsyncFromSyncIteratorPrototype%: for-await over a plain sync iterable, including the failure
-// modes that close the sync iterator before the rejection propagates.
 public class AsyncFromSyncIterationTest {
     private static String joined(String source) {
         final var array = (JsArray) Interpreter.run(source);
@@ -42,7 +40,6 @@ public class AsyncFromSyncIterationTest {
         assertEquals("1,2,3,done", drive(prelude, "for await (const x of src) out.push(x); out.push('done');"));
     }
 
-    // AsyncFromSyncIteratorContinuation awaits only the value, so a promise-valued step resolves
     @Test
     public void forAwaitAwaitsEachSyncStepValue() {
         final var prelude = """

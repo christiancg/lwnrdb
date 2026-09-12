@@ -21,7 +21,6 @@ public class HostAllowlistTest {
         assertTrue(HostAllowlist.allows(List.of("api.example.com"), "API.EXAMPLE.COM"));
     }
 
-    // A wildcard behaves like a certificate wildcard: sub-domains, not the apex.
     @Test
     public void test_wildcard_matches_subdomains_but_not_the_apex() {
         assertTrue(HostAllowlist.allows(List.of("*.example.com"), "api.example.com"));

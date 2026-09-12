@@ -62,7 +62,6 @@ public class AdminUserEntryScriptPermissionTest {
         assertFalse(parsed.canManageScripts("otherdb"));
     }
 
-    // A record must never be read as more permissive than it says
     @Test
     public void test_unrecognised_level_reads_as_none() {
         final var raw = new JsonObject();
@@ -84,7 +83,6 @@ public class AdminUserEntryScriptPermissionTest {
                 parsed.getData().get("scriptPermissions").asJsonObject().get("mydb").asJsonString().getValue());
     }
 
-    // The existing RUN_SCRIPT grant keeps working verbatim
     @Test
     public void test_can_run_scripts_unchanged_for_legacy_records() {
         final var raw = new JsonObject();

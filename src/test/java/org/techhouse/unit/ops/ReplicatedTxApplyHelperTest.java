@@ -59,7 +59,6 @@ public class ReplicatedTxApplyHelperTest {
 
     @Test
     public void test_applies_upsert_and_delete_entries_atomically() throws Exception {
-        // Seed a document to be deleted by the batch.
         ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
                 List.of(doc("tx-del")), null));
         assertEquals(OperationStatus.OK, findStatus("tx-del"));

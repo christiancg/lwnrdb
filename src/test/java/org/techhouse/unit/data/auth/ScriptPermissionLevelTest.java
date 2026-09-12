@@ -29,7 +29,6 @@ public class ScriptPermissionLevelTest {
         assertEquals(ScriptPermissionLevel.MANAGE, ScriptPermissionLevel.parseOrNone("MANAGE"));
     }
 
-    // A permission must never be widened by a parse guess
     @Test
     public void test_parse_or_none_defaults_to_none() {
         assertEquals(ScriptPermissionLevel.NONE, ScriptPermissionLevel.parseOrNone("MANAGER"));

@@ -11,8 +11,6 @@ import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 
-// A configurable in-memory DatabaseAccess double for interpreter-side tests. When denyMessage is set it
-// throws a JS Error from every call, mimicking EnforcingDatabaseAccess's permission/schema rejection.
 public class FakeDatabaseAccess implements DatabaseAccess {
     public final List<String> calls = new ArrayList<>();
     public JsonObject nextFindResult;

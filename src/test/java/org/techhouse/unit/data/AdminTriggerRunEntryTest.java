@@ -36,7 +36,6 @@ public class AdminTriggerRunEntryTest {
         assertEquals("run|0", entry("run", 0L, EventType.CREATED, List.of("a"), List.of()).get_id());
     }
 
-    // A record id with no separator is not a chunked id, so the whole string is the run id.
     @Test
     public void test_run_id_of_an_unseparated_id_is_the_id_itself() {
         assertEquals("plain", AdminTriggerRunEntry.runIdOf("plain"));
@@ -95,7 +94,6 @@ public class AdminTriggerRunEntryTest {
         assertEquals(original, parsed);
     }
 
-    // An unauthenticated write has no acting user, so the field legitimately round-trips as JSON null.
     @Test
     public void test_a_null_acting_user_round_trips() {
         final var original = new AdminTriggerRunEntry("run", 0L, "node-1", "myDb", "myColl", "audit", "recalc",

@@ -45,13 +45,11 @@ public class AdminCacheSchemaTest {
         return s;
     }
 
-    // A collection with no schema file returns null (and negatively caches the absence)
     @Test
     public void test_absent_schema_returns_null() {
         assertNull(adminCache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // put makes the schema visible without touching disk
     @Test
     public void test_put_then_get() {
         final var s = schema("object");
@@ -59,14 +57,12 @@ public class AdminCacheSchemaTest {
         assertEquals(s, adminCache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // a schema written to disk is lazily loaded on first access
     @Test
     public void test_lazy_load_from_disk() throws Exception {
         fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, eJson.toJson(schema("string")));
         assertEquals(schema("string"), adminCache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // remove clears the cached schema
     @Test
     public void test_remove() {
         adminCache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL, schema("object"));
@@ -74,7 +70,6 @@ public class AdminCacheSchemaTest {
         assertNull(adminCache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // removeCollectionSchemasForDatabase clears every collection schema under the database
     @Test
     public void test_remove_for_database() {
         adminCache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL, schema("object"));

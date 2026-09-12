@@ -4,9 +4,7 @@ import java.util.List;
 import java.util.Objects;
 import org.techhouse.data.DbEntry;
 
-public class TriggerEvent extends Event {
-    private final String dbName;
-    private final String collName;
+public class TriggerEvent extends CollectionScopedEvent {
     private final String triggerName;
     private final String procedureName;
     private final boolean batchMode;
@@ -29,9 +27,7 @@ public class TriggerEvent extends Event {
 
     public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
             boolean batchMode, List<DbEntry> entries, String actingUser, int depth, String runId, int attempt) {
-        super(type);
-        this.dbName = dbName;
-        this.collName = collName;
+        super(type, dbName, collName);
         this.triggerName = triggerName;
         this.procedureName = procedureName;
         this.batchMode = batchMode;
@@ -45,14 +41,6 @@ public class TriggerEvent extends Event {
 
     public int getAttempt() {
         return attempt;
-    }
-
-    public String getDbName() {
-        return dbName;
-    }
-
-    public String getCollName() {
-        return collName;
     }
 
     public String getTriggerName() {
@@ -95,21 +83,19 @@ public class TriggerEvent extends Event {
             return false;
         if (!super.equals(o))
             return false;
-        return batchMode == that.batchMode && depth == that.depth && Objects.equals(dbName, that.dbName)
-                && Objects.equals(collName, that.collName) && Objects.equals(triggerName, that.triggerName)
+        return batchMode == that.batchMode && depth == that.depth && Objects.equals(triggerName, that.triggerName)
                 && Objects.equals(procedureName, that.procedureName) && Objects.equals(entries, that.entries)
                 && Objects.equals(actingUser, that.actingUser) && Objects.equals(runId, that.runId);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), dbName, collName, triggerName, procedureName, batchMode, entries,
-                actingUser, depth, runId);
+        return Objects.hash(super.hashCode(), triggerName, procedureName, batchMode, entries, actingUser, depth, runId);
     }
 
     @Override
     public String toString() {
-        return "TriggerEvent(super=" + super.toString() + ", dbName=" + dbName + ", collName=" + collName
+        return "TriggerEvent(super=" + super.toString() + ", dbName=" + getDbName() + ", collName=" + getCollName()
                 + ", triggerName=" + triggerName + ", procedureName=" + procedureName + ", batchMode=" + batchMode
                 + ", entries=" + entries.size() + ", actingUser=" + actingUser + ", depth=" + depth + ", runId=" + runId
                 + ")";

@@ -122,7 +122,6 @@ public class ClusterRouterTest {
         assertNull(router.forward(runScript(), "{}", false, null, null));
     }
 
-    // A forward that cannot be delivered runs the script here instead of failing the request.
     @Test
     public void test_run_script_falls_back_to_local_when_the_target_is_unreachable() throws Exception {
         routableMembership();
@@ -142,7 +141,6 @@ public class ClusterRouterTest {
         assertEquals(fallbacksBefore + 1, scriptPlacement.getForwardFallbacks());
     }
 
-    // A script op is rejected with 409-6 inside an open transaction, so it must never reach placement.
     @Test
     public void test_script_ops_are_not_routed_inside_a_transaction() throws Exception {
         routableMembership();
@@ -151,8 +149,6 @@ public class ClusterRouterTest {
         assertEquals(fallbacksBefore, scriptPlacement.getForwardFallbacks());
     }
 
-    // Placement scores candidates by what they own of the database the script is scoped to, so the router
-    // has to hand it that database rather than letting it place blind.
     @Test
     public void test_the_scoped_database_reaches_placement() throws Exception {
         routableMembership();

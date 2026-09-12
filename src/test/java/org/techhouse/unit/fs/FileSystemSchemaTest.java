@@ -34,13 +34,11 @@ public class FileSystemSchemaTest {
         fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
     }
 
-    // Reading a schema for a collection that has none returns null
     @Test
     public void test_read_absent_schema_returns_null() throws Exception {
         assertNull(fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // Write then read round-trips the schema JSON
     @Test
     public void test_write_then_read() throws Exception {
         final var json = "{\"type\":\"object\"}";
@@ -48,7 +46,6 @@ public class FileSystemSchemaTest {
         assertEquals(json, fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // Writing again replaces the previous schema
     @Test
     public void test_overwrite() throws Exception {
         fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"object\"}");
@@ -56,7 +53,6 @@ public class FileSystemSchemaTest {
         assertEquals("{\"type\":\"string\"}", fs.readCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // Delete removes an existing schema and reports success; a second delete reports false
     @Test
     public void test_delete() throws Exception {
         fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\":\"object\"}");

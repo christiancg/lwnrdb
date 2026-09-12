@@ -12,7 +12,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
 public class AdminDbEntryTest {
-    // Creating AdminDbEntry with default collections initializes correctly
     @Test
     public void test_admin_db_entry_initializes_with_default_collections() {
         AdminDbEntry entry = new AdminDbEntry("testDb");
@@ -25,7 +24,6 @@ public class AdminDbEntryTest {
         assertTrue(data.get("collections").asJsonArray().isEmpty());
     }
 
-    // Initializes AdminDbEntry with given database name and collections
     @Test
     public void test_initializes_with_given_db_name_and_collections() {
         String dbName = "testDb";
@@ -45,7 +43,6 @@ public class AdminDbEntryTest {
         assertEquals("collection2", jsonArray.get(1).asJsonString().getValue());
     }
 
-    // Handles empty collections list without errors
     @Test
     public void test_handles_empty_collections_list() {
         String dbName = "testDb";
@@ -63,7 +60,6 @@ public class AdminDbEntryTest {
         assertTrue(jsonArray.isEmpty());
     }
 
-    // Converts a valid JsonObject to AdminDbEntry correctly
     @Test
     public void test_valid_json_object_conversion() {
         JsonObject jsonObject = new JsonObject();
@@ -81,7 +77,6 @@ public class AdminDbEntryTest {
         assertEquals(Globals.ADMIN_DATABASES_COLLECTION_NAME, entry.getCollectionName());
     }
 
-    // Handles JsonObject with no collections field
     @Test
     public void test_no_collections_field() {
         JsonObject jsonObject = new JsonObject();
@@ -95,7 +90,6 @@ public class AdminDbEntryTest {
         assertEquals(Globals.ADMIN_DATABASES_COLLECTION_NAME, entry.getCollectionName());
     }
 
-    // Successfully updates the collections field with a new list of strings
     @Test
     public void test_update_collections_with_new_list() {
         AdminDbEntry entry = new AdminDbEntry("testDb");
@@ -110,7 +104,6 @@ public class AdminDbEntryTest {
         assertTrue(collectionsArray.contains(new JsonString("collection2")));
     }
 
-    // Handles an empty list of collections without errors
     @Test
     public void test_handle_empty_collections_list() {
         AdminDbEntry entry = new AdminDbEntry("testDb");

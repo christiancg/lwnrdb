@@ -11,7 +11,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.BulkSaveResponse;
 
 public class BulkSaveResponseTest {
-    // Create BulkSaveResponse with OK status and non-empty inserted/updated lists
     @Test
     public void test_bulk_save_response_with_non_empty_lists() {
         List<String> inserted = Arrays.asList("doc1", "doc2");
@@ -27,7 +26,6 @@ public class BulkSaveResponseTest {
         assertEquals(updated, response.getUpdated());
     }
 
-    // Create BulkSaveResponse with null inserted list
     @Test
     public void test_bulk_save_response_with_null_inserted_list() {
         List<String> updated = List.of("doc1");
@@ -42,7 +40,6 @@ public class BulkSaveResponseTest {
         assertEquals(updated, response.getUpdated());
     }
 
-    // test getters and setters provided by lombok
     @Test
     public void test_bulk_save_response_getters_and_setters() {
         List<String> inserted = Arrays.asList("item1", "item2");

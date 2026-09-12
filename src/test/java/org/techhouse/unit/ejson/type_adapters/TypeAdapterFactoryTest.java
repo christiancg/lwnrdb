@@ -14,7 +14,6 @@ import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ejson.type_adapters.impl.ReflectionTypeAdapter;
 
 public class TypeAdapterFactoryTest {
-    // Register and retrieve a basic type adapter for a simple class
     @Test
     public void test_register_and_retrieve_type_adapter() {
         TypeAdapter<String> stringAdapter = new TypeAdapter<>() {
@@ -37,7 +36,6 @@ public class TypeAdapterFactoryTest {
         assertEquals("\"test\"", retrievedAdapter.toJson("test"));
     }
 
-    // Register new type adapter for a class type
     @Test
     public void register_type_adapter_for_class() {
         class TestClass {
@@ -63,10 +61,8 @@ public class TypeAdapterFactoryTest {
         assertEquals(adapter, retrievedAdapter);
     }
 
-    // Returns cached adapter when type exists in _genericTypeAdapters map
     @Test
     public void test_returns_cached_adapter_when_type_exists() throws ClassNotFoundException {
-        // Create a parameterized type for List<String>
         Type listType = new ParameterizedType() {
             @Override
             public Type[] getActualTypeArguments() {
@@ -84,23 +80,19 @@ public class TypeAdapterFactoryTest {
             }
         };
 
-        // Get adapter first time to cache it
         TypeAdapter<?> firstCall = TypeAdapterFactory.getAdapter(listType);
 
-        // Get adapter second time - should return cached instance
         TypeAdapter<?> secondCall = TypeAdapterFactory.getAdapter(listType);
 
         assertNotNull(secondCall);
         assertSame(firstCall, secondCall);
     }
 
-    // Handles null input type parameter
     @Test
     public void test_handles_null_type_parameter() {
         assertThrows(NullPointerException.class, () -> TypeAdapterFactory.getAdapter((Type) null));
     }
 
-    // Returns cached adapter when type exists in _adapters map
     @Test
     public void test_returns_cached_adapter_when_exists() {
         TypeAdapter<String> stringAdapter = new ReflectionTypeAdapter<>(String.class);
@@ -111,7 +103,6 @@ public class TypeAdapterFactoryTest {
         assertSame(stringAdapter, result);
     }
 
-    // getAdapter(Class) for a JsonCustom subclass returns a JsonCustomTypeAdapter (L51-53)
     @Test
     public void test_get_adapter_for_custom_type() {
         new org.techhouse.ejson.EJson(); // register custom types
@@ -119,7 +110,6 @@ public class TypeAdapterFactoryTest {
         assertNotNull(adapter);
     }
 
-    // JsonBaseElementTypeAdapter.toJson with a syntax token throws (L23 default case)
     @Test
     public void test_json_base_element_adapter_syntax_token_throws() {
         TypeAdapter<JsonBaseElement> adapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);

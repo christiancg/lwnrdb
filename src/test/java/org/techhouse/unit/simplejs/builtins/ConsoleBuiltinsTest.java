@@ -17,7 +17,6 @@ public class ConsoleBuiltinsTest {
         ConsoleBuiltins.setSink(System.out::println);
     }
 
-    // console.log joins its arguments with spaces and writes to the sink
     @Test
     public void test_console_log() {
         ConsoleBuiltins.setSink(captured::add);
@@ -25,7 +24,6 @@ public class ConsoleBuiltinsTest {
         assertEquals(List.of("a 1 true"), captured);
     }
 
-    // error/warn/info all route to the sink
     @Test
     public void test_console_levels() {
         ConsoleBuiltins.setSink(captured::add);

@@ -6,10 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * Building a view over a buffer, and the by-copy methods that have to build another one of the same kind -
- * including for a subclass, where the copy is constructed through the subclass rather than the base kind.
- */
 public class TypedArrayConstructionTest {
     private static String str(String source) {
         return ((JsString) Interpreter.run(source)).getValue();
@@ -21,7 +17,6 @@ public class TypedArrayConstructionTest {
                 """ + "); } catch (e) { return e.constructor.name; } })()");
     }
 
-    // Without an explicit length the view covers whatever the buffer has left past the offset
     @Test
     public void test_a_view_without_a_length_covers_the_rest_of_the_buffer() {
         assertEquals("4", str("new Uint8Array(new ArrayBuffer(8), 4).length + ''"));
@@ -75,7 +70,6 @@ public class TypedArrayConstructionTest {
                 str("[new Uint8Array([255, 0]).toHex(), Uint8Array.fromHex('ff00').join(',')]" + ".join(':')"));
     }
 
-    // setFromBase64 fills in place and reports how much of the input it consumed
     @Test
     public void test_set_from_base64_reports_what_it_read_and_wrote() {
         assertEquals("1,2,3:4:3", str("""

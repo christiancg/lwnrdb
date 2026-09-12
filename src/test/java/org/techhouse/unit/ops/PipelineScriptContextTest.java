@@ -15,8 +15,6 @@ public class PipelineScriptContextTest {
         return document;
     }
 
-    // A source repeated across steps or inside a conjunction is opened once, so its state (and its share
-    // of the budget) is shared rather than duplicated.
     @Test
     public void test_opens_one_callable_per_distinct_source() {
         try (var context = new PipelineScriptContext()) {

@@ -19,7 +19,6 @@ public class UserOperationHelperLastAdminTest {
     @BeforeAll
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
-        // Create exactly one admin user
         final var req = new CreateUserRequest();
         req.setUsername("sole_admin");
         req.setPassword("password123");

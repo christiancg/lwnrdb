@@ -209,8 +209,6 @@ public class BeforeHookContextTest {
         assertFalse(run(document("a"), EventType.CREATED).isRejected());
     }
 
-    // Fail-closed: a hook that never finished must stop the write, and keep its own code so an operator
-    // can tell it apart from a hook that deliberately said no.
     @Test
     public void test_a_timeout_rejects_the_write_with_its_own_code() throws Exception {
         TestUtils.setPrivateField(configuration, "beforeHookInstructionBudget", 5_000_000_000L);
@@ -249,8 +247,6 @@ public class BeforeHookContextTest {
         assertTrue(run(document("a"), EventType.CREATED).isRejected());
     }
 
-    // One interpreter per request, so the module body is evaluated once no matter how many documents the
-    // request carries - the property that makes a bulk save affordable.
     @Test
     public void test_shares_one_callable_across_documents() throws Exception {
         installHook("v", "counter",
@@ -383,8 +379,6 @@ public class BeforeHookContextTest {
         }
     }
 
-    // Registered per request, so LIST_SCRIPTS sees one run covering the whole request rather than one per
-    // document - which is also what makes the module-body evaluation inside openCallable cancellable.
     @Test
     public void test_a_running_hook_is_visible_to_the_run_registry() throws Exception {
         installHook("v", "noop", "export default function (doc) { };", EventType.CREATED);

@@ -16,13 +16,6 @@ import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.resp.OperationResponse;
 
-/**
- * Bridges the admin handlers to the clustering layer: rejects admin mutations this node may not apply (no
- * write quorum), and after a successful mutation has the admin coordinator replicate it to a majority of
- * nodes. Structural DDL is replicated by re-execution; user/permission ops ship the committed admin/users
- * record (so the salted password hash is identical everywhere). No-ops when clustering is off or this node is
- * not the coordinator, so the single-node admin path is unchanged.
- */
 public final class ClusterAdminHelper {
     private static final Set<OperationType> ADMIN_DDL = Set.of(OperationType.CREATE_DATABASE,
             OperationType.DROP_DATABASE, OperationType.CREATE_COLLECTION, OperationType.DROP_COLLECTION,
@@ -42,14 +35,11 @@ public final class ClusterAdminHelper {
     private ClusterAdminHelper() {
     }
 
-    // Admin/user mutations that are serialized and replicated by the admin coordinator.
     public static boolean isCoordinatedAdminOp(OperationType type) {
         return ADMIN_DDL.contains(type) || USER_OPS.contains(type);
     }
 
-    // Returns an error response if this node may not apply the admin mutation, or null to proceed. Rejects on
-    // no quorum, and — while a coordinator is still catching up on rejoin — with a retryable ADMIN_SYNCING so
-    // it never commits an admin op on a stale base before its first reconciliation.
+    // A coordinator still catching up on rejoin rejects with a retryable ADMIN_SYNCING, never committing on a stale base.
     public static OperationResponse guard(OperationRequest request) {
         if (!isCoordinatedAdminOp(request.getType())) {
             return null;
@@ -70,8 +60,7 @@ public final class ClusterAdminHelper {
         if (!isCoordinatedAdminOp(type) || response.getStatus() != OperationStatus.OK) {
             return response;
         }
-        // Bump the epoch before replicating so the new value ships on the REPLICATE_ADMIN/REPLICATE_USER
-        // message; only the coordinator advances the single cluster-wide admin lineage.
+        // Bump the epoch before replicating so the new value ships on the replication message.
         if (clusterConfig.isEnabled() && ownershipManager.isAdminCoordinator()) {
             adminEpoch.bump();
         }

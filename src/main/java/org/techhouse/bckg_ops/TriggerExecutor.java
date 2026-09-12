@@ -14,7 +14,6 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.TriggerDispatcher;
 
 public class TriggerExecutor {
-    private static final long SHUTDOWN_TIMEOUT_SECONDS = 3L;
     private final Logger logger = Logger.logFor(TriggerExecutor.class);
     private final LinkedBlockingQueue<TriggerEvent> queue;
     private final LongAdder fired = new LongAdder();
@@ -148,16 +147,8 @@ public class TriggerExecutor {
             scheduler.shutdownNow();
         }
         scheduled.set(0);
-        pool.shutdownNow();
-        try {
-            if (!pool.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                logger.warning("Trigger workers did not terminate within the timeout; abandoning them");
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        pool = RestartablePool.shutdownAndReplace(pool, logger, "Trigger");
         queue.clear();
-        pool = Executors.newVirtualThreadPerTaskExecutor();
         dispatcher = null;
         logger.info("Stopped listening for triggers");
     }

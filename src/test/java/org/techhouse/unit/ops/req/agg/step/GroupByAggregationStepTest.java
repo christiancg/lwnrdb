@@ -7,7 +7,6 @@ import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
 
 public class GroupByAggregationStepTest {
-    // Constructor initializes with valid fieldName and sets GROUP_BY type
     @Test
     public void constructor_with_valid_field_name_sets_properties() {
         String fieldName = "testField";
@@ -18,7 +17,6 @@ public class GroupByAggregationStepTest {
         assertEquals(fieldName, step.getFieldName());
     }
 
-    // Constructor handles empty string fieldName
     @Test
     public void constructor_with_empty_field_name_sets_empty_string() {
         String emptyFieldName = "";
@@ -29,16 +27,13 @@ public class GroupByAggregationStepTest {
         assertEquals(emptyFieldName, step.getFieldName());
     }
 
-    // test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         String fieldName = "testField";
         GroupByAggregationStep step = new GroupByAggregationStep(fieldName);
 
-        // Test getter
         assertEquals("testField", step.getFieldName());
 
-        // Test setter
         step.setFieldName("newField");
         assertEquals("newField", step.getFieldName());
     }

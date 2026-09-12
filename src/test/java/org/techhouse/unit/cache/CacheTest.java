@@ -55,7 +55,6 @@ public class CacheTest {
         assertEquals(expected, result);
     }
 
-    // Returns correct identifier for standard field names and types
     @Test
     public void test_returns_correct_identifier_for_standard_field_names_and_types() {
         String fieldName = "username";
@@ -74,7 +73,6 @@ public class CacheTest {
         assertEquals(expected, actual);
     }
 
-    // The facade composes the AdminCache and UserCache IoC singletons
     @Test
     public void test_facade_constructs_subcaches_from_ioc() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
@@ -86,7 +84,6 @@ public class CacheTest {
         assertSame(IocContainer.get(org.techhouse.cache.UserCache.class), userCache);
     }
 
-    // A user-cache method routed through the facade lands in the UserCache store
     @Test
     public void test_facade_delegates_user_method() {
         Cache cache = new Cache();
@@ -99,7 +96,6 @@ public class CacheTest {
         assertTrue(cached.containsKey("u1"));
     }
 
-    // An admin-cache method routed through the facade lands in the AdminCache store
     @Test
     public void test_facade_delegates_admin_method() {
         Cache cache = new Cache();
@@ -109,7 +105,6 @@ public class CacheTest {
         assertEquals(0L, cache.getAdminPageEntry("userDb", "c1", 0L).getPage());
     }
 
-    // Returns the whole collection from the cache if it exists and is complete
     @Test
     public void test_returns_whole_collection_from_cache_if_exists_and_complete()
             throws NoSuchFieldException, IllegalAccessException {
@@ -126,7 +121,7 @@ public class CacheTest {
         final var typePages = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {
         };
         final var adminCache = IocContainer.get(org.techhouse.cache.AdminCache.class);
-        final var pagesMap = TestUtils.getPrivateField(adminCache, "pages", typePages);
+        final var pagesMap = TestUtils.getPrivateField(TestUtils.pageCacheOf(adminCache), "pages", typePages);
         pagesMap.put(collectionIdentifier, pageList);
 
         DbEntry entry1 = new DbEntry();
@@ -151,7 +146,6 @@ public class CacheTest {
         assertTrue(result.containsKey("2"));
     }
 
-    // Handles IOException when reading the collection from the file system
     @Test
     public void test_handles_ioexception_when_reading_collection_from_file_system()
             throws NoSuchFieldException, IllegalAccessException, IOException {
@@ -169,7 +163,6 @@ public class CacheTest {
         assertThrows(RuntimeException.class, () -> cache.getWholeCollection(dbName, collName));
     }
 
-    // Returns the provided resultStream if it is not null
     @Test
     public void test_returns_provided_resultStream_if_not_null() throws IOException {
         Cache cache = new Cache();
@@ -178,7 +171,6 @@ public class CacheTest {
         assertEquals(mockStream, result);
     }
 
-    // Handles IOException when reading the collection from the file system
     @Test
     public void test_handles_ioexception_when_reading_collection()
             throws NoSuchFieldException, IllegalAccessException, IOException {
@@ -205,16 +197,14 @@ public class CacheTest {
         assertEquals(1, result.size());
     }
 
-    // Regression for the completeness gate: it must use the synchronous PK index size, not the
-    // background-updated (lagging) admin page entry count. A cache missing a freshly-committed
-    // document is reloaded from disk even when a stale low page count would have accepted it.
+    // Regression: the completeness gate must use the synchronous PK index size, not the
+    // background-updated (lagging) admin page entry count.
     @Test
     public void test_get_whole_collection_reloads_when_cache_incomplete_vs_pk_index() throws Exception {
         final var cache = new Cache();
         final var fs = IocContainer.get(FileSystem.class);
         TestUtils.createTestDatabaseAndCollection();
 
-        // Two committed documents: insertIntoCollection writes the .dat pages and the synchronous PK index.
         for (int i = 1; i <= 2; i++) {
             final var o = new JsonObject();
             o.addProperty(Globals.PK_FIELD, "id" + i);
@@ -223,7 +213,6 @@ public class CacheTest {
             fs.insertIntoCollection(e);
         }
 
-        // Cache holds only one of the two docs (e.g. the second insert was not admitted under memory pressure).
         final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
         final var cachedObj = new JsonObject();
         cachedObj.addProperty(Globals.PK_FIELD, "id1");
@@ -247,7 +236,6 @@ public class CacheTest {
         TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
         try {
             Cache cache = IocContainer.get(Cache.class);
-            // Create the collection on disk so readWholeCollection works.
             TestUtils.createTestDatabaseAndCollection();
             final var stream = cache.initializeStreamIfNecessary(null, TestGlobals.DB, TestGlobals.COLL);
             assertNotNull(stream);
@@ -262,13 +250,10 @@ public class CacheTest {
         }
     }
 
-    // ── getEntriesByIds / streamCollection (page-streaming read path) ─────────
-
     private static void injectCachedEntry(String collId, DbEntry entry)
             throws NoSuchFieldException, IllegalAccessException {
         final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
         };
-        // Document cache lives on the UserCache singleton, which the facade reads through.
         final var userCache = IocContainer.get(org.techhouse.cache.UserCache.class);
         final var collectionMap = TestUtils.getPrivateField(userCache, "collectionMap", type);
         final var inner = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
@@ -279,9 +264,8 @@ public class CacheTest {
             throws NoSuchFieldException, IllegalAccessException {
         final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {
         };
-        // Page metadata lives on the AdminCache singleton, which the facade reads through.
         final var adminCache = IocContainer.get(org.techhouse.cache.AdminCache.class);
-        final var pages = TestUtils.getPrivateField(adminCache, "pages", type);
+        final var pages = TestUtils.getPrivateField(TestUtils.pageCacheOf(adminCache), "pages", type);
         pages.put(collId, pageList);
     }
 
@@ -375,7 +359,6 @@ public class CacheTest {
             TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
 
             final var collId = Cache.getCollectionIdentifier("userDb", "c1");
-            // Even though an entry is cached, caching-disabled must bypass the cache branch.
             final var cachedObj = new JsonObject();
             cachedObj.addProperty(Globals.PK_FIELD, "stale");
             injectCachedEntry(collId, DbEntry.fromJsonObject("userDb", "c1", cachedObj));
@@ -401,8 +384,6 @@ public class CacheTest {
         }
     }
 
-    // shiftPkPositionsAfterCompaction routes to the admin cache for the admin database and to the user
-    // cache otherwise.
     @Test
     public void test_shift_pk_positions_routes_admin_vs_user() throws NoSuchFieldException, IllegalAccessException {
         Cache cache = new Cache();
@@ -413,12 +394,9 @@ public class CacheTest {
 
         cache.shiftPkPositionsAfterCompaction(
                 new org.techhouse.fs.PkCompaction(Globals.ADMIN_DB_NAME, "collections", 0, 10, 5));
-        // Page-metadata collections live in the reserved admin_pages namespace but must route to the
-        // admin cache too.
         cache.shiftPkPositionsAfterCompaction(
                 new org.techhouse.fs.PkCompaction(Globals.ADMIN_PAGES_DB_NAME, "userDb_userColl", 2, 30, 9));
         cache.shiftPkPositionsAfterCompaction(new org.techhouse.fs.PkCompaction("userDb", "userColl", 1, 20, 7));
-        // A null compaction (no survivor moved) is a no-op.
         cache.shiftPkPositionsAfterCompaction(null);
 
         verify(adminMock).shiftPkPositionsAfterCompaction("collections", 0, 10, 5);

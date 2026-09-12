@@ -15,17 +15,13 @@ import org.techhouse.ejson.type_adapters.impl.JsonCustomTypeAdapter;
 
 public class JsonCustomTypeAdapterTest {
 
-    // Passing null value to toJson method
     @Test
     public void test_to_json_with_null_value() {
-        // Arrange
         JsonCustomTypeAdapter adapter = new JsonCustomTypeAdapter();
 
-        // Act & Assert
         assertThrows(NullPointerException.class, () -> adapter.toJson(null));
     }
 
-    // Input is a JsonCustom instance and returns correctly converted JsonCustom object
     @Test
     public void test_json_custom_conversion() {
         JsonCustomTypeAdapter adapter = new JsonCustomTypeAdapter();
@@ -46,7 +42,6 @@ public class JsonCustomTypeAdapterTest {
         }
     }
 
-    // toJson on a real JsonCustom object calls toJson on base adapter (L12)
     @Test
     public void test_to_json_with_real_custom_type() {
         new org.techhouse.ejson.EJson(); // register custom types
@@ -57,7 +52,6 @@ public class JsonCustomTypeAdapterTest {
         assertTrue(result.contains("10:00:00"));
     }
 
-    // fromJson with a non-JsonCustom element returns null (L20)
     @Test
     public void test_from_json_with_non_custom_returns_null() {
         JsonCustomTypeAdapter adapter = new JsonCustomTypeAdapter();

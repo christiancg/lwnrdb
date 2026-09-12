@@ -5,12 +5,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 
-/**
- * A single buffered operation of an in-progress transaction, persisted in the {@code admin/transactions}
- * collection (the durable source of truth replayed at commit). The {@code _id} is {@code
- * transactionId|seq}, so a transaction's operations sort by their apply order and can be located and
- * removed by id at commit/rollback.
- */
 public class AdminTransactionEntry extends DbEntry {
     private static final String TRANSACTION_ID_FIELD = "transactionId";
     private static final String CLIENT_ID_FIELD = "clientId";
@@ -23,21 +17,14 @@ public class AdminTransactionEntry extends DbEntry {
     public static final String OP_TYPE_SAVE = "SAVE";
     public static final String OP_TYPE_BULK_SAVE = "BULK_SAVE";
     public static final String OP_TYPE_DELETE = "DELETE";
-    // Phase 5b two-phase-commit recovery markers, stored in admin/transactions alongside the slice ops:
-    // a participant's PREPARED marker (_id = {dtxId}|part) and the coordinator's COMMIT decision
-    // (_id = {dtxId}|coord). The distributed-tx id is a UUID (never contains the '|' separator), so an
-    // id whose trailing token is "part"/"coord" is a marker and a numeric trailing token is a slice op.
+    // A transaction id is a UUID and never contains '|', so a record's trailing id token tells a marker
+    // ("part"/"coord"/"outcome"/"localcommit") from a numeric slice-op seq.
     public static final String OP_TYPE_PARTICIPANT_PREPARED = "PARTICIPANT_PREPARED";
     public static final String OP_TYPE_COORDINATOR_COMMIT = "COORDINATOR_COMMIT";
-    // A resolved participant's retained outcome (committed/aborted), so a peer can still report the decision
-    // during cooperative termination after the participant has already applied it. GC'd after a retention.
     public static final String OP_TYPE_TRANSACTION_OUTCOME = "TRANSACTION_OUTCOME";
-    // A single-node commit's durable intent marker (_id = {txId}|localcommit). Written before the first op is
-    // applied, so its presence at startup means the commit was decided and must be finished; its absence means
-    // the transaction was still buffering and the slice is discarded.
+    // Written before the first op is applied: present at startup means the commit was decided and must be
+    // finished, absent means the transaction was still buffering and the slice is discarded.
     public static final String OP_TYPE_LOCAL_COMMIT = "LOCAL_COMMIT";
-    // Consumes a pending trigger run, buffered as the last op of the run's own transaction so the run's effects
-    // and the record that would replay them commit or roll back together.
     public static final String OP_TYPE_DELETE_TRIGGER_RUN = "DELETE_TRIGGER_RUN";
     public static final String MARKER_PARTICIPANT = "part";
     public static final String MARKER_COORDINATOR = "coord";
@@ -78,8 +65,6 @@ public class AdminTransactionEntry extends DbEntry {
         return transactionId + Globals.COLL_IDENTIFIER_SEPARATOR + seq;
     }
 
-    // Builds a recovery marker record (see the MARKER_* constants). The marker's descriptive fields are
-    // carried in the payload.
     public static AdminTransactionEntry marker(String transactionId, String markerSuffix, String opType,
             JsonObject payload) {
         final var result = new AdminTransactionEntry();

@@ -12,7 +12,6 @@ import org.techhouse.ejson.internal.JsonWriter;
 import org.techhouse.test.TestUtils;
 
 public class EJsonTest {
-    // Serialize and deserialize primitive types (boolean, number, string) correctly
     @Test
     public void test_primitive_types_serialization_deserialization() {
         EJson eJson = new EJson();
@@ -36,7 +35,6 @@ public class EJsonTest {
         public String strVal;
     }
 
-    // Handle null values in serialization and deserialization
     @Test
     public void test_null_values_handling() {
         EJson eJson = new EJson();
@@ -57,7 +55,6 @@ public class EJsonTest {
         public Integer nullableNumber;
     }
 
-    // A null collection field must deserialize as null rather than failing the whole object
     @Test
     public void test_null_collection_field_deserializes_as_null() {
         EJson eJson = new EJson();
@@ -74,7 +71,6 @@ public class EJsonTest {
         assertNull(result.items);
     }
 
-    // A populated collection field still round-trips
     @Test
     public void test_populated_collection_field_round_trips() {
         EJson eJson = new EJson();
@@ -93,7 +89,6 @@ public class EJsonTest {
         public java.util.List<String> items;
     }
 
-    // Serialize basic Java objects to JSON strings using toJson()
     @Test
     public void test_serialize_basic_java_objects() {
         EJson eJson = new EJson();
@@ -111,7 +106,6 @@ public class EJsonTest {
         assertEquals("3.14", eJson.toJson(doubleResult));
     }
 
-    // Constructor successfully initializes JsonReader and JsonWriter instances
     @Test
     public void test_constructor_initializes_reader_writer() {
         EJson eJson = new EJson();
@@ -123,7 +117,6 @@ public class EJsonTest {
         assertNotNull(output);
     }
 
-    // Parse valid JSON string into corresponding Java object of specified class
     @Test
     public void parse_valid_json_to_object() {
         EJson ejson = new EJson();
@@ -149,7 +142,6 @@ public class EJsonTest {
         }
     }
 
-    // Handle empty JSON string input
     @Test
     public void handle_empty_json_string() {
         EJson eJson = new EJson();
@@ -179,7 +171,6 @@ public class EJsonTest {
         }
     }
 
-    // Convert simple object to JSON string using its class type
     @Test
     public void test_convert_simple_object_to_json() {
         EJson eJson = new EJson();
@@ -193,7 +184,6 @@ public class EJsonTest {
         assertEquals("{\"name\":\"test\",\"value\":123}", result);
     }
 
-    // Convert simple object to JSON string using its class type
     @Test
     public void test_convert_simple_object_to_json2() {
         EJson eJson = new EJson();
@@ -204,7 +194,6 @@ public class EJsonTest {
         assertEquals("\"test\"", result);
     }
 
-    // Handle null input object
     @Test
     public void test_handle_null_input() {
         EJson eJson = new EJson();
@@ -212,7 +201,6 @@ public class EJsonTest {
         assertThrows(NullPointerException.class, () -> eJson.toJson(null));
     }
 
-    // Handle null input object
     @Test
     public void reader_and_writer_are_not_null() throws NoSuchFieldException, IllegalAccessException {
         EJson eJson = new EJson();
@@ -222,7 +210,6 @@ public class EJsonTest {
         assertNotNull(writer);
     }
 
-    // Handle null JsonBaseElement input
     @Test
     public void test_handle_null_json_element() {
         Class<String> targetClass = String.class;

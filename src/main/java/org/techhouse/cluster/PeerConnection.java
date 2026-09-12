@@ -72,7 +72,9 @@ public class PeerConnection {
         }
         try {
             return future.get(timeoutMs, TimeUnit.MILLISECONDS);
-        } catch (TimeoutException e) {
+        } catch (TimeoutException | InterruptedException e) {
+            // Drop the correlation either way, or a caller that gave up leaves an entry no reply will ever
+            // remove. A response that arrives afterwards finds nothing pending and is discarded.
             rpc.fail(correlationId, e);
             throw e;
         } catch (ExecutionException e) {

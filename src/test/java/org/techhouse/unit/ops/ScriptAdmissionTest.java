@@ -94,8 +94,6 @@ public class ScriptAdmissionTest {
         assertTrue(admission.tryAcquire());
     }
 
-    // Fairness is what keeps the bounded wait bounded: an unfair semaphore would let the later arrival
-    // barge ahead of a thread that has already been parked.
     @Test
     public void test_permits_are_fair() throws Exception {
         final var admission = new ScriptAdmission(1, 5_000L);
@@ -236,7 +234,6 @@ public class ScriptAdmissionTest {
         assertNotNull(admission.acquire(null, null));
     }
 
-    // Idle pools are dropped so a node that sees many one-off users does not accumulate an entry per name.
     @Test
     public void test_idle_pools_are_released() {
         final var admission = tenantAdmission(5, 1, 1);
@@ -254,8 +251,6 @@ public class ScriptAdmissionTest {
         assertEquals(ScriptAdmission.SCOPE_NODE, admission.lastRefusalScope());
     }
 
-    // Read before anything was ever refused on this thread, the scope answers for the outermost cap
-    // rather than for nothing at all.
     @Test
     public void test_the_refusal_scope_defaults_to_the_node() {
         assertEquals(ScriptAdmission.SCOPE_NODE, new ScriptAdmission(1, 0L).lastRefusalScope());

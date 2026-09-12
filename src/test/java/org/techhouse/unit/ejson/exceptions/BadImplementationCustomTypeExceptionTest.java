@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.exceptions.BadImplementationCustomTypeException;
 
 public class BadImplementationCustomTypeExceptionTest {
-    // Create exception with valid class name and cause exception
     @Test
     public void test_create_exception_with_valid_class_name_and_cause() {
         String className = "MyCustomType";
@@ -19,7 +18,6 @@ public class BadImplementationCustomTypeExceptionTest {
         assertEquals(cause, exception.getCause());
     }
 
-    // Create exception with very long class name
     @Test
     public void test_create_exception_with_very_long_class_name() {
         String veryLongClassName = "com.organization.project.module.submodule.implementation.service.handler.processor.CustomTypeImplementation";

@@ -77,7 +77,6 @@ public class ScriptOperationHelperTest {
         return (RunScriptResponse) response;
     }
 
-    // The gossiped placement signal counts a run for exactly as long as it is executing
     @Test
     public void test_counts_a_run_while_it_executes() throws Exception {
         final var scriptLoad = IocContainer.get(ScriptLoad.class);
@@ -105,7 +104,6 @@ public class ScriptOperationHelperTest {
         assertEquals(0, scriptLoad.current());
     }
 
-    // Scripts are off by default: the operation is refused before anything is parsed
     @Test
     public void test_returns_403_when_scripts_disabled() throws Exception {
         setConfig("scriptsEnabled", false);
@@ -157,7 +155,6 @@ public class ScriptOperationHelperTest {
         assertTrue(response.getStack().getFirst().startsWith("inner ("), response.getStack()::toString);
     }
 
-    // The single-line form the trigger and schedule log lines embed
     @Test
     public void test_render_stack_joins_frames_on_one_line() {
         assertEquals(" stack=[inner (main:2:3) | main:4:1]",
@@ -188,7 +185,6 @@ public class ScriptOperationHelperTest {
         assertEquals(42, response.getResult().asJsonObject().get("total").asJsonNumber().getValue().intValue());
     }
 
-    // The compiled form is cached, but a syntax error must still answer 400-9 on every call
     @Test
     public void test_repeated_syntax_error_stays_400_9() {
         for (var i = 0; i < 3; i++) {
@@ -326,7 +322,6 @@ public class ScriptOperationHelperTest {
         assertTrue(response.getResult().asJsonString().getValue().contains("may only access database"));
     }
 
-    // Reading a collection that does not exist answers null instead of failing the run
     @Test
     public void test_missing_collection_reads_as_null() {
         final var response = run("""
@@ -337,7 +332,6 @@ public class ScriptOperationHelperTest {
         assertTrue(response.getResult().asJsonBoolean().getValue());
     }
 
-    // An acting user that no longer exists is rejected on the script's first database call
     @Test
     public void test_unknown_acting_user_fails_the_script() {
         final var response = ScriptOperationHelper.execute(new RunScriptRequest(TestGlobals.DB,
@@ -354,7 +348,6 @@ public class ScriptOperationHelperTest {
         assertEquals(java.util.List.of("días 🎉"), response.getLogs());
     }
 
-    // A refused write is no longer swallowed: the script sees it, and an uncaught one fails the run
     @Test
     public void test_failed_write_surfaces_into_the_script() {
         final var caught = run("""
@@ -392,7 +385,6 @@ public class ScriptOperationHelperTest {
         assertEquals(2L, response.getMetrics().get("dbOperations").asJsonNumber().getValue().longValue());
     }
 
-    // A failed run reports what it burned: the metrics are attached on every exit path
     @Test
     public void test_a_failed_run_still_reports_metrics() {
         final var response = run("for (let i = 0; i < 10; i++) {} throw new Error('nope');");

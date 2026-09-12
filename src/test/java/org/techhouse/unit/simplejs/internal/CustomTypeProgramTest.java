@@ -22,7 +22,6 @@ public class CustomTypeProgramTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // Every custom type coerces to the EJson wire text the storage layer already parses
     @Test
     public void test_string_coercion_of_every_type() {
         assertEquals("#geo(1.0,2.0)", str("String(new Geo(1, 2))"));
@@ -31,7 +30,6 @@ public class CustomTypeProgramTest {
         assertEquals("#time(03:04:05)", str("String(new DbTime(3, 4, 5))"));
     }
 
-    // JSON.stringify goes through each type's toJSON, so it emits the wire text as a JSON string
     @Test
     public void test_json_stringify_of_every_type() {
         assertEquals("{\"at\":\"#geo(1.0,2.0)\"}", str("JSON.stringify({ at: new Geo(1, 2) })"));
@@ -40,7 +38,6 @@ public class CustomTypeProgramTest {
         assertEquals("\"#time(03:04:05)\"", str("JSON.stringify(new DbTime(3, 4, 5))"));
     }
 
-    // structuredClone keeps the type rather than falling through to the generic object path
     @Test
     public void test_structured_clone_preserves_the_type() {
         assertEquals("[object Geo]", str("Object.prototype.toString.call(structuredClone(new Geo(1, 2)))"));
@@ -50,14 +47,12 @@ public class CustomTypeProgramTest {
         assertEquals(1, num("structuredClone(new Geo(1, 2)).lat"));
     }
 
-    // A member write lands as an ordinary own property, leaving the wrapped value untouched
     @Test
     public void test_member_writes_are_ordinary_properties() {
         assertEquals(7, num("const g = new Geo(1, 2); g.note = 7; g.note"));
         assertEquals(1, num("const g = new Geo(1, 2); g.note = 7; g.lat"));
     }
 
-    // The four globals are non-enumerable, so they never show up in Object.keys(globalThis)
     @Test
     public void test_globals_are_non_enumerable() {
         assertTrue(bool("!Object.keys(globalThis).includes('Geo')"));

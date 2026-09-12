@@ -43,14 +43,11 @@ public class TemporalPlainMonthDayBuiltinsTest {
         assertEquals(1972, num("new Temporal.PlainMonthDay(11, 30).getISOFields().isoYear"));
     }
 
-    // A non-string calendar argument is a TypeError, not a RangeError
     @Test
     public void test_constructor_calendar_non_string_is_type_error() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainMonthDay(11, 30, 5)"));
     }
 
-    // The property-bag `calendar` field accepts a bare identifier, a full ISO string carrying (or
-    // defaulting) a u-ca annotation, or a Temporal object (fast path)
     @Test
     public void test_from_fields_calendar_field_flexible() {
         assertEquals("iso8601",
@@ -73,7 +70,6 @@ public class TemporalPlainMonthDayBuiltinsTest {
                 str("Object.prototype.toString.call(new Temporal.PlainMonthDay(11, 30))"));
     }
 
-    // No numeric `month` accessor exists per spec - only monthCode/day/calendarId
     @Test
     public void test_field_accessors() {
         assertEquals("M11,30,iso8601",
@@ -93,8 +89,6 @@ public class TemporalPlainMonthDayBuiltinsTest {
                 () -> Interpreter.run("Temporal.PlainMonthDay.prototype.toString.call({})"));
     }
 
-    // No add/subtract/until/since/compare exist per spec (a bare month-day cannot be arithmetic'd
-    // without a year)
     @Test
     public void test_no_arithmetic_or_compare_surface() {
         assertEquals("undefined", str("typeof new Temporal.PlainMonthDay(11, 30).add"));
@@ -114,7 +108,6 @@ public class TemporalPlainMonthDayBuiltinsTest {
     public void test_equals() {
         assertTrue(bool("new Temporal.PlainMonthDay(11, 30).equals('11-30')"));
         assertTrue(bool("!new Temporal.PlainMonthDay(11, 30).equals(new Temporal.PlainMonthDay(11, 29))"));
-        // Differing referenceISOYear makes two otherwise-identical month-days unequal, per spec
         assertTrue(bool(
                 "!new Temporal.PlainMonthDay(2, 29, 'iso8601', 2000)" + ".equals(new Temporal.PlainMonthDay(2, 29))"));
     }
@@ -220,8 +213,6 @@ public class TemporalPlainMonthDayBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainMonthDay(11, 30).with({})"));
     }
 
-    // ToTemporalMonthDay's fast paths for PlainDate/PlainDateTime/ZonedDateTime arguments read the
-    // month+day directly, forcing referenceISOYear to 1972
     @Test
     public void test_from_plain_date_plain_date_time_and_zoned_date_time_fast_paths() {
         assertEquals(1972,
@@ -246,7 +237,6 @@ public class TemporalPlainMonthDayBuiltinsTest {
                 () -> Interpreter.run("Temporal.PlainMonthDay.from({monthCode: 'M11', day: -1})"));
     }
 
-    // Reflect.construct threads a distinct newTarget's own prototype onto the constructed instance
     @Test
     public void test_reflect_construct_uses_new_target_prototype() {
         assertTrue(bool("function Sub() {} Sub.prototype = Object.create(Temporal.PlainMonthDay.prototype); "

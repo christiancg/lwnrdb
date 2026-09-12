@@ -99,7 +99,6 @@ public class EnforcingDatabaseAccessScopeTest {
         assertNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "absent"));
     }
 
-    // Transaction control carries no database, so the scope check must not reject it
     @Test
     public void test_transaction_within_the_scope_commits() {
         final var db = scoped();

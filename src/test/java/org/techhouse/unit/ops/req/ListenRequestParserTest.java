@@ -11,7 +11,6 @@ import org.techhouse.ops.req.StopListenRequest;
 
 public class ListenRequestParserTest {
 
-    // LISTEN with aggregationSteps is parsed correctly
     @Test
     public void parseRequest_listen_withFilterStep_parsedCorrectly() {
         final var json = """
@@ -28,7 +27,6 @@ public class ListenRequestParserTest {
         assertFalse(((ListenRequest) result).getAggregationSteps().isEmpty());
     }
 
-    // LISTEN with empty aggregationSteps is parsed without error
     @Test
     public void parseRequest_listen_emptySteps_parsedCorrectly() {
         final var json = "{\"type\":\"LISTEN\",\"databaseName\":\"db\",\"collectionName\":\"coll\",\"aggregationSteps\":[]}";
@@ -40,7 +38,6 @@ public class ListenRequestParserTest {
         assertTrue(((ListenRequest) result).getAggregationSteps().isEmpty());
     }
 
-    // STOP_LISTEN is parsed correctly
     @Test
     public void parseRequest_stopListen_parsedCorrectly() {
         final var id = UUID.randomUUID().toString();

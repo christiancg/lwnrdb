@@ -42,14 +42,11 @@ public class TemporalPlainYearMonthBuiltinsTest {
                 () -> Interpreter.run("new Temporal.PlainYearMonth(2020, 2, 'iso8601', 30)"));
     }
 
-    // A non-string calendar argument is a TypeError, not a RangeError
     @Test
     public void test_constructor_calendar_non_string_is_type_error() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainYearMonth(2020, 6, 5)"));
     }
 
-    // The property-bag `calendar` field accepts a bare identifier, a full ISO string carrying (or
-    // defaulting) a u-ca annotation, or a Temporal object (fast path)
     @Test
     public void test_from_fields_calendar_field_flexible() {
         assertEquals("iso8601",
@@ -64,8 +61,6 @@ public class TemporalPlainYearMonthBuiltinsTest {
                 () -> Interpreter.run("Temporal.PlainYearMonth.from({year: 2020, month: 6, calendar: 5})"));
     }
 
-    // ToTemporalYearMonth's fast paths for PlainDate/PlainDateTime/ZonedDateTime arguments read the
-    // year+month directly, forcing referenceISODay to 1
     @Test
     public void test_from_plain_date_plain_date_time_and_zoned_date_time_fast_paths() {
         assertEquals("2020-06", str("Temporal.PlainYearMonth.from(new Temporal.PlainDate(2020, 6, 15)).toString()"));
@@ -75,7 +70,6 @@ public class TemporalPlainYearMonthBuiltinsTest {
                 + "Temporal.ZonedDateTime.from('2020-06-15T10:00:00-04:00[America/New_York]')).toString()"));
     }
 
-    // A duration-like object with none of the ten recognized properties present is a TypeError
     @Test
     public void test_add_rejects_duration_like_with_no_recognized_fields() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainYearMonth(2020, 6).add({})"));
@@ -138,7 +132,6 @@ public class TemporalPlainYearMonthBuiltinsTest {
                 () -> Interpreter.run("new Temporal.PlainYearMonth(2020, 1).add({years: 1, months: -1})"));
     }
 
-    // add/subtract accept a real Temporal.Duration instance directly (Duration is now a merged type)
     @Test
     public void test_add_accepts_real_duration() {
         assertEquals("2021,1", str("var d = new Temporal.PlainYearMonth(2020, 1);"
@@ -157,7 +150,6 @@ public class TemporalPlainYearMonthBuiltinsTest {
                 + ".until(new Temporal.PlainYearMonth(2020, 4), {largestUnit: 'day'})"));
     }
 
-    // until/since return a real Temporal.Duration instance
     @Test
     public void test_until_returns_real_duration() {
         assertTrue(bool("new Temporal.PlainYearMonth(2020, 1)"
@@ -168,7 +160,6 @@ public class TemporalPlainYearMonthBuiltinsTest {
     public void test_equals() {
         assertTrue(bool("new Temporal.PlainYearMonth(2020, 6).equals('2020-06')"));
         assertTrue(bool("!new Temporal.PlainYearMonth(2020, 6).equals(new Temporal.PlainYearMonth(2020, 7))"));
-        // Differing referenceISODay makes two otherwise-identical year-months unequal, per spec
         assertTrue(bool("!new Temporal.PlainYearMonth(2020, 6, 'iso8601', 15)"
                 + ".equals(new Temporal.PlainYearMonth(2020, 6))"));
     }

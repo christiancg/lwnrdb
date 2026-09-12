@@ -36,12 +36,6 @@ import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The cap end-to-end: a real listening {@link SocketServer}, real TCP connections, and the whole
- * accept -> MessageProcessor -> OperationProcessor -> ScriptOperationHelper path. The helper-level tests
- * drive one entry point on the calling thread; only here does each caller arrive on its own connection and
- * its own virtual thread, which is the shape of the concurrency the cap exists to bound.
- */
 public class ScriptAdmissionE2ETest {
     private static final String ADMIN = "e2eadmin";
     private static final String PASSWORD = "password123";
@@ -107,9 +101,8 @@ public class ScriptAdmissionE2ETest {
         }
     }
 
-    // Polling is the only option here: serve() binds the socket on the server thread and offers no
-    // readiness signal, so there is nothing to await on. The delay runs between every attempt, not
-    // only after a refused one, which is what keeps this a poll rather than a spin.
+    // Polling is the only option: serve() binds the socket on the server thread and offers no readiness
+    // signal, so there is nothing to await on.
     private static void awaitListening() throws InterruptedException {
         final var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         while (System.nanoTime() < deadline) {
@@ -133,7 +126,6 @@ public class ScriptAdmissionE2ETest {
         return "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"" + TestGlobals.DB + "\",\"script\":\"" + script + "\"}";
     }
 
-    // Every caller arrives on its own connection, released together so the burst really overlaps.
     private static List<String> burst(String request) throws Exception {
         final var responses = new ConcurrentLinkedQueue<String>();
         final var ready = new CountDownLatch(6);
@@ -173,8 +165,6 @@ public class ScriptAdmissionE2ETest {
         return ok;
     }
 
-    // The headline behaviour, over the wire: the node admits at most its capacity and turns the rest away
-    // with 503-6 rather than queueing them into the heap.
     @Test
     public void test_concurrent_wire_clients_are_capped_and_rejected_cleanly() throws Exception {
         admission.reconfigure(2, 0L);
@@ -193,7 +183,6 @@ public class ScriptAdmissionE2ETest {
         assertEquals(rejected.size(), admission.getRejected());
     }
 
-    // The same burst with room to queue: the cap still bounds concurrency, but no caller is turned away.
     @Test
     public void test_burst_is_absorbed_when_callers_may_wait() throws Exception {
         admission.reconfigure(2, 10_000L);
@@ -205,8 +194,6 @@ public class ScriptAdmissionE2ETest {
         assertEquals(2, admission.available());
     }
 
-    // The off switch, over the wire: with the cap disabled the burst behaves exactly as it did before the
-    // feature existed.
     @Test
     public void test_cap_disabled_allows_every_caller() throws Exception {
         admission.reconfigure(0, 0L);
@@ -234,9 +221,6 @@ public class ScriptAdmissionE2ETest {
         }
     }
 
-    // Observable only end-to-end: a rejection is an ordinary error response, so the connection stays usable
-    // and the client's retry succeeds once a permit frees. A caller that had to reconnect after every 503-6
-    // would turn a capacity blip into a connection storm.
     @Test
     public void test_a_rejected_connection_stays_usable_and_the_retry_succeeds() throws Exception {
         admission.reconfigure(1, 0L);
@@ -253,8 +237,6 @@ public class ScriptAdmissionE2ETest {
         }
     }
 
-    // The operator's window onto the cap, read the way an operator reads it: over a connection, after the
-    // rejections have happened.
     @Test
     public void test_stats_over_the_wire_report_the_admission_state() throws Exception {
         admission.reconfigure(2, 0L);
@@ -270,7 +252,6 @@ public class ScriptAdmissionE2ETest {
         }
     }
 
-    // One client connection: authenticate once, then exchange request/response lines.
     private static final class Client implements Closeable {
         private final Socket socket;
         private final BufferedReader reader;

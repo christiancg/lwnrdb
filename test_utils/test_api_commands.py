@@ -450,6 +450,14 @@ def test_aggregation_steps(c):
     check("SORT descending by age",
                [d.get("age") for d in (r.get("results") or [])] == [40, 30, 25, 25])
 
+    # Booleans order the conventional way: false before true ascending, and the reverse descending.
+    r = aggregate(c, COLL_AGG, [{"type": "SORT", "fieldName": "active", "ascending": True}])
+    check("SORT ascending by a boolean puts false first",
+               [d.get("active") for d in (r.get("results") or [])] == [False, False, True, True])
+    r = aggregate(c, COLL_AGG, [{"type": "SORT", "fieldName": "active", "ascending": False}])
+    check("SORT descending by a boolean puts true first",
+               [d.get("active") for d in (r.get("results") or [])] == [True, True, False, False])
+
     r = aggregate(c, COLL_AGG, [{"type": "SORT", "fieldName": "age", "ascending": True},
                                    {"type": "LIMIT", "limit": 2}])
     check("LIMIT 2 truncates", len(r.get("results") or []) == 2)

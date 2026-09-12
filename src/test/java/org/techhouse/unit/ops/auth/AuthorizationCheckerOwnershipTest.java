@@ -58,7 +58,6 @@ public class AuthorizationCheckerOwnershipTest {
     public void test_drop_database_requires_ownership_not_just_global_perm() {
         final var user = nonAdminWithDropPerm();
         final var req = new DropDatabaseRequest("some_db");
-        // user has DROP_DATABASE global perm but is not owner → FORBIDDEN
         assertFalse(AuthorizationChecker.check(req, user).isAllowed());
     }
 
@@ -110,7 +109,6 @@ public class AuthorizationCheckerOwnershipTest {
     @Test
     public void test_drop_database_db_exists_but_user_not_owner_forbidden() {
         setOwnerInCache("other_owners_db");
-        // "user2" is NOT in the owners list (only "user" is)
         final var user2 = new AdminUserEntry("user2", "hash", false, new HashSet<>(), new HashMap<>(), new HashMap<>());
         final var req = new DropDatabaseRequest("other_owners_db");
         assertFalse(AuthorizationChecker.check(req, user2).isAllowed());
@@ -123,7 +121,6 @@ public class AuthorizationCheckerOwnershipTest {
         assertFalse(AuthorizationChecker.check(req, user).isAllowed());
     }
 
-    // A database owner may run scripts on it without holding the RUN_SCRIPT global permission
     @Test
     public void test_run_script_allowed_for_owner() {
         setOwnerInCache("scripted_db");

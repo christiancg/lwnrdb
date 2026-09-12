@@ -11,9 +11,6 @@ import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 
-// Enforces a collection's JSON Schema on SAVE / BULK_SAVE before the write reaches OperationProcessor,
-// so a non-compliant document can never be committed. Runs at the edge node; because schemas are
-// replicated cluster-wide, an edge validates before forwarding a write to the collection's owner.
 public final class SchemaValidationHelper {
     private static final Logger logger = Logger.logFor(SchemaValidationHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -22,7 +19,6 @@ public final class SchemaValidationHelper {
     private SchemaValidationHelper() {
     }
 
-    // Returns null when the request complies (or the collection has no schema), otherwise a 400-7 error.
     public static OperationResponse check(OperationRequest request) {
         try {
             return switch (request.getType()) {
@@ -31,8 +27,7 @@ public final class SchemaValidationHelper {
                 default -> null;
             };
         } catch (Exception e) {
-            // The cached schema is validated when it is saved, so this is a can't-happen guard: never
-            // break the write path over an internal schema issue — log and let the write proceed.
+            // Cannot happen (the cached schema was validated when saved): never break the write path over it.
             logger.warning("Skipping schema validation for " + request.getDatabaseName() + "|"
                     + request.getCollectionName() + ": " + e.getMessage());
             return null;
@@ -62,9 +57,7 @@ public final class SchemaValidationHelper {
         return null;
     }
 
-    // Also the entry point a before trigger's replacement document is re-validated through: the checks
-    // above run at the edge, before the hook, so without this a hook could produce a document the
-    // collection's schema forbids. Returns the joined violations, or null when the document complies.
+    // Also re-validates a before-hook's replacement document: the checks above run at the edge, before the hook.
     public static String schemaErrors(String dbName, String collName, JsonObject object) {
         final var schema = cache.getCollectionSchema(dbName, collName);
         if (schema == null) {
@@ -74,10 +67,7 @@ public final class SchemaValidationHelper {
         return result.isValid() ? null : String.join("; ", result.getErrors());
     }
 
-    // Validates the user document without the reserved _id field: _id is a system-assigned primary key
-    // (already format-checked by the request validator), not user data the schema governs — so a schema
-    // with additionalProperties:false does not need to declare it. Returns a shallow copy (children shared)
-    // so the original request object is left untouched for the downstream write.
+    // _id is system-assigned, not user data the schema governs, so additionalProperties:false need not declare it.
     private static JsonObject withoutId(JsonObject object) {
         if (object == null || !object.has(Globals.PK_FIELD)) {
             return object;

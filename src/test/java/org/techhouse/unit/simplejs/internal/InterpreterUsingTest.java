@@ -33,7 +33,6 @@ public class InterpreterUsingTest {
         return ((JsNumber) Interpreter.run(source)).getValue();
     }
 
-    // joins a returned array's string elements; used to observe disposal that runs after the last statement
     private static String joinArray(String source) {
         final var array = (JsArray) Interpreter.run(source);
         final var sb = new StringBuilder();
@@ -50,14 +49,12 @@ public class InterpreterUsingTest {
         return "{ [Symbol.dispose]: () => { " + body + " } }";
     }
 
-    // the resource is disposed when the block exits, after the body runs
     @Test
     public void test_disposes_at_block_exit() {
         assertEquals("body,d",
                 str("let log=[]; { using r = " + dispose("log.push('d')") + "; log.push('body'); } log.join(',')"));
     }
 
-    // multiple resources dispose in reverse declaration order
     @Test
     public void test_disposes_in_reverse_order() {
         final var source = "let log=[]; { using a=" + dispose("log.push('a')") + "; using b=" + dispose("log.push('b')")
@@ -65,7 +62,6 @@ public class InterpreterUsingTest {
         assertEquals("b,a", str(source));
     }
 
-    // a thrown body still disposes before the error propagates
     @Test
     public void test_disposes_on_throw() {
         final var source = "let log=[]; try { { using r=" + dispose("log.push('d')")
@@ -73,7 +69,6 @@ public class InterpreterUsingTest {
         assertEquals("d,c:x", str(source));
     }
 
-    // a return through a using block disposes before returning
     @Test
     public void test_disposes_on_return() {
         final var source = "let log=[]; function f(){ { using r=" + dispose("log.push('d')")
@@ -81,7 +76,6 @@ public class InterpreterUsingTest {
         assertEquals("d,ret", str(source));
     }
 
-    // a break out of a using-containing block disposes
     @Test
     public void test_disposes_on_break() {
         final var source = "let log=[]; for (let i=0;i<1;i++) { using r=" + dispose("log.push('d')")
@@ -89,25 +83,21 @@ public class InterpreterUsingTest {
         assertEquals("d", str(source));
     }
 
-    // using null/undefined is a no-op and does not throw
     @Test
     public void test_null_resource_is_noop() {
         assertEquals("ok", str("let log=[]; { using r = null; using u = undefined; log.push('ok'); } log.join(',')"));
     }
 
-    // a resource without a dispose method throws a TypeError at declaration
     @Test
     public void test_non_disposable_throws_type_error() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("{ using r = {}; }"));
     }
 
-    // a dispose method that is not callable throws a TypeError
     @Test
     public void test_dispose_not_callable_throws_type_error() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("{ using r = { [Symbol.dispose]: 5 }; }"));
     }
 
-    // a dispose error propagates when the body completed normally
     @Test
     public void test_dispose_error_propagates() {
         final var source = "let out=''; try { { using r={ [Symbol.dispose]: () => { throw new Error('boom') } }; } }"
@@ -115,7 +105,6 @@ public class InterpreterUsingTest {
         assertEquals("boom", str(source));
     }
 
-    // a body error and a dispose error aggregate into a SuppressedError
     @Test
     public void test_suppressed_error_when_both_throw() {
         final var source = "let out=''; try { { using r={ [Symbol.dispose]: () => { throw new Error('E2') } };"
@@ -123,7 +112,6 @@ public class InterpreterUsingTest {
         assertEquals("SuppressedError:E2:E1", str(source));
     }
 
-    // multiple dispose errors chain: the newest is the error, the accumulated is suppressed
     @Test
     public void test_multiple_dispose_errors_chain() {
         final var source = "let out=''; try { { using a={ [Symbol.dispose]: () => { throw new Error('E1') } };"
@@ -132,7 +120,6 @@ public class InterpreterUsingTest {
         assertEquals("SuppressedError/E1/E2", str(source));
     }
 
-    // for-of with a using head disposes each element after its iteration
     @Test
     public void test_for_of_using_disposes_each_iteration() {
         final var source = "let log=[]; for (using r of [" + dispose("log.push('x')") + "," + dispose("log.push('y')")
@@ -140,16 +127,12 @@ public class InterpreterUsingTest {
         assertEquals("i,x,i,y", str(source));
     }
 
-    // a for-of head's `using` bound name is in TDZ while the source expression evaluates, so a
-    // reference to it there (even the loop's own iterable) is a ReferenceError, not a lookup of an
-    // outer binding of the same name
     @Test
     public void test_for_of_using_head_bound_name_is_tdz_during_source_evaluation() {
         final var source = "let x = { [Symbol.dispose](){} }; for (using x of [x]) {}";
         assertThrows(ReferenceErrorException.class, () -> Interpreter.run(source));
     }
 
-    // a using at function-body top level disposes when the function returns
     @Test
     public void test_function_body_using_disposes() {
         final var source = "let log=[]; function f(){ using r=" + dispose("log.push('d')")
@@ -157,7 +140,6 @@ public class InterpreterUsingTest {
         assertEquals("body,d", str(source));
     }
 
-    // a using in a switch case disposes when the switch exits
     @Test
     public void test_switch_using_disposes() {
         final var source = "let log=[]; switch(1){ case 1: { using r=" + dispose("log.push('d')")
@@ -165,14 +147,12 @@ public class InterpreterUsingTest {
         assertEquals("c,d", str(source));
     }
 
-    // a using at module top level disposes when the module finishes (observed after the run)
     @Test
     public void test_module_top_level_using_disposes() {
         final var source = "let log=[]; using r=" + dispose("log.push('d')") + "; log.push('body'); log";
         assertEquals("body,d", joinArray(source));
     }
 
-    // a using inside a generator is disposed when the generator is early-returned
     @Test
     public void test_generator_return_runs_dispose() {
         final var source = """
@@ -186,7 +166,6 @@ public class InterpreterUsingTest {
         assertEquals("d", str(source));
     }
 
-    // await using awaits the async dispose method
     @Test
     public void test_await_using_awaits_async_dispose() {
         final var source = "let log=[]; async function f(){ await using r={ [Symbol.asyncDispose]: () => { log.push('ad') } };"
@@ -194,7 +173,6 @@ public class InterpreterUsingTest {
         assertEquals("body,ad", str(source));
     }
 
-    // await using falls back to Symbol.dispose when no asyncDispose is present
     @Test
     public void test_await_using_falls_back_to_sync_dispose() {
         final var source = "let log=[]; async function f(){ await using r=" + dispose("log.push('sd')")
@@ -202,7 +180,6 @@ public class InterpreterUsingTest {
         assertEquals("body,sd", str(source));
     }
 
-    // await using at module top level is valid (disposal observed after the run)
     @Test
     public void test_await_using_top_level() {
         final var source = "let log=[]; await using r={ [Symbol.asyncDispose]: () => { log.push('d') } };"
@@ -210,14 +187,12 @@ public class InterpreterUsingTest {
         assertEquals("body,d", joinArray(source));
     }
 
-    // await using in a sync function is a runtime SyntaxError
     @Test
     public void test_await_using_outside_async_throws() {
         assertThrows(SyntaxErrorException.class,
                 () -> Interpreter.run("function f(){ await using r = " + dispose("") + "; } f()"));
     }
 
-    // a wall-clock abort skips user disposers
     @Test
     public void test_script_abort_skips_dispose() {
         final var log = new ArrayList<String>();
@@ -228,21 +203,18 @@ public class InterpreterUsingTest {
         assertTrue(log.stream().noneMatch(line -> line.contains("d")));
     }
 
-    // typeof a symbol is 'symbol'
     @Test
     public void test_typeof_symbol() {
         assertEquals("symbol", str("typeof Symbol.dispose"));
         assertEquals("symbol", str("typeof Symbol('x')"));
     }
 
-    // each Symbol() call produces a distinct value
     @Test
     public void test_symbol_identity() {
         assertFalse(bool("Symbol('a') === Symbol('a')"));
         assertTrue(bool("Symbol.dispose === Symbol.dispose"));
     }
 
-    // symbol-keyed properties round-trip and do not collide with string keys
     @Test
     public void test_symbol_keyed_property() {
         assertEquals(42, num("let o={}; o[Symbol.dispose]=42; o[Symbol.dispose]"));
@@ -250,32 +222,27 @@ public class InterpreterUsingTest {
                 + " o[Symbol.dispose]+','+o['Symbol(Symbol.dispose)']"));
     }
 
-    // reading an absent symbol key yields undefined
     @Test
     public void test_symbol_missing_key_undefined() {
         assertEquals("undefined", str("let o={}; typeof o[Symbol.dispose]"));
     }
 
-    // a compound-assignment update through a symbol key works
     @Test
     public void test_symbol_key_update() {
         assertEquals(3, num("let o={}; o[Symbol.dispose]=1; o[Symbol.dispose]+=2; o[Symbol.dispose]"));
     }
 
-    // SuppressedError constructor exposes error/suppressed/message
     @Test
     public void test_suppressed_error_constructor() {
         final var source = "let e = new SuppressedError('x', 'y', 'm'); e.name+':'+e.message+':'+e.error+':'+e.suppressed";
         assertEquals("SuppressedError:m:x:y", str(source));
     }
 
-    // coercing a symbol to a string throws a TypeError
     @Test
     public void test_symbol_to_string_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("'' + Symbol('x')"));
     }
 
-    // a class instance with a Symbol.dispose field is disposable via using
     @Test
     public void test_class_instance_field_disposable() {
         final var source = """
@@ -287,7 +254,6 @@ public class InterpreterUsingTest {
         assertEquals("body,d", str(source));
     }
 
-    // a DisposableStack composes with a using declaration
     @Test
     public void test_using_disposable_stack() {
         final var source = """
@@ -298,14 +264,12 @@ public class InterpreterUsingTest {
         assertEquals("body,d", str(source));
     }
 
-    // Symbol.dispose resolves through the prototype
     @Test
     public void test_disposable_stack_prototype_has_dispose() {
         assertTrue(bool("Symbol.dispose in DisposableStack.prototype"));
         assertTrue(bool("new DisposableStack() instanceof DisposableStack"));
     }
 
-    // await using awaits disposeAsync on an AsyncDisposableStack
     @Test
     public void test_await_using_async_disposable_stack() {
         final var source = """

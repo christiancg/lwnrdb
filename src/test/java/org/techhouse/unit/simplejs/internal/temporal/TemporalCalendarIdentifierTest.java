@@ -64,8 +64,8 @@ public class TemporalCalendarIdentifierTest {
         assertThrows(RangeErrorException.class, () -> TemporalCalendarIdentifier.requireBuiltinCalendar("hebrew"));
     }
 
-    // requireBuiltinCalendar does not extract a u-ca annotation from a full ISO string, unlike
-    // requireBuiltinCalendarOrAnnotated - a validly-formed date string is still rejected here.
+    // Unlike requireBuiltinCalendarOrAnnotated, requireBuiltinCalendar does not extract a u-ca annotation
+    // from a full ISO string.
     @Test
     public void test_require_builtin_calendar_rejects_full_iso_string() {
         assertThrows(RangeErrorException.class,

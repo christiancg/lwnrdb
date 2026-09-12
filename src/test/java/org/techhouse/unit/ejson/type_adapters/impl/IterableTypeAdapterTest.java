@@ -20,35 +20,26 @@ public class IterableTypeAdapterTest {
         new EJson();
     }
 
-    // Convert non-empty Iterable<T> to JSON string with proper array format
     @Test
     public void test_serialize_non_empty_iterable_to_json() {
-        // Arrange
         IterableTypeAdapter<String> adapter = new IterableTypeAdapter<>(String.class);
         List<String> testList = Arrays.asList("test1", "test2", "test3");
 
-        // Act
         String result = adapter.toJson(testList);
 
-        // Assert
         assertEquals("[\"test1\",\"test2\",\"test3\"]", result);
     }
 
-    // Handle null values inside Iterable during serialization
     @Test
     public void test_serialize_iterable_with_null_values() {
-        // Arrange
         IterableTypeAdapter<String> adapter = new IterableTypeAdapter<>(String.class);
         List<String> testList = Arrays.asList("test1", null, "test3");
 
-        // Act
         String result = adapter.toJson(testList);
 
-        // Assert
         assertEquals("[\"test1\",null,\"test3\"]", result);
     }
 
-    // Convert JsonArray to Iterable<T> with valid elements
     @Test
     public void test_convert_json_array_to_iterable() {
         IterableTypeAdapter<String> adapter = new IterableTypeAdapter<>(String.class);
@@ -69,7 +60,6 @@ public class IterableTypeAdapterTest {
         assertEquals("test2", resultList.get(1));
     }
 
-    // Return null when input is not a JsonArray
     @Test
     public void test_return_null_for_non_array_input() {
         IterableTypeAdapter<String> adapter = new IterableTypeAdapter<>(String.class);

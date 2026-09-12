@@ -8,7 +8,6 @@ import org.techhouse.simplejs.elements.JsBaseElement;
 import org.techhouse.simplejs.elements.JsTemplateString;
 
 public class JsTemplateStringTest {
-    // Quasis, raw quasis and expressions are exposed as provided
     @Test
     public void test_getters() {
         final List<List<JsBaseElement>> expressions = List.of(List.of());
@@ -18,14 +17,12 @@ public class JsTemplateStringTest {
         assertEquals(expressions, template.getExpressions());
     }
 
-    // The quasis/expressions count invariant is enforced
     @Test
     public void test_invariant_violation_throws() {
         assertThrows(IllegalArgumentException.class,
                 () -> new JsTemplateString(List.of("a", "b"), List.of("a", "b"), List.of()));
     }
 
-    // The raw/cooked count invariant is enforced
     @Test
     public void test_raw_count_invariant_violation_throws() {
         assertThrows(IllegalArgumentException.class,

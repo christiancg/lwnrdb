@@ -14,8 +14,6 @@ import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 
-// `await`, `async` and `of` are lexer keywords but grammar-contextual: they are identifiers wherever
-// the current function context does not reserve them.
 public class AwaitYieldContextTest {
     private static double num(String source) {
         return ((JsNumber) Interpreter.run(source)).getValue();
@@ -31,7 +29,6 @@ public class AwaitYieldContextTest {
                 "expected a parse rejection but got " + error);
     }
 
-    // await is an ordinary identifier at the top level of a script and in a plain function
     @Test
     public void test_await_is_an_identifier_outside_async_code() {
         assertEquals(1, num("var await = 1; await"));
@@ -43,13 +40,11 @@ public class AwaitYieldContextTest {
         assertEquals("function", str());
     }
 
-    // at the top level of a script `await x` is still the operator, which the host contract keeps
     @Test
     public void test_top_level_await_stays_the_operator() {
         assertEquals(5, num("await 5"));
     }
 
-    // inside async code await is reserved, so it is neither a binding nor a reference
     @Test
     public void test_await_is_reserved_inside_async_code() {
         rejectsParse("async function f() { var await = 1; }");
@@ -58,7 +53,6 @@ public class AwaitYieldContextTest {
         rejectsParse("async function f(a = await 1) {}");
     }
 
-    // a class static block reserves await, but a function or arrow body inside it does not
     @Test
     public void test_await_in_a_class_static_block() {
         rejectsParse("class C { static { await; } }");
@@ -67,7 +61,6 @@ public class AwaitYieldContextTest {
         assertEquals(1, num("var r = 0; class C { static { (function await(await) {}); r = 1; } } r"));
     }
 
-    // `of` is only the loop keyword in a for-of head; everywhere else it is an identifier
     @Test
     public void test_of_is_a_contextual_identifier() {
         assertEquals(1, num("var of = 1; of"));
@@ -77,29 +70,23 @@ public class AwaitYieldContextTest {
         assertEquals(1, num("var of = function() { return 1; }; of()"));
     }
 
-    // `async` is contextual too: only a function or an arrow head makes it a modifier
     @Test
     public void test_async_is_a_contextual_identifier() {
         assertEquals(1, num("var async = 1; async"));
         assertEquals(1, num("var async = function() { return 1; }; async(0)"));
         assertEquals(1, num("var async = { x: 1 }; async.x"));
         assertEquals(7, num("var async; for ((async) of [7]) ; async"));
-        // the for-of head carries a lookahead restriction on a bare `async`
         rejectsParse("var async; for (async of [7]) ;");
     }
 
-    // `await` is a reserved word only in a context where an AwaitExpression could appear (an actual
-    // Module goal symbol, or inside async code) - unlike a genuine future-reserved word, so an
-    // escaped spelling is a legal binding identifier at the top level of a script, including as a
-    // class name and as an object-literal shorthand property inside a class static block (which can
-    // never itself contain an AwaitExpression)
+    // `await` is reserved only where an AwaitExpression could appear, unlike a genuine future-reserved
+    // word - so an escaped spelling is a legal binding identifier at the top level of a script.
     @Test
     public void test_escaped_await_is_a_legal_binding_identifier() {
         assertEquals(1, num("class aw\\u0061it {} 1"));
         assertEquals(1, num("class C { static { (() => ({ await })); } } 1"));
     }
 
-    // the new parser contexts do not change tick() accounting: a script near the budget still aborts
     @Test
     public void test_instruction_budget_still_aborts() {
         final var host = new SimpleHostBindings(null, null, null, new ResourceLimits(2_000L, -1, 100));

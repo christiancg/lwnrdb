@@ -29,7 +29,6 @@ public class AssignerTest {
         }
     }
 
-    // Assign JsonObject to a simple POJO class using reflection adapter
     @Test
     public void test_assign_json_to_pojo() {
         new EJson();
@@ -44,7 +43,6 @@ public class AssignerTest {
         assertEquals(25, person.getAge());
     }
 
-    // Handle null input JsonObject
     @Test
     public void test_assign_null_json() {
         assertThrows(NullPointerException.class, () -> Assigner.assign(null, Person.class));

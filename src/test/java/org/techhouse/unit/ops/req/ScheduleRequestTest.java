@@ -12,8 +12,8 @@ import org.techhouse.ops.req.ListSchedulesRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveScheduleRequest;
 import org.techhouse.ops.req.validations.RequestValidator;
-import org.techhouse.ops.resp.DeleteScheduleResponse;
 import org.techhouse.ops.resp.ListSchedulesResponse;
+import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveScheduleResponse;
 
 public class ScheduleRequestTest {
@@ -21,7 +21,6 @@ public class ScheduleRequestTest {
     public void test_save_schedule_request_accessors() {
         final var request = new SaveScheduleRequest();
         assertEquals(OperationType.SAVE_SCHEDULE, request.getType());
-        // Absent args read as an empty object rather than null
         assertTrue(request.getArgs().entrySet().isEmpty());
         request.setName("s");
         request.setProcedureName("p");
@@ -49,7 +48,6 @@ public class ScheduleRequestTest {
         assertEquals("alice", request.getStampedUpdatedBy());
         assertEquals("owner", request.getStampedDefiner());
         assertEquals("v", request.getArgs().get("k").asJsonString().getValue());
-        // Absent enabled reads as enabled
         assertTrue(request.isEnabled());
         request.setEnabled(false);
         assertFalse(request.isEnabled());
@@ -87,7 +85,8 @@ public class ScheduleRequestTest {
     @Test
     public void test_response_accessors() {
         assertEquals(3L, new SaveScheduleResponse("ok", 3L).getVersion());
-        assertEquals(OperationType.DELETE_SCHEDULE, new DeleteScheduleResponse("ok").getType());
+        assertEquals(OperationType.DELETE_SCHEDULE,
+                OperationResponse.ok(OperationType.DELETE_SCHEDULE, "ok").getType());
         assertTrue(new ListSchedulesResponse("ok", List.of()).getSchedules().isEmpty());
     }
 

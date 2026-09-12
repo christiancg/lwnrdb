@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ex.InvalidCommandException;
 
 public class InvalidCommandExceptionTest {
-    // Create exception with underlying cause exception
     @Test
     public void test_create_with_cause_exception() {
         Exception cause = new RuntimeException("Original error");
@@ -18,7 +17,6 @@ public class InvalidCommandExceptionTest {
         assertEquals(cause, exception.getCause());
     }
 
-    // Create exception with null cause exception
     @Test
     public void test_create_with_null_cause() {
         InvalidCommandException exception = new InvalidCommandException(null);
