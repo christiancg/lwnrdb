@@ -9,24 +9,14 @@ import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 import org.techhouse.utils.GeoPoint;
 import org.techhouse.utils.GeoUtils;
 
-// A geographic point stored as "#geo(lat,lng)". Beyond the standard equality/ordering used by every
-// custom type, it exposes two custom filter operators: "distance" (compare the haversine distance to
-// a target point against a threshold via a comparator) and "within" (point-in-polygon over an array
-// of points forming an enclosed shape).
 public class JsonGeo extends JsonCustom<GeoPoint> {
-    // The custom type name (the "#geo(...)" prefix) and the names of the custom filter operators this
-    // type exposes. They live here — with the geo type itself — rather than in the global config.
     public static final String CUSTOM_TYPE_NAME = "geo";
     public static final String OPERATOR_DISTANCE = "distance";
     public static final String OPERATOR_WITHIN = "within";
 
-    // Number of geohash characters used for ordering; high enough that distinct coordinates virtually
-    // always differ (ties are broken by lat/lng anyway, so equality stays exact).
     private static final int GEO_HASH_ORDER_PRECISION = 12;
 
     public JsonGeo(GeoPoint customValue) {
-        // Build the "#geo(lat,lng)" wire value explicitly (rather than relying on GeoPoint.toString),
-        // so GeoPoint stays a plain data record; the string constructor parses it back into customValue.
         super("#" + CUSTOM_TYPE_NAME + "(" + customValue.lat() + "," + customValue.lng() + ")");
     }
 
@@ -63,8 +53,8 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
         }
     }
 
-    // Orders by geohash so the on-disk/in-memory index is spatially clustered (enabling the geohash
-    // range scan), with lat then lng as tie-breakers so compare(...) == 0 iff the points are equal.
+    // Geohash first, so the index is spatially clustered and the geohash range scan works; lat/lng only
+    // break ties, keeping compare == 0 iff the points are equal.
     @Override
     public Integer compare(GeoPoint another) {
         final var byHash = geoHash()
@@ -125,7 +115,6 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
         return GeoUtils.pointInPolygon(customValue, polygon);
     }
 
-    // Accepts a geo argument that arrives either already parsed as a JsonGeo or as a "#geo(...)" string.
     private static GeoPoint toGeoPoint(JsonBaseElement element) {
         if (element instanceof JsonGeo geo) {
             return geo.point();

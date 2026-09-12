@@ -41,12 +41,10 @@ public class FilterOperatorResolutionTest {
         TestUtils.standardTearDown();
     }
 
-    // processOperator uses index when available (covers matchingValues != null path L187-205)
     @Test
     public void test_process_operator_with_index_returns_indexed_results() throws Exception {
         final var cache = IocContainer.get(Cache.class);
 
-        // Insert two entries
         JsonObject obj1 = new JsonObject();
         obj1.add(Globals.PK_FIELD, new JsonString("idx1"));
         obj1.addProperty("score", 100);
@@ -64,13 +62,10 @@ public class FilterOperatorResolutionTest {
         cache.putAdminCollectionEntry(adminCollEntry,
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "idx1", 0, 100, 0));
 
-        // Create an index on "score"
         org.techhouse.ops.IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "score");
-        // Ensure the collection entry knows about the index
         final var coll = cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL);
         coll.setIndexes(java.util.Set.of("score"));
 
-        // Query with EQUALS on the indexed field — matchingValues will be non-null
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "score", new JsonNumber(100));
         List<JsonObject> result = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
                 .toList();
@@ -79,7 +74,6 @@ public class FilterOperatorResolutionTest {
         assertEquals(100, result.getFirst().get("score").asJsonNumber().asInteger());
     }
 
-    // matchingValues != null with non-null resultStream filters the existing stream by index (L194-205)
     @Test
     public void test_process_operator_with_index_and_existing_stream() throws Exception {
         final var cache = IocContainer.get(Cache.class);
@@ -105,7 +99,6 @@ public class FilterOperatorResolutionTest {
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(java.util.Set.of("level"));
 
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(5));
-        // Pass a non-null stream — triggers the resultStream != null branch of matchingValues path
         java.util.stream.Stream<JsonObject> existing = java.util.stream.Stream.of(obj1, obj2);
         List<JsonObject> result = FilterOperatorHelper.processOperator(op, existing, TestGlobals.DB, TestGlobals.COLL)
                 .toList();
@@ -113,8 +106,6 @@ public class FilterOperatorResolutionTest {
         assertEquals(1, result.size());
         assertEquals(5, result.getFirst().get("level").asJsonNumber().asInteger());
     }
-
-    // ---- resolveIdsViaIndex (index-only id-set resolution, used by index-backed COUNT) ----
 
     private void addIndexedDoc(Cache cache, String id, JsonBaseElement value) {
         final var obj = new JsonObject();
@@ -145,7 +136,6 @@ public class FilterOperatorResolutionTest {
         TestUtils.setPrivateField(userCache, "pkIndexMap", pkMap);
     }
 
-    // A single indexed field operator resolves to exactly the matching ids.
     @Test
     public void test_resolve_ids_single_field_returns_index_ids() throws Exception {
         final var cache = IocContainer.get(Cache.class);
@@ -160,7 +150,6 @@ public class FilterOperatorResolutionTest {
         assertEquals(java.util.Set.of("r1", "r3"), ids);
     }
 
-    // A field without an index cannot be resolved → null signals the caller to fall back.
     @Test
     public void test_resolve_ids_unindexed_field_returns_null() throws Exception {
         final var cache = IocContainer.get(Cache.class);
@@ -170,7 +159,6 @@ public class FilterOperatorResolutionTest {
         assertNull(FilterOperatorHelper.resolveIdsViaIndex(op, TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // AND intersects the child id-sets.
     @Test
     public void test_resolve_ids_and_intersects_child_sets() throws Exception {
         final var cache = IocContainer.get(Cache.class);
@@ -186,7 +174,6 @@ public class FilterOperatorResolutionTest {
                 FilterOperatorHelper.resolveIdsViaIndex(and, TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // OR unions the child id-sets.
     @Test
     public void test_resolve_ids_or_unions_child_sets() throws Exception {
         final var cache = IocContainer.get(Cache.class);
@@ -202,13 +189,12 @@ public class FilterOperatorResolutionTest {
                 FilterOperatorHelper.resolveIdsViaIndex(or, TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // XOR keeps ids that appear in exactly one child id-set.
     @Test
     public void test_resolve_ids_xor_keeps_exactly_one() throws Exception {
         final var cache = IocContainer.get(Cache.class);
-        addTwoFieldDoc(cache, "r1", "active", 1); // matches both leaves
-        addTwoFieldDoc(cache, "r2", "active", 2); // matches only status
-        addTwoFieldDoc(cache, "r3", "inactive", 1); // matches only level
+        addTwoFieldDoc(cache, "r1", "active", 1);
+        addTwoFieldDoc(cache, "r2", "active", 2);
+        addTwoFieldDoc(cache, "r3", "inactive", 1);
         index(cache, "status", "level");
 
         final var xor = new ConjunctionOperator(ConjunctionOperatorType.XOR,
@@ -218,7 +204,6 @@ public class FilterOperatorResolutionTest {
                 FilterOperatorHelper.resolveIdsViaIndex(xor, TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // NOR is the complement of the union against the full id universe (from the PK index).
     @Test
     public void test_resolve_ids_nor_complements_against_pk_index() throws Exception {
         final var cache = IocContainer.get(Cache.class);
@@ -231,12 +216,10 @@ public class FilterOperatorResolutionTest {
         final var nor = new ConjunctionOperator(ConjunctionOperatorType.NOR,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
                         new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(3))));
-        // union(active = r1,r2; level3 = r3) = {r1,r2,r3}; complement against {r1,r2,r3} = {}
         assertEquals(java.util.Set.of(),
                 FilterOperatorHelper.resolveIdsViaIndex(nor, TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // NAND is the complement of the intersection against the full id universe.
     @Test
     public void test_resolve_ids_nand_complements_against_pk_index() throws Exception {
         final var cache = IocContainer.get(Cache.class);
@@ -249,17 +232,15 @@ public class FilterOperatorResolutionTest {
         final var nand = new ConjunctionOperator(ConjunctionOperatorType.NAND,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
                         new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))));
-        // intersection(active = r1,r2; level1 = r1,r3) = {r1}; complement against {r1,r2,r3} = {r2,r3}
         assertEquals(java.util.Set.of("r2", "r3"),
                 FilterOperatorHelper.resolveIdsViaIndex(nand, TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // A conjunction with one unindexed leaf cannot be resolved purely from indexes → null.
     @Test
     public void test_resolve_ids_conjunction_with_unindexed_leaf_returns_null() throws Exception {
         final var cache = IocContainer.get(Cache.class);
         addTwoFieldDoc(cache, "r1", "active", 1);
-        index(cache, "status"); // "level" is not indexed
+        index(cache, "status");
 
         final var and = new ConjunctionOperator(ConjunctionOperatorType.AND,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active")),
@@ -267,7 +248,6 @@ public class FilterOperatorResolutionTest {
         assertNull(FilterOperatorHelper.resolveIdsViaIndex(and, TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // An indexed value with no matches resolves to an empty set (count 0), not null.
     @Test
     public void test_resolve_ids_no_matches_returns_empty_set() throws Exception {
         final var cache = IocContainer.get(Cache.class);
@@ -328,7 +308,6 @@ public class FilterOperatorResolutionTest {
         assertEquals(Set.of("o1", "o2"), matched);
     }
 
-    // Same as above for an array operand / Array hash index.
     @Test
     public void test_resolve_ids_via_index_array_equals_disqualified_but_filter_resolves() throws IOException {
         final var cache = IocContainer.get(Cache.class);

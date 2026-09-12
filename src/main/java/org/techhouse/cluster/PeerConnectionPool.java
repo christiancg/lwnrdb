@@ -24,12 +24,8 @@ public class PeerConnectionPool {
         try {
             return connection.sendRequest(message, timeoutMs);
         } catch (IOException e) {
-            // Only a transport failure condemns the socket. Every peer shares one connection, and dropping
-            // it fails all the other requests riding on it, so a timeout must not: it says this call got no
-            // answer in time, not that the link is broken. Dropping on one meant a single slow reply took
-            // down the concurrent gossip, replication and anti-entropy to that peer, which then read as the
-            // peer being unreachable and cost the cluster its write quorum. A genuinely dead peer still
-            // gets dropped - the reader thread sees EOF and closes, and getOrCreate reconnects.
+            // Only a transport failure condemns the socket, never a timeout: every peer shares one connection,
+            // so dropping it would fail the concurrent gossip and replication riding on it and cost the quorum.
             drop(address, connection);
             throw e;
         }

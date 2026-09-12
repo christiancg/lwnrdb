@@ -9,7 +9,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.SaveRequest;
 
 public class SaveRequestTest {
-    // Create SaveRequest with valid database and collection names
     @Test
     public void test_create_save_request_with_valid_names() {
         String dbName = "testDb";
@@ -24,7 +23,6 @@ public class SaveRequestTest {
         assertNull(saveRequest.getObject());
     }
 
-    // Create SaveRequest with empty database name
     @Test
     public void test_create_save_request_with_empty_db_name() {
         String dbName = "";
@@ -39,7 +37,6 @@ public class SaveRequestTest {
         assertNull(saveRequest.getObject());
     }
 
-    // test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         String dbName = "testDb";

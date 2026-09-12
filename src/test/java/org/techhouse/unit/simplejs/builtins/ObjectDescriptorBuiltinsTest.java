@@ -13,21 +13,18 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.test.JsEval;
 
 public class ObjectDescriptorBuiltinsTest {
-    // getOwnPropertyDescriptor returns a data descriptor
     @Test
     public void test_get_own_property_descriptor() {
         assertEquals(3, JsEval.num("Object.getOwnPropertyDescriptor({a: 3}, 'a').value"));
         assertInstanceOf(JsUndefined.class, Interpreter.run("Object.getOwnPropertyDescriptor({}, 'missing')"));
     }
 
-    // getOwnPropertyDescriptor returns an accessor descriptor for accessors
     @Test
     public void test_get_own_property_descriptor_accessor() {
         assertEquals(4, JsEval.num(
                 "let o = {}; Object.defineProperty(o, 'v', {get: function() { return 4; }}); Object.getOwnPropertyDescriptor(o, 'v').get()"));
     }
 
-    // getOwnPropertyDescriptor reports the real flags of a defined property
     @Test
     public void test_get_own_property_descriptor_flags() {
         final var setup = "let o = {}; Object.defineProperty(o, 'v', "
@@ -38,7 +35,6 @@ public class ObjectDescriptorBuiltinsTest {
         assertEquals(7, JsEval.num(setup + "Object.getOwnPropertyDescriptor(o, 'v').value"));
     }
 
-    // delete returns false for a non-configurable property and true for a configurable one
     @Test
     public void test_delete_configurability() {
         assertThrows(TypeErrorException.class,
@@ -48,7 +44,6 @@ public class ObjectDescriptorBuiltinsTest {
         assertTrue(JsEval.bool("let o = {a: 1}; delete o.a"));
     }
 
-    // getOwnPropertyDescriptors reports every own key's descriptor
     @Test
     public void test_get_own_property_descriptors_data_property() {
         final var source = """
@@ -58,7 +53,6 @@ public class ObjectDescriptorBuiltinsTest {
         assertEquals("1|true|true|true", JsEval.str(source));
     }
 
-    // an accessor descriptor carries its get and set functions
     @Test
     public void test_get_own_property_descriptors_accessor() {
         final var source = """
@@ -68,7 +62,6 @@ public class ObjectDescriptorBuiltinsTest {
         assertEquals("function|function", JsEval.str(source));
     }
 
-    // a non-enumerable key is still described
     @Test
     public void test_get_own_property_descriptors_includes_non_enumerable() {
         final var source = """
@@ -79,7 +72,6 @@ public class ObjectDescriptorBuiltinsTest {
         assertEquals(1, JsEval.num(source));
     }
 
-    // symbol keys are described alongside string keys
     @Test
     public void test_get_own_property_descriptors_includes_symbol() {
         final var source = """
@@ -90,13 +82,11 @@ public class ObjectDescriptorBuiltinsTest {
         assertEquals(3, JsEval.num(source));
     }
 
-    // an empty object yields an empty descriptor map
     @Test
     public void test_get_own_property_descriptors_empty() {
         assertEquals(0, JsEval.num("Object.keys(Object.getOwnPropertyDescriptors({})).length"));
     }
 
-    // ToObject(O) rejects only null/undefined; another primitive simply has no own properties
     @Test
     public void test_get_own_property_descriptors_non_object_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.getOwnPropertyDescriptors(undefined)"));
@@ -104,7 +94,6 @@ public class ObjectDescriptorBuiltinsTest {
         assertEquals(0, JsEval.num("Object.keys(Object.getOwnPropertyDescriptors(1)).length"));
     }
 
-    // the name descriptor is non-writable, non-enumerable and configurable
     @Test
     public void test_function_name_descriptor_attributes() {
         final var source = """
@@ -115,7 +104,6 @@ public class ObjectDescriptorBuiltinsTest {
         assertEquals("[\"foo\",false,false,true]", JsEval.str(source));
     }
 
-    // the prototype descriptor is writable, non-enumerable and non-configurable
     @Test
     public void test_function_prototype_descriptor_attributes() {
         final var source = """
@@ -126,7 +114,6 @@ public class ObjectDescriptorBuiltinsTest {
         assertEquals("[true,true,false,false]", JsEval.str(source));
     }
 
-    // a declared global reports a data descriptor on globalThis
     @Test
     public void test_get_own_property_descriptor_of_a_global() {
         final var source = """
@@ -138,40 +125,34 @@ public class ObjectDescriptorBuiltinsTest {
         assertTrue(JsEval.bool("Object.getOwnPropertyDescriptor(globalThis, 'neverDeclared') === undefined"));
     }
 
-    // getOwnPropertyDescriptor with a missing key argument or a non-object receiver returns undefined
     @Test
     public void test_get_own_property_descriptor_missing_arg_or_non_object() {
         assertInstanceOf(JsUndefined.class, Interpreter.run("Object.getOwnPropertyDescriptor({})"));
         assertInstanceOf(JsUndefined.class, Interpreter.run("Object.getOwnPropertyDescriptor(5, 'x')"));
     }
 
-    // a symbol key is not reflected in a function's descriptor lookup (functions have no symbol storage)
     @Test
     public void test_get_own_property_descriptor_of_function_with_symbol_key() {
         assertInstanceOf(JsUndefined.class,
                 Interpreter.run("Object.getOwnPropertyDescriptor(function() {}, Symbol('x'))"));
     }
 
-    // the prototype metadata descriptor of a native constructor reports its real .prototype
     @Test
     public void test_get_own_property_descriptor_of_native_constructor_prototype() {
         assertTrue(JsEval.bool("Object.getOwnPropertyDescriptor(Array, 'prototype').value === Array.prototype"));
     }
 
-    // a symbol key on globalThis's descriptor lookup returns undefined
     @Test
     public void test_get_own_property_descriptor_of_global_with_symbol_key() {
         assertInstanceOf(JsUndefined.class,
                 Interpreter.run("Object.getOwnPropertyDescriptor(globalThis, Symbol('x'))"));
     }
 
-    // a symbol never assigned on the object reports no descriptor
     @Test
     public void test_get_own_property_descriptor_of_absent_symbol() {
         assertInstanceOf(JsUndefined.class, Interpreter.run("Object.getOwnPropertyDescriptor({}, Symbol('x'))"));
     }
 
-    // A descriptor carrying only enumerable/configurable leaves an existing accessor intact
     @Test
     public void test_generic_descriptor_preserves_existing_accessor() {
         assertTrue(
@@ -180,7 +161,6 @@ public class ObjectDescriptorBuiltinsTest {
                         + "typeof Object.getOwnPropertyDescriptor(o, 'x').get === 'function' && o.x === 5"));
     }
 
-    // A symbol-keyed defineProperty stores its flags instead of always reporting all-true
     @Test
     public void test_symbol_descriptor_stores_flags() {
         assertTrue(JsEval.bool("const s = Symbol('s'); const o = {};"
@@ -189,7 +169,6 @@ public class ObjectDescriptorBuiltinsTest {
                 + "d.value === 1 && d.enumerable === false && d.configurable === false"));
     }
 
-    // A builtin constructor's `prototype` is non-writable, non-enumerable and non-configurable
     @Test
     public void test_builtin_constructor_prototype_descriptor() {
         assertTrue(JsEval.bool("const d = Object.getOwnPropertyDescriptor(Array, 'prototype');"
@@ -266,7 +245,6 @@ public class ObjectDescriptorBuiltinsTest {
                 """));
     }
 
-    // ToPropertyDescriptor accepts any object (a function, an array, a Date), not just a literal
     @Test
     public void acceptsNonPlainObjectDescriptor() {
         assertEquals(5, JsEval.num("""
@@ -288,16 +266,12 @@ public class ObjectDescriptorBuiltinsTest {
                 () -> Interpreter.run("Object.defineProperty({}, 'x', { get() {}, value: 1 })"));
     }
 
-    // The descriptor object FromPropertyDescriptor builds is itself proto-linked to Object.prototype
-    // (both the single- and the batch- getOwnPropertyDescriptor forms).
     @Test
     public void getOwnPropertyDescriptorResultIsAnInstanceOfObject() {
         assertTrue(JsEval.bool("Object.getOwnPropertyDescriptor({p: 1}, 'p') instanceof Object"));
         assertTrue(JsEval.bool("Object.getPrototypeOf(Object.getOwnPropertyDescriptors({})) === Object.prototype"));
     }
 
-    // Object.values/entries over a Proxy interleave getOwnPropertyDescriptor and get per key (not a
-    // getOwnPropertyDescriptor batch followed by a get batch).
     @Test
     public void valuesOverAProxyInterleavesDescriptorCheckAndGetPerKey() {
         assertEquals("|ownKeys|getOwnPropertyDescriptor:a|get:a|getOwnPropertyDescriptor:b|get:b", JsEval

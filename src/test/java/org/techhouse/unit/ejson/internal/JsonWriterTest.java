@@ -12,7 +12,6 @@ public class JsonWriterTest {
     public void setUp() {
         new EJson();
     }
-    // Convert simple POJO to JSON string using reflection adapter
     @Test
     public void test_convert_pojo_to_json_string() {
         class TestPojo {
@@ -42,7 +41,6 @@ public class JsonWriterTest {
         assertEquals("{\"name\":\"test\",\"value\":123}", json);
     }
 
-    // Handle null input object
     @Test
     public void test_convert_null_to_json_string() {
         JsonWriter writer = new JsonWriter();
@@ -51,7 +49,6 @@ public class JsonWriterTest {
         assertEquals("null", json);
     }
 
-    // Convert a simple POJO to JSON string using ReflectionTypeAdapter
     @Test
     public void test_convert_simple_pojo_to_json() {
         class TestPojo {

@@ -14,7 +14,6 @@ import org.techhouse.data.Client;
 
 public class ClientWriterTest {
 
-    // Client stores and retrieves writer
     @Test
     public void client_writerGetterSetter() {
         final var client = new Client("127.0.0.1");
@@ -25,7 +24,6 @@ public class ClientWriterTest {
         assertSame(writer, client.getWriter());
     }
 
-    // ClientTracker.registerWriter and getWriter round-trip
     @Test
     public void clientTracker_registerAndGetWriter() {
         final var tracker = new ClientTracker();
@@ -42,7 +40,6 @@ public class ClientWriterTest {
         assertSame(writer, tracker.getWriter(clientId));
     }
 
-    // getWriter for unknown clientId returns null
     @Test
     public void clientTracker_getWriter_unknownId_returnsNull() {
         final var tracker = new ClientTracker();
@@ -50,7 +47,6 @@ public class ClientWriterTest {
         assertNull(tracker.getWriter(UUID.randomUUID()));
     }
 
-    // registerWriter for null clientId does not throw
     @Test
     public void clientTracker_registerWriter_nullId_doesNotThrow() {
         final var tracker = new ClientTracker();
@@ -59,7 +55,6 @@ public class ClientWriterTest {
         assertDoesNotThrow(() -> tracker.registerWriter(null, writer));
     }
 
-    // getWriter for null clientId returns null
     @Test
     public void clientTracker_getWriter_nullId_returnsNull() {
         final var tracker = new ClientTracker();

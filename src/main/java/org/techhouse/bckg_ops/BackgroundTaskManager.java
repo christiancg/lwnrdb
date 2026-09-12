@@ -34,13 +34,6 @@ public class BackgroundTaskManager {
         logger.info("Started listening for background tasks");
     }
 
-    /**
-     * Lets the workers finish what is queued before stopping, up to {@code timeoutMillis}. Called on the
-     * shutdown path: an index event dropped here is a field index left stale with no pending-write overlay to
-     * compensate after the restart, because that overlay lives only in memory.
-     *
-     * @return true when the queue drained fully within the budget
-     */
     public boolean drain(long timeoutMillis) {
         draining = true;
         try {
@@ -67,11 +60,6 @@ public class BackgroundTaskManager {
         return queue.size() + inFlight.get();
     }
 
-    /**
-     * Interrupts the running workers, drops any pending events and replaces the pool so the manager can be
-     * started again. The workers block on {@code queue.take()}; {@code shutdownNow} interrupts that wait,
-     * which exits {@link BackgroundProcessorThread#run()}.
-     */
     public void stopBackgroundWorkers() {
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Background");
         queue.clear();

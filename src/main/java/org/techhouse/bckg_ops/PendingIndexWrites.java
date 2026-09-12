@@ -7,18 +7,11 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.cache.Cache;
 
 /**
- * Tracks documents that have been committed (document, PK index and document cache updated
- * synchronously) but whose asynchronous field-index update has not yet completed. Index
- * maintenance is eventually consistent, so during that window the field indexes do not yet reflect
- * the write; index-backed reads consult this overlay to stay consistent (a pending document's index
- * entry is untrustworthy, so readers re-evaluate it against the current document instead).
- *
- * <p>Counts (not a plain set) are kept per id so rapid repeated writes to the same id stay pending
- * until <em>all</em> their index updates have completed. All mutations use atomic
- * {@link ConcurrentHashMap} operations so {@code mark} and {@code clear} never lose updates.
+ * A pending document's field-index entry is untrustworthy: index-backed reads must re-evaluate it
+ * against the current document. Counts, not a set, so repeated writes to one id stay pending until
+ * all of their index updates have completed.
  */
 public class PendingIndexWrites {
-    // db|coll -> (id -> pending-update count)
     private final Map<String, Map<String, Integer>> pending = new ConcurrentHashMap<>();
 
     public void mark(String dbName, String collName, String id) {
@@ -32,8 +25,6 @@ public class PendingIndexWrites {
         }
     }
 
-    // Safe to call for an id that was never marked (e.g. DELETE events): computeIfPresent is a no-op
-    // when the id is absent.
     public void clear(String dbName, String collName, String id) {
         final var byId = pending.get(Cache.getCollectionIdentifier(dbName, collName));
         if (byId != null) {
@@ -47,8 +38,6 @@ public class PendingIndexWrites {
         }
     }
 
-    // Snapshot of the ids currently pending for the collection; empty when there are no recent
-    // writes, in which case index reads incur no overhead.
     public Set<String> idsFor(String dbName, String collName) {
         final var byId = pending.get(Cache.getCollectionIdentifier(dbName, collName));
         if (byId == null || byId.isEmpty()) {

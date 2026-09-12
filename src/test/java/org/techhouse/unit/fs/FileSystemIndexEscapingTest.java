@@ -127,12 +127,10 @@ public class FileSystemIndexEscapingTest {
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "testField";
 
-        // Insert initial entry pointing to a document with special-char ID
         FieldIndexEntry<String> initial = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue",
                 Set.of("doc|one", "doc;two"));
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, initial, null);
 
-        // Remove one ID, keep the other
         FieldIndexEntry<String> removed = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue",
                 Set.of("doc;two"));
         FieldIndexEntry<String> updated = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "aValue",
@@ -210,7 +208,6 @@ public class FileSystemIndexEscapingTest {
         assertEquals("my|and;special|id", index.getFirst().getValue());
     }
 
-    // writeHashIndexFile + readWholeHashIndexFile round-trip for OBJECT and ARRAY kinds
     @Test
     public void test_hash_index_write_and_read_round_trip()
             throws IOException, NoSuchFieldException, IllegalAccessException {

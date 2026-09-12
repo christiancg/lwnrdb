@@ -13,12 +13,6 @@ import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
 
-/**
- * Scaffolding shared by the cluster integration tests: cluster configuration forced on with a known
- * secret, a real {@link ClusterServer} on an ephemeral port, and the membership/ownership globals put
- * back afterwards. Whatever a single test needs on top — which collections exist, which epoch, a
- * different ack timeout — stays at its own call site.
- */
 public final class ClusterTestHarness {
     public static final String SECRET = "s";
     private static final long DEFAULT_ACK_TIMEOUT_MS = 1500L;
@@ -96,7 +90,6 @@ public final class ClusterTestHarness {
         ownership.onMembershipChanged(membershipService.membershipView());
     }
 
-    // Two-node membership in which self is NOT the admin coordinator; the coordinator sits at serverPort.
     public void configureRemoteCoordinator() throws Exception {
         for (var i = 0; i < 500; i++) {
             configureMembership(2, node("self", 19990), node("coord-" + i, serverPort));

@@ -7,9 +7,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.log.Logger;
 
-// A periodic reconcile pass that coalesces bursts into at most one queued run: while a pass is
-// pending, further requests are dropped rather than queued, so a storm of membership changes cannot
-// pile up passes behind each other.
 final class CoalescingSweep {
     interface Reconcile {
         void run() throws Exception;

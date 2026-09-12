@@ -11,14 +11,6 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.Tx2pcLog;
 
-/**
- * Crash recovery for Phase 5b two-phase commit. A prepared participant asks its coordinator for the decision
- * (present coordinator marker ⇒ commit, otherwise presumed-abort); if the coordinator is unreachable it falls
- * back to <b>cooperative termination</b> — polling the other participants and adopting any decision one of
- * them already reached. A coordinator that recorded a commit re-drives COMMIT to its participants. Runs at
- * startup, on every membership change, and on a periodic sweep (which also GCs old outcome markers and warns
- * about long in-doubt transactions). Idempotent.
- */
 public class Tx2pcRecovery implements MembershipListener {
     private final Logger logger = Logger.logFor(Tx2pcRecovery.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
@@ -35,8 +27,6 @@ public class Tx2pcRecovery implements MembershipListener {
         recover();
     }
 
-    // Starts the periodic recovery/GC sweep (retries in-doubt transactions without waiting for a membership
-    // change, GCs resolved-outcome markers, and warns about long in-doubt transactions).
     public void start() {
         if (!clusterConfig.isEnabled() || clusterConfig.antiEntropyIntervalMs() <= 0) {
             return;
@@ -114,9 +104,8 @@ public class Tx2pcRecovery implements MembershipListener {
         TransactionOperationHelper.resolveFromDurable(dtxId, true);
     }
 
-    // Determines the outcome for a prepared-but-uncertain transaction. The coordinator is authoritative when
-    // reachable (commit marker ⇒ commit, otherwise presumed-abort); only when it is unreachable do we fall back
-    // to cooperative termination among the other participants.
+    // The coordinator is authoritative when reachable (commit marker ⇒ commit, otherwise presumed-abort);
+    // only when it is unreachable do we fall back to cooperative termination among the other participants.
     private Decision resolve(String coordinatorAddress, java.util.List<String> participants, String dtxId) {
         final var fromCoordinator = statusFrom(coordinatorAddress, dtxId);
         if (fromCoordinator != null) {
@@ -137,7 +126,6 @@ public class Tx2pcRecovery implements MembershipListener {
         return Decision.UNKNOWN;
     }
 
-    // This node's or a peer's knowledge of the transaction, or null when the peer is unreachable.
     private Tx2pcLog.Status statusFrom(String address, String dtxId) {
         if (isSelf(address)) {
             try {

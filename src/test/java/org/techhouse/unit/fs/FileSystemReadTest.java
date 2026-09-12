@@ -48,7 +48,6 @@ public class FileSystemReadTest {
         }
     }
 
-    // Handle case when folder creation fails
     @Test
     public void test_handle_folder_creation_failure() throws IOException {
         FileSystem fileSystem = new FileSystem();
@@ -66,24 +65,19 @@ public class FileSystemReadTest {
         verify(mockFile, never()).createNewFile();
     }
 
-    // Handle case when file does not exist
     @Test
     public void test_get_by_id_throws_when_file_not_exists() {
-        // Arrange
         FileSystem fileSystem = new FileSystem();
         String dbName = "nonExistentDb";
         String collectionName = "nonExistentCollection";
         String id = "123";
         PkIndexEntry pkIndexEntry = new PkIndexEntry(dbName, collectionName, id, 0L, 100L, 0);
 
-        // Act & Assert
         assertThrows(FileNotFoundException.class, () -> fileSystem.getById(pkIndexEntry));
     }
 
-    // Successfully retrieves DbEntry when valid PkIndexEntry is provided
     @Test
     public void test_get_by_id_returns_valid_db_entry() throws Exception {
-        // Arrange
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         fileSystem.createBaseDbPath();
@@ -103,10 +97,8 @@ public class FileSystemReadTest {
         dbEntry.set_id(id);
         PkIndexEntry indexEntry = fileSystem.insertIntoCollection(dbEntry);
 
-        // Act
         DbEntry result = fileSystem.getById(indexEntry);
 
-        // Assert
         assertNotNull(result);
         assertEquals(TestGlobals.DB, result.getDatabaseName());
         assertEquals(TestGlobals.COLL, result.getCollectionName());
@@ -128,7 +120,6 @@ public class FileSystemReadTest {
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, fooBar, null);
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, foo, null);
 
-        // Remove "foo" — should only remove the exact "foo" entry, leaving "foo|bar" intact
         FieldIndexEntry<String> fooEmpty = new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "foo", Set.of());
         fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, fieldName, null, fooEmpty);
 
@@ -142,23 +133,18 @@ public class FileSystemReadTest {
                 "'foo|bar' entry must not be affected");
     }
 
-    // Returns null when collection folder does not exist
     @Test
     public void test_returns_null_when_collection_folder_missing() throws NoSuchFieldException, IllegalAccessException {
-        // Arrange
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "age";
 
-        // Act
         ConcurrentMap<String, List<FieldIndexEntry<?>>> result = fileSystem.readAllWholeFieldIndexFiles(TestGlobals.DB,
                 "nonexistentCollection", fieldName);
 
-        // Assert
         assertNull(result);
     }
 
-    // streamPages yields one map per page file
     @Test
     public void test_stream_pages_yields_one_map_per_page()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -192,7 +178,6 @@ public class FileSystemReadTest {
         assertTrue(allIds.contains("2"));
     }
 
-    // streamPages on a non-existent collection folder returns an empty stream
     @Test
     public void test_stream_pages_missing_folder_empty()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -201,8 +186,6 @@ public class FileSystemReadTest {
         assertEquals(0L, fileSystem.streamPages("noSuchDbNameForStreamTest", "noSuchCollName").count());
     }
 
-    // The reserved ADMIN_PAGES_DB_NAME namespace resolves physically to the admin/pages subfolder,
-    // and its data/index files live inside it (and NOT flat under admin/).
     @Test
     public void test_pages_namespace_resolves_under_admin_pages_folder() throws Exception {
         FileSystem fileSystem = new FileSystem();
@@ -235,7 +218,6 @@ public class FileSystemReadTest {
         final var fs = new FileSystem();
         TestUtils.setDbPath(fs, TestGlobals.PATH);
 
-        // Insert one valid entry so the page file exists with a known good line.
         final var entry = new DbEntry();
         entry.setDatabaseName(TestGlobals.DB);
         entry.setCollectionName(TestGlobals.COLL);
@@ -244,16 +226,14 @@ public class FileSystemReadTest {
         entry.setPage(0L);
         fs.insertIntoCollection(entry);
 
-        // Append a torn/garbage line, simulating a crash mid-write.
         final var pageFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
                 + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
                 + Globals.FILE_PAGE_SEPARATOR + 0 + Globals.DB_FILE_EXTENSION);
         Files.writeString(pageFile.toPath(), "\nthis-is-not-json{partial", StandardCharsets.UTF_8,
                 java.nio.file.StandardOpenOption.APPEND);
 
-        // The malformed line is skipped in-memory; the file is left untouched
-        // so the .idx file's byte offsets remain valid (rewriting the .dat
-        // here would require coordinated .idx rewriting — a real compaction).
+        // The file is left untouched so the .idx byte offsets stay valid; rewriting the .dat here would
+        // require a coordinated .idx rewrite - a real compaction.
         final var firstRead = fs.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0L);
         assertEquals(1, firstRead.size());
         assertTrue(firstRead.containsKey("good"));
@@ -263,7 +243,6 @@ public class FileSystemReadTest {
                 ".dat is intentionally left as-is to preserve .idx offsets");
     }
 
-    // streamEntries on a missing/empty collection yields an empty stream
     @Test
     public void test_stream_entries_empty_collection()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -276,7 +255,6 @@ public class FileSystemReadTest {
         }
     }
 
-    // streamEntries yields all entries across pages
     @Test
     public void test_stream_entries_yields_all_across_pages()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -309,7 +287,6 @@ public class FileSystemReadTest {
         assertEquals(Set.of("a", "b"), ids);
     }
 
-    // A string field containing a newline stays on a single line in the page file and reads back intact
     @Test
     public void test_document_with_newline_occupies_one_line() throws Exception {
         FileSystem fileSystem = new FileSystem();

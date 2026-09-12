@@ -69,7 +69,6 @@ public class FileSystem {
         createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesTriggerRuns);
     }
 
-    // Create the nested admin/pages parent up front (per-collection folders below are mkdir'd one level deep).
     private void createAdminPagesFolder() {
         final var pagesFolder = paths.adminPagesFolder();
         if (!pagesFolder.exists() && !pagesFolder.mkdirs()) {
@@ -283,11 +282,6 @@ public class FileSystem {
         }
     }
 
-    /**
-     * Deletes the entry from its page, compacting the survivors. Returns the {@link PkCompaction}
-     * describing the shift (so the caller can fix the in-memory PK positions via
-     * {@code Cache.shiftPkPositionsAfterCompaction}), or {@code null} when no survivor moved.
-     */
     public PkCompaction deleteFromCollection(PkIndexEntry pkIndexEntry) {
         final var dbName = pkIndexEntry.getDatabaseName();
         final var collName = pkIndexEntry.getCollectionName();
@@ -319,13 +313,6 @@ public class FileSystem {
         }
     }
 
-    /**
-     * Shifts the entries after {@code pkIndexEntry} toward the start of the page, overwriting its
-     * slot. Returns {@code true} when entries were actually moved (so the caller must fix the
-     * in-memory PK positions of the survivors), {@code false} when there was nothing to shift — the
-     * removed entry was the last one, or its position is already past the end of the file (a stale
-     * position from a concurrent compaction/drop), in which case allocating the buffer is skipped.
-     */
     private boolean shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, long totalFileLength)
             throws IOException {
         final int otherEntriesLength = (int) (totalFileLength - pkIndexEntry.getPosition() - pkIndexEntry.getLength());
@@ -340,21 +327,12 @@ public class FileSystem {
         return true;
     }
 
-    /**
-     * Updates many entries by delegating to the single-entry {@link #updateFromCollection}, which keeps
-     * the page file and PK index file correct for each row. Earlier updates shift the file positions of
-     * later same-page entries, so this drives each {@code updateFromCollection} with a private,
-     * progressively-adjusted copy of the target's index entry (never mutating the caller's cached
-     * {@link PkIndexEntry} objects). The returned {@link BulkUpdateResult} carries the new entries plus
-     * the ordered compactions the caller must apply to fix the in-memory positions of the surviving
-     * (non-updated) entries.
-     */
     public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
             throws IOException {
         final var updated = new ArrayList<IndexedDbEntry>();
         final var compactions = new ArrayList<PkCompaction>();
-        // Private copies of the target index entries; their positions are adjusted as earlier updates
-        // compact the page, so each delegated update sees the current on-disk position.
+        // Private copies: earlier updates compact the page, so these positions are adjusted as we go
+        // rather than mutating the caller's cached entries.
         final var working = new ArrayList<PkIndexEntry>(entries.size());
         for (final var entry : entries) {
             final var idx = entry.getIndex();
@@ -376,11 +354,8 @@ public class FileSystem {
             final var compaction = result.compaction();
             if (compaction != null) {
                 compactions.add(compaction);
-                // This update relocated the row to the end and shifted later same-page entries toward
-                // the start. Apply the same shift to the still-to-be-processed working copies (so the
-                // next update sees the current on-disk position) and to the already-relocated entries
-                // from earlier iterations (so their reported new positions stay correct), but not to
-                // the row we just relocated.
+                // Apply the shift to the pending working copies and to the entries relocated by earlier
+                // iterations, but never to the row this iteration just relocated.
                 for (int j = i + 1; j < working.size(); j++) {
                     shiftIfAfter(working.get(j), compaction);
                 }
@@ -392,11 +367,6 @@ public class FileSystem {
         return new BulkUpdateResult(updated, compactions);
     }
 
-    /**
-     * Updates the entry in place, relocating it to the end of its page and compacting the survivors.
-     * Returns the new {@link PkIndexEntry} together with the {@link PkCompaction} the caller must
-     * apply to the in-memory PK positions (or a null compaction when no survivor moved).
-     */
     public UpdateResult updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();

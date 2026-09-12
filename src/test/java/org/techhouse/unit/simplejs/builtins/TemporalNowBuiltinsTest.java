@@ -20,8 +20,6 @@ public class TemporalNowBuiltinsTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // Temporal.Now is a plain object of functions, not a constructor: Object.getPrototypeOf answers
-    // Object.prototype (via Temporal.Now's own setProto call), never a Temporal.Now.prototype
     @Test
     public void test_now_is_a_plain_namespace_object() {
         assertTrue(
@@ -33,8 +31,6 @@ public class TemporalNowBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Now()"));
     }
 
-    // Object.prototype.toString reports the real own [Symbol.toStringTag] on both Temporal and
-    // Temporal.Now, mirroring how Math/JSON/Reflect are tagged
     @Test
     public void test_to_string_tags() {
         assertEquals("[object Temporal]", str("Object.prototype.toString.call(Temporal)"));
@@ -71,14 +67,11 @@ public class TemporalNowBuiltinsTest {
         assertTrue(bool("typeof Temporal.Now.timeZoneId() === 'string' && Temporal.Now.timeZoneId().length > 0"));
     }
 
-    // With no argument every zone-aware member defaults to the system time zone, matching
-    // Temporal.Now.timeZoneId()
     @Test
     public void test_zoned_date_time_iso_defaults_to_system_time_zone() {
         assertTrue(bool("Temporal.Now.zonedDateTimeISO().timeZoneId === Temporal.Now.timeZoneId()"));
     }
 
-    // An explicit string argument overrides the system default
     @Test
     public void test_explicit_time_zone_argument_is_honored() {
         assertEquals("UTC", str("Temporal.Now.zonedDateTimeISO('UTC').timeZoneId"));
@@ -87,7 +80,6 @@ public class TemporalNowBuiltinsTest {
         assertTrue(bool("Temporal.Now.plainDateTimeISO('Asia/Tokyo') instanceof Temporal.PlainDateTime"));
     }
 
-    // A Temporal.ZonedDateTime argument reuses its own time zone (ToTemporalTimeZoneIdentifier)
     @Test
     public void test_zoned_date_time_argument_reuses_its_time_zone() {
         assertEquals("America/New_York", str("Temporal.Now.zonedDateTimeISO("
@@ -100,7 +92,6 @@ public class TemporalNowBuiltinsTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.Now.plainDateISO('Not/AZone')"));
     }
 
-    // A non-string, non-ZonedDateTime time zone argument is a TypeError
     @Test
     public void test_non_string_time_zone_argument_throws_type_error() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Temporal.Now.plainDateISO(42)"));

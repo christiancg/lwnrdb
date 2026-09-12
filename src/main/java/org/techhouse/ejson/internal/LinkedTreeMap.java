@@ -93,7 +93,7 @@ public final class LinkedTreeMap<K, V> extends AbstractMap<K, V> implements Seri
         int comparison = 0;
 
         if (nearest != null) {
-            @SuppressWarnings("unchecked") // Throws a ClassCastException below if there's trouble.
+            @SuppressWarnings("unchecked")
             Comparable<Object> comparableKey = (comparator == NATURAL_ORDER) ? (Comparable<Object>) key : null;
 
             while (true) {

@@ -27,14 +27,12 @@ public class RegexBuiltinsTest {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
-    // RegExp constructor builds a regex from a string pattern and flags
     @Test
     public void test_constructor_from_string() {
         assertTrue(bool("new RegExp('a.c').test('axc')"));
         assertTrue(bool("RegExp('a', 'i').test('A')"));
     }
 
-    // RegExp constructor clones another regex, optionally overriding flags
     @Test
     public void test_constructor_clone() {
         assertEquals("i", str("new RegExp(/a/i).flags"));
@@ -42,14 +40,12 @@ public class RegexBuiltinsTest {
         assertEquals("a", str("new RegExp(/a/i).source"));
     }
 
-    // test reports whether the pattern matches
     @Test
     public void test_test_method() {
         assertTrue(bool("/\\d+/.test('abc123')"));
         assertFalse(bool("/\\d+/.test('abc')"));
     }
 
-    // regex property accessors reflect the flags and lastIndex
     @Test
     public void test_flag_properties() {
         assertTrue(bool("/a/g.global"));
@@ -59,7 +55,6 @@ public class RegexBuiltinsTest {
         assertEquals(0, num("/a/g.lastIndex"));
     }
 
-    // assigning lastIndex resets the stateful matching position
     @Test
     public void test_last_index_assignable() {
         final var source = """
@@ -71,32 +66,27 @@ public class RegexBuiltinsTest {
         assertEquals(1, num(source));
     }
 
-    // an invalid pattern in the RegExp constructor throws a SyntaxError
     @Test
     public void test_invalid_pattern_throws() {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("new RegExp('(')"));
     }
 
-    // the dotAll accessor and an unknown property resolve
     @Test
     public void test_dotall_and_unknown_property() {
         assertTrue(bool("/a/s.dotAll"));
         assertInstanceOf(JsUndefined.class, Interpreter.run("/a/.unknownProp"));
     }
 
-    // RegExp with no arguments builds an empty-source regex
     @Test
     public void test_constructor_no_args() {
         assertEquals("", str("new RegExp().source"));
     }
 
-    // test with no argument matches against the string "undefined"
     @Test
     public void test_test_no_arg() {
         assertTrue(bool("/undefined/.test()"));
     }
 
-    // RegExp.escape escapes syntax characters so the result matches the literal string
     @Test
     public void test_escape_syntax_characters() {
         assertEquals("\\.\\*\\+", str("RegExp.escape('.*+')"));
@@ -104,7 +94,6 @@ public class RegexBuiltinsTest {
         assertFalse(bool("new RegExp(RegExp.escape('a.b')).test('axb')"));
     }
 
-    // RegExp.escape hex-escapes an alphanumeric first character so concatenation stays safe
     @Test
     public void test_escape_first_char() {
         assertEquals("\\x61bc", str("RegExp.escape('abc')"));
@@ -112,7 +101,6 @@ public class RegexBuiltinsTest {
     }
 
     // ECMA-262 WhiteSpace is not java's: NBSP, NNBSP and the byte order mark are escaped too, and a
-    // surrogate that is not half of a well-formed pair has no printable spelling.
     @Test
     public void test_escape_whitespace_and_lone_surrogates() {
         assertEquals("\\ufeff\\x20\\xa0\\u202f", str("RegExp.escape('\\ufeff\\u0020\\u00a0\\u202f')"));
@@ -122,26 +110,22 @@ public class RegexBuiltinsTest {
         assertEquals("\\u2028", str("RegExp.escape('\\u2028')"));
     }
 
-    // RegExp.escape rejects a non-string argument
     @Test
     public void test_escape_non_string_throws() {
         assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
                 () -> Interpreter.run("RegExp.escape(5)"));
     }
 
-    // RegExp.escape emits named escapes for whitespace control characters
     @Test
     public void test_escape_whitespace() {
         assertEquals("\\tx", str("RegExp.escape(String.fromCharCode(9) + 'x')"));
     }
 
-    // the u and v flags are mutually exclusive
     @Test
     public void test_u_and_v_flags_conflict() {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("new RegExp('x', 'uv')"));
     }
 
-    // general-category property escapes: short codes pass through, long names translate to short
     @Test
     public void test_unicode_property_general_category() {
         assertTrue(bool("/\\p{L}/u.test('a')"));
@@ -151,7 +135,6 @@ public class RegexBuiltinsTest {
         assertTrue(bool("/\\p{gc=Nd}/u.test('5')"));
     }
 
-    // Script= / sc= and binary properties are translated to their java.util.regex equivalents
     @Test
     public void test_unicode_property_scripts_and_binary() {
         assertTrue(bool("/\\p{Script=Greek}/u.test('\\u03B1')"));
@@ -162,7 +145,6 @@ public class RegexBuiltinsTest {
         assertTrue(bool("/\\p{L}/v.test('a')"));
     }
 
-    // \P negates the property; the whole class still resolves
     @Test
     public void test_unicode_property_negation() {
         assertTrue(bool("/\\P{L}/u.test('3')"));
@@ -176,7 +158,6 @@ public class RegexBuiltinsTest {
         assertFalse(bool("/^\\d$/u.test('\\u0663')"));
     }
 
-    // unsupported or unknown Unicode properties are rejected with a SyntaxError
     @Test
     public void test_unsupported_unicode_property_throws() {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("/\\p{Emoji}/u"));
@@ -184,7 +165,6 @@ public class RegexBuiltinsTest {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("/\\p{Script=Nonsense}/u"));
     }
 
-    // unicode/unicodeSets accessors reflect the u/v flags
     @Test
     public void test_unicode_accessors() {
         assertTrue(bool("/a/u.unicode"));
@@ -210,7 +190,6 @@ public class RegexBuiltinsTest {
         assertEquals("\\u2029", str("RegExp.escape('\\u2029')"));
     }
 
-    // RegExp.prototype.flags is derived from the individual flag getters, in dgimsuvy order.
     @Test
     public void flagsIsGenericAndCanonicallyOrdered() {
         assertEquals("dgimsuy", str("new RegExp('', 'yusmigd').flags"));
@@ -227,7 +206,6 @@ public class RegexBuiltinsTest {
                         + " Object.getOwnPropertyDescriptor(RegExp.prototype, 'flags').get.call(re); calls"));
     }
 
-    // `flags` is generic all the way down, so an own flag accessor is what @@match/@@replace observe.
     @Test
     public void flagsReadsTheFlagPropertiesOffTheReceiver() {
         assertEquals("i",
@@ -240,7 +218,6 @@ public class RegexBuiltinsTest {
                 + " r.toString()"));
     }
 
-    // The flag accessors have no setter, but an own property shadowing one is writable.
     @Test
     public void assigningAFlagIsRefusedUnlessShadowed() {
         assertEquals("TypeError", str("let caught = 'none'; const r = /a/g;"
@@ -255,11 +232,8 @@ public class RegexBuiltinsTest {
                 + " try { proto.next.call({}); } catch (e) { caught = e.constructor.name; } caught"));
     }
 
-    // %RegExp%[Symbol.species] is a real, discoverable getter accessor returning the receiver
-    // unchanged (test262 built-ins/Function/prototype/toString/symbol-named-builtins.js asserts the
-    // getter itself is a native function) - speciesConstructor's own fallback already produced this
-    // same result when the accessor was simply absent, so this only makes it observable via
-    // getOwnPropertyDescriptor, not a behavior change.
+    // %RegExp%[Symbol.species] is a real, discoverable getter (test262 built-ins/Function/prototype/
+    // toString/symbol-named-builtins.js); speciesConstructor's fallback already produced the same result.
     @Test
     public void speciesIsADiscoverableGetterReturningTheReceiver() {
         assertTrue(bool("typeof Object.getOwnPropertyDescriptor(RegExp, Symbol.species).get === 'function'"));
@@ -268,7 +242,6 @@ public class RegexBuiltinsTest {
         assertTrue(bool("Object.getOwnPropertyDescriptor(RegExp, Symbol.species).configurable"));
     }
 
-    // The RegExp constructor accepts a regexp-like object, taking source/flags through [[Get]].
     @Test
     public void constructorAcceptsARegexpLikeObject() {
         assertEquals("a+", str("new RegExp({ source: 'a+', flags: 'g', [Symbol.match]: true }).source"));

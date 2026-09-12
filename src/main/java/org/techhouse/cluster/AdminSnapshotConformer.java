@@ -23,9 +23,8 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
 
-// Converges this node's admin metadata onto a peer snapshot: writes what differs, drops what the
-// snapshot does not have. The admin epoch is the ordering, so there is no per-record version, and
-// every step is idempotent so the periodic sweep does not rewrite an already-converged node.
+// The admin epoch is the ordering, so there is no per-record version, and every step is
+// idempotent so the periodic sweep does not rewrite an already-converged node.
 final class AdminSnapshotConformer {
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -74,7 +73,6 @@ final class AdminSnapshotConformer {
         for (final var db : snapshotDbs.values()) {
             // Outside the entry check on purpose, and idempotent: the folder is what a routed write opens, so
             // a node holding the admin entry without it answers "no such file or directory" instead of a miss.
-            // Creating it only when the entry is absent would let one failed create stay broken forever.
             fs.createDatabaseFolder(db.get_id());
             if (cache.getAdminDbEntry(db.get_id()) == null) {
                 AdminOperationHelper.saveDatabaseEntry(
@@ -105,9 +103,6 @@ final class AdminSnapshotConformer {
         return snapshotColls;
     }
 
-    // Converges each database's stored procedures to the snapshot: write when different, delete the ones
-    // the snapshot does not have. No per-record version comparison - the admin epoch is the ordering, the
-    // same rule collection schemas follow.
     private void conformProcedures(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs)
             throws Exception {
         final var desired = new HashMap<String, JsonObject>();
@@ -141,10 +136,6 @@ final class AdminSnapshotConformer {
         }
     }
 
-    // Converges each database's schedules to the snapshot, on the same terms as conformProcedures: write
-    // when different, delete the ones the snapshot does not have, ordering by the admin epoch rather than
-    // any per-record version. The registry is rebuilt for a database that changed, so the scheduler picks
-    // up what anti-entropy brought in without waiting for scheduleRefreshMs.
     private void conformSchedules(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs)
             throws Exception {
         final var desired = new HashMap<String, JsonObject>();
@@ -183,8 +174,7 @@ final class AdminSnapshotConformer {
         }
     }
 
-    // Converges the collection's trigger file/cache to the snapshot, under the collection lock the caller
-    // already holds. Idempotent, so the periodic sweep does not rewrite an already-matching list.
+    // Runs under the collection lock the caller already holds.
     private void conformTriggers(String dbName, String collName, JsonObject snapshotTriggers) throws Exception {
         final var key = Cache.getCollectionIdentifier(dbName, collName);
         final var desired = snapshotTriggers.has(key) && snapshotTriggers.get(key).isJsonArray()
@@ -233,8 +223,6 @@ final class AdminSnapshotConformer {
         }
     }
 
-    // Converges the collection's schema file/cache to the snapshot: write when different, delete when the
-    // snapshot has none. Idempotent, so the periodic sweep does not rewrite an already-matching schema.
     private void conformSchema(String dbName, String collName, JsonObject desiredSchema) throws Exception {
         final var current = cache.loadSchemaUncached(dbName, collName);
         if (desiredSchema != null) {
@@ -248,8 +236,8 @@ final class AdminSnapshotConformer {
         }
     }
 
-    // Drops orphan collections (removed while their database is kept). Collections of an entirely-removed
-    // database are left to dropDatabase, which deletes the whole folder in one shot.
+    // Collections of an entirely-removed database are left to dropDatabase, which deletes the whole
+    // folder in one shot.
     private void dropAbsentCollections(HashMap<String, AdminDbEntry> snapshotDbs, HashSet<String> snapshotColls)
             throws Exception {
         for (final var dbName : new ArrayList<>(cache.getUserDatabaseNames())) {

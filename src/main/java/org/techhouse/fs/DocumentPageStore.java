@@ -50,7 +50,6 @@ final class DocumentPageStore {
             final var first = pageGroup.getValue().getFirst();
             final var file = paths.collectionPage(first.getDatabaseName(), first.getCollectionName(),
                     pageGroup.getKey());
-            // Read the page's requested entries in ascending position order for sequential seeks.
             final var pageEntries = pageGroup.getValue().stream()
                     .sorted(Comparator.comparingLong(PkIndexEntry::getPosition)).toList();
             final var lock = FileLocks.lockFor(file).readLock();
@@ -79,11 +78,8 @@ final class DocumentPageStore {
                 final var entry = DbEntry.fromString(dbName, collectionName, line);
                 result.put(entry.get_id(), entry);
             } catch (Exception e) {
-                // Skip-and-log only. We deliberately do NOT rewrite the .dat
-                // file here: the .idx file stores byte offsets into the .dat,
-                // so removing lines would invalidate every entry's recorded
-                // position. Compacting both atomically is a separate concern
-                // (a real compaction operation, not a read-side side effect).
+                // Skip-and-log only: the .idx files store byte offsets into this .dat, so dropping a
+                // line here would invalidate every later entry's recorded position.
                 logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
             }
         }

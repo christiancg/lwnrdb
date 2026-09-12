@@ -8,7 +8,6 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
     private long position;
     private long length;
     private long page;
-    // Last-write-wins version (epoch millis), persisted as the optional trailing index column.
     private long version;
 
     public PkIndexEntry(String databaseName, String collectionName, String value, long position, long length,
@@ -34,8 +33,7 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
     public static PkIndexEntry fromIndexFileEntry(String databaseName, String collectionName, String line) {
         final var cleaned = line.trim().replace("\r", "").replace("\n", "");
         final var sep = Globals.INDEX_ENTRY_SEPARATOR;
-        // Lines are value|position|length|page|version. The value (a document id) may itself contain the
-        // separator, so parse the four fixed trailing fields from the end and take the rest as the value.
+        // A document id may itself contain the separator, so the four fixed fields are parsed from the end.
         final var lastPipe = cleaned.lastIndexOf(sep);
         final var secondLastPipe = cleaned.lastIndexOf(sep, lastPipe - 1);
         final var thirdLastPipe = cleaned.lastIndexOf(sep, secondLastPipe - 1);

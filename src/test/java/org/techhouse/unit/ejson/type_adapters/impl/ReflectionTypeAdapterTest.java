@@ -13,7 +13,6 @@ import org.techhouse.ejson.type_adapters.impl.ReflectionTypeAdapter;
 public class ReflectionTypeAdapterTest {
     @BeforeEach
 
-    // Serialize object with primitive fields to JSON string
     @Test
     public void test_serialize_primitive_fields() {
         new EJson();
@@ -32,7 +31,6 @@ public class ReflectionTypeAdapterTest {
         assertEquals("{\"intField\":42,\"boolField\":true,\"doubleField\":3.14}", json);
     }
 
-    // Handle null field values during serialization and deserialization
     @Test
     public void test_handle_null_fields() {
         @SuppressWarnings("unused")
@@ -67,7 +65,6 @@ public class ReflectionTypeAdapterTest {
         assertEquals(Integer.valueOf(5), assigned.nullInteger);
     }
 
-    // Constructor successfully initializes with valid Class<T> parameter
     @Test
     public void test_constructor_initializes_with_valid_class() {
         ReflectionTypeAdapter<String> adapter = new ReflectionTypeAdapter<>(String.class);
@@ -75,13 +72,11 @@ public class ReflectionTypeAdapterTest {
         assertNotNull(adapter);
     }
 
-    // Constructor handles null class parameter
     @Test
     public void test_constructor_handles_null_class() {
         assertThrows(NullPointerException.class, () -> new ReflectionTypeAdapter<>(null));
     }
 
-    // Converts simple object with primitive fields to valid JSON string
     @Test
     public void test_converts_simple_object_to_json() {
         @SuppressWarnings("unused")
@@ -99,7 +94,6 @@ public class ReflectionTypeAdapterTest {
         assertEquals("{\"intField\":42,\"stringField\":\"test\",\"boolField\":true}", result);
     }
 
-    // Handles null object value fields by converting them to "null" string
     @Test
     public void test_converts_null_fields_to_null_string() {
         @SuppressWarnings("unused")
@@ -116,7 +110,6 @@ public class ReflectionTypeAdapterTest {
         assertEquals("{\"nullField\":null,\"nullInteger\":null}", result);
     }
 
-    // Successfully converts JsonObject to target class instance with matching field names
     @Test
     public void test_converts_json_object_to_target_class() {
         @SuppressWarnings("unused")
@@ -145,7 +138,6 @@ public class ReflectionTypeAdapterTest {
         assertEquals(Integer.valueOf(123), result.getIntField());
     }
 
-    // Returns null when input is not a JsonObject type
     @Test
     public void test_returns_null_for_non_object_input() {
         @SuppressWarnings("unused")
@@ -162,9 +154,8 @@ public class ReflectionTypeAdapterTest {
         assertNull(result);
     }
 
-    // A class's constants are not its instance data. Emitting them put every `public static final`
-    // on the wire beside the real fields - TEST_TRIGGER responses carried three of them - and on the
-    // way back in the deserializer would try to assign them from the document.
+    // Emitting statics put every `public static final` on the wire beside the real fields, and on the
+    // way back the deserializer would try to assign them from the document.
     @Test
     public void test_static_fields_are_not_serialized() {
         final var json = new EJson().toJson(new WithConstants());

@@ -26,8 +26,7 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 /**
- * The bounds and the miss-cache separation of the admin metadata caches. Each test installs its own
- * small-capped caches so eviction is reachable without writing megabytes.
+ * Each test installs its own small-capped caches so eviction is reachable without writing megabytes.
  */
 public class AdminCacheBoundsTest {
     private final Cache cache = IocContainer.get(Cache.class);
@@ -102,12 +101,9 @@ public class AdminCacheBoundsTest {
         final var stats = cache.metadataCacheStats();
         assertTrue(stats.procedureBytes() <= 2048L, "expected the cache to stay under its byte cap");
         assertTrue(stats.procedureEntries() < 3, "expected at least one procedure to have been evicted");
-        // Evicted, not lost: the next read comes back from disk.
         assertNotNull(cache.getProcedure(TestGlobals.DB, "p1"));
     }
 
-    // The CALL_PROCEDURE vector: a caller naming procedures that do not exist must not be able to push the
-    // ones actually in use out of the cache.
     @Test
     public void test_miss_flood_does_not_evict_live_procedures() throws Exception {
         installProcedureCache(32L * 1024 * 1024);
@@ -130,7 +126,6 @@ public class AdminCacheBoundsTest {
                 "expected the miss cache to stay at its cap, was " + cache.metadataCacheStats().missEntries());
     }
 
-    // A remembered miss must not outlive the thing it recorded the absence of.
     @Test
     public void test_remove_procedure_clears_the_miss_entry() throws Exception {
         assertNull(cache.getProcedure(TestGlobals.DB, "later"));
@@ -183,7 +178,6 @@ public class AdminCacheBoundsTest {
         assertEquals(1, cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).size());
         cache.getTriggersFor(TestGlobals.DB, "other");
         assertEquals(1, cache.metadataCacheStats().triggerEntries());
-        // Evicted, then reloaded from its file rather than answered as "no triggers".
         assertEquals(1, cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).size());
         fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);

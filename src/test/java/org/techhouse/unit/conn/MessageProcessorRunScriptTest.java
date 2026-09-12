@@ -129,7 +129,6 @@ public class MessageProcessorRunScriptTest {
         assertTrue(responses.get(1).contains("\"result\":42"), responses.get(1));
     }
 
-    // The run itself succeeds; the write the script attempted is what gets denied, inside the script
     @Test
     public void test_write_inside_script_is_authorized_separately() throws Exception {
         final var script = "import db from 'db';" + "try { db.save(db.name, '" + TestGlobals.COLL
@@ -146,7 +145,6 @@ public class MessageProcessorRunScriptTest {
         assertTrue(responses.get(2).contains("\"errorCode\":\"409-6\""), responses.get(2));
     }
 
-    // A multi-line source with escaped quotes and a template literal survives the line protocol
     @Test
     public void test_multiline_script_round_trips() throws Exception {
         final var script = "const name = \\\"world\\\";\\nconst greeting = `hello ${name}`;\\nreturn greeting;";

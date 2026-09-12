@@ -25,10 +25,6 @@ import org.techhouse.ops.resp.SaveTriggerResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * SAVE_TRIGGER and DELETE_TRIGGER as dispatched by the processor: both take the collection write lock before
- * rewriting the trigger file, so that they serialize against a concurrent save to the same collection.
- */
 public class OperationProcessorTriggerDispatchTest {
     private static final Configuration configuration = Configuration.getInstance();
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
@@ -81,7 +77,6 @@ public class OperationProcessorTriggerDispatchTest {
         assertTrue(afterDelete.getTriggers().isEmpty());
     }
 
-    // Listing without a collection reports every trigger in the database, tagged with its collection
     @Test
     public void test_listing_the_whole_database_tags_each_trigger_with_its_collection() {
         processor.processMessage(saveRequest());
@@ -106,7 +101,6 @@ public class OperationProcessorTriggerDispatchTest {
         assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(), response.getErrorCode());
     }
 
-    // A trigger pointing at a procedure that does not exist fails the save rather than the first write
     @Test
     public void test_saving_a_trigger_for_an_unknown_procedure_is_refused() {
         final var request = new SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "onInsert", List.of("CREATED"),

@@ -82,7 +82,7 @@ public final class MapOperatorHelper {
             case AND -> andConjunction(combinationResult);
             case OR -> orConjunction(combinationResult);
             case XOR -> xorConjunction(combinationResult);
-            case NOR, NAND -> false; //Not supported
+            case NOR, NAND -> false;
         };
     }
 
@@ -346,7 +346,6 @@ public final class MapOperatorHelper {
                         try {
                             yield new JsonNumber(Double.parseDouble(primitive.asJsonString().getValue()));
                         } catch (Exception ignored) {
-                            // not a valid number; fall through to JsonNull below
                         }
                     }
                     yield JsonNull.INSTANCE;
@@ -373,7 +372,6 @@ public final class MapOperatorHelper {
                         try {
                             yield new JsonBoolean(Boolean.parseBoolean(primitive.asJsonString().getValue()));
                         } catch (Exception ignored) {
-                            // not a valid boolean; fall through to JsonNull below
                         }
                     } else if (primitive.isJsonNumber()) {
                         final var number = primitive.asJsonNumber().getValue().doubleValue();
@@ -392,7 +390,6 @@ public final class MapOperatorHelper {
                                     + ")";
                             yield CustomTypeFactory.getCustomTypeInstance(wireFormat);
                         } catch (Exception ignored) {
-                            // not a valid value for this custom type; fall through to JsonNull below
                         }
                     }
                     yield JsonNull.INSTANCE;

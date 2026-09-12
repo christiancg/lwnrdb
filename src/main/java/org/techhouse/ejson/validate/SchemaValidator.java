@@ -6,9 +6,6 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBaseElement.JsonType;
 import org.techhouse.ejson.elements.JsonObject;
 
-// Validates a JSON value against a JsonSchema (draft 2020-12 subset). Keyword semantics follow the spec:
-// a keyword that does not apply to the instance's type is simply skipped, and errors carry a
-// JSON-Pointer-style path so the caller can point at the offending location.
 public class SchemaValidator {
     private final SchemaApplicatorValidator applicatorValidator = new SchemaApplicatorValidator(this);
     private final SchemaObjectValidator objectValidator = new SchemaObjectValidator(this);

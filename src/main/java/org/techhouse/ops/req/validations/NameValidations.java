@@ -11,8 +11,8 @@ public final class NameValidations {
     private NameValidations() {
     }
 
-    // The procedure name is matched against the collection-name rule because it becomes a path segment
-    // in FileSystem.getProcedureFile: the rule admits no separator, no dot and no '..' segment.
+    // Procedure names follow the collection-name rule because the name becomes a path segment in
+    // FileSystem.getProcedureFile: no separator, no dot, no '..'.
     static ValidationResult validateProcedureName(String name) {
         if (name == null || name.isBlank()) {
             return ValidationResult.fail("procedure name is required");
@@ -36,8 +36,7 @@ public final class NameValidations {
         return validateDbAndColl(request, rejectAdmin, false);
     }
 
-    // rejectReserved refuses the collections the server owns inside a user database. Reads are deliberately
-    // not refused: the history collection exists to be queried.
+    // Reads are deliberately not refused: the history collection exists to be queried.
     static ValidationResult validateDbAndColl(OperationRequest request, boolean rejectAdmin, boolean rejectReserved) {
         final var dbResult = validateDbName(request.getDatabaseName(), rejectAdmin);
         if (!dbResult.isValid()) {

@@ -47,10 +47,8 @@ public class OperationProcessorWriteTest {
         TestUtils.standardTearDown();
     }
 
-    // Delete entries and update cache/indexes accordingly
     @Test
     public void test_delete_operation_success() {
-        // Arrange
         SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         var obj = new JsonObject();
         obj.add("_id", new JsonString("123"));
@@ -59,16 +57,13 @@ public class OperationProcessorWriteTest {
         assertNotNull(saveResponse);
         assertEquals(OperationStatus.OK, saveResponse.getStatus());
 
-        // Act
         DeleteRequest request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
         request.set_id("123");
         DeleteResponse response = (DeleteResponse) processor.processMessage(request);
 
-        // Assert
         assertEquals(OperationStatus.OK, response.getStatus());
     }
 
-    // Handle duplicate IDs in bulk save operations
     @Test
     public void test_bulk_save() {
         BulkSaveRequest request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -91,7 +86,6 @@ public class OperationProcessorWriteTest {
         assertTrue(response.getUpdated().isEmpty());
     }
 
-    // After a save, the entry's PkIndexEntry carries the page assigned by selectPageForInsert
     @Test
     public void test_save_operation_assigns_page() throws Exception {
         SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -106,11 +100,9 @@ public class OperationProcessorWriteTest {
         final var pkIdx = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL);
         final var saved = pkIdx.stream().filter(p -> p.getValue().equals("testPageAssignedId")).findFirst();
         assertTrue(saved.isPresent());
-        // First insert into a small collection lands on page 0
         assertEquals(0L, saved.get().getPage());
     }
 
-    // Save with an existing _id updates the entry rather than inserting a duplicate
     @Test
     public void test_save_operation_updates_existing_entry() {
         SaveRequest firstSave = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -134,7 +126,6 @@ public class OperationProcessorWriteTest {
         assertEquals("updateMe", secondResponse.get_id());
     }
 
-    // Delete returns NOT_FOUND when the entry does not exist
     @Test
     public void test_delete_returns_not_found_for_missing_entry() {
         DeleteRequest request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -146,7 +137,6 @@ public class OperationProcessorWriteTest {
         assertEquals("404-2", response.getErrorCode());
     }
 
-    // Bulk save with some already-existing IDs performs updates for those entries
     @Test
     public void test_bulk_save_updates_existing_entries() {
         SaveRequest insert = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -171,13 +161,11 @@ public class OperationProcessorWriteTest {
         assertTrue(response.getInserted().contains("bulkNew"));
     }
 
-    // Save an oversized entry returns an error response
     @Test
     public void test_save_oversized_entry_returns_error() {
         SaveRequest request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString("bigId"));
-        // Create a value larger than 1MB (maxEntrySize default)
         obj.add("bigField", new JsonString("x".repeat(1_048_600)));
         request.setObject(obj);
 
@@ -187,7 +175,6 @@ public class OperationProcessorWriteTest {
         assertEquals("400-2", response.getErrorCode());
     }
 
-    // Bulk save with duplicate _id values in the same request returns an error
     @Test
     public void test_bulk_save_duplicate_id_returns_error() {
         BulkSaveRequest request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -204,7 +191,6 @@ public class OperationProcessorWriteTest {
         assertTrue(response.getMessage().contains("dupId"));
     }
 
-    // Bulk save with an oversized entry returns an error response
     @Test
     public void test_bulk_save_oversized_entry_returns_error() {
         BulkSaveRequest request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -239,13 +225,10 @@ public class OperationProcessorWriteTest {
     @Test
     public void test_save_admin_collection_does_not_record_usage() {
         final var mm = IocContainer.get(org.techhouse.cache.MemoryManagement.class);
-        // admin saves go through helpers, but explicitly verify recordAccess no ops:
         mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null);
         assertNull(mm.getCounter(org.techhouse.cache.AccessKind.COLLECTION, Globals.ADMIN_DB_NAME, "databases", null));
     }
 
-    // A SAVE that grows an existing document past maxPageSize relocates it to another page instead of
-    // overflowing its current page; the document still reads back intact and no page exceeds the cap.
     @Test
     public void test_save_grow_update_relocates_to_avoid_page_overflow() throws Exception {
         final var cache = IocContainer.get(org.techhouse.cache.Cache.class);
@@ -285,7 +268,6 @@ public class OperationProcessorWriteTest {
             assertEquals(0L, keepPageBefore);
             assertEquals(0L, aPageBefore, "both docs must start co-located on page 0");
 
-            // Grow "a" past what fits on page 0 alongside "keep" -> must relocate.
             final var bigValue = "x".repeat(1780);
             final var growSave = new SaveRequest(TestGlobals.DB, collName);
             final var grown = new JsonObject();
@@ -295,7 +277,6 @@ public class OperationProcessorWriteTest {
             growSave.set_id("a");
             assertEquals(OperationStatus.OK, processor.processMessage(growSave).getStatus());
 
-            // "a" relocated off page 0; "keep" stayed put.
             final var pkAfter = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, collName);
             final var aPageAfter = pkAfter.stream().filter(p -> p.getValue().equals("a")).findFirst().orElseThrow()
                     .getPage();
@@ -304,14 +285,12 @@ public class OperationProcessorWriteTest {
             assertEquals(0L, keepPageAfter, "the untouched doc must stay on page 0");
             assertTrue(aPageAfter > 0L, "the grown doc must relocate off page 0 (was " + aPageAfter + ")");
 
-            // The grown value reads back intact.
             final var find = new FindByIdRequest(TestGlobals.DB, collName);
             find.set_id("a");
             final var found = (FindByIdResponse) processor.processMessage(find);
             assertEquals(OperationStatus.OK, found.getStatus());
             assertEquals(bigValue, found.getObject().get("v").asJsonString().getValue());
 
-            // No on-disk page file exceeds maxPageSize.
             final var collFolder = new java.io.File(
                     TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + collName);
             final var datFiles = collFolder.listFiles((_, n) -> n.endsWith(Globals.DB_FILE_EXTENSION));
@@ -327,8 +306,6 @@ public class OperationProcessorWriteTest {
         }
     }
 
-    // When no admin page metadata is available, the overflow check can't assess the page, so the SAVE
-    // falls back to an in-place update (no relocation) and the document still updates correctly.
     @Test
     public void test_save_grow_update_without_page_metadata_updates_in_place() {
         final var cache = IocContainer.get(org.techhouse.cache.Cache.class);
@@ -378,7 +355,6 @@ public class OperationProcessorWriteTest {
 
         assertEquals(OperationStatus.OK, processor.processMessage(save).getStatus());
 
-        // Capture the page state set by the synchronous updatePageSizeInMemory call.
         final var pageEntries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
         assertNotNull(pageEntries);
         final var page0Before = pageEntries.stream().filter(p -> p.getPage() == 0L).findFirst();
@@ -386,7 +362,6 @@ public class OperationProcessorWriteTest {
         final long countBefore = page0Before.get().getEntryCount();
         final long sizeBefore = page0Before.get().getPageSize();
 
-        // Simulate the background EntityEvent(CREATED) arriving.
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id("singleSaveId1");
         entry.setPage(0L);
@@ -399,8 +374,6 @@ public class OperationProcessorWriteTest {
         assertEquals(sizeBefore, page0After.get().getPageSize(), "pageSize must not be incremented again");
     }
 
-    // Bulk-save inserts also call updatePageSizeInMemory synchronously per inserted entry;
-    // the subsequent background BulkEntityEvent must not double-count any of them.
     @Test
     public void test_bulk_save_insert_page_entry_count_single_counted() throws Exception {
         final var cache = IocContainer.get(Cache.class);
@@ -421,7 +394,6 @@ public class OperationProcessorWriteTest {
         final long countBefore = page0Before.get().getEntryCount();
         final long sizeBefore = page0Before.get().getPageSize();
 
-        // Simulate the background BulkEntityEvent(CREATED) arriving.
         final var e1 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj1);
         e1.set_id("bulkSaveId1");
         e1.setPage(0L);

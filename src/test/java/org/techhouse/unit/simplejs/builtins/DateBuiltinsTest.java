@@ -22,33 +22,28 @@ public class DateBuiltinsTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // Date.now() is a positive number
     @Test
     public void test_now() {
         assertEquals("number", str("typeof Date.now()"));
         assertTrue(bool("Date.now() > 0"));
     }
 
-    // new Date(ms).getTime() round-trips the epoch millis
     @Test
     public void test_get_time() {
         assertEquals(0, num("new Date(0).getTime()"));
         assertEquals(1000, num("new Date(1000).getTime()"));
     }
 
-    // typeof a date is object
     @Test
     public void test_typeof() {
         assertEquals("object", str("typeof new Date()"));
     }
 
-    // ISO string round-trip
     @Test
     public void test_iso_round_trip() {
         assertEquals("2020-01-02T03:04:05.006Z", str("new Date('2020-01-02T03:04:05.006Z').toISOString()"));
     }
 
-    // UTC component getters
     @Test
     public void test_utc_components() {
         assertEquals(2020, num("new Date('2020-01-02T03:04:05.006Z').getUTCFullYear()"));
@@ -60,65 +55,55 @@ public class DateBuiltinsTest {
         assertEquals(6, num("new Date('2020-01-02T03:04:05.006Z').getUTCMilliseconds()"));
     }
 
-    // getUTCDay: 2020-01-02 was a Thursday (4)
     @Test
     public void test_utc_day() {
         assertEquals(4, num("new Date('2020-01-02T00:00:00Z').getUTCDay()"));
     }
 
-    // multi-argument constructor interpreted in UTC
     @Test
     public void test_component_constructor() {
         assertEquals(2020, num("new Date(2020, 0, 2).getUTCFullYear()"));
         assertEquals(2, num("new Date(2020, 0, 2).getUTCDate()"));
     }
 
-    // Number(date) and valueOf equal getTime
     @Test
     public void test_number_coercion() {
         assertEquals(500, num("+new Date(500)"));
         assertEquals(500, num("new Date(500).valueOf()"));
     }
 
-    // JSON.stringify emits the ISO string
     @Test
     public void test_json_stringify() {
         assertEquals("\"1970-01-01T00:00:00.000Z\"", str("JSON.stringify(new Date(0))"));
     }
 
-    // invalid date -> NaN time, and toJSON is null
     @Test
     public void test_invalid_date() {
         assertTrue(bool("isNaN(new Date('not a date').getTime())"));
         assertEquals("null", str("JSON.stringify(new Date('not a date'))"));
     }
 
-    // Date.parse of a bad string is NaN; of a good ISO string is the epoch
     @Test
     public void test_parse() {
         assertTrue(bool("isNaN(Date.parse('garbage'))"));
         assertEquals(0, num("Date.parse('1970-01-01T00:00:00.000Z')"));
     }
 
-    // Date.UTC builds epoch millis from UTC components
     @Test
     public void test_date_utc() {
         assertEquals(0, num("Date.UTC(1970, 0, 1)"));
     }
 
-    // setTime mutates and returns the new time
     @Test
     public void test_set_time() {
         assertEquals(1234, num("let d = new Date(0); d.setTime(1234); d.getTime()"));
     }
 
-    // setUTCFullYear mutates the year
     @Test
     public void test_set_full_year() {
         assertEquals(1999, num("let d = new Date('2020-06-15T00:00:00Z'); d.setUTCFullYear(1999); d.getUTCFullYear()"));
     }
 
-    // local (non-UTC) getters read the same instant through the JVM default zone
     @Test
     public void test_local_getters() {
         assertEquals(2020, num("new Date('2020-01-02T03:04:05.006Z').getFullYear()"));
@@ -130,7 +115,6 @@ public class DateBuiltinsTest {
         assertEquals(6, num("new Date('2020-01-02T03:04:05.006Z').getMilliseconds()"));
     }
 
-    // toString follows the spec's ToDateString grammar and toUTCString the RFC form
     @Test
     public void test_to_string_and_offset() {
         assertTrue(bool("/^(Sun|Mon|Tue|Wed|Thu|Fri|Sat) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)"
@@ -140,14 +124,12 @@ public class DateBuiltinsTest {
         assertTrue(bool("Number.isFinite(new Date(0).getTimezoneOffset())"));
     }
 
-    // string coercion of a date uses toString
     @Test
     public void test_string_coercion() {
         assertEquals(str("new Date(0).toString()"), str("'' + new Date(0)"));
         assertEquals("Invalid Date", str("'' + new Date('nope')"));
     }
 
-    // remaining component setters mutate their field
     @Test
     public void test_component_setters() {
         assertEquals(5, num("let d = new Date(0); d.setUTCMonth(5); d.getUTCMonth()"));
@@ -158,25 +140,21 @@ public class DateBuiltinsTest {
         assertEquals(44, num("let d = new Date(0); d.setUTCMilliseconds(44); d.getUTCMilliseconds()"));
     }
 
-    // new Date(dateValue) copies the time
     @Test
     public void test_copy_constructor() {
         assertEquals(1500, num("let a = new Date(1500); new Date(a).getTime()"));
     }
 
-    // an unknown member is undefined
     @Test
     public void test_unknown_member() {
         assertEquals("undefined", str("typeof new Date(0).nope"));
     }
 
-    // getters on an invalid date return NaN
     @Test
     public void test_invalid_getters() {
         assertTrue(bool("isNaN(new Date('nope').getUTCFullYear())"));
     }
 
-    // toLocaleString/Date/Time produce a non-empty locale string, and "Invalid Date" for NaN
     @Test
     public void test_to_locale_string() {
         assertTrue(bool("new Date(0).toLocaleString().length > 0"));
@@ -245,10 +223,8 @@ public class DateBuiltinsTest {
                 + " threw"));
     }
 
-    // Reflect.construct(Date, args, newTarget) must link the new instance's prototype to
-    // newTarget.prototype (OrdinaryCreateFromConstructor), not always to the intrinsic
-    // Date.prototype - this is what makes `class X extends Date {}` and manual subclassing via
-    // Reflect.construct observe the right prototype chain and internal [[DateValue]] slot.
+    // Reflect.construct(Date, args, newTarget) links the instance to newTarget.prototype
+    // (OrdinaryCreateFromConstructor), not always to the intrinsic Date.prototype.
     @Test
     public void reflectConstructLinksNewTargetPrototype() {
         assertTrue(bool("""
@@ -261,7 +237,6 @@ public class DateBuiltinsTest {
                 """));
     }
 
-    // A plain `new Date(...)` (no custom newTarget) still gets the ordinary Date.prototype.
     @Test
     public void plainNewKeepsDatePrototype() {
         assertTrue(bool("Object.getPrototypeOf(new Date(0)) === Date.prototype"));

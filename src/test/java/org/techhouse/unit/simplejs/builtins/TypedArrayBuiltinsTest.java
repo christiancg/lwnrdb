@@ -17,9 +17,6 @@ public class TypedArrayBuiltinsTest {
         return str("let caught = 'none'; try { " + expression + "; } catch (e) { caught = e.name; } caught");
     }
 
-    // AllocateArrayBuffer order: OrdinaryCreateFromConstructor (observing new.target's "prototype",
-    // which a getter can make throw) runs before CreateByteDataBlock, so a length that would
-    // otherwise RangeError loses to a throwing prototype getter.
     @Test
     public void test_array_buffer_prototype_getter_wins_over_allocation_range_error() {
         assertEquals("DummyError", str("""
@@ -34,8 +31,6 @@ public class TypedArrayBuiltinsTest {
                 """));
     }
 
-    // But the byteLength-vs-maxByteLength comparison is a plain numeric check that runs *before*
-    // OrdinaryCreateFromConstructor, so it wins over a throwing prototype getter.
     @Test
     public void test_array_buffer_max_byte_length_check_precedes_prototype_observation() {
         assertEquals("RangeError,0", str("""
@@ -51,7 +46,6 @@ public class TypedArrayBuiltinsTest {
                 """));
     }
 
-    // an in-range allocation still works, and an absent/undefined length is zero
     @Test
     public void test_ordinary_lengths_still_allocate() {
         assertEquals("8", str("String(new ArrayBuffer(8).byteLength)"));
@@ -62,7 +56,6 @@ public class TypedArrayBuiltinsTest {
 
     private static final String DETACHED = "const b = new ArrayBuffer(8); const ta = new Int8Array(b); b.transfer(0); ";
 
-    // ValidateTypedArray on entry: a detached buffer is a TypeError, not a silent empty result
     @Test
     public void test_methods_throw_on_detached_buffer() {
         assertEquals("TypeError", caught(DETACHED + "ta.forEach(function () {})"));
@@ -74,14 +67,9 @@ public class TypedArrayBuiltinsTest {
         assertEquals("TypeError", caught(DETACHED + "ta.join(',')"));
         assertEquals("TypeError", caught(DETACHED + "ta.values()"));
         assertEquals("TypeError", caught(DETACHED + "ta.set([1])"));
-        // subarray skips ValidateTypedArray, but the view it species-creates over the same detached
-        // buffer cannot be built, so the rejection arrives from the constructor instead
         assertEquals("TypeError", caught(DETACHED + "ta.subarray(0)"));
     }
 
-    // a callback or coercion that detaches mid-call is observed rather than silently tolerated: the
-    // iteration length is frozen up front, reads past the detachment yield undefined, and the
-    // methods that re-validate after their arguments are coerced throw
     @Test
     public void test_methods_revalidate_after_callback_detaches() {
         assertEquals("1,,,", str("const b = new ArrayBuffer(4); const ta = new Int8Array(b); ta[0] = 1;"
@@ -93,7 +81,6 @@ public class TypedArrayBuiltinsTest {
                 + "ta.copyWithin(0, { valueOf: function () { b.transfer(0); return 1; } })"));
     }
 
-    // a length-tracking view just gets shorter or longer with its buffer
     @Test
     public void test_length_tracking_view_follows_resize() {
         final var base = "const b = new ArrayBuffer(4, { maxByteLength: 8 }); const ta = new Int8Array(b); ";
@@ -103,7 +90,6 @@ public class TypedArrayBuiltinsTest {
         assertEquals("0,0", str(base + "b.resize(2); ta.join(',')"));
     }
 
-    // argument coercion runs a user valueOf instead of stringifying the object to NaN
     @Test
     public void test_arguments_coerce_through_value_of() {
         assertEquals("0,0,9,9", str(
@@ -116,7 +102,6 @@ public class TypedArrayBuiltinsTest {
                 "const ta = new Int8Array(2);" + "ta.set([{ valueOf: function () { return 7; } }], 1); ta.join(',')"));
     }
 
-    // the second argument to every callback-taking method is the callback's `this`
     @Test
     public void test_callbacks_honour_this_arg() {
         final var host = "const host = { mark: 42 }; const ta = new Int8Array([1, 2]); ";
@@ -127,11 +112,8 @@ public class TypedArrayBuiltinsTest {
         assertEquals("1", str(host + "String(ta.find(function () { return this.mark === 42; }, host))"));
     }
 
-    // SpeciesConstructor with no reachable @@species falls back to the exemplar's own kind, and the
-    // derived view keeps the source's buffer for subarray but not for the copying methods.
-    // A non-default species is not exercised here because neither a typed-array instance nor a
-    // native constructor currently accepts an own property through the member paths, so there is
-    // nowhere to attach one - see the MemberEvaluator gap noted in the phase report.
+    // A non-default species is not exercised here because neither a typed-array instance nor a native
+    // constructor accepts an own property through the member paths, so there is nowhere to attach one.
     @Test
     public void test_map_uses_species_constructor() {
         final var base = "const ta = new Int8Array([1, 2]); ";
@@ -145,7 +127,6 @@ public class TypedArrayBuiltinsTest {
         assertEquals("1", str(base + "String(ta.subarray(1).length)"));
     }
 
-    // BYTES_PER_ELEMENT is fully immutable, on both the constructor and its prototype
     @Test
     public void test_bytes_per_element_is_immutable() {
         assertEquals("4", str("String(Int32Array.BYTES_PER_ELEMENT)"));
@@ -156,7 +137,6 @@ public class TypedArrayBuiltinsTest {
                 + "Int32Array.prototype, 'BYTES_PER_ELEMENT').configurable)"));
     }
 
-    // Number() is ToNumeric, so a BigInt converts rather than throwing
     @Test
     public void test_number_of_bigint_converts() {
         assertEquals("7", str("String(Number(7n))"));
@@ -164,7 +144,6 @@ public class TypedArrayBuiltinsTest {
                 str("const ta = new BigInt64Array([0n, 2n]);" + "[Number(ta[0]), Number(ta[1])].join(',')"));
     }
 
-    // the @@toStringTag getter names the kind, and answers undefined for a foreign receiver
     @Test
     public void test_to_string_tag_reports_the_kind() {
         assertEquals("Int8Array", str("new Int8Array(1)[Symbol.toStringTag]"));
@@ -174,7 +153,6 @@ public class TypedArrayBuiltinsTest {
                         + " Symbol.toStringTag).get.call({}))"));
     }
 
-    // ownPropertyKeys lists the indices ascending, then the table's string keys, then its symbols
     @Test
     public void test_own_keys_order_indices_then_strings() {
         assertEquals("0,1,tag",
@@ -184,7 +162,6 @@ public class TypedArrayBuiltinsTest {
                 + "const ta = new Int8Array(b); b.resize(2); Object.getOwnPropertyNames(ta).join(',')"));
     }
 
-    // a numeric string Number::toString would never produce is an ordinary key, not an index
     @Test
     public void test_non_canonical_numeric_keys_are_ordinary() {
         final var base = "const ta = new Int8Array(2); ";
@@ -197,8 +174,6 @@ public class TypedArrayBuiltinsTest {
         assertEquals("false", str(base + "String(Reflect.defineProperty(ta, '-0', { value: 1 }))"));
     }
 
-    // [[DefineOwnProperty]] on an index writes the element; anything the exotic cannot honour - an
-    // accessor, a cleared attribute, an out-of-range index - is rejected
     @Test
     public void test_define_own_property_on_indices() {
         final var base = "const ta = new Int8Array(2); ";
@@ -212,7 +187,6 @@ public class TypedArrayBuiltinsTest {
         assertEquals("TypeError", caught(base + "Object.defineProperty(ta, '2', { value: 7 })"));
     }
 
-    // an element write runs the value's own valueOf even when the value is itself an exotic object
     @Test
     public void test_element_write_coerces_through_ordinary_to_primitive() {
         assertEquals("Test262Error", caught("const ta = new Int8Array(1); const src = new Int8Array(1);"
@@ -230,7 +204,6 @@ public class TypedArrayBuiltinsTest {
                 + "v.setFloat16(0, 2.980232238769532e-8); String(v.getFloat16(0))"));
     }
 
-    // from/of construct through the `this` constructor rather than a fixed kind
     @Test
     public void test_from_and_of_honour_the_this_constructor() {
         assertEquals("1,2", str("Int8Array.of(1, 2).join(',')"));
@@ -243,7 +216,6 @@ public class TypedArrayBuiltinsTest {
                 + "String(Int8Array.from([1], function () { return this.mark; }, host)[0])"));
     }
 
-    // a constructor-only builtin rejects a plain call and reads new.target's prototype
     @Test
     public void test_constructors_require_new() {
         assertEquals("TypeError", caught("Int8Array(1)"));
@@ -252,7 +224,6 @@ public class TypedArrayBuiltinsTest {
         assertEquals("3", str("String(Int8Array.length)"));
     }
 
-    // isView answers for both view kinds and for nothing else
     @Test
     public void test_is_view_recognises_both_view_kinds() {
         assertEquals("true", str("String(ArrayBuffer.isView(new Int8Array(1)))"));
@@ -262,7 +233,6 @@ public class TypedArrayBuiltinsTest {
         assertEquals("true", str("const isView = ArrayBuffer.isView; String(isView(new Int8Array(1)))"));
     }
 
-    // FromBase64: whitespace is skipped, and the last chunk is governed by lastChunkHandling
     @Test
     public void test_from_base64_decodes_per_last_chunk_handling() {
         assertEquals("101,120,97,102", str("Uint8Array.fromBase64('ZXhhZg==').join(',')"));
@@ -282,7 +252,6 @@ public class TypedArrayBuiltinsTest {
         assertEquals("1", str("String(Uint8Array.fromBase64.length)"));
     }
 
-    // toBase64/toHex read their options once and reject a detached receiver
     @Test
     public void test_to_base64_and_to_hex() {
         assertEquals("Zm9v", str("new Uint8Array([102, 111, 111]).toBase64()"));
@@ -296,8 +265,6 @@ public class TypedArrayBuiltinsTest {
                 caught("const b = new ArrayBuffer(2); const u = new Uint8Array(b); b.transfer(0); u.toHex()"));
     }
 
-    // OrdinaryCreateFromConstructor: a foreign new.target's prototype is honoured, and a non-object
-    // one falls back to the kind's own intrinsic.
     @Test
     public void test_new_target_prototype_is_honoured() {
         assertEquals("true", str("function nt() {} nt.prototype = { tag: 1 };"
@@ -310,9 +277,6 @@ public class TypedArrayBuiltinsTest {
         assertEquals("4", str("class M extends Uint8Array {} String(new M(4).length)"));
     }
 
-    // Reflect.has on a typed array with a foreign object as its prototype must consult that
-    // prototype's own [[HasProperty]] (a Proxy `has` trap included) rather than silently answering
-    // false because the prototype link never took effect.
     @Test
     public void test_has_property_walks_a_foreign_prototype() {
         assertTrue(JsEval.bool("""

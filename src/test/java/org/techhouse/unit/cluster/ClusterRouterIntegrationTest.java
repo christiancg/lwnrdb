@@ -92,8 +92,6 @@ public class ClusterRouterIntegrationTest {
         return eJson.toJson(request);
     }
 
-    // The forward ships the caller's own pipeline JSON, which is what lets a polymorphic operator - a
-    // SCRIPT one included - survive the trip and be re-parsed on the owner.
     @Test
     public void test_forwarded_aggregate_runs_the_script_on_the_owner() throws Exception {
         cluster.configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));

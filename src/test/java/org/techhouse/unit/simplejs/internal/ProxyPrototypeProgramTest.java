@@ -25,7 +25,6 @@ public class ProxyPrototypeProgramTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // A has trap drives the `in` operator
     @Test
     public void test_has_trap_drives_in() {
         final var source = """
@@ -35,13 +34,11 @@ public class ProxyPrototypeProgramTest {
         assertTrue(bool(source));
     }
 
-    // Absent has trap falls through to the target for `in`
     @Test
     public void test_has_falls_through() {
         assertTrue(bool("const p = new Proxy({ a: 1 }, {}); 'a' in p"));
     }
 
-    // A deleteProperty trap drives `delete`
     @Test
     public void test_delete_trap() {
         final var source = """
@@ -53,13 +50,11 @@ public class ProxyPrototypeProgramTest {
         assertEquals("gone", str(source));
     }
 
-    // Absent deleteProperty trap deletes on the target
     @Test
     public void test_delete_falls_through() {
         assertFalse(bool("const t = { a: 1 }; const p = new Proxy(t, {}); delete p.a; 'a' in t"));
     }
 
-    // An ownKeys trap drives Object.keys and for-in; enumerable descriptors keep every key
     @Test
     public void test_own_keys_trap() {
         final var source = """
@@ -74,7 +69,6 @@ public class ProxyPrototypeProgramTest {
         assertEquals(6, num(source));
     }
 
-    // Object.keys / for-in filter ownKeys-trap keys down to enumerable ones
     @Test
     public void test_own_keys_trap_filters_non_enumerable() {
         final var source = """
@@ -91,7 +85,6 @@ public class ProxyPrototypeProgramTest {
         assertEquals(2, num(source));
     }
 
-    // Without an ownKeys trap, for-in enumerates the target's own keys
     @Test
     public void test_own_keys_falls_through() {
         final var source = """
@@ -103,7 +96,6 @@ public class ProxyPrototypeProgramTest {
         assertEquals(2, num(source));
     }
 
-    // CreateListFromArrayLike rejects a non-object ownKeys trap result
     @Test
     public void test_own_keys_non_array_result() {
         final var source = """
@@ -115,7 +107,6 @@ public class ProxyPrototypeProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // getPrototypeOf trap intercepts Object.getPrototypeOf; absent trap falls through to the target
     @Test
     public void test_proxy_get_prototype_of() {
         assertEquals("P", str("""
@@ -131,7 +122,6 @@ public class ProxyPrototypeProgramTest {
                 """));
     }
 
-    // A proxy reached as a [[Prototype]] dispatches its get trap, with the original object as receiver
     @Test
     public void test_proto_proxy_get_trap() {
         final var source = """
@@ -142,7 +132,6 @@ public class ProxyPrototypeProgramTest {
         assertEquals("x:true", str(source));
     }
 
-    // A get trap on a prototype proxy answers even when it yields undefined, ending the walk
     @Test
     public void test_proto_proxy_get_trap_undefined_ends_walk() {
         final var source = """
@@ -154,7 +143,6 @@ public class ProxyPrototypeProgramTest {
         assertEquals("undefined", str(source));
     }
 
-    // An own property still wins over a prototype proxy's get trap
     @Test
     public void test_own_property_beats_proto_proxy() {
         final var source = """
@@ -166,7 +154,6 @@ public class ProxyPrototypeProgramTest {
         assertEquals("own", str(source));
     }
 
-    // `in` walks into a prototype proxy's has trap
     @Test
     public void test_proto_proxy_has_trap() {
         final var source = """
@@ -177,7 +164,6 @@ public class ProxyPrototypeProgramTest {
         assertTrue(bool(source));
     }
 
-    // A write on an object whose prototype is a proxy goes through the set trap with the receiver
     @Test
     public void test_proto_proxy_set_trap() {
         final var source = """
@@ -192,7 +178,6 @@ public class ProxyPrototypeProgramTest {
         assertEquals("y=7:true", str(source));
     }
 
-    // A prototype proxy whose set trap returns false rejects the write, which throws in strict mode
     @Test
     public void test_proto_proxy_set_trap_false_throws() {
         final var source = """
@@ -203,7 +188,6 @@ public class ProxyPrototypeProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // A symbol-keyed read walks into a prototype proxy's get trap
     @Test
     public void test_proto_proxy_symbol_get_trap() {
         final var source = """
@@ -215,7 +199,6 @@ public class ProxyPrototypeProgramTest {
         assertEquals("sym", str(source));
     }
 
-    // A symbol-keyed `in` walks into a prototype proxy's has trap
     @Test
     public void test_proto_proxy_symbol_has_trap() {
         final var source = """
@@ -227,7 +210,6 @@ public class ProxyPrototypeProgramTest {
         assertTrue(bool(source));
     }
 
-    // A prototype proxy with no trap of its own falls through to its target's properties
     @Test
     public void test_proto_proxy_without_trap_reads_target() {
         final var source = """
@@ -238,8 +220,6 @@ public class ProxyPrototypeProgramTest {
         assertEquals(42d, num(source));
     }
 
-    // The ownKeys result is validated: duplicates, non-string/symbol keys and a dropped
-    // non-configurable target key are each a TypeError
     @Test
     public void test_own_keys_result_is_validated() {
         assertThrows(TypeErrorException.class,
@@ -251,7 +231,6 @@ public class ProxyPrototypeProgramTest {
                         + "Object.getOwnPropertyNames(new Proxy(t, { ownKeys: () => [] }))"));
     }
 
-    // A symbol key reaches the has trap instead of being coerced to a string
     @Test
     public void test_symbol_keys_in_the_has_trap() {
         assertTrue(bool("""
@@ -262,7 +241,6 @@ public class ProxyPrototypeProgramTest {
                 """));
     }
 
-    // Same ToPropertyKey requirement for the set and has traps.
     @Test
     public void test_numeric_key_is_converted_to_a_string_before_set_and_has_traps() {
         assertTrue(bool("""
@@ -277,9 +255,8 @@ public class ProxyPrototypeProgramTest {
                 """));
     }
 
-    // GetFunctionRealm on a newTarget that is a revoked Proxy is a TypeError: a `get` trap that
-    // revokes its own proxy as a side effect while OrdinaryCreateFromConstructor reads "prototype"
-    // must surface that, rather than silently falling back to the default prototype.
+    // GetFunctionRealm on a newTarget that is a revoked Proxy is a TypeError, not a silent fallback to the
+    // default prototype.
     @Test
     public void test_construct_with_newtarget_revoked_during_prototype_read_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("""

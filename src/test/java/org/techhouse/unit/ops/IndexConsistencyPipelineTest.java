@@ -36,9 +36,6 @@ import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-// Covers the index read/write consistency layer: the PendingIndexWrites overlay (no false positives
-// or negatives across FILTER/COUNT/GROUP_BY/SORT/DISTINCT/JOIN), evict-on-write convergence, and the
-// UserCache snapshot/eviction helpers.
 public class IndexConsistencyPipelineTest {
     private Cache cache;
     private PendingIndexWrites pending;
@@ -56,8 +53,6 @@ public class IndexConsistencyPipelineTest {
     public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
 
     private void addDoc(String coll, String id, String field, JsonBaseElement value) {
         final var obj = new JsonObject();
@@ -93,9 +88,6 @@ public class IndexConsistencyPipelineTest {
         return result.getFirst().get("count").asJsonNumber().getValue().longValue();
     }
 
-    // ── FILTER ───────────────────────────────────────────────────────────────
-
-    // A matching document committed but not yet indexed is returned (no false negative).
     @Test
     public void test_filter_includes_pending_not_yet_indexed_match() throws IOException {
         addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
@@ -105,22 +97,16 @@ public class IndexConsistencyPipelineTest {
         assertEquals(Set.of("1", "2"), filterIds(new JsonString("active")));
     }
 
-    // A document whose indexed value changed (stale index entry) is not wrongly returned under its old
-    // value (no false positive) and is found under its new value (no false negative).
     @Test
     public void test_filter_reconciles_stale_updated_value() throws IOException {
         addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
         enableIndex(TestGlobals.COLL, "status");
-        // Update doc 1 to inactive in the document cache, but leave the index stale (still active->{1}).
         addPendingDoc(TestGlobals.COLL, "1", "status", new JsonString("inactive"));
 
         assertTrue(filterIds(new JsonString("active")).isEmpty());
         assertEquals(Set.of("1"), filterIds(new JsonString("inactive")));
     }
 
-    // ── COUNT ──────────────────────────────────────────────────────────────--
-
-    // Index-only COUNT with a filter reflects the current documents, not the stale index.
     @Test
     public void test_count_with_filter_is_consistent() throws IOException {
         addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
@@ -152,9 +138,6 @@ public class IndexConsistencyPipelineTest {
         assertEquals(3L, result.getFirst().get("count").asJsonNumber().getValue().longValue());
     }
 
-    // ── DISTINCT ─────────────────────────────────────────────────────────────
-
-    // A pending document with a brand-new value contributes its value to the distinct set.
     @Test
     public void test_distinct_includes_pending_new_value() throws IOException {
         addDoc(TestGlobals.COLL, "1", "color", new JsonString("red"));
@@ -169,12 +152,10 @@ public class IndexConsistencyPipelineTest {
         assertEquals(Set.of("red", "blue", "green"), values);
     }
 
-    // When a pending update empties an index value, that value no longer surfaces as distinct.
     @Test
     public void test_distinct_drops_emptied_value_after_pending_update() throws IOException {
         addDoc(TestGlobals.COLL, "1", "color", new JsonString("red"));
         enableIndex(TestGlobals.COLL, "color");
-        // Doc 1 (the only "red") is updated to "blue" but not yet indexed.
         addPendingDoc(TestGlobals.COLL, "1", "color", new JsonString("blue"));
 
         final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -184,10 +165,6 @@ public class IndexConsistencyPipelineTest {
         assertEquals(Set.of("blue"), values);
     }
 
-    // ── GROUP_BY ───────────────────────────────────────────────────────────--
-
-    // Pending documents are grouped under their current value (merged into existing groups and added
-    // as new groups).
     @Test
     public void test_group_by_includes_pending_docs() throws IOException {
         addDoc(TestGlobals.COLL, "1", "type", new JsonString("A"));
@@ -204,8 +181,6 @@ public class IndexConsistencyPipelineTest {
         assertEquals(1, sizesByType.get("B"));
     }
 
-    // A pending document whose value is non-scalar (object) forces a full-scan fallback, which still
-    // produces consistent groups.
     @Test
     public void test_group_by_falls_back_to_scan_for_non_scalar_pending() throws IOException {
         addDoc(TestGlobals.COLL, "1", "type", new JsonString("A"));
@@ -217,13 +192,9 @@ public class IndexConsistencyPipelineTest {
         final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         req.setAggregationSteps(List.of(new GroupByAggregationStep("type")));
         final var groups = AggregationOperationHelper.processAggregation(req);
-        // Both the scalar "A" group and the object-valued group are present (scan fallback sees all).
         assertEquals(2, groups.size());
     }
 
-    // ── SORT ───────────────────────────────────────────────────────────────--
-
-    // Pending documents are ordered by their current value alongside indexed documents.
     @Test
     public void test_sort_orders_pending_docs_by_current_value() throws IOException {
         addDoc(TestGlobals.COLL, "mid", "num", new JsonNumber(2));
@@ -238,9 +209,6 @@ public class IndexConsistencyPipelineTest {
         assertEquals(List.of("low", "mid", "high"), ordered);
     }
 
-    // ── JOIN ───────────────────────────────────────────────────────────────--
-
-    // A pending (not-yet-indexed) remote document is still matched by an index-backed JOIN.
     @Test
     public void test_join_includes_pending_remote_doc() throws IOException {
         final var main = new JsonObject();
@@ -252,7 +220,6 @@ public class IndexConsistencyPipelineTest {
 
         addDoc(TestGlobals.JOIN_COLL, "j0", "refKey", new JsonNumber(7));
         enableIndex(TestGlobals.JOIN_COLL, "refKey");
-        // Remote doc with refKey 42 committed but not yet indexed.
         addPendingDoc(TestGlobals.JOIN_COLL, "j1", "refKey", new JsonNumber(42));
 
         final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -269,7 +236,6 @@ public class IndexConsistencyPipelineTest {
     public void test_join_excludes_pending_remote_doc_whose_value_changed() throws IOException {
         addDoc(TestGlobals.JOIN_COLL, "j1", "refKey", new JsonNumber(7));
         enableIndex(TestGlobals.JOIN_COLL, "refKey");
-        // Same id re-saved with a different key: committed in cache, still indexed under 7.
         addPendingDoc(TestGlobals.JOIN_COLL, "j1", "refKey", new JsonNumber(99));
 
         final var matched = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.JOIN_COLL, "refKey",
@@ -277,8 +243,6 @@ public class IndexConsistencyPipelineTest {
         assertNotNull(matched);
         assertFalse(matched.contains("j1"), "a pending doc whose value moved off the join key must not match");
     }
-
-    // ── DELETE (Finding 1) ─────────────────────────────────────────────────--
 
     private void saveViaProcessor(OperationProcessor processor, String id, String value) {
         final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -309,9 +273,7 @@ public class IndexConsistencyPipelineTest {
         del.set_id("gone");
         processor.processMessage(del);
 
-        // The delete marked the id pending (its async index removal has not run in this test).
         assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains("gone"));
-        // FILTER already excluded it; COUNT and DISTINCT must too.
         assertTrue(filterIds(new JsonString("gone")).isEmpty());
 
         final var countReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);

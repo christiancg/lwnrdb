@@ -41,7 +41,6 @@ public class IndexHelperUpdateTest {
         TestUtils.standardTearDown();
     }
 
-    // Successfully updates indexes for both inserted and updated entries
     @Test
     public void test_updates_indexes_for_inserted_and_updated_entries() throws IOException, InterruptedException {
         String dbName = TestGlobals.DB;
@@ -103,7 +102,6 @@ public class IndexHelperUpdateTest {
         }
     }
 
-    // updateIndexes indexes a String-valued field for a CREATED event
     @Test
     public void test_update_indexes_string_field() {
         Cache cache = IocContainer.get(Cache.class);
@@ -119,7 +117,6 @@ public class IndexHelperUpdateTest {
         assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id()));
     }
 
-    // updateIndexes indexes a Boolean-valued field for a CREATED event
     @Test
     public void test_update_indexes_boolean_field() {
         Cache cache = IocContainer.get(Cache.class);
@@ -135,7 +132,6 @@ public class IndexHelperUpdateTest {
         assertDoesNotThrow(() -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, newEntry.get_id()));
     }
 
-    // updateIndexes indexes a custom type (JsonTime) field for a CREATED event
     @Test
     public void test_update_indexes_custom_type_field() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
@@ -156,7 +152,6 @@ public class IndexHelperUpdateTest {
         assertFalse(index.isEmpty());
     }
 
-    // updateIndexes with DELETED event removes an entry from the index
     @Test
     public void test_update_indexes_deleted_event_removes_entry() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
@@ -177,8 +172,6 @@ public class IndexHelperUpdateTest {
         assertTrue(index == null || index.stream().noneMatch(e -> e.getIds().contains("del1")));
     }
 
-    // updateIndexes for a document that still exists but whose field value became null removes it
-    // from the scalar indexes (as opposed to a DELETED event, where the document itself is gone)
     @Test
     public void test_update_indexes_field_value_became_null_removes_scalar_entry()
             throws IOException, InterruptedException {
@@ -217,7 +210,6 @@ public class IndexHelperUpdateTest {
                 kind);
     }
 
-    // updateIndexes adds an object value to the Object hash index for a CREATED event
     @Test
     public void test_update_indexes_object_value() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
@@ -237,7 +229,6 @@ public class IndexHelperUpdateTest {
         assertTrue(ids.contains("o2"));
     }
 
-    // updateIndexes moves an id from the Object index to the Array index on an object->array change
     @Test
     public void test_update_indexes_moves_id_object_to_array() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
@@ -256,7 +247,6 @@ public class IndexHelperUpdateTest {
         assertTrue(arrIndex.stream().anyMatch(e -> e.getIds().contains("m1")));
     }
 
-    // updateIndexes with a DELETED event removes the id from the Object hash index
     @Test
     public void test_update_indexes_deleted_removes_object_entry() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
@@ -265,7 +255,6 @@ public class IndexHelperUpdateTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
 
-        // Simulate a committed delete: the document is gone, so the re-read removes it from the index.
         cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "d1");
         IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "d1");
 
@@ -273,8 +262,6 @@ public class IndexHelperUpdateTest {
         assertTrue(objIndex == null || objIndex.stream().noneMatch(e -> e.getIds().contains("d1")));
     }
 
-    // updateIndexes for a new document whose object value already matches an existing hash entry adds
-    // its id to that entry instead of creating a new one
     @Test
     public void test_update_indexes_object_value_joins_existing_hash_entry() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
@@ -291,9 +278,6 @@ public class IndexHelperUpdateTest {
         assertEquals(Set.of("o1", "o2"), objIndex.getFirst().getIds());
     }
 
-    // updateIndexes for a document whose value changes from a custom type to a plain string removes
-    // the old custom-typed entry (found by scanning the registered custom types) and indexes the new
-    // string value
     @Test
     public void test_update_indexes_custom_value_changed_to_plain_string_removes_custom_entry()
             throws IOException, InterruptedException {
@@ -317,8 +301,6 @@ public class IndexHelperUpdateTest {
         assertTrue(stringIndex.stream().anyMatch(e -> e.getIds().contains("ct1")));
     }
 
-    // updateIndexes for a new document whose custom value already matches an existing custom-typed
-    // entry adds its id to that entry instead of creating a new one
     @Test
     public void test_update_indexes_new_doc_with_matching_existing_custom_value_joins_entry()
             throws IOException, InterruptedException {
@@ -339,8 +321,6 @@ public class IndexHelperUpdateTest {
         assertEquals(Set.of("ct1", "ct2"), timeIndex.getFirst().getIds());
     }
 
-    // updateIndexes for a document whose value changes from boolean to number removes the boolean
-    // entry (toRemoveBoolean branch) and indexes the new number value
     @Test
     public void test_update_indexes_boolean_to_number_type_change_removes_boolean_entry()
             throws IOException, InterruptedException {
@@ -363,8 +343,6 @@ public class IndexHelperUpdateTest {
         assertTrue(numberIndex.stream().anyMatch(e -> e.getIds().contains("b1")));
     }
 
-    // updateIndexes for the first-ever custom value on a field that previously only held numbers
-    // finds no existing custom-typed index (null) and creates a fresh one
     @Test
     public void test_update_indexes_first_custom_value_for_field_creates_entry()
             throws IOException, InterruptedException {
@@ -384,8 +362,6 @@ public class IndexHelperUpdateTest {
         assertTrue(timeIndex.stream().anyMatch(e -> e.getIds().contains("m2")));
     }
 
-    // updateIndexes for the first-ever boolean value on a field that previously only held custom
-    // values finds no existing boolean index (null) and creates a fresh one
     @Test
     public void test_update_indexes_first_boolean_value_for_field_creates_entry()
             throws IOException, InterruptedException {

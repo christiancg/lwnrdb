@@ -20,11 +20,6 @@ public final class JsonUtils {
     private JsonUtils() {
     }
 
-    // Produces a stable, type-disambiguated textual form of a JSON element so that two values that
-    // are equal (JsonObject/JsonArray equals) always serialize identically. Object members are
-    // emitted sorted by key (object equality is key-order independent); array elements keep their
-    // order (array equality is order dependent); integral numbers drop their trailing ".0" so a
-    // query value of 1 matches a stored 1.0. Used only to feed hashElement.
     public static int sortFunctionAscending(JsonObject o1, JsonObject o2, String fieldName) {
         return compareAtPath(o1, o2, fieldName, JsonUtils::ascendingPrimitives);
     }
@@ -33,8 +28,6 @@ public final class JsonUtils {
         return compareAtPath(o1, o2, fieldName, JsonUtils::descendingPrimitives);
     }
 
-    // A missing field and a non-primitive value order the same way in both directions - only the
-    // primitive comparison reverses - so the direction is a parameter rather than a negated result.
     private static int compareAtPath(JsonObject o1, JsonObject o2, String fieldName,
             ToIntBiFunction<JsonPrimitive<?>, JsonPrimitive<?>> comparePrimitives) {
         final var o1Field = JsonUtils.getFromPath(o1, fieldName);
@@ -78,9 +71,8 @@ public final class JsonUtils {
         return compareByType(o1Primitive, o2Primitive);
     }
 
-    // Two values of different types still need a total order, or each compares as greater than the
-    // other and TimSort rejects the whole sort. Booleans, then numbers, then strings, then custom
-    // types by class name: arbitrary, but identical on every node.
+    // Values of different types still need a total order, or each compares greater than the other and
+    // TimSort rejects the whole sort. The ranking is arbitrary but must be identical on every node.
     private static int compareByType(JsonPrimitive<?> o1Primitive, JsonPrimitive<?> o2Primitive) {
         final var byRank = Integer.compare(typeRank(o1Primitive), typeRank(o2Primitive));
         return byRank != 0
@@ -173,9 +165,6 @@ public final class JsonUtils {
         return String.valueOf(asDouble);
     }
 
-    // Hashes the whole element (object or array, possibly nested) into a hex SHA-256 string used as
-    // the element-match index key. Equal values hash equally; the hex form is separator/newline-safe
-    // so it slots straight into the existing value|ids index line format.
     public static String hashElement(JsonBaseElement element) {
         try {
             final var digest = MessageDigest.getInstance("SHA-256");
@@ -186,8 +175,6 @@ public final class JsonUtils {
         }
     }
 
-    // Hex SHA-256 of a plain string, used to identify a script source (the compiled-program cache key
-    // and a stored procedure's sourceHash). Same digest and hex form as hashElement above.
     public static String sha256(String value) {
         try {
             final var digest = MessageDigest.getInstance("SHA-256");

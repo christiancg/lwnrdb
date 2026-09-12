@@ -10,8 +10,7 @@ import org.techhouse.simplejs.values.JsString;
 
 /**
  * OrdinarySet lands the write on the receiver, not on the object whose chain answered the lookup. Reflect.set
- * is the only way to hand the engine a receiver that is not the target, and a proxy receiver has to reach its
- * traps rather than the ordinary own-property table it does not have.
+ * is the only way to hand the engine a receiver that is not the target.
  */
 public class ReceiverAwareSetTest {
     private static String str(String source) {
@@ -49,7 +48,6 @@ public class ReceiverAwareSetTest {
                 """));
     }
 
-    // A proxy receiver has no ordinary own-property table, so the write has to arrive as a trap
     @Test
     public void test_a_proxy_receiver_defines_the_property_through_its_trap() {
         assertEquals("true:y=2", str("""
@@ -78,7 +76,6 @@ public class ReceiverAwareSetTest {
                 """));
     }
 
-    // An integer-indexed write meant for a foreign receiver leaves an ordinary property there
     @Test
     public void test_a_typed_array_index_written_for_a_foreign_receiver_never_reaches_the_view() {
         assertEquals("true:0:7", str("""
@@ -88,8 +85,7 @@ public class ReceiverAwareSetTest {
                 """));
     }
 
-    // RegExpExec calls the receiver's own `exec`, so that assignment must land; a flag accessor has no
-    // setter and refuses one
+    // RegExpExec calls the receiver's own `exec`, so that assignment must land; a flag accessor has no setter.
     @Test
     public void test_a_regexp_takes_an_own_exec_but_refuses_a_flag_accessor() {
         assertEquals("TypeError:patched", str("""

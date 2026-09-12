@@ -33,7 +33,6 @@ public class UserCacheEvictionTest {
         TestUtils.standardTearDown();
     }
 
-    // Evicting an entry from a populated collection
     @Test
     public void evict_entry_from_populated_collection() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
@@ -56,7 +55,6 @@ public class UserCacheEvictionTest {
         assertFalse(collectionMap.get(collectionIdentifier).containsKey(pk));
     }
 
-    // Evicting an entry when the collection map is empty
     @Test
     public void evict_entry_from_empty_collection_map() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
@@ -73,7 +71,6 @@ public class UserCacheEvictionTest {
         assertNull(collectionMap.get(Cache.getCollectionIdentifier(dbName, collName)));
     }
 
-    // Successfully evicts all collections and their primary key indexes for a given database name
     @Test
     public void test_evict_database_success() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
@@ -127,7 +124,6 @@ public class UserCacheEvictionTest {
         assertTrue(collectionMap.isEmpty());
     }
 
-    // evictCollection removes the correct collection from pkIndexMap
     @Test
     public void test_evict_collection_removes_from_pkIndexMap() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
@@ -148,7 +144,6 @@ public class UserCacheEvictionTest {
         assertFalse(pkIndexMap.containsKey(collIdentifier));
     }
 
-    // evictCollection is called with a non-existent dbName and collName
     @Test
     public void test_evict_collection_with_non_existent_collection()
             throws NoSuchFieldException, IllegalAccessException {
@@ -213,7 +208,6 @@ public class UserCacheEvictionTest {
         fieldIndexMap.put(collId2, inner2);
         fieldIndexMap.put(siblingId, inner3);
 
-        // Also populate collectionMap so evictDatabase can build its toRemove list.
         final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
         };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
@@ -325,7 +319,6 @@ public class UserCacheEvictionTest {
         assertTrue(collectionMap.containsKey(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases")));
     }
 
-    // evictDatabase("foo") must not touch a sibling database whose name starts with "foo".
     @Test
     public void test_evictDatabase_does_not_evict_sibling_database()
             throws NoSuchFieldException, IllegalAccessException {

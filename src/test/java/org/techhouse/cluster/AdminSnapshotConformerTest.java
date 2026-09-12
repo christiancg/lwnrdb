@@ -31,9 +31,7 @@ import org.techhouse.ops.IndexHelper;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-// Applying a coordinator's admin snapshot to this node's own metadata. Split out of
-// AdminAntiEntropyServiceTest, which now covers only the reconcile/epoch/membership side; lives in
-// org.techhouse.cluster rather than unit/cluster because AdminSnapshotConformer is package-private.
+// Lives in org.techhouse.cluster rather than unit/cluster because AdminSnapshotConformer is package-private.
 public class AdminSnapshotConformerTest {
     private final AdminSnapshotConformer conformer = new AdminSnapshotConformer();
     private final Cache cache = IocContainer.get(Cache.class);
@@ -94,10 +92,6 @@ public class AdminSnapshotConformerTest {
         assertTrue(cache.getCollectionNamesForDatabase("newdb").contains("newcoll"));
     }
 
-    // Metadata and directory can drift apart - a node that recorded the admin entry but whose folder never
-    // landed answers a routed write with "no such file or directory" rather than a miss. Both creations are
-    // idempotent, so every sweep must re-run them; gating them on the admin entry being absent would let the
-    // first pass write the entry and every later pass skip the repair, making the drift permanent.
     @Test
     public void test_conform_recreates_a_directory_that_went_missing_under_an_existing_admin_entry() throws Exception {
         final var snapshot = snapshot(List.of(dbJson("driftdb", List.of())),
@@ -146,8 +140,7 @@ public class AdminSnapshotConformerTest {
         TestUtils.createTestDatabaseAndCollection();
         final var schema = new JsonObject();
         schema.add("type", new JsonString("object"));
-        // Written to disk as SAVE_SCHEMA does, not just cached: conform reads the authoritative file, so a
-        // cache-only schema is a state the server never produces.
+        // Written to disk, not just cached: conform reads the authoritative file.
         IocContainer.get(FileSystem.class).writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL,
                 IocContainer.get(EJson.class).toJson(schema));
         cache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL, schema);

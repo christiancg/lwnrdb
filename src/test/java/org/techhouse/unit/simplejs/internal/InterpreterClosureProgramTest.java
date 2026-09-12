@@ -27,7 +27,6 @@ public class InterpreterClosureProgramTest {
         return sb.toString();
     }
 
-    // A recursive function declaration computes a factorial
     @Test
     public void test_recursive_factorial() {
         final var source = """
@@ -40,7 +39,6 @@ public class InterpreterClosureProgramTest {
         assertEquals(120, num(source));
     }
 
-    // A recursive Fibonacci function returns the expected term
     @Test
     public void test_recursive_fibonacci() {
         final var source = """
@@ -53,7 +51,6 @@ public class InterpreterClosureProgramTest {
         assertEquals(55, num(source));
     }
 
-    // A closure-based accumulator keeps private state across calls
     @Test
     public void test_closure_accumulator() {
         final var source = """
@@ -72,13 +69,11 @@ public class InterpreterClosureProgramTest {
         assertEquals(12, num(source));
     }
 
-    // An async generator that awaits is consumed by for-await end to end
     @Test
     public void test_async_generator_pipeline() {
         assertEquals("0,1,4,9", drained());
     }
 
-    // a var nested in a statement that never runs still has its binding from scope entry
     @Test
     public void test_var_hoisting_reaches_nested_statements() {
         assertEquals(1, num("if (false) { var a = 2; } a === undefined ? 1 : 0"));

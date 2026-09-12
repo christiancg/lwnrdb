@@ -27,13 +27,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
-/**
- * Cache for admin (internal metadata) entries: databases, collections, users,
- * page metadata and the PK indexes of the admin collections. Admin entries are
- * always cached and never evicted, so this cache holds no memory-management
- * machinery. User document/index caching lives in {@link UserCache}; the two are
- * coordinated by the {@link Cache} facade.
- */
 public class AdminCache {
     private static final Logger logger = Logger.logFor(AdminCache.class);
     private static final String PROCEDURE_MISS_PREFIX = "p" + Globals.COLL_IDENTIFIER_SEPARATOR;
@@ -52,9 +45,8 @@ public class AdminCache {
     private final Map<String, PkIndexEntry> collectionUsagePkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> transactionsPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> triggerRunsPkIndex = new ConcurrentHashMap<>();
-    // Bounded and LRU-evicted, unlike every other map here: their contents are derived from disk and can be
-    // reloaded, while the rest of this cache is the only in-memory copy of the admin records. Misses are kept
-    // apart so a caller naming thousands of nonexistent procedures cannot evict the ones actually in use.
+    // Evictable because disk is authoritative, unlike every other map here. Misses are kept in a separate
+    // cache so a caller naming thousands of nonexistent procedures cannot evict the ones in use.
     private final BoundedLruCache<JsonObject> collectionSchemas = new BoundedLruCache<>(Integer.MAX_VALUE,
             configuration.getMetadataCacheMaxBytes() / 3, schema -> (long) eJson.toJson(schema).length() * 2L);
     private final BoundedLruCache<ProcedureDefinition> procedures = new BoundedLruCache<>(Integer.MAX_VALUE,
@@ -156,13 +148,6 @@ public class AdminCache {
         return pageCache.getAdminPagePkIndexes(dbName, collName);
     }
 
-    /**
-     * Keeps the cached admin PK index positions consistent after a single-entry page compaction on
-     * the given admin collection, dispatching to the matching PK structure (databases, collections,
-     * users, collection_usage, or a page-metadata collection). Every cached entry on {@code page}
-     * whose position is greater than {@code removedPosition} shifted toward the start of the file by
-     * {@code removedLength}; entries are mutated in place.
-     */
     public void shiftPkPositionsAfterCompaction(String collName, long page, long removedPosition, long removedLength) {
         final Collection<PkIndexEntry> entries = switch (collName) {
             case Globals.ADMIN_DATABASES_COLLECTION_NAME -> databasesPkIndex.values();
@@ -258,9 +243,8 @@ public class AdminCache {
 
     public Set<String> getIndexesForCollection(String dbName, String collName) {
         final var collection = collections.get(Cache.getCollectionIdentifier(dbName, collName));
-        // The collection may have been dropped while a background index event for it was still
-        // queued. Treat a missing collection as "no indexes" so background maintenance becomes a
-        // clean no-op (and hasIndex returns false) instead of throwing.
+        // A collection dropped while a background index event was queued must read as "no indexes"
+        // rather than throw, so that event becomes a clean no-op.
         if (collection == null) {
             return Set.of();
         }
@@ -297,7 +281,6 @@ public class AdminCache {
         schemaCache.removeForDatabase(dbName);
     }
 
-    // loadAdminData deliberately does not read procedures at startup: this cache fills on first call.
     public ProcedureDefinition getProcedure(String dbName, String name) {
         return procedureCache.get(dbName, name);
     }
@@ -328,7 +311,6 @@ public class AdminCache {
         procedureCache.removeForDatabase(dbName);
     }
 
-    // ScheduleRegistry walks the schedules once when the feature is on, so startup does not read them.
     public ScheduleDefinition getSchedule(String dbName, String name) {
         return scheduleCache.get(dbName, name);
     }
@@ -363,10 +345,8 @@ public class AdminCache {
         scheduleCache.removeIf(keyMatches);
     }
 
-    // Every trigger on the collection, empty when it has none. The cache key is db|coll, so the write
-    // path's lookup is a single map get and an untriggered collection is read from disk once and then
-    // answered from the negative cache - the hot-path contract SchemaValidationHelper.check already
-    // relies on for every SAVE. An empty list doubles as the negative-cache sentinel.
+    // An empty list doubles as the negative-cache sentinel, so an untriggered collection is read from
+    // disk once rather than on every SAVE.
     public List<TriggerDefinition> getTriggersFor(String dbName, String collName) {
         final var id = Cache.getCollectionIdentifier(dbName, collName);
         var cached = triggers.get(id);
@@ -404,9 +384,8 @@ public class AdminCache {
         triggers.removeIf(id -> id.startsWith(prefix));
     }
 
-    // Drops the trigger lists whose db|coll key matches, leaving no entry behind: TriggerDispatcher looks the
-    // list up again when it runs a queued event, so a removed key reloads from disk while a cached empty list
-    // would make an already-queued trigger silently not fire.
+    // Must leave no entry behind: a cached empty list would make an already-queued trigger silently
+    // not fire when TriggerDispatcher looks the list up again.
     public void removeTriggersMatching(Predicate<String> keyMatches) {
         triggers.removeIf(keyMatches);
     }

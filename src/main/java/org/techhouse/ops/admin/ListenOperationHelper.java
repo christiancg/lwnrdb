@@ -16,7 +16,6 @@ import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.StopListenResponse;
 
-// LISTEN / STOP_LISTEN registration.
 public final class ListenOperationHelper {
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
 
@@ -26,15 +25,14 @@ public final class ListenOperationHelper {
     public static OperationResponse processListenOperation(ListenRequest listenRequest, UUID clientId) {
         final var dbName = listenRequest.getDatabaseName();
         final var collName = listenRequest.getCollectionName();
-        // Build an AggregateRequest so we can use the existing aggregation infrastructure.
         final var aggReq = new AggregateRequest(dbName, collName);
         aggReq.setAggregationSteps(listenRequest.getAggregationSteps());
         return OperationLocks.withReadLocks(false, AggregationOperationHelper.aggregateLockSet(aggReq),
                 OperationType.LISTEN, ErrorCode.ERROR_LISTEN, () -> {
                     final var results = AggregationOperationHelper.processAggregation(aggReq);
                     final var initialHash = ResultHasher.hash(results);
-                    // The re-run request uses dirty reads: timeliness matters more than strict consistency
-                    // for push notifications, and per-file locks still ensure valid data.
+                    // Re-runs use dirty reads: timeliness beats strict consistency here, and the per-file
+                    // locks still ensure valid data.
                     final var dirtyReq = new AggregateRequest(dbName, collName);
                     dirtyReq.setAggregationSteps(listenRequest.getAggregationSteps());
                     dirtyReq.setDirtyRead(true);

@@ -13,8 +13,6 @@ import org.techhouse.log.Logger;
 public class CoalescingSweepTest {
     private static final Logger logger = Logger.logFor(CoalescingSweepTest.class);
 
-    // The point of the class: a burst of requests arriving while a pass is already pending collapses
-    // into a single queued run, so a storm of membership changes cannot pile passes up behind it.
     @Test
     public void test_concurrent_schedules_coalesce_to_one_queued_run() throws Exception {
         final var started = new CountDownLatch(1);
@@ -40,8 +38,6 @@ public class CoalescingSweepTest {
         sweep.stopPeriodic();
     }
 
-    // A failing pass must be swallowed and logged, never propagated: it is the executor's only task,
-    // so an escaping exception would silently stop every later pass.
     @Test
     public void test_a_failing_pass_does_not_stop_the_next_one() throws Exception {
         final var runs = new AtomicInteger();

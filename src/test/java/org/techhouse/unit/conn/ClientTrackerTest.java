@@ -15,7 +15,6 @@ import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
 public class ClientTrackerTest {
-    // Adding a client when under max connections returns a valid UUID
     @Test
     public void test_add_client_under_max_connections() throws NoSuchFieldException, IllegalAccessException {
         Configuration config = Configuration.getInstance();
@@ -31,7 +30,6 @@ public class ClientTrackerTest {
         assertNotNull(clientId);
     }
 
-    // Adding a client when max connections are reached returns null
     @Test
     public void test_add_client_max_connections_reached() throws NoSuchFieldException, IllegalAccessException {
         Configuration config = Configuration.getInstance();
@@ -53,7 +51,6 @@ public class ClientTrackerTest {
         assertNull(clientId);
     }
 
-    // maxConnections of 0 means unlimited: clients are added beyond a small count
     @Test
     public void test_add_client_unlimited_when_max_connections_zero()
             throws NoSuchFieldException, IllegalAccessException {
@@ -69,7 +66,6 @@ public class ClientTrackerTest {
         }
     }
 
-    // Successfully removes a client when a valid UUID is provided
     @Test
     public void test_remove_client_with_valid_uuid() throws NoSuchFieldException, IllegalAccessException {
         ClientTracker clientTracker = new ClientTracker();
@@ -86,7 +82,6 @@ public class ClientTrackerTest {
         assertNull(clients.get(clientId));
     }
 
-    // Removing a client from an empty map
     @Test
     public void test_remove_client_from_empty_map() throws NoSuchFieldException, IllegalAccessException {
         ClientTracker clientTracker = new ClientTracker();
@@ -98,7 +93,6 @@ public class ClientTrackerTest {
         assertTrue(clients.isEmpty());
     }
 
-    // Successfully updates last command time for existing client
     @Test
     public void test_update_last_command_time_for_existing_client()
             throws NoSuchFieldException, IllegalAccessException {
@@ -115,7 +109,6 @@ public class ClientTrackerTest {
         assertNotNull(client.getLastCommandTime());
     }
 
-    // Handles null clientId gracefully without exceptions
     @Test
     public void test_handle_null_client_id_gracefully() {
         ClientTracker clientTracker = new ClientTracker();

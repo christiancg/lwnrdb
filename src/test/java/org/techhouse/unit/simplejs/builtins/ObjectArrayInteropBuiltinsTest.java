@@ -14,26 +14,22 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.test.JsEval;
 
 public class ObjectArrayInteropBuiltinsTest {
-    // keys/values also work over arrays (index keys)
     @Test
     public void test_over_arrays() {
         assertEquals("0,1", JsEval.str("Object.keys(['x', 'y']).join(',')"));
         assertEquals("x,y", JsEval.str("Object.values(['x', 'y']).join(',')"));
     }
 
-    // getOwnPropertyNames over an array includes length
     @Test
     public void test_get_own_property_names_array() {
         assertEquals("0,1,length", JsEval.str("Object.getOwnPropertyNames(['a', 'b']).join(',')"));
     }
 
-    // canonical array-index keys still sort ahead of the insertion-ordered rest
     @Test
     public void test_array_index_key_order_unaffected() {
         assertEquals("1,2,b,a", JsEval.str("Object.keys({b: 1, 2: 1, a: 1, 1: 1}).join(',')"));
     }
 
-    // Object.hasOwn reports own index presence on a typed array and a script-assigned array property
     @Test
     public void test_has_own_typed_array_and_array_custom_property() {
         assertTrue(JsEval.bool("Object.hasOwn(new Int8Array(3), 1)"));
@@ -42,14 +38,11 @@ public class ObjectArrayInteropBuiltinsTest {
         assertFalse(JsEval.bool("Object.hasOwn([], 'missing')"));
     }
 
-    // Object.entries over an array pairs each index string with its element
     @Test
     public void test_entries_over_array() {
         assertEquals("0=a,1=b", JsEval.str("Object.entries(['a', 'b']).map(e => e[0] + '=' + e[1]).join(',')"));
     }
 
-    // Object.defineProperty/defineProperties on an Array: data descriptors for indices, "length",
-    // and named own properties, matching the same flags/redefinition rules as a plain object.
     @Test
     public void test_define_property_on_array_index() {
         assertEquals(1001, JsEval
@@ -178,7 +171,6 @@ public class ObjectArrayInteropBuiltinsTest {
                 .run("var arr = []; Object.preventExtensions(arr); Object.defineProperty(arr, 'x', {value: 1});"));
     }
 
-    // keys/values/entries/getOwnPropertyNames on an Array reflect enumerability and skip holes
     @Test
     public void test_array_keys_values_entries_respect_enumerable_and_holes() {
         assertTrue(JsEval.bool("""
@@ -232,7 +224,6 @@ public class ObjectArrayInteropBuiltinsTest {
                 Interpreter.run("var arr = [1,2,3]; delete arr[1]; Object.getOwnPropertyDescriptor(arr, '1')"));
     }
 
-    // A [[Prototype]] may be any object-like value, not only a plain object
     @Test
     public void test_set_prototype_of_accepts_an_array() {
         assertEquals("function", JsEval.str("const o = {}; Object.setPrototypeOf(o, [1, 2]); typeof o.join"));
@@ -242,7 +233,6 @@ public class ObjectArrayInteropBuiltinsTest {
         assertTrue(JsEval.bool("const p = new Map(); const o = Object.create(p); Object.getPrototypeOf(o) === p"));
     }
 
-    // The cycle check still runs over a chain whose links include a non-plain-object prototype
     @Test
     public void test_set_prototype_of_cycle_check_across_an_array_link() {
         assertEquals("TypeError", JsEval.str("""
@@ -255,7 +245,6 @@ public class ObjectArrayInteropBuiltinsTest {
                 """));
     }
 
-    // Object.create rejects a primitive prototype but takes any object-like one
     @Test
     public void test_create_with_an_array_prototype() {
         assertEquals("function", JsEval.str("typeof Object.create([1, 2, 3]).map"));
@@ -263,7 +252,6 @@ public class ObjectArrayInteropBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.create(5)"));
     }
 
-    // isPrototypeOf walks a chain whose links are not plain objects
     @Test
     public void test_is_prototype_of_through_an_array_link() {
         assertTrue(JsEval.bool("const p = [1, 2]; Object.prototype.isPrototypeOf.call(p, Object.create(p))"));
@@ -354,8 +342,6 @@ public class ObjectArrayInteropBuiltinsTest {
                 """));
     }
 
-    // ArraySetLength: an out-of-range length is a RangeError (it fails the numeric conversion), while
-    // a length write refused by a non-writable `length` is a TypeError.
     @Test
     public void arraySetLengthDistinguishesRangeErrorFromTypeError() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("const a = [1]; a.length = -1"));
@@ -374,8 +360,6 @@ public class ObjectArrayInteropBuiltinsTest {
                 """));
     }
 
-    // Truncation deletes indices top-down and stops at the first non-configurable one, leaving
-    // `length` just above it.
     @Test
     public void arraySetLengthTruncationStopsAtANonConfigurableIndex() {
         assertEquals(3, JsEval.num("""
@@ -392,8 +376,6 @@ public class ObjectArrayInteropBuiltinsTest {
         assertEquals(1, JsEval.num("const a = [0, 1, 2, 3]; a.length = 1; a.length"));
     }
 
-    // An index write with no own property consults the prototype chain's setter instead of creating
-    // one, and a getter-only inherited accessor refuses the write.
     @Test
     public void arrayIndexWriteConsultsAnInheritedSetter() {
         assertEquals("42", JsEval.str("""
@@ -429,7 +411,6 @@ public class ObjectArrayInteropBuiltinsTest {
                 Object.setPrototypeOf(a, proto);
                 a[0] = 1
                 """));
-        // An own index still wins over the inherited accessor.
         assertEquals(9, JsEval.num("""
                 const proto = {};
                 Object.defineProperty(proto, '0', { set(v) {}, get() { return 'G'; } });
@@ -440,8 +421,6 @@ public class ObjectArrayInteropBuiltinsTest {
                 """));
     }
 
-    // Redirecting an array's [[Prototype]] redirects its inherited reads too, so the Array.prototype
-    // method surface is genuinely gone rather than resolved behind the new link.
     @Test
     public void settingAnArrayPrototypeRedirectsInheritedReads() {
         assertEquals("inherited", JsEval.str("const a = []; Object.setPrototypeOf(a, { tag: 'inherited' }); a.tag"));
@@ -453,9 +432,6 @@ public class ObjectArrayInteropBuiltinsTest {
         assertTrue(JsEval.bool("const a = [1]; Object.getPrototypeOf(a) === Array.prototype"));
     }
 
-    // Object.assign ToObjects a primitive target (typeof becomes "object") and copies a String
-    // source's index characters, an Array source/target's exotic length semantics, and a Proxy
-    // source's own keys/values through the ops seam rather than special-casing each shape.
     @Test
     public void assignHandlesPrimitiveTargetsStringSourcesAndArrays() {
         assertEquals("object,object,object", JsEval

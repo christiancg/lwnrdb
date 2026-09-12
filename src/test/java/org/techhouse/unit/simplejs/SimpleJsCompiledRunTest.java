@@ -9,10 +9,6 @@ import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 
-/**
- * The outcome mapping of the CompiledScript overload. It repeats the source overload's cascade, so each arm
- * needs its own reachable case.
- */
 public class SimpleJsCompiledRunTest {
     private final SimpleJs simpleJs = new SimpleJs();
 

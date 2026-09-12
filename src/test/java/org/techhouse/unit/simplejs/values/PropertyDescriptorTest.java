@@ -35,7 +35,6 @@ public class PropertyDescriptorTest {
         return new PropertyDescriptor(value, null, null, true, true, true);
     }
 
-    // The record's factories fill in the attribute triple and classify the descriptor
     @Test
     public void test_descriptor_factories() {
         final var data = PropertyDescriptor.data(new JsNumber(1), new PropertyFlags(true, false, true));
@@ -52,7 +51,6 @@ public class PropertyDescriptorTest {
         assertFalse(accessor.configurableOr(true));
     }
 
-    // An absent attribute falls back to the current one rather than to false
     @Test
     public void test_absent_attributes_keep_the_current_value() {
         final var partial = new PropertyDescriptor(new JsNumber(1), null, null, null, null, null);
@@ -61,7 +59,6 @@ public class PropertyDescriptorTest {
         assertTrue(partial.configurableOr(true));
     }
 
-    // A primitive has no property table, so it owns nothing and accepts no definition
     @Test
     public void test_primitive_owns_nothing() {
         final var primitive = new JsString("abc");
@@ -72,7 +69,6 @@ public class PropertyDescriptorTest {
         assertTrue(primitive.deleteOwnProperty(new JsString("x")));
     }
 
-    // An ordinary object answers all five operations from its table, symbol keys included
     @Test
     public void test_ordinary_object_protocol() {
         final var object = new JsObject();
@@ -90,7 +86,6 @@ public class PropertyDescriptorTest {
         assertFalse(object.hasOwnKey(symbol));
     }
 
-    // An accessor definition is reported back as an accessor descriptor
     @Test
     public void test_accessor_definition_round_trip() {
         final var object = new JsObject();
@@ -102,7 +97,6 @@ public class PropertyDescriptorTest {
         assertSame(getter, descriptor.getter());
     }
 
-    // Redefining a non-configurable property is rejected with a TypeError naming the key
     @Test
     public void test_non_configurable_redefine_is_rejected() {
         final var object = new JsObject();
@@ -115,7 +109,6 @@ public class PropertyDescriptorTest {
         assertFalse(object.deleteOwnProperty(new JsString("a")));
     }
 
-    // A non-extensible object refuses a brand new key
     @Test
     public void test_new_key_on_non_extensible_object() {
         final var object = new JsObject();
@@ -124,7 +117,6 @@ public class PropertyDescriptorTest {
         assertThrows(TypeErrorException.class, () -> object.defineOwnProperty(new JsString("a"), descriptor));
     }
 
-    // An array reports its indices, then length (created with the array), then its named properties
     @Test
     public void test_array_own_keys_and_descriptors() {
         final var array = new JsArray(List.of(new JsNumber(1)));
@@ -139,7 +131,6 @@ public class PropertyDescriptorTest {
         assertNotNull(array.getOwnProperty(new JsString("0")));
     }
 
-    // Defining an index writes through the element storage; deleting one leaves a hole
     @Test
     public void test_array_index_definition_and_delete() {
         final var array = new JsArray();
@@ -153,7 +144,6 @@ public class PropertyDescriptorTest {
         assertTrue(array.deleteOwnProperty(new JsString("missing")));
     }
 
-    // A non-writable length rejects a resize, and an accessor length is never legal
     @Test
     public void test_array_length_is_exotic() {
         final var array = new JsArray(List.of(new JsNumber(1)));
@@ -165,7 +155,6 @@ public class PropertyDescriptorTest {
         assertThrows(TypeErrorException.class, () -> array.defineOwnProperty(new JsString("length"), accessor));
     }
 
-    // The global object's string keys live in the Environment, so a definition writes the binding
     @Test
     public void test_global_object_protocol() {
         final var env = Environment.global();
@@ -182,7 +171,6 @@ public class PropertyDescriptorTest {
         assertNull(global.getOwnProperty(new JsString("gx")));
     }
 
-    // A callable's synthesised name/length are real own properties once reflected upon
     @Test
     public void test_callable_metadata_is_materialised() {
         final var function = new JsNativeFunction("f", (_, _) -> JsUndefined.getInstance());

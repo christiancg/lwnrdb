@@ -7,7 +7,6 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 
 public class JsonNullTest {
-    // Singleton instance "INSTANCE" is accessible and returns same object on multiple accesses
     @Test
     public void test_singleton_instance_returns_same_object() {
         JsonNull instance1 = JsonNull.INSTANCE;
@@ -16,7 +15,6 @@ public class JsonNullTest {
         assertSame(instance1, instance2);
     }
 
-    // equals() returns false when comparing with null
     @Test
     public void test_equals_returns_false_for_null() {
         JsonNull jsonNull = JsonNull.INSTANCE;
@@ -24,7 +22,6 @@ public class JsonNullTest {
         assertNotEquals(null, jsonNull);
     }
 
-    // Returns consistent hash code for all JsonNull instances
     @Test
     public void test_consistent_hashcode_for_all_instances() {
         JsonNull instance1 = JsonNull.INSTANCE;
@@ -40,7 +37,6 @@ public class JsonNullTest {
         assertEquals(hashCode1, JsonNull.class.hashCode());
     }
 
-    // Compare JsonNull instance with another JsonNull instance returns true
     @Test
     public void test_json_null_equals_another_json_null() {
         JsonNull jsonNull1 = JsonNull.INSTANCE;
@@ -51,7 +47,6 @@ public class JsonNullTest {
         assertTrue(result);
     }
 
-    // Compare JsonNull with null returns false
     @Test
     public void test_json_null_equals_null() {
         JsonNull jsonNull = JsonNull.INSTANCE;
@@ -61,7 +56,6 @@ public class JsonNullTest {
         assertFalse(result);
     }
 
-    // Returns singleton INSTANCE when deepCopy is called
     @Test
     public void test_deep_copy_returns_singleton_instance() {
         JsonNull jsonNull = new JsonNull();
@@ -71,7 +65,6 @@ public class JsonNullTest {
         assertSame(JsonNull.INSTANCE, result);
     }
 
-    // Verify INSTANCE is not null
     @Test
     public void test_instance_not_null() {
         JsonNull jsonNull = JsonNull.INSTANCE;

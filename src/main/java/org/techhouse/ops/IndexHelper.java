@@ -33,7 +33,6 @@ public class IndexHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
-    // The element-match (hashed) index families; the remaining IndexKind values are scalar.
     private static final IndexKind[] HASH_INDEX_KINDS = {IndexKind.OBJECT, IndexKind.ARRAY};
 
     public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName)
@@ -99,9 +98,6 @@ public class IndexHelper {
         cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
     }
 
-    // Object- and array-valued documents are reduced to a single hex hash (element-match key) and
-    // written to their own per-kind index files, keeping them fully separate from the scalar/custom
-    // index built above. Equal objects/arrays already grouped together via their equals/hashCode.
     private static void writeHashIndexes(String dbName, String collName, String fieldName,
             Map<JsonBaseElement, List<JsonObject>> grouped) {
         final var objectEntries = new ArrayList<FieldIndexEntry<String>>();
@@ -131,8 +127,6 @@ public class IndexHelper {
         return result;
     }
 
-    // Bulk counterpart of updateIndexes: re-reads the current state of every affected id once, then
-    // applies it to each field index. Same order-independent convergence as updateIndexes.
     public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids)
             throws IOException, InterruptedException {
         final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
@@ -161,12 +155,8 @@ public class IndexHelper {
         }
     }
 
-    // Index maintenance for a single committed write. Background events for the same id may be
-    // processed out of order by the worker pool, so rather than trusting the (possibly stale) event
-    // snapshot we re-read the CURRENT committed document by id and index that — whichever event runs
-    // last observes the final committed state, so the index converges regardless of processing order.
-    // The collection read lock gives a stable view of the document's existence and value (it blocks a
-    // concurrent commit until maintenance finishes; that commit then converges via its own event).
+    // Background events for one id may run out of order, so re-read the CURRENT committed document by id
+    // rather than trusting the event snapshot; whichever event runs last makes the index converge.
     public static void updateIndexes(String dbName, String collName, String id)
             throws IOException, InterruptedException {
         final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
@@ -181,8 +171,7 @@ public class IndexHelper {
                 rl.lockIndex(dbName, collName, fieldName);
                 try {
                     applyCurrentState(dbName, collName, fieldName, id, doc);
-                    // The cached index now diverges from the rewritten .idx files; drop it so the next
-                    // read reloads the up-to-date index from disk.
+                    // Drop the cached index so the next read reloads the rewritten .idx files from disk.
                     cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
                 } finally {
                     rl.releaseIndex(dbName, collName, fieldName);
@@ -193,10 +182,7 @@ public class IndexHelper {
         }
     }
 
-    // Applies the current committed state of a document to one field index: upsert when the document
-    // still exists (internalSelectIndexType clears the id from every family, then adds it to the
-    // current value), or remove the id from every family when it no longer exists (deleted). Must be
-    // called holding the field index write lock.
+    // Must be called holding the field index write lock.
     private static void applyCurrentState(String dbName, String collName, String fieldName, String id, DbEntry doc)
             throws IOException {
         if (doc != null) {
@@ -211,10 +197,8 @@ public class IndexHelper {
             throws IOException {
         final var element = JsonUtils.getFromPath(entry.getData(), fieldName);
         final var entryId = entry.get_id();
-        // The id may currently live in any family, and an update can change its value or even its kind
-        // (object <-> array, scalar <-> object/array). Clearing it from the hash families up front in a
-        // single, unconditional pass covers every shape change; the scalar families are then cleared on
-        // the branches that don't already rewrite them in place.
+        // An update can change the value or even the kind (object <-> array, scalar <-> object/array), so clear
+        // the hash families unconditionally up front; the scalar families are cleared on the branches below.
         removeIdFromHashIndexes(dbName, collName, fieldName, entryId);
         if (element != JsonNull.INSTANCE && element.isJsonPrimitive()) {
             final var primitive = element.asJsonPrimitive();
@@ -241,15 +225,12 @@ public class IndexHelper {
             removeIdFromScalarIndexes(dbName, collName, fieldName, entryId);
             addToHashIndex(dbName, collName, fieldName, entryId, IndexKind.ARRAY, JsonUtils.hashElement(element));
         } else {
-            // null or absent value (e.g. DELETE, or a field removed on update): the id must not linger
-            // in any index family, and there is nothing to add.
+            // null or absent value (DELETE, or a field removed on update): only remove, nothing to add.
             removeIdFromScalarIndexes(dbName, collName, fieldName, entryId);
         }
     }
 
-    // Element-match counterpart of the scalar add: for a CREATE/UPDATE, adds the id to the matching
-    // hash entry of the target kind (creating the entry when the value is new). The id has already
-    // been cleared from every hash family by internalSelectIndexType, so this only adds.
+    // The id has already been cleared from every hash family by internalSelectIndexType, so this only adds.
     private static void addToHashIndex(String dbName, String collName, String fieldName, String entryId, IndexKind kind,
             String hash) throws IOException {
         final var entries = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);

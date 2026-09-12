@@ -25,8 +25,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 
-// Every request to one peer rides a single shared connection, so what one request's failure does to the
-// others is the behaviour under test. Lives in org.techhouse.cluster to reach the package's internals.
+// Lives in org.techhouse.cluster to reach the package's internals.
 public class PeerConnectionPoolTest {
     private static final long GIVE_UP_MS = 250L;
     private static final long REPLY_DELAY_MS = GIVE_UP_MS * 3;
@@ -50,9 +49,8 @@ public class PeerConnectionPoolTest {
         return new NodeAddress(server.getInetAddress().getHostAddress(), server.getLocalPort());
     }
 
-    // Answers every request, but only after REPLY_DELAY_MS - long enough that an impatient caller has
-    // already given up while a patient one is still waiting on the same socket. Replying off the read
-    // loop keeps the two independent, so which request the client wrote first does not matter.
+    // Replies after REPLY_DELAY_MS off the read loop, so a patient and an impatient caller on the same
+    // socket stay independent of which request was written first.
     private void serveEveryRequestSlowly(CountDownLatch bothArrived) {
         Thread.ofVirtual().start(() -> {
             try (var socket = server.accept();
@@ -92,9 +90,8 @@ public class PeerConnectionPoolTest {
         }
     }
 
-    // The regression: a timeout used to drop the shared connection, and dropping it failed every other
-    // request riding on it. One slow reply took out the concurrent gossip, replication and anti-entropy
-    // to that peer, which then read as unreachable and cost the cluster its write quorum.
+    // The regression: a timeout used to drop the shared connection, failing every other request riding
+    // on it - which cost the cluster its write quorum.
     @Test
     public void test_one_request_timing_out_leaves_a_concurrent_request_on_the_same_peer_alive() throws Exception {
         final var bothArrived = new CountDownLatch(2);
@@ -125,8 +122,6 @@ public class PeerConnectionPoolTest {
         assertEquals(ClusterMessageType.GOSSIP_ACK, reply.get().getType());
     }
 
-    // The other half of the contract: a peer that cannot be reached at all still has to surface as a
-    // transport failure rather than a connection the pool keeps handing out.
     @Test
     public void test_a_peer_that_cannot_be_connected_to_raises_the_transport_failure() throws Exception {
         final var unbound = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());

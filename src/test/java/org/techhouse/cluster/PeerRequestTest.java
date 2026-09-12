@@ -42,8 +42,6 @@ public class PeerRequestTest {
         assertEquals("self", message.getSender().getNodeId());
     }
 
-    // Every caller may build a request before this node has joined, when it has no identity yet: the
-    // envelope has to carry a null sender rather than fail.
     @Test
     public void test_a_request_built_before_joining_carries_no_sender() throws Exception {
         TestUtils.setPrivateField(membershipService, "self", null);

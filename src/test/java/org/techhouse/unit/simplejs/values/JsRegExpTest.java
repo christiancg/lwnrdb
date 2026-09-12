@@ -12,7 +12,6 @@ import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.values.JsRegExp;
 
 public class JsRegExpTest {
-    // A compiled regex exposes its source and parses flag predicates
     @Test
     public void test_source_and_flags() {
         final var re = RegexTranslator.compile("a.c", "gi");
@@ -25,14 +24,12 @@ public class JsRegExpTest {
         assertFalse(re.isSticky());
     }
 
-    // toStr renders /source/flags
     @Test
     public void test_to_string() {
         assertEquals("/a.c/gi", JsCoercion.toStr(RegexTranslator.compile("a.c", "gi")));
         assertEquals("/x/", JsCoercion.toStr(RegexTranslator.compile("x", "")));
     }
 
-    // lastIndex is mutable state used by global matching
     @Test
     public void test_last_index_stateful() {
         final var re = RegexTranslator.compile("a", "g");
@@ -41,7 +38,6 @@ public class JsRegExpTest {
         assertEquals(3, ((org.techhouse.simplejs.values.JsNumber) re.getLastIndex()).getValue());
     }
 
-    // multiline, dotAll, sticky and indices flags parse
     @Test
     public void test_more_flags() {
         final var re = RegexTranslator.compile("a", "msyd");
@@ -51,20 +47,17 @@ public class JsRegExpTest {
         assertTrue(re.hasIndices());
     }
 
-    // an invalid pattern throws a SyntaxError
     @Test
     public void test_invalid_pattern_throws() {
         assertThrows(SyntaxErrorException.class, () -> RegexTranslator.compile("(", ""));
     }
 
-    // an unknown or duplicated flag throws a SyntaxError
     @Test
     public void test_invalid_flag_throws() {
         assertThrows(SyntaxErrorException.class, () -> RegexTranslator.compile("a", "q"));
         assertThrows(SyntaxErrorException.class, () -> RegexTranslator.compile("a", "gg"));
     }
 
-    // The alias table is empty for an ordinary pattern and lists every java name for a duplicated one
     @Test
     public void test_group_aliases() {
         assertTrue(new JsRegExp("a", "", RegexTranslator.compile("a", "").getProgram()).getGroupAliases().isEmpty());

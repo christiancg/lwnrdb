@@ -131,7 +131,6 @@ public class AdminAntiEntropyServiceTest {
         assertTrue(service.hasCompletedAdminSync());
     }
 
-    // The gate is gossiped so peers can keep a script off a node that is not caught up yet.
     @Test
     public void test_start_marks_this_node_as_admin_syncing_and_stop_clears_it() throws Exception {
         TestUtils.setPrivateField(config, "antiEntropyIntervalMs", 0L);

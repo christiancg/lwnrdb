@@ -32,9 +32,8 @@ public final class IndexEntryReader {
     private IndexEntryReader() {
     }
 
-    // Null means the field is not indexed, or its entries could not be loaded: the caller falls back
-    // to a scan. Entries are read under the field's index read lock and returned as deep copies, so
-    // the background index writer can never mutate a set a consumer is still iterating.
+    // Entries are read under the field's index read lock and returned as deep copies, so the background
+    // index writer can never mutate a set a consumer is still iterating.
     public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName)
             throws IOException {
         if (cache.hasNoIndex(dbName, collName, fieldName)) {
@@ -83,8 +82,6 @@ public final class IndexEntryReader {
         return combined;
     }
 
-    // Records that this field index was used (and its read lock taken) for analyze mode. A no-op
-    // when analyze is off (no active context).
     private static void recordAnalyzeIndexUse(String dbName, String collName, String fieldName) {
         final var analyzeContext = AnalyzeContext.current();
         if (analyzeContext != null) {
@@ -93,10 +90,6 @@ public final class IndexEntryReader {
         }
     }
 
-    // Fetches the actual documents for all object/array-valued ids collected from the hash indexes,
-    // groups them by their real field value, and appends one FieldIndexEntry<JsonBaseElement> per
-    // distinct value to combined. Called after the index read lock is released, following the same
-    // lock-free getEntriesByIds pattern used by reconcilePending.
     private static void addHashIndexEntries(List<FieldIndexEntry<?>> combined, String dbName, String collName,
             String fieldName, Set<String> hashIds) throws IOException {
         final var docs = cache.getEntriesByIds(dbName, collName, hashIds);
@@ -118,8 +111,6 @@ public final class IndexEntryReader {
         }
     }
 
-    // Adds deep copies (entry + id set) of a type's cached entries to combined, so the returned list
-    // is fully detached from the cache.
     private static void addEntriesOfType(List<FieldIndexEntry<?>> combined, String dbName, String collName,
             String fieldName, Class<?> type) throws IOException {
         final var entries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type);
@@ -131,13 +122,8 @@ public final class IndexEntryReader {
         }
     }
 
-    // Reconciles documents committed but not yet indexed into the loaded index entries: their index
-    // membership is untrustworthy, so every pending id is dropped from all entries and then re-added
-    // to the entry matching its CURRENT scalar/custom value (creating the entry when the value is
-    // new). Emptied entries are dropped so DISTINCT does not surface phantom values. Returns false
-    // when a pending document's value is present but not scalar/custom (object/array), signaling the
-    // caller to fall back to a full scan, which sees every committed document. The mutated entries are
-    // the deep copies built above, so the cache is never touched.
+    // Pending ids are dropped from every entry and re-added under the document's CURRENT value; a
+    // non-scalar pending value returns false so the caller falls back to a full scan.
     private static boolean reconcilePending(List<FieldIndexEntry<?>> combined, String dbName, String collName,
             String fieldName, Set<String> pendingIds) throws IOException {
         for (var entry : combined) {
@@ -181,8 +167,6 @@ public final class IndexEntryReader {
         return true;
     }
 
-    // Builds a fresh scalar/custom FieldIndexEntry for a single pending document, mirroring the value
-    // conversion used when an index is first created.
     private static FieldIndexEntry<?> scalarEntryFor(String dbName, String collName, JsonPrimitive<?> primitive,
             String id) {
         final var ids = new HashSet<>(Set.of(id));
@@ -196,11 +180,6 @@ public final class IndexEntryReader {
         };
     }
 
-    // Targeted index lookup for a JOIN: returns the set of ids in the remote collection whose
-    // remoteField equals any value in localValues, using one binary-search-backed getIdsFromIndex
-    // call per distinct local value instead of deep-copying every index entry. Returns null when
-    // the field has no index so the caller can fall back to the full-scan path. Pending writes are
-    // reconciled by re-testing each pending document against the local value set.
     public static Set<String> getMatchingIdsForJoin(String dbName, String collName, String fieldName,
             Set<JsonBaseElement> localValues) throws IOException {
         if (cache.hasNoIndex(dbName, collName, fieldName)) {
@@ -210,11 +189,11 @@ public final class IndexEntryReader {
         final var matchingIds = new HashSet<String>();
         for (var localValue : localValues) {
             if (localValue.isJsonNull()) {
-                continue; // null-keyed joins are not index-backed
+                continue;
             }
             final var lookupValue = IndexValueCodec.elementToLookupValue(localValue);
             if (lookupValue == null) {
-                continue; // object/array-valued local key - skip index lookup
+                continue;
             }
             final var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, localValue);
             final var ids = cache.getIdsFromIndex(dbName, collName, fieldName, operator, lookupValue);

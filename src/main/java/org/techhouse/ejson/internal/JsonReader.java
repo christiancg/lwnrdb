@@ -39,7 +39,7 @@ public class JsonReader {
     }
 
     private ParseTokenResult parseObject(List<JsonBaseElement> tokens) {
-        int tokensToSkip = 1; // starts at 1 because already 1 token has been skipped on internalParse method
+        int tokensToSkip = 1;
         final var obj = new JsonObject();
         var firstToken = tokens.getFirst();
         if (firstToken.equals(JsonSyntaxToken.RIGHT_BRACE)) {
@@ -81,7 +81,7 @@ public class JsonReader {
     }
 
     private ParseTokenResult parseArray(List<JsonBaseElement> tokens) {
-        int tokensToSkip = 1; // starts at 1 because already 1 token has been skipped on internalParse method
+        int tokensToSkip = 1;
         final var arr = new JsonArray();
         var firstToken = tokens.getFirst();
         if (firstToken.equals(JsonSyntaxToken.RIGHT_BRACKET)) {

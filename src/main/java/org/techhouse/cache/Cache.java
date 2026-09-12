@@ -20,15 +20,6 @@ import org.techhouse.fs.PkCompaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
-/**
- * Facade over the two separated cache stores: {@link AdminCache} for admin
- * (internal metadata) entries and {@link UserCache} for user document/index
- * entries. Admin methods delegate to {@link AdminCache} and user methods to
- * {@link UserCache}; the cross-cutting read/stream methods are implemented here
- * because they combine admin page metadata with the user document cache. The
- * facade stays a concrete IoC singleton so the existing
- * {@code IocContainer.get(Cache.class)} call sites are unchanged.
- */
 public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -58,11 +49,6 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + typeLabel;
     }
 
-    /**
-     * Applies the in-memory PK position fix described by a {@link PkCompaction} returned from a
-     * delete/update, routing to the admin or user cache by database. Null-safe: a {@code null}
-     * compaction (no survivor moved) is a no-op.
-     */
     public void shiftPkPositionsAfterCompaction(PkCompaction compaction) {
         if (compaction == null) {
             return;
@@ -98,7 +84,6 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return entries;
     }
 
-    // Records documents touched by a read for AGGREGATE analyze mode. A no-op when analyze is off.
     private void recordScanned(long count) {
         final var analyzeContext = AnalyzeContext.current();
         if (analyzeContext != null) {
@@ -122,11 +107,8 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     public Map<String, DbEntry> getWholeCollection(String dbName, String collName) {
         final var wholeCollection = userCache.getCachedCollection(dbName, collName);
-        // The completeness gate uses the synchronously-maintained PK index size as the authoritative
-        // document count, NOT the admin page entry counts: those are updated by the background worker
-        // and lag behind committed writes, so under memory pressure (when a freshly inserted document
-        // is not admitted into the cache) a stale low entry count could wrongly accept an incomplete
-        // cached map. The PK index is written synchronously on every save/delete (see CountOperatorHelper).
+        // Gate completeness on the synchronous PK index size, never on the admin page entry counts:
+        // those lag behind committed writes and would accept an incomplete cached map.
         if (wholeCollection != null && !wholeCollection.isEmpty()
                 && wholeCollection.size() >= pkIndexSize(dbName, collName)) {
             recordScanned(wholeCollection.size());
@@ -142,7 +124,6 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         }
     }
 
-    // The exact, currently-consistent document count from the synchronously-maintained PK index.
     private int pkIndexSize(String dbName, String collName) {
         try {
             return userCache.getPkIndexAndLoadIfNecessary(dbName, collName).size();
@@ -154,8 +135,6 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     public Stream<DbEntry> streamCollection(String dbName, String collName) throws IOException {
         if (!userCache.isCachingDisabled(dbName)) {
             final var cached = userCache.getCachedCollection(dbName, collName);
-            // See getWholeCollection: gate on the synchronous PK index size, not the lagging admin
-            // page entry counts, so a stale count can never accept an incomplete cached collection.
             if (cached != null && !cached.isEmpty() && cached.size() >= pkIndexSize(dbName, collName)) {
                 return decorateScan(cached.values().stream());
             }
@@ -163,9 +142,6 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return decorateScan(streamCollectionFromDisk(dbName, collName));
     }
 
-    // Counts entries as they are consumed for AGGREGATE analyze mode (the stream is lazy, so the
-    // count reflects documents actually scanned). The context is captured on the consuming thread,
-    // which is the same virtual thread that registered it. A no-op when analyze is off.
     private Stream<DbEntry> decorateScan(Stream<DbEntry> stream) {
         final var analyzeContext = AnalyzeContext.current();
         if (analyzeContext == null) {
@@ -177,15 +153,11 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName) throws IOException {
         final var collPages = adminCache.getAdminPageEntries(dbName, collName);
         if (collPages == null || collPages.isEmpty()) {
-            // No page metadata to drive memory-aware reading; fall back to the lazy
-            // file-based page stream (still only one page resident at a time).
             return fs.streamEntries(dbName, collName);
         }
         final var maxPageBytes = configuration.getMaxPageSize();
         final var sortedPages = collPages.stream().sorted(Comparator.comparingLong(AdminPageEntry::getPage)).toList();
-        // flatMap pulls one page at a time: the headroom check + page read happen lazily
-        // as the previous page's entries are exhausted downstream, so each page map is
-        // released for GC before the next is read.
+        // flatMap keeps this lazy, so only one page map is resident at a time.
         return sortedPages.stream().flatMap(pageEntry -> {
             final var estimate = pageEntry.getPageSize() > 0 ? pageEntry.getPageSize() : maxPageBytes;
             memoryManagement.ensureHeadroomForBytes(estimate);

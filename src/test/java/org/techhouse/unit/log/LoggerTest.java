@@ -54,7 +54,6 @@ public class LoggerTest {
         return date.format(DateTimeFormatter.ISO_DATE) + Globals.LOG_FILE_EXTENSION;
     }
 
-    // Constructor successfully initializes Logger instance with valid Class parameter
     @Test
     public void test_constructor_initializes_with_valid_class() throws IllegalAccessException {
         Logger logger = new Logger(String.class);
@@ -70,7 +69,6 @@ public class LoggerTest {
         }
     }
 
-    // Constructor handles null Class parameter
     @Test
     public void test_constructor_handles_null_class() throws IllegalAccessException {
         Logger logger = new Logger(null);
@@ -86,7 +84,6 @@ public class LoggerTest {
         }
     }
 
-    // Returns a new Logger instance when called with a valid Class parameter
     @Test
     public void test_log_for_returns_logger_with_valid_class() throws IllegalAccessException {
         Logger logger = Logger.logFor(String.class);
@@ -105,7 +102,6 @@ public class LoggerTest {
     public static class FatalTest {
     }
 
-    // Logs fatal message with correct severity level FATAL
     @Test
     public void test_fatal_logs_with_fatal_severity() {
         Logger logger = Logger.logFor(FatalTest.class);
@@ -118,7 +114,6 @@ public class LoggerTest {
         }
     }
 
-    // Handles empty message string
     @Test
     public void test_fatal_handles_empty_message() {
         Logger logger = Logger.logFor(FatalTest.class);
@@ -131,7 +126,6 @@ public class LoggerTest {
         }
     }
 
-    // Logs fatal message with exception using correct severity level FATAL
     @Test
     public void test_fatal_logs_message_with_exception() {
         Logger logger = Logger.logFor(FatalTest.class);
@@ -149,42 +143,33 @@ public class LoggerTest {
     public static class ErrorTest {
     }
 
-    // Verify error message is logged with ERROR severity level
     @Test
     public void test_error_logs_message_with_error_severity() {
-        // Arrange
         Logger logger = Logger.logFor(ErrorTest.class);
         String testMessage = "Test error message";
 
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
-            // Act
             logger.error(testMessage);
 
-            // Assert
             logWriterMock.verify(() -> LogWriter.writeLogEntry(argThat(
                     logEntry -> logEntry.contains(LogSeverity.ERROR.name()) && logEntry.contains(testMessage))));
         }
     }
 
-    // Test with empty message string
     @Test
     public void test_error_logs_empty_message() {
-        // Arrange
         Logger logger = Logger.logFor(ErrorTest.class);
         String emptyMessage = "";
 
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
-            // Act
             logger.error(emptyMessage);
 
-            // Assert
             logWriterMock.verify(
                     () -> LogWriter.writeLogEntry(argThat(logEntry -> logEntry.contains(LogSeverity.ERROR.name())
                             && logEntry.contains(ErrorTest.class.getName()))));
         }
     }
 
-    // Logs error message with exception details in correct format
     @Test
     public void test_fatal_logs_message_with_exception_details() {
         Logger logger = Logger.logFor(ErrorTest.class);
@@ -199,7 +184,6 @@ public class LoggerTest {
         }
     }
 
-    // Logs error message with exception details in correct format
     @Test
     public void test_error_logs_message_with_exception_details() {
         Logger logger = Logger.logFor(ErrorTest.class);
@@ -215,7 +199,6 @@ public class LoggerTest {
         }
     }
 
-    // Handle null exception parameter
     @Test
     public void test_error_logs_message_with_null_exception() {
         Logger logger = Logger.logFor(ErrorTest.class);
@@ -233,43 +216,34 @@ public class LoggerTest {
     public static class WarningTest {
     }
 
-    // Verify warning message is logged with WARNING severity level
     @Test
     public void test_warning_logs_message_with_warning_severity() {
-        // Arrange
         Logger logger = Logger.logFor(WarningTest.class);
         String testMessage = "Test warning message";
 
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
-            // Act
             logger.warning(testMessage);
 
-            // Assert
             logWriterMock.verify(
                     () -> LogWriter.writeLogEntry(argThat(logEntry -> logEntry.contains(LogSeverity.WARNING.name())
                             && logEntry.contains(testMessage) && logEntry.contains(WarningTest.class.getName()))));
         }
     }
 
-    // Test with empty message string
     @Test
     public void test_warning_logs_empty_message() {
-        // Arrange
         Logger logger = Logger.logFor(WarningTest.class);
         String emptyMessage = "";
 
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
-            // Act
             logger.warning(emptyMessage);
 
-            // Assert
             logWriterMock.verify(
                     () -> LogWriter.writeLogEntry(argThat(logEntry -> logEntry.contains(LogSeverity.WARNING.name())
                             && logEntry.contains(WarningTest.class.getName()))));
         }
     }
 
-    // Warning log entry is created with message and exception
     @Test
     public void test_warning_with_message_and_exception() {
         Logger logger = Logger.logFor(WarningTest.class);
@@ -277,10 +251,8 @@ public class LoggerTest {
         String testMessage = "Test warning message";
 
         try (MockedStatic<LogWriter> logWriterMock = mockStatic(LogWriter.class)) {
-            // Act
             logger.warning(testMessage, testException);
 
-            // Assert
             logWriterMock.verify(
                     () -> LogWriter.writeLogEntry(argThat(logEntry -> logEntry.contains(LogSeverity.WARNING.name())
                             && logEntry.contains(WarningTest.class.getName()))));
@@ -290,7 +262,6 @@ public class LoggerTest {
     public static class InfoTest {
     }
 
-    // Verify info message is logged with INFO severity level
     @Test
     public void test_info_message_logged_with_info_severity() {
         Logger logger = Logger.logFor(InfoTest.class);
@@ -303,7 +274,6 @@ public class LoggerTest {
         }
     }
 
-    // Pass empty string as message
     @Test
     public void test_info_empty_message() {
         Logger logger = Logger.logFor(InfoTest.class);

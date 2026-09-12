@@ -34,24 +34,19 @@ public class AggregationJoinStepTest {
         TestUtils.standardTearDown();
     }
 
-    // Handle empty collections in join operations
     @Test
     public void test_handle_empty_collections_in_join() throws IOException {
-        // Arrange
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         JoinAggregationStep joinStep = new JoinAggregationStep("joinCollection", "localField", "remoteField",
                 "asField");
         request.setAggregationSteps(List.of(joinStep));
 
-        // Act
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
-        // Assert
         assertNotNull(result);
         assertTrue(result.isEmpty());
     }
 
-    // JOIN adds matched documents from another collection as a nested array field
     @Test
     public void test_join_adds_matching_documents() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -80,12 +75,10 @@ public class AggregationJoinStepTest {
         assertTrue(result.stream().anyMatch(r -> r.has("joined") && !r.get("joined").asJsonArray().isEmpty()));
     }
 
-    // JOIN skips objects that lack the local field (L109, L115)
     @Test
     public void test_join_skips_objects_without_local_field() throws IOException {
         final var cache = IocContainer.get(Cache.class);
 
-        // Entry without the localField
         JsonObject noField = new JsonObject();
         noField.add(Globals.PK_FIELD, new JsonString("nf1"));
         noField.addProperty("other", "value");
@@ -100,7 +93,6 @@ public class AggregationJoinStepTest {
 
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
         assertNotNull(result);
-        // Object without localField should still appear but with empty joined array
         assertTrue(result.stream().allMatch(r -> !r.has("joined") || r.get("joined").asJsonArray().isEmpty()));
     }
 
@@ -114,7 +106,6 @@ public class AggregationJoinStepTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.JOIN_COLL, e);
     }
 
-    // JOIN using a remote-field index attaches only the matching remote documents
     @Test
     public void test_join_uses_remote_index_returns_only_matching() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -140,7 +131,6 @@ public class AggregationJoinStepTest {
         assertEquals("matched", joined.get(0).asJsonObject().get("label").asJsonString().getValue());
     }
 
-    // Index-backed JOIN where no remote doc matches any local value produces empty joined arrays
     @Test
     public void test_join_via_index_no_remote_match_returns_empty_joined_array() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -166,7 +156,6 @@ public class AggregationJoinStepTest {
         assertTrue(result.getFirst().get("joined").isJsonNull());
     }
 
-    // When the remote field has no index, JOIN falls back to a full collection scan on the remote side
     @Test
     public void test_join_without_remote_index_falls_back_to_full_scan() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -179,7 +168,6 @@ public class AggregationJoinStepTest {
 
         addJoinDoc(cache, "j1", 5, "match");
         addJoinDoc(cache, "j2", 9, "no-match");
-        // No index on refKey — should fall back to full scan
 
         final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         req.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")));

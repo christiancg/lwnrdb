@@ -51,20 +51,15 @@ public class AggregationCountStepTest {
         TestUtils.standardTearDown();
     }
 
-    // COUNT as the only step on an empty collection returns zero (exercises the
-    // null-resultStream branch that derives the count from admin page metadata)
     @Test
     public void test_count_on_empty_collection_returns_zero() throws IOException {
-        // Arrange
         var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         var steps = new ArrayList<BaseAggregationStep>();
         steps.add(new CountAggregationStep());
         request.setAggregationSteps(steps);
 
-        // Act
         var result = AggregationOperationHelper.processAggregation(request);
 
-        // Assert
         assertNotNull(result);
         assertEquals(1, result.size());
         var countResult = result.getFirst();
@@ -72,7 +67,6 @@ public class AggregationCountStepTest {
         assertEquals(0, countResult.get("count").asJsonNumber().asInteger());
     }
 
-    // Helper to insert entries directly into cache and page metadata for the test collection
     private void insertEntry(Cache cache, String id, String fieldName, Object fieldValue) {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
@@ -100,7 +94,6 @@ public class AggregationCountStepTest {
         pkIndexMap.put(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL), list);
     }
 
-    // COUNT returns the number of documents in the collection
     @Test
     public void test_count_returns_document_count() throws IOException, NoSuchFieldException, IllegalAccessException {
         final var cache = IocContainer.get(Cache.class);
@@ -119,8 +112,6 @@ public class AggregationCountStepTest {
         assertEquals(3, result.getFirst().get("count").asJsonNumber().asInteger());
     }
 
-    // ---- Index-backed aggregation steps (GROUP_BY, JOIN, SORT, DISTINCT) ----
-
     private void addDoc(Cache cache, String id, JsonBaseElement value) {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
@@ -134,8 +125,6 @@ public class AggregationCountStepTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status"));
     }
-
-    // ---- Index usage in COUNT (FILTER directly followed by COUNT) ----
 
     private static int countOf(List<JsonObject> result) {
         assertEquals(1, result.size());
@@ -153,8 +142,6 @@ public class AggregationCountStepTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    // COUNT after an indexed FILTER is answered from the index id-set size without reading any
-    // documents (still correct after the document cache is evicted).
     @Test
     public void test_count_after_indexed_filter_reads_no_documents() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -175,7 +162,6 @@ public class AggregationCountStepTest {
         assertEquals(2, countOf(result));
     }
 
-    // Without an index the COUNT after a FILTER falls back to counting the scanned, filtered stream.
     @Test
     public void test_count_after_unindexed_filter_falls_back_and_is_correct() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -193,7 +179,6 @@ public class AggregationCountStepTest {
         assertEquals(2, countOf(result));
     }
 
-    // The index-backed COUNT yields the same number as the unindexed scan path.
     @Test
     public void test_count_after_filter_indexed_matches_unindexed() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -236,7 +221,6 @@ public class AggregationCountStepTest {
         assertTrue(result.isEmpty());
     }
 
-    // COUNT after an indexed AND conjunction counts the intersection of the matched id-sets.
     @Test
     public void test_count_after_indexed_and_conjunction() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -257,7 +241,6 @@ public class AggregationCountStepTest {
         assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // COUNT after an indexed OR conjunction counts the union of the matched id-sets.
     @Test
     public void test_count_after_indexed_or_conjunction() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -275,18 +258,15 @@ public class AggregationCountStepTest {
         final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         req.setAggregationSteps(List.of(new FilterAggregationStep(or), new CountAggregationStep()));
 
-        // c1 + c2 (active) ∪ c3 (level 3) = 3
         assertEquals(3, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // A conjunction with one unindexed leaf cannot use the fast path, but still counts correctly.
     @Test
     public void test_count_after_partially_indexed_conjunction_falls_back() throws IOException {
         final var cache = IocContainer.get(Cache.class);
         addDocWithFields(cache, "c1", new JsonString("active"), "level", new JsonNumber(1));
         addDocWithFields(cache, "c2", new JsonString("active"), "level", new JsonNumber(2));
         addDocWithFields(cache, "c3", new JsonString("inactive"), "level", new JsonNumber(1));
-        // Only "status" is indexed; "level" is not.
         enableIndex(cache);
 
         final var and = new org.techhouse.ops.req.agg.operators.ConjunctionOperator(
@@ -299,7 +279,6 @@ public class AggregationCountStepTest {
         assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // COUNT is not the second step, so the fast path does not fire (still correct).
     @Test
     public void test_count_only_step_is_unaffected() throws IOException, NoSuchFieldException, IllegalAccessException {
         final var cache = IocContainer.get(Cache.class);
@@ -314,7 +293,6 @@ public class AggregationCountStepTest {
         assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // An indexed FILTER on a value with no matches yields a count of zero (empty id-set, not a fallback).
     @Test
     public void test_count_after_indexed_filter_no_matches_returns_zero() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -330,7 +308,6 @@ public class AggregationCountStepTest {
         assertEquals(0, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // Sequential indexed FILTER steps compose as AND: the count is the intersection of their id-sets.
     @Test
     public void test_count_after_multiple_indexed_filters_intersects() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -348,11 +325,9 @@ public class AggregationCountStepTest {
                 new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "level", new JsonNumber(1))),
                 new CountAggregationStep()));
 
-        // active = {c1,c2}; level 1 = {c1,c3}; intersection = {c1}
         assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // A count-preserving MAP between the FILTER and COUNT is skipped (still reads no documents).
     @Test
     public void test_count_after_indexed_filter_then_map_skips_map() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -374,7 +349,6 @@ public class AggregationCountStepTest {
         assertEquals(2, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // A count-preserving JOIN between the FILTER and COUNT is skipped.
     @Test
     public void test_count_after_indexed_filter_then_join_skips_join() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -392,7 +366,6 @@ public class AggregationCountStepTest {
         assertEquals(2, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // A count-preserving SORT between the FILTER and COUNT is skipped.
     @Test
     public void test_count_after_indexed_filter_then_sort_skips_sort() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -410,7 +383,6 @@ public class AggregationCountStepTest {
         assertEquals(2, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // With no FILTER, count-preserving steps before COUNT yield the whole-collection count.
     @Test
     public void test_count_after_map_only_uses_whole_collection_count()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -428,7 +400,6 @@ public class AggregationCountStepTest {
         assertEquals(2, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // GROUP_BY changes the count, so the fast path is disabled and the group count is returned.
     @Test
     public void test_count_after_group_by_falls_back_to_group_count() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -442,11 +413,9 @@ public class AggregationCountStepTest {
                         new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"))),
                 new GroupByAggregationStep("status"), new CountAggregationStep()));
 
-        // Two active docs collapse into one "status" group, so the count is the group count (1).
         assertEquals(1, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // A FILTER after a MAP cannot use its index, so the whole pipeline runs normally (count correct).
     @Test
     public void test_count_with_filter_after_map_falls_back() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -466,7 +435,6 @@ public class AggregationCountStepTest {
         assertEquals(2, countOf(AggregationOperationHelper.processAggregation(req)));
     }
 
-    // LIMIT changes the count, so the fast path is disabled and the capped count is returned.
     @Test
     public void test_count_after_limit_falls_back() throws IOException {
         final var cache = IocContainer.get(Cache.class);

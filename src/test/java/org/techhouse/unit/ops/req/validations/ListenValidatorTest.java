@@ -14,7 +14,6 @@ import org.techhouse.ops.req.validations.RequestValidator;
 
 public class ListenValidatorTest {
 
-    // Valid LISTEN request passes validation
     @Test
     public void validate_listen_validRequest_returnsOk() {
         final var req = new ListenRequest("myDb", "myColl");
@@ -23,7 +22,6 @@ public class ListenValidatorTest {
         assertTrue(RequestValidator.validate(req).isValid());
     }
 
-    // LISTEN with null databaseName fails validation
     @Test
     public void validate_listen_nullDb_returnsFail() {
         final var req = new ListenRequest(null, "coll");
@@ -32,7 +30,6 @@ public class ListenValidatorTest {
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
-    // LISTEN with null collectionName fails validation
     @Test
     public void validate_listen_nullColl_returnsFail() {
         final var req = new ListenRequest("db", null);
@@ -41,7 +38,6 @@ public class ListenValidatorTest {
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
-    // LISTEN with null aggregationSteps fails validation
     @Test
     public void validate_listen_nullSteps_returnsFail() {
         final var req = new ListenRequest("myDb", "myColl");
@@ -49,7 +45,6 @@ public class ListenValidatorTest {
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
-    // LISTEN with valid filter step passes validation
     @Test
     public void validate_listen_withFilterStep_returnsOk() {
         final var req = new ListenRequest("myDb", "myColl");
@@ -59,7 +54,6 @@ public class ListenValidatorTest {
         assertTrue(RequestValidator.validate(req).isValid());
     }
 
-    // STOP_LISTEN with valid UUID passes validation
     @Test
     public void validate_stopListen_validUUID_returnsOk() {
         final var req = new StopListenRequest();
@@ -68,7 +62,6 @@ public class ListenValidatorTest {
         assertTrue(RequestValidator.validate(req).isValid());
     }
 
-    // STOP_LISTEN with null listenId fails
     @Test
     public void validate_stopListen_nullId_returnsFail() {
         final var req = new StopListenRequest();
@@ -76,7 +69,6 @@ public class ListenValidatorTest {
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
-    // STOP_LISTEN with blank listenId fails
     @Test
     public void validate_stopListen_blankId_returnsFail() {
         final var req = new StopListenRequest();
@@ -85,7 +77,6 @@ public class ListenValidatorTest {
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
-    // STOP_LISTEN with non-UUID string fails
     @Test
     public void validate_stopListen_nonUuidId_returnsFail() {
         final var req = new StopListenRequest();

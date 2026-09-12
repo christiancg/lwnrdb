@@ -26,9 +26,6 @@ import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-// End-to-end coverage of the vector "nearest" (top-K) ranking operator through the full SAVE / AGGREGATE
-// pipeline, with and without a field index (which drives the SimHash pre-filter in
-// VectorSimilarityIndexHelper).
 public class OperationProcessorVectorTest {
     final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
 
@@ -44,7 +41,6 @@ public class OperationProcessorVectorTest {
         TestUtils.standardTearDown();
     }
 
-    // nearest over a scanned (un-indexed) collection returns the K most similar, ordered by similarity.
     @Test
     public void test_nearest_without_index_returns_topk_ordered() {
         final var coll = "vecScan";
@@ -56,7 +52,6 @@ public class OperationProcessorVectorTest {
         assertEquals(List.of("best", "second"), orderedIds(response.getResults()));
     }
 
-    // The same query over an indexed collection returns the same top-K and reports the index as used.
     @Test
     public void test_nearest_with_index_reports_index_used() {
         final var coll = "vecIdx";
@@ -74,7 +69,6 @@ public class OperationProcessorVectorTest {
         assertTrue(response.getAnalyzeResult().getIndexesUsed().contains("embedding"));
     }
 
-    // exact:true forces a full scan (guaranteed-exact top-K) and does not use the index.
     @Test
     public void test_nearest_exact_true_no_index_used() {
         final var coll = "vecExact";
@@ -90,7 +84,6 @@ public class OperationProcessorVectorTest {
         assertFalse(response.getAnalyzeResult().isIndexUsed());
     }
 
-    // A K larger than the collection returns every document, still ordered by similarity.
     @Test
     public void test_nearest_k_larger_than_collection_returns_all_ordered() {
         final var coll = "vecAll";
@@ -101,8 +94,6 @@ public class OperationProcessorVectorTest {
         assertEquals(List.of("best", "second", "third", "worst"), orderedIds(response.getResults()));
     }
 
-    // Documents whose field is absent, not a vector, or a mismatched-dimension vector (undefined
-    // similarity) simply do not rank.
     @Test
     public void test_nearest_ignores_missing_or_non_vector_field() {
         final var coll = "vecMixed";
@@ -118,7 +109,6 @@ public class OperationProcessorVectorTest {
         assertEquals(List.of("best", "second"), orderedIds(response.getResults()));
     }
 
-    // COUNT after a nearest filter falls back to the document-reading count and returns min(k, matches).
     @Test
     public void test_count_after_nearest() {
         final var coll = "vecCount";
@@ -133,7 +123,6 @@ public class OperationProcessorVectorTest {
         assertEquals(2, response.getResults().getFirst().get("count").asJsonNumber().getValue().intValue());
     }
 
-    // Four vectors with strictly decreasing cosine similarity to (10,0): best > second > third > worst.
     private void seed(String coll) {
         processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
         saveVector(coll, "best", "#vector(10.0,0.0)");

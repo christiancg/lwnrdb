@@ -2,8 +2,6 @@ package org.techhouse.utils;
 
 import java.util.Random;
 
-// Cosine similarity and the SimHash locality-sensitive hashing behind the vector similarity index (the
-// SimHash signature plays the role for vectors that the geohash plays for geo points).
 public final class VectorUtils {
     private VectorUtils() {
     }
@@ -31,8 +29,6 @@ public final class VectorUtils {
         return dot / (Math.sqrt(normA) * Math.sqrt(normB));
     }
 
-    // One bit per hyperplane (sign of the dot product). Drawing all planes from one fixed-seed generator
-    // in a fixed order keeps signatures comparable across vectors of the same dimension.
     public static String simHash(double[] vector, int bits) {
         final var random = new Random(SIMHASH_SEED);
         final var sb = new StringBuilder(bits);

@@ -9,8 +9,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
-// Per-resource access counters, kept apart from eviction so the cache can record and consult usage
-// without depending on the evictor that consumes it.
 public class UsageTracker {
     private final Logger logger = Logger.logFor(UsageTracker.class);
     private final Configuration config = Configuration.getInstance();

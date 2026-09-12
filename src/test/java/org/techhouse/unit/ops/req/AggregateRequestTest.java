@@ -11,7 +11,6 @@ import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 
 public class AggregateRequestTest {
-    // Create AggregateRequest with valid database and collection names
     @Test
     public void test_create_aggregate_request_with_valid_names() {
         String dbName = "testDb";
@@ -25,7 +24,6 @@ public class AggregateRequestTest {
         assertNull(request.getAggregationSteps());
     }
 
-    // Create AggregateRequest with empty database name
     @Test
     public void test_create_aggregate_request_with_empty_db_name() {
         String dbName = "";
@@ -39,7 +37,6 @@ public class AggregateRequestTest {
         assertNull(request.getAggregationSteps());
     }
 
-    // Test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         String dbName = "testDb";

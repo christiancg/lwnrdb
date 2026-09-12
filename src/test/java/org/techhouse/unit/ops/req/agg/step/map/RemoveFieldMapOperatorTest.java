@@ -10,7 +10,6 @@ import org.techhouse.ops.req.agg.step.map.MapOperationType;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 
 public class RemoveFieldMapOperatorTest {
-    // Constructor correctly sets REMOVE_FIELD as MapOperationType
     @Test
     public void test_constructor_sets_remove_field_type() {
         String fieldName = "testField";
@@ -23,7 +22,6 @@ public class RemoveFieldMapOperatorTest {
         assertEquals(condition, operator.getCondition());
     }
 
-    // Constructor called with null fieldName parameter
     @Test
     public void test_constructor_with_null_field_name() {
         BaseOperator condition = new BaseOperator(OperatorType.FIELD);

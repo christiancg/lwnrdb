@@ -6,10 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * The generic and error-shaped corners of the standard library: the methods that accept an array-like or a
- * Set-like rather than the real thing, the ones that build a subclass instance, and the ones that refuse.
- */
 public class StandardLibraryEdgesTest {
     private static String str(String source) {
         return ((JsString) Interpreter.run(source)).getValue();
@@ -19,7 +15,6 @@ public class StandardLibraryEdgesTest {
         return str("(() => { try { return String(" + expression + "); } catch (e) { return e.constructor.name; } })()");
     }
 
-    // null and undefined join as empty, everything else through its own toLocaleString
     @Test
     public void test_array_to_locale_string_skips_the_nullish_elements() {
         assertEquals("1,,,obj,x",
@@ -40,7 +35,6 @@ public class StandardLibraryEdgesTest {
                 """));
     }
 
-    // An array-like only spreads into concat when it says it is concat-spreadable
     @Test
     public void test_concat_spreads_an_array_like_that_opts_in() {
         assertEquals("1,x,y", str("""
@@ -86,7 +80,6 @@ public class StandardLibraryEdgesTest {
                 str("[(123.456).toPrecision(4), (0.000123).toPrecision(2), (123).toPrecision(2)].join(',')"));
     }
 
-    // The seven set methods take any Set-like: a size, a has and a keys
     @Test
     public void test_the_set_methods_accept_a_set_like() {
         assertEquals("1234|2|13|134|true|false|true|true", str("""
@@ -150,7 +143,6 @@ public class StandardLibraryEdgesTest {
                 """));
     }
 
-    // Disposal runs in reverse registration order, whichever way the resource was registered
     @Test
     public void test_a_disposable_stack_disposes_in_reverse_order() {
         assertEquals("defer,adopt:resource,use", str("""

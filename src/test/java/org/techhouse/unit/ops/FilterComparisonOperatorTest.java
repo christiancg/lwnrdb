@@ -29,7 +29,6 @@ public class FilterComparisonOperatorTest {
         TestUtils.standardTearDown();
     }
 
-    // Compare boolean values with EQUALS and NOT_EQUALS operators
     @Test
     public void test_boolean_comparison_operators() {
         JsonObject testObj = new JsonObject();
@@ -47,7 +46,6 @@ public class FilterComparisonOperatorTest {
         assertTrue(tester.test(testObj, "boolField"));
     }
 
-    // Compare numeric values with all comparison operators
     @Test
     public void test_compare_numeric_values() {
         JsonObject jsonObject = new JsonObject();
@@ -77,7 +75,6 @@ public class FilterComparisonOperatorTest {
         assertTrue(tester.test(jsonObject, "numberField"));
     }
 
-    // Compare string values with EQUALS, NOT_EQUALS and CONTAINS operators
     @Test
     public void test_compare_string_values() {
         JsonObject jsonObject = new JsonObject();
@@ -96,7 +93,6 @@ public class FilterComparisonOperatorTest {
         assertTrue(tester.test(jsonObject, "stringField"));
     }
 
-    // getTester: type mismatch (field is string, operator expects number) returns false
     @Test
     public void test_type_mismatch_returns_false() {
         JsonObject obj = new JsonObject();
@@ -108,7 +104,6 @@ public class FilterComparisonOperatorTest {
         assertFalse(tester.test(obj, "field"));
     }
 
-    // getTester: boolean with GREATER_THAN (unsupported) returns false (L117 branch)
     @Test
     public void test_boolean_greater_than_returns_false() {
         JsonObject obj = new JsonObject();
@@ -117,7 +112,6 @@ public class FilterComparisonOperatorTest {
         assertFalse(FilterOperatorHelper.getTester(op, FieldOperatorType.GREATER_THAN).test(obj, "flag"));
     }
 
-    // getTester: numeric IN returns false (L128 branch)
     @Test
     public void test_numeric_in_returns_false() {
         JsonObject obj = new JsonObject();
@@ -126,7 +120,6 @@ public class FilterComparisonOperatorTest {
         assertFalse(FilterOperatorHelper.getTester(op, FieldOperatorType.IN).test(obj, "n"));
     }
 
-    // getTester: string GREATER_THAN returns false (L152 branch)
     @Test
     public void test_string_greater_than_returns_false() {
         JsonObject obj = new JsonObject();
@@ -135,7 +128,6 @@ public class FilterComparisonOperatorTest {
         assertFalse(FilterOperatorHelper.getTester(op, FieldOperatorType.GREATER_THAN).test(obj, "s"));
     }
 
-    // getTester: numeric GREATER_THAN returns false when value does not exceed threshold
     @Test
     public void test_numeric_greater_than_returns_false() {
         JsonObject obj = new JsonObject();
@@ -144,7 +136,6 @@ public class FilterComparisonOperatorTest {
         assertFalse(FilterOperatorHelper.getTester(op, FieldOperatorType.GREATER_THAN).test(obj, "n"));
     }
 
-    // getTester: numeric SMALLER_THAN returns false when value is not below threshold
     @Test
     public void test_numeric_smaller_than_returns_false() {
         JsonObject obj = new JsonObject();
@@ -153,7 +144,6 @@ public class FilterComparisonOperatorTest {
         assertFalse(FilterOperatorHelper.getTester(op, FieldOperatorType.SMALLER_THAN).test(obj, "n"));
     }
 
-    // getTester: numeric GREATER_THAN_EQUALS returns false when value is below threshold
     @Test
     public void test_numeric_greater_than_equals_returns_false() {
         JsonObject obj = new JsonObject();
@@ -162,7 +152,6 @@ public class FilterComparisonOperatorTest {
         assertFalse(FilterOperatorHelper.getTester(op, FieldOperatorType.GREATER_THAN_EQUALS).test(obj, "n"));
     }
 
-    // getTester: numeric SMALLER_THAN_EQUALS returns false when value exceeds threshold
     @Test
     public void test_numeric_smaller_than_equals_returns_false() {
         JsonObject obj = new JsonObject();

@@ -7,9 +7,6 @@ import org.techhouse.ejson.elements.JsonObject;
 
 public class DbEntry extends JsonDocumentEntry {
     private long page;
-    // Last-write-wins version (epoch millis), assigned by the coordinating owner and persisted in the PK
-    // index. Not part of the document data or of equality; threaded through the write path for replication
-    // and anti-entropy.
     private long version;
 
     public static DbEntry fromJsonObject(String databaseName, String collectionName, JsonObject jsonObject) {

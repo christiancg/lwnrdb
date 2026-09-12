@@ -51,9 +51,8 @@ public class ReflectionUtils {
         }
     }
 
-    // Static fields are the class's own constants, not the instance's data. Including them would
-    // serialize every `public static final` onto the wire beside the real fields, and on the way back
-    // in would try to assign them from the document.
+    // Static fields are skipped: including them would put every `public static final` on the wire and
+    // then try to assign them back from the document.
     private static <T> Field[] internalGetFields(Class<T> tClass) {
         final List<Field> fields = new ArrayList<>();
         for (final var field : tClass.getDeclaredFields()) {
@@ -164,7 +163,7 @@ public class ReflectionUtils {
             case BOOLEAN -> fieldValue.asJsonBoolean().getValue();
             case STRING, CUSTOM -> fieldValue.asJsonString().getValue();
             case NUMBER -> fieldValue.asJsonNumber().getValue();
-            case SYNTAX -> null; // should never come here
+            case SYNTAX -> null;
             default -> throw new IllegalStateException("Unexpected value: " + jsonType);
         };
         if (parameterType.isEnum() && jsonValue instanceof String) {
@@ -206,8 +205,8 @@ public class ReflectionUtils {
         return parameterType.cast(jsonValue);
     }
 
-    // A primitive field is set reflectively, which only unboxes — the box has to already match the
-    // field's type, so a double-valued number reaching a long field must be narrowed here.
+    // Reflective field set only unboxes, so the box must already match the field's type: a double-valued
+    // number reaching a long field has to be narrowed here.
     private static Object toPrimitiveValue(Class<?> parameterType, Object jsonValue) {
         if (!(jsonValue instanceof Number number)) {
             return jsonValue;

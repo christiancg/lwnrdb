@@ -29,9 +29,6 @@ import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * Startup recovery of pending runs: what is re-queued, what is discarded, and what is only warned about.
- */
 public class TriggerRunRecoveryTest {
     private static final Configuration configuration = Configuration.getInstance();
 
@@ -114,7 +111,6 @@ public class TriggerRunRecoveryTest {
         assertEquals(1, captured.getFirst().getEntries().size());
     }
 
-    // Only this node's own records are replayed: another node's pending runs are its to recover.
     @Test
     public void test_run_from_another_node_is_not_replayed_locally() throws Exception {
         writeRecord("run-b", "some-other-node", EventType.UPDATED, List.of("live"), List.of(),
@@ -127,7 +123,6 @@ public class TriggerRunRecoveryTest {
         assertEquals(1, TriggerRunLog.pending().size(), "the other node's record must be left alone");
     }
 
-    // A DELETED run carries its documents, because they cannot be re-read from the collection.
     @Test
     public void test_deleted_event_replays_the_stored_document() throws Exception {
         writeRecord("run-c", TriggerRunLog.currentNodeId(), EventType.DELETED, List.of(), List.of(document("removed")),
@@ -141,8 +136,6 @@ public class TriggerRunRecoveryTest {
         assertEquals("removed", captured.getFirst().getEntries().getFirst().get_id());
     }
 
-    // The documents a run was about are gone, so there is nothing to re-run: the record is consumed rather
-    // than left to be replayed at every restart.
     @Test
     public void test_a_run_whose_documents_vanished_is_consumed() throws Exception {
         writeRecord("run-d", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("no-such-doc"), List.of(),

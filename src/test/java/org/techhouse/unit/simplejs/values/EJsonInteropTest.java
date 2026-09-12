@@ -42,7 +42,6 @@ import org.techhouse.simplejs.values.JsVector;
 import org.techhouse.utils.GeoPoint;
 
 public class EJsonInteropTest {
-    // Scalars convert to their EJson counterparts
     @Test
     public void test_scalars_to_ejson() {
         assertInstanceOf(JsonNumber.class, EJsonInterop.toEjson(new JsNumber(3)));
@@ -51,20 +50,17 @@ public class EJsonInteropTest {
         assertInstanceOf(JsonNull.class, EJsonInterop.toEjson(JsNull.getInstance()));
     }
 
-    // undefined and functions convert to null (dropped by callers)
     @Test
     public void test_undefined_and_function_to_ejson() {
         assertNull(EJsonInterop.toEjson(JsUndefined.getInstance()));
         assertNull(EJsonInterop.toEjson(new JsNativeFunction("f", (_, _) -> JsNull.getInstance())));
     }
 
-    // a BigInt cannot be converted
     @Test
     public void test_bigint_to_ejson_throws() {
         assertThrows(TypeErrorException.class, () -> EJsonInterop.toEjson(new JsBigInt(BigInteger.ONE)));
     }
 
-    // objects and arrays round-trip, dropping undefined members
     @Test
     public void test_object_array_roundtrip() {
         final var object = new JsObject();
@@ -78,7 +74,6 @@ public class EJsonInteropTest {
         assertInstanceOf(JsArray.class, back.get("nested"));
     }
 
-    // array holes of undefined become null on the EJson side
     @Test
     public void test_array_undefined_to_null() {
         final var array = new JsArray(List.of(new JsNumber(1), JsUndefined.getInstance()));
@@ -86,14 +81,12 @@ public class EJsonInteropTest {
         assertInstanceOf(JsonNull.class, ejson.get(1));
     }
 
-    // fromEjson maps a null element to JS null
     @Test
     public void test_fromejson_null() {
         assertInstanceOf(JsNull.class, EJsonInterop.fromEjson(null));
         assertInstanceOf(JsNull.class, EJsonInterop.fromEjson(JsonNull.INSTANCE));
     }
 
-    // a circular structure is rejected
     @Test
     public void test_circular_throws() {
         final var object = new JsObject();
@@ -101,7 +94,6 @@ public class EJsonInteropTest {
         assertThrows(TypeErrorException.class, () -> EJsonInterop.toEjson(object));
     }
 
-    // a regex serializes to an empty object, matching JSON.stringify(/x/)
     @Test
     public void test_regex_to_empty_object() {
         final var result = EJsonInterop.toEjson(RegexTranslator.compile("x", "g"));
@@ -136,7 +128,6 @@ public class EJsonInteropTest {
         assertTrue(EJsonInterop.toEjson(bool).asJsonBoolean().getValue());
     }
 
-    // Each of the four custom types crosses into the engine as its own value type
     @Test
     public void test_from_ejson_of_every_custom_type() {
         assertInstanceOf(JsGeo.class, EJsonInterop.fromEjson(new JsonGeo("#geo(1,2)")));
@@ -147,7 +138,6 @@ public class EJsonInteropTest {
         assertEquals(1, ((JsGeo) EJsonInterop.fromEjson(new JsonGeo("#geo(1,2)"))).getPoint().lat());
     }
 
-    // A custom type this engine has no value type for degrades to its wire text, not undefined
     @Test
     public void test_from_ejson_of_an_unknown_custom_type() {
         final var unknown = EJsonInterop.fromEjson(new UnknownCustom(7));
@@ -155,7 +145,6 @@ public class EJsonInteropTest {
         assertEquals("#mystery(7)", ((JsString) unknown).getValue());
     }
 
-    // Each custom type serializes back as a real JsonCustom whose text round-trips
     @Test
     public void test_to_ejson_of_every_custom_type_round_trips() {
         final var values = List.of(new JsGeo(new GeoPoint(1, 2)), new JsVector(new double[]{1, 2}),
@@ -168,13 +157,11 @@ public class EJsonInteropTest {
         }
     }
 
-    // The spec path stays spec-shaped: JSON.stringify's shared entry point still rejects a BigInt
     @Test
     public void test_to_ejson_still_throws_on_a_big_int() {
         assertThrows(TypeErrorException.class, () -> EJsonInterop.toEjson(new JsBigInt(BigInteger.ONE)));
     }
 
-    // The host path converts a losslessly-representable BigInt to a number
     @Test
     public void test_to_host_ejson_converts_an_exact_big_int() {
         final var max = new JsBigInt(BigInteger.valueOf(9007199254740991L));
@@ -182,7 +169,6 @@ public class EJsonInteropTest {
         assertEquals(-1, EJsonInterop.toHostEjson(new JsBigInt(BigInteger.valueOf(-1))).asJsonNumber().asInteger());
     }
 
-    // Beyond the exact integer range it throws instead of silently losing precision
     @Test
     public void test_to_host_ejson_rejects_an_inexact_big_int() {
         final var huge = new JsBigInt(BigInteger.TWO.pow(64));
@@ -190,7 +176,6 @@ public class EJsonInteropTest {
         assertTrue(error.getMessage().contains("exceeds the exact integer range"));
     }
 
-    // The error names the property path, so the failure points at the value rather than the boundary
     @Test
     public void test_to_host_ejson_reports_the_property_path() {
         final var inner = new JsArray();
@@ -203,7 +188,6 @@ public class EJsonInteropTest {
         assertTrue(error.getMessage().contains("'a.b[0]'"), error.getMessage());
     }
 
-    // A custom type registered outside the four the engine knows about, for the fallback arm above
     private static final class UnknownCustom extends JsonCustom<Integer> {
         private UnknownCustom(int value) {
             super(value);

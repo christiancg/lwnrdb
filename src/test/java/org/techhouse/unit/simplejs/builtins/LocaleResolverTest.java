@@ -7,10 +7,6 @@ import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.host.ScriptResult;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 
-/**
- * The locales/options arguments the toLocaleString / localeCompare family accepts. Exercised through the
- * engine rather than against the resolver directly, since a JsValue argument list is what it is built for.
- */
 public class LocaleResolverTest {
     private final SimpleJs engine = new SimpleJs();
 
@@ -98,8 +94,6 @@ public class LocaleResolverTest {
                 .asJsonNumber().asInteger());
     }
 
-    // usage and caseFirst are validated even though java.text cannot honour them, so a typo is an error
-    // rather than a silent no-op.
     @Test
     public void test_unhonoured_options_are_still_validated() {
         assertEquals(-1,

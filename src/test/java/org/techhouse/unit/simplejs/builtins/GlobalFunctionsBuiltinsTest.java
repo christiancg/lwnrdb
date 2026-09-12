@@ -24,7 +24,6 @@ public class GlobalFunctionsBuiltinsTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // joins an accumulator array read after the event loop has drained
     private static String joinDrained() {
         final var array = (JsArray) Interpreter.run(
                 "let order = [];\nsetTimeout(() => order.push('timer'), 0);\nqueueMicrotask(() => order.push('micro'));\norder\n");
@@ -38,7 +37,6 @@ public class GlobalFunctionsBuiltinsTest {
         return sb.toString();
     }
 
-    // encodeURIComponent escapes reserved characters that encodeURI preserves
     @Test
     public void test_encode_uri_variants() {
         assertEquals("a%20b", str("encodeURI('a b')"));
@@ -46,7 +44,6 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals("a/b", str("encodeURI('a/b')"));
     }
 
-    // decodeURIComponent round-trips multi-byte UTF-8
     @Test
     public void test_decode_uri_round_trip() {
         assertEquals("✓", str("decodeURIComponent('%E2%9C%93')"));
@@ -56,7 +53,6 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals("a%2Fb", str("decodeURI('a%2Fb')"));
     }
 
-    // a malformed percent sequence throws a URIError
     @Test
     public void test_decode_uri_malformed_throws() {
         final var source = """
@@ -71,7 +67,6 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals("URIError", str(source));
     }
 
-    // escape and unescape round-trip a non-ASCII string
     @Test
     public void test_escape_unescape() {
         assertEquals("%u2713", str("escape('✓')"));
@@ -79,14 +74,12 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals("a b", str("unescape(escape('a b'))"));
     }
 
-    // encode round-trips a four-byte (astral) code point
     @Test
     public void test_encode_astral_round_trip() {
         assertEquals("%F0%9F%98%80", str("encodeURIComponent('😀')"));
         assertEquals("😀", str("decodeURIComponent('%F0%9F%98%80')"));
     }
 
-    // encodeURI rejects a lone surrogate with a URIError
     @Test
     public void test_encode_lone_surrogate_throws() {
         final var source = """
@@ -101,7 +94,6 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals("URIError", str(source));
     }
 
-    // a truncated multi-byte sequence throws a URIError
     @Test
     public void test_decode_truncated_multibyte_throws() {
         final var source = """
@@ -116,7 +108,6 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals("URIError", str(source));
     }
 
-    // unescape decodes both %XX and %uXXXX escapes and passes literals through
     @Test
     public void test_unescape_forms() {
         assertEquals("A", str("unescape('%41')"));
@@ -124,14 +115,12 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals("%zz", str("unescape('%zz')"));
     }
 
-    // escape encodes a low byte as %XX and passes unescaped characters through
     @Test
     public void test_escape_low_byte() {
         assertEquals("%20", str("escape(' ')"));
         assertEquals("aA1@*_+-./", str("escape('aA1@*_+-./')"));
     }
 
-    // structuredClone copies dates, maps, sets, typed arrays and buffers
     @Test
     public void test_structured_clone_builtin_types() {
         assertEquals(1000, num("structuredClone(new Date(1000)).getTime()"));
@@ -141,7 +130,6 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals(4, num("structuredClone(new ArrayBuffer(4)).byteLength"));
     }
 
-    // structuredClone preserves primitive leaf values
     @Test
     public void test_structured_clone_primitives() {
         final var source = """
@@ -151,7 +139,6 @@ public class GlobalFunctionsBuiltinsTest {
         assertTrue(bool(source));
     }
 
-    // structuredClone deep-copies nested structures
     @Test
     public void test_structured_clone_deep() {
         final var source = """
@@ -163,7 +150,6 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals(203, num(source));
     }
 
-    // structuredClone preserves cycles
     @Test
     public void test_structured_clone_cycle() {
         final var source = """
@@ -175,7 +161,6 @@ public class GlobalFunctionsBuiltinsTest {
         assertTrue(bool(source));
     }
 
-    // cloning a function throws a TypeError
     @Test
     public void test_structured_clone_function_throws() {
         final var source = """
@@ -190,13 +175,11 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals("TypeError", str(source));
     }
 
-    // queueMicrotask runs before a zero-delay timer
     @Test
     public void test_queue_microtask_ordering() {
         assertEquals("micro,timer", joinDrained());
     }
 
-    // queueMicrotask with a non-function argument throws a TypeError
     @Test
     public void test_queue_microtask_non_function_throws() {
         final var source = """
@@ -211,7 +194,6 @@ public class GlobalFunctionsBuiltinsTest {
         assertEquals("TypeError", str(source));
     }
 
-    // structuredClone copies the getter's value rather than the accessor
     @Test
     public void test_structured_clone_invokes_getter() {
         assertEquals(4, num("structuredClone({get x() { return 4; }}).x"));

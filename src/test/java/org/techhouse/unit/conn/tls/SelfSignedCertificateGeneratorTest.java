@@ -31,7 +31,6 @@ public class SelfSignedCertificateGeneratorTest {
         assertNotNull(keyStore);
         assertTrue(Files.exists(keystorePath), "keystore should be persisted to disk");
 
-        // Reload from disk to confirm it is a valid, readable PKCS12 keystore.
         final var reloaded = KeyStore.getInstance("PKCS12");
         try (var in = Files.newInputStream(keystorePath)) {
             reloaded.load(in, PASSWORD);
@@ -47,12 +46,10 @@ public class SelfSignedCertificateGeneratorTest {
         final var keyStore = SelfSignedCertificateGenerator.generate(keystorePath, PASSWORD, ALIAS);
         final var certificate = (X509Certificate) keyStore.getCertificate(ALIAS);
 
-        // Self-signed: subject equals issuer, and the certificate verifies against its own public key.
         assertEquals(certificate.getSubjectX500Principal(), certificate.getIssuerX500Principal());
         certificate.verify(certificate.getPublicKey());
         certificate.checkValidity();
 
-        // Validity window is roughly one year.
         final var lifetime = Duration.between(certificate.getNotBefore().toInstant(),
                 certificate.getNotAfter().toInstant());
         assertTrue(lifetime.toDays() >= 364 && lifetime.toDays() <= 366, "expected ~365 day validity");
@@ -73,7 +70,6 @@ public class SelfSignedCertificateGeneratorTest {
 
     @Test
     public void test_generate_fails_for_unwritable_path(@TempDir Path tempDir) throws Exception {
-        // A regular file in the keystore's path makes directory creation impossible.
         final var blocker = Files.createFile(tempDir.resolve("blocker"));
         final var keystorePath = blocker.resolve("sub").resolve("lwnrdb.p12");
         assertThrows(TlsConfigurationException.class,

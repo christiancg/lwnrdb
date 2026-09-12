@@ -33,13 +33,11 @@ public class InterpreterIterationTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // spread expands a generator into an array literal
     @Test
     public void test_spread_generator_into_array() {
         assertEquals("1,2,3", str("function* g() { yield 1; yield 2; yield 3; } [...g()].join(',')"));
     }
 
-    // spread expands a custom iterable into an array literal
     @Test
     public void test_spread_custom_iterable() {
         final var source = """
@@ -54,7 +52,6 @@ public class InterpreterIterationTest {
         assertEquals("1,2,3", str(source));
     }
 
-    // iterator helpers chain lazily over a generator
     @Test
     public void test_iterator_map_filter_take_chain() {
         final var source = """
@@ -64,7 +61,6 @@ public class InterpreterIterationTest {
         assertEquals(6, num(source));
     }
 
-    // drop skips a prefix and flatMap flattens one level
     @Test
     public void test_iterator_drop_flat_map() {
         assertEquals("3,4", str("function* g(){yield 1;yield 2;yield 3;yield 4;} g().drop(2).toArray().join(',')"));
@@ -72,7 +68,6 @@ public class InterpreterIterationTest {
                 str("function* g(){yield 1;yield 2;} g().flatMap(x => [x, x * 10]).toArray().join(',')"));
     }
 
-    // some, every and find short-circuit
     @Test
     public void test_iterator_some_every_find() {
         assertTrue(bool("function* g(){yield 1;yield 2;yield 3;} g().some(x => x === 2)"));
@@ -80,7 +75,6 @@ public class InterpreterIterationTest {
         assertEquals(4, num("function* g(){yield 2;yield 4;yield 6;} g().find(x => x > 3)"));
     }
 
-    // helpers are lazy: take(2) does not pull the whole source
     @Test
     public void test_iterator_helpers_are_lazy() {
         final var source = """
@@ -92,13 +86,11 @@ public class InterpreterIterationTest {
         assertEquals(202, num(source));
     }
 
-    // built-in array iterators inherit the helpers
     @Test
     public void test_array_values_inherits_helpers() {
         assertEquals("2,3,4", str("[1,2,3].values().map(x => x + 1).toArray().join(',')"));
     }
 
-    // Iterator.from wraps a plain iterator object
     @Test
     public void test_iterator_from_plain_iterator() {
         final var source = """
@@ -108,7 +100,6 @@ public class InterpreterIterationTest {
                 """;
         assertEquals("1,4,9", str(source));
     }
-    // The iterator protocol walks a string by code point, so an astral character is one step
     @Test
     public void test_spread_string_astral() {
         assertEquals(3, num("[...'ab\\u{1F600}'].length"));
@@ -117,20 +108,17 @@ public class InterpreterIterationTest {
         assertEquals(0, num("[...''].length"));
     }
 
-    // Array destructuring of a string follows the iterator, not the index properties
     @Test
     public void test_destructure_string_astral() {
         assertEquals("😀", str("const [a, b] = 'a\\u{1F600}'; b"));
     }
 
-    // Array.from and the explicit Symbol.iterator agree with the spread form
     @Test
     public void test_array_from_string_astral() {
         assertEquals(2, num("Array.from('a\\u{1F600}').length"));
         assertEquals(1, num("[...('\\u{1F600}')[Symbol.iterator]()].length"));
     }
 
-    // Indexed access, length and split('') stay code-unit based
     @Test
     public void test_string_index_stays_code_unit() {
         assertTrue(bool("'\\u{1F600}'[0].length === 1"));
@@ -140,14 +128,12 @@ public class InterpreterIterationTest {
         assertEquals(2, num("Array.prototype.slice.call('\\u{1F600}').length"));
     }
 
-    // A lone surrogate is yielded as its own single-unit string rather than dropped
     @Test
     public void test_lone_surrogate_is_preserved() {
         assertEquals(2, num("[...'\\uD800x'].length"));
         assertEquals(1, num("[...'\\uD800x'][0].length"));
     }
 
-    // spread consumes a generator-valued [Symbol.iterator]
     @Test
     public void test_spread_object_with_generator_symbol_iterator() {
         final var source = """
@@ -157,13 +143,11 @@ public class InterpreterIterationTest {
         assertEquals("1,2", str(source));
     }
 
-    // the object-literal form of a generator [Symbol.iterator] method works too
     @Test
     public void test_spread_object_literal_generator_method() {
         assertEquals("1", str("[...{ *[Symbol.iterator]() { yield 1; } }].join(',')"));
     }
 
-    // a plain generator function stored under [Symbol.iterator] is equally iterable
     @Test
     public void test_symbol_iterator_as_plain_generator_function_property() {
         final var source = """
@@ -173,7 +157,6 @@ public class InterpreterIterationTest {
         assertEquals("1,2", str(source));
     }
 
-    // array destructuring pulls from a generator-valued iterable
     @Test
     public void test_array_destructuring_from_generator_iterable() {
         final var source = """
@@ -183,7 +166,6 @@ public class InterpreterIterationTest {
         assertEquals(45, num(source));
     }
 
-    // Array.from materialises a generator-valued iterable
     @Test
     public void test_array_from_generator_iterable() {
         final var source = """
@@ -193,7 +175,6 @@ public class InterpreterIterationTest {
         assertEquals(3, num(source));
     }
 
-    // yield* delegates to a generator-valued iterable
     @Test
     public void test_yield_star_over_generator_iterable() {
         final var source = """
@@ -204,7 +185,6 @@ public class InterpreterIterationTest {
         assertEquals("1,2,3", str(source));
     }
 
-    // new Set(iterable) accepts a generator-valued [Symbol.iterator]
     @Test
     public void test_new_set_from_generator_iterable() {
         final var source = """
@@ -214,7 +194,6 @@ public class InterpreterIterationTest {
         assertEquals(2, num(source));
     }
 
-    // an iterator built by another builtin (a Map iterator) is object-like enough to drive iteration
     @Test
     public void test_symbol_iterator_returning_map_iterator() {
         final var source = """
@@ -224,20 +203,17 @@ public class InterpreterIterationTest {
         assertEquals("1,2", str(source));
     }
 
-    // a primitive returned from [Symbol.iterator] is still rejected
     @Test
     public void test_symbol_iterator_returning_primitive_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("[...{ [Symbol.iterator]() { return 1; } }]"));
     }
 
-    // undefined returned from [Symbol.iterator] is still rejected
     @Test
     public void test_symbol_iterator_returning_undefined_throws() {
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("[...{ [Symbol.iterator]() { return undefined; } }]"));
     }
 
-    // closing a generator-valued iterable through the member return() unwinds its finally
     @Test
     public void test_generator_iterable_close_runs_finally() {
         final var source = """
@@ -253,10 +229,6 @@ public class InterpreterIterationTest {
         assertTrue(bool(source));
     }
 
-    // the member path honours a patched Generator.prototype.next. A generator instance's own
-    // [[Prototype]] is its function's `prototype` object (one level below %GeneratorPrototype%), so
-    // reaching the shared intrinsic that every generator - including the unrelated anonymous one
-    // below - inherits from takes a double unwrap.
     @Test
     public void test_patched_next_on_generator_iterable() {
         final var source = """
@@ -272,7 +244,6 @@ public class InterpreterIterationTest {
         assertEquals(0, num(source));
     }
 
-    // isObjectLike is a deny-list: every non-primitive value counts as an object
     @Test
     public void test_is_object_like_covers_non_primitives() {
         assertTrue(InterpreterUtils.isObjectLike(new JsObject()));
@@ -283,7 +254,6 @@ public class InterpreterIterationTest {
         assertTrue(InterpreterUtils.isObjectLike(new JsNativeFunction("f", (_, _) -> JsUndefined.getInstance())));
     }
 
-    // isObjectLike rejects each of the seven primitive types
     @Test
     public void test_is_object_like_rejects_primitives() {
         assertFalse(InterpreterUtils.isObjectLike(JsUndefined.getInstance()));
@@ -294,7 +264,6 @@ public class InterpreterIterationTest {
         assertFalse(InterpreterUtils.isObjectLike(new JsBigInt(java.math.BigInteger.ONE)));
         assertFalse(InterpreterUtils.isObjectLike(new JsSymbol("s")));
     }
-    // @@iterator is a real own property of the intrinsic prototypes, shared with its named alias
     @Test
     public void test_iterator_symbol_is_a_real_prototype_property() {
         assertTrue(bool("Array.prototype.values === Array.prototype[Symbol.iterator]"));
@@ -304,14 +273,12 @@ public class InterpreterIterationTest {
         assertTrue(bool("[1][Symbol.iterator] === Array.prototype[Symbol.iterator]"));
     }
 
-    // deleting Array.prototype[Symbol.iterator] makes an array non-iterable
     @Test
     public void test_deleted_array_iterator_makes_arrays_non_iterable() {
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("delete Array.prototype[Symbol.iterator]; const [a] = [1];"));
     }
 
-    // the array iterator reads the live array, so a mutation between steps is observed
     @Test
     public void test_array_iterator_reads_the_array_lazily() {
         final var source = """
@@ -324,7 +291,6 @@ public class InterpreterIterationTest {
         assertEquals(8, num(source));
     }
 
-    // a proxy over an array iterates through the target's intrinsic iterator
     @Test
     public void test_proxy_over_an_array_is_iterable() {
         assertEquals(6, num("let s = 0; for (const x of new Proxy([1, 2, 3], {})) s += x; s"));

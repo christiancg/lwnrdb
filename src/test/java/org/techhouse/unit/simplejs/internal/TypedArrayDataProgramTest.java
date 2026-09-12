@@ -17,26 +17,22 @@ public class TypedArrayDataProgramTest {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
-    // slice copies into an independent typed array
     @Test
     public void test_slice_is_independent() {
         final var source = "const a = new Uint8Array([1, 2, 3, 4]); const s = a.slice(1, 3); s[0] = 99; a[1]";
         assertEquals(2, num(source));
     }
 
-    // set copies a source array into the target at an offset
     @Test
     public void test_set() {
         assertEquals("0,5,6,0", str("const a = new Uint8Array(4); a.set([5, 6], 1); a.join(',')"));
     }
 
-    // fill writes a value across a range
     @Test
     public void test_fill() {
         assertEquals(7, num("new Uint8Array(3).fill(7)[1]"));
     }
 
-    // A DataView round-trips integers and floats with explicit endianness
     @Test
     public void test_data_view_roundtrip() {
         assertEquals(-5,
@@ -44,7 +40,6 @@ public class TypedArrayDataProgramTest {
         assertEquals(1.5, num("const dv = new DataView(new ArrayBuffer(8)); dv.setFloat64(0, 1.5); dv.getFloat64(0)"));
     }
 
-    // DataView exposes every width and both endiannesses
     @Test
     public void test_data_view_widths() {
         assertEquals(127, num("const d = new DataView(new ArrayBuffer(8)); d.setInt8(0, 127); d.getInt8(0)"));
@@ -59,33 +54,28 @@ public class TypedArrayDataProgramTest {
                 num("const d = new DataView(new ArrayBuffer(8)); d.setFloat32(0, 0.5, true); d.getFloat32(0, true)"));
     }
 
-    // DataView geometry accessors are exposed
     @Test
     public void test_data_view_geometry() {
         final var source = "const b = new ArrayBuffer(16); const d = new DataView(b, 4, 8); d.byteOffset + ',' + d.byteLength + ',' + (d.buffer === b)";
         assertEquals("4,8,true", str(source));
     }
 
-    // set rejects a source that overflows the target
     @Test
     public void test_set_overflow_throws() {
         assertEquals("RangeError", str("let n; try { new Uint8Array(2).set([1, 2, 3]); } catch (e) { n = e.name } n"));
     }
 
-    // set copies from another typed array; a non-array-like source is a no-op
     @Test
     public void test_set_variants() {
         assertEquals("1,2,0", str("const a = new Uint8Array(3); a.set(new Uint8Array([1, 2])); a.join(',')"));
         assertEquals("0,0", str("const a = new Uint8Array(2); a.set(5); a.join(',')"));
     }
 
-    // fill honours explicit start/end bounds
     @Test
     public void test_fill_range() {
         assertEquals("0,7,7,0", str("new Uint8Array(4).fill(7, 1, 3).join(',')"));
     }
 
-    // an auto-length DataView tracks the buffer and re-clamps reads past its current length
     @Test
     public void test_auto_length_data_view_reclamps() {
         final var source = """
@@ -104,7 +94,6 @@ public class TypedArrayDataProgramTest {
         assertEquals("RangeError", str(source));
     }
 
-    // The by-copy methods return same-kind copies
     @Test
     public void test_by_copy_methods() {
         assertEquals("2,10", str("const t = new Int32Array([10, 2]); const s = t.toSorted();"
@@ -114,7 +103,6 @@ public class TypedArrayDataProgramTest {
         assertTrue(JsEval.bool("new Int32Array([1]).toSorted() instanceof Int32Array"));
     }
 
-    // findLast, findLastIndex and copyWithin
     @Test
     public void test_find_last_and_copy_within() {
         assertEquals(4, num("new Int8Array([1, 4, 2]).findLast(v => v > 2)"));

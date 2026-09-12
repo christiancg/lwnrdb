@@ -15,8 +15,6 @@ import org.techhouse.data.admin.AdminCollectionUsageEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
-// Persists the LFU access counters that drive cache eviction, and ages out the ones whose
-// collection is gone or that nothing has touched in a long time.
 public final class AdminUsageHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);

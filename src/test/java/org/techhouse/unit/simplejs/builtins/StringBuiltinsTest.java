@@ -27,14 +27,12 @@ public class StringBuiltinsTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // String is callable as a coercion function
     @Test
     public void test_string_coercion() {
         assertEquals("42", str("String(42)"));
         assertEquals("", str("String()"));
     }
 
-    // slice and substring extract ranges, honoring negatives and swaps
     @Test
     public void test_slice_substring() {
         assertEquals("bc", str("'abcd'.slice(1, 3)"));
@@ -42,7 +40,6 @@ public class StringBuiltinsTest {
         assertEquals("ab", str("'abcd'.substring(2, 0)"));
     }
 
-    // case, trim, includes, prefixes and padding
     @Test
     public void test_case_trim_predicates_pad() {
         assertEquals("ABC", str("'abc'.toUpperCase()"));
@@ -55,7 +52,6 @@ public class StringBuiltinsTest {
         assertEquals("abc", str("'abc'.padStart(2, '0')"));
     }
 
-    // repeat, charAt and indexOf
     @Test
     public void test_repeat_charat_indexof() {
         assertEquals("ababab", str("'ab'.repeat(3)"));
@@ -64,20 +60,17 @@ public class StringBuiltinsTest {
         assertEquals(2, num("'abc'.indexOf('c')"));
     }
 
-    // repeat with a negative count throws a RangeError
     @Test
     public void test_repeat_negative_throws() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("'a'.repeat(-1)"));
     }
 
-    // match/search coerce a string argument into a regex
     @Test
     public void test_string_arg_coercion() {
         assertEquals("b", str("'abc'.match('b')[0]"));
         assertEquals(1, num("'a1b'.search('\\\\d')"));
     }
 
-    // String.raw concatenates the raw segments with the interpolated substitutions
     @Test
     public void test_string_raw_concatenates_raw_and_substitutions() {
         final var source = """
@@ -87,7 +80,6 @@ public class StringBuiltinsTest {
         assertEquals("a\\n1b2c", str(source));
     }
 
-    // String.raw returns an empty string when the raw segments are missing or empty
     @Test
     public void test_string_raw_empty() {
         assertEquals("", str("String.raw({ raw: [] })"));
@@ -95,7 +87,6 @@ public class StringBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("String.raw()"));
     }
 
-    // charCodeAt/codePointAt return unit values or NaN/undefined out of range
     @Test
     public void test_charcode_codepoint() {
         assertEquals(97, num("'abc'.charCodeAt(0)"));
@@ -104,7 +95,6 @@ public class StringBuiltinsTest {
         assertTrue(bool("'abc'.codePointAt(9) === undefined"));
     }
 
-    // at indexes from the end with negatives
     @Test
     public void test_at() {
         assertEquals("c", str("'abc'.at(-1)"));
@@ -112,7 +102,6 @@ public class StringBuiltinsTest {
         assertTrue(bool("'abc'.at(9) === undefined"));
     }
 
-    // padEnd, trimStart and trimEnd
     @Test
     public void test_padend_trim() {
         assertEquals("abc00", str("'abc'.padEnd(5, '0')"));
@@ -121,7 +110,6 @@ public class StringBuiltinsTest {
         assertEquals("  hi", str("'  hi  '.trimEnd()"));
     }
 
-    // normalize, localeCompare and concat
     @Test
     public void test_normalize_localecompare_concat() {
         assertEquals("abc", str("'abc'.normalize()"));
@@ -131,17 +119,14 @@ public class StringBuiltinsTest {
         assertEquals("abcd", str("'ab'.concat('c', 'd')"));
     }
 
-    // Collator-backed localeCompare orders an accented character next to its base, not by code point
     @Test
     public void test_locale_compare_collation() {
         assertTrue(num("'á'.localeCompare('b')") < 0);
         assertTrue(num("'a'.localeCompare('á')") < 0);
     }
 
-    // Spec requirement: strings that are canonically equivalent per Unicode normalization must
-    // compare as 0, even when the underlying combining-mark order differs. Collator.getInstance()
-    // defaults to NO_DECOMPOSITION, which would treat these as unequal without explicitly requesting
-    // CANONICAL_DECOMPOSITION.
+    // Canonically equivalent strings must compare as 0; Collator.getInstance() defaults to
+    // NO_DECOMPOSITION, which would treat these as unequal without CANONICAL_DECOMPOSITION.
     @Test
     public void test_locale_compare_canonical_equivalence() {
         assertEquals(0, num("'\\u00E4\\u0323'.localeCompare('a\\u0323\\u0308')"),
@@ -149,27 +134,23 @@ public class StringBuiltinsTest {
         assertEquals(0, num("'\\u00C7'.localeCompare('C\\u0327')"), "C-with-cedilla == C + combining cedilla");
     }
 
-    // String.fromCharCode and fromCodePoint build strings from code units/points
     @Test
     public void test_fromcharcode_fromcodepoint() {
         assertEquals("ABC", str("String.fromCharCode(65, 66, 67)"));
         assertEquals("abc", str("String.fromCodePoint(97, 98, 99)"));
     }
 
-    // padEnd with an empty pad returns the value unchanged
     @Test
     public void test_padend_empty_pad() {
         assertEquals("abc", str("'abc'.padEnd(5, '')"));
     }
 
-    // at and charCodeAt out-of-range boundaries
     @Test
     public void test_at_charcode_out_of_range() {
         assertTrue(bool("'abc'.at(-9) === undefined"));
         assertTrue(Double.isNaN(num("'abc'.charCodeAt(-1)")));
     }
 
-    // isWellFormed is true for normal strings and valid surrogate pairs, false for lone surrogates
     @Test
     public void test_is_well_formed() {
         assertTrue(bool("'abc'.isWellFormed()"));
@@ -179,7 +160,6 @@ public class StringBuiltinsTest {
         assertFalse(bool("('a' + String.fromCharCode(0xD800) + 'b').isWellFormed()"));
     }
 
-    // toWellFormed replaces lone surrogates with U+FFFD and leaves valid text untouched
     @Test
     public void test_to_well_formed() {
         assertEquals("abc", str("'abc'.toWellFormed()"));
@@ -188,14 +168,12 @@ public class StringBuiltinsTest {
         assertEquals(2, num("String.fromCharCode(0xD83D, 0xDE00).toWellFormed().length"));
     }
 
-    // A plain string/regex argument keeps the built-in behavior (no symbol method present)
     @Test
     public void test_plain_argument_not_delegated() {
         assertEquals("axc", str("'abc'.replace('b', 'x')"));
         assertEquals(1, num("'abc'.search(/b/)"));
     }
 
-    // Annex-B substr handles negative and absent lengths
     @Test
     public void test_substr() {
         assertEquals("de", str("'abcdef'.substr(-3, 2)"));
@@ -207,7 +185,6 @@ public class StringBuiltinsTest {
         assertEquals("ef", str("'abcdef'.substr(4, 10)"));
     }
 
-    // Annex-B trim aliases and locale case conversion
     @Test
     public void test_annex_b_aliases() {
         assertEquals("a ", str("'  a '.trimLeft()"));
@@ -216,9 +193,8 @@ public class StringBuiltinsTest {
         assertEquals("abc", str("'ABC'.toLocaleLowerCase()"));
     }
 
-    // Greek capital sigma lower-cases to the context-dependent final form (U+03C2) at the end of a
-    // cased-letter run, and to the ordinary medial form (U+03C3) everywhere else (Unicode Default
-    // Case Algorithm's Final_Sigma condition, SpecialCasing.txt)
+    // Greek capital sigma lower-cases to the final form (U+03C2) at the end of a cased-letter run and
+    // to the medial form (U+03C3) elsewhere (Unicode Final_Sigma condition, SpecialCasing.txt)
     @Test
     public void test_to_lower_case_final_sigma() {
         assertEquals("σ", str("'\\u03A3'.toLowerCase()"));
@@ -236,8 +212,6 @@ public class StringBuiltinsTest {
         assertEquals("aσb", str("'A\\u03A3B'.toLocaleLowerCase()"));
     }
 
-    // String.prototype methods are generic: a non-string receiver (number, object with valueOf/
-    // toString) is coerced via ToString rather than rejected; only null/undefined still throw
     @Test
     public void test_string_methods_generic_receiver() {
         assertEquals("[object Object]", str("String.prototype.trim.call({})"));
@@ -246,8 +220,6 @@ public class StringBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("String.prototype.trim.call(undefined)"));
     }
 
-    // includes/startsWith/endsWith reject a RegExp argument, and a plain object with a throwing
-    // @@match getter propagates that error rather than converting to string first
     @Test
     public void test_includes_start_ends_with_reject_regexp() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("'abc'.includes(/b/)"));
@@ -260,7 +232,6 @@ public class StringBuiltinsTest {
                 """));
     }
 
-    // indexOf/lastIndexOf honor the fromIndex/position argument
     @Test
     public void test_index_of_and_last_index_of_position() {
         assertEquals(3, num("'abcabc'.indexOf('a', 1)"));
@@ -269,7 +240,6 @@ public class StringBuiltinsTest {
         assertEquals(-1, num("'abc'.indexOf('a', 5)"));
     }
 
-    // fromCodePoint validates each argument is an integral Number in range, coercing via valueOf
     @Test
     public void test_from_code_point_validation() {
         assertEquals("a", str("String.fromCodePoint(97)"));
@@ -279,7 +249,6 @@ public class StringBuiltinsTest {
         assertEquals(97, num("String.fromCodePoint({valueOf(){return 97;}}).charCodeAt(0)"));
     }
 
-    // fromCharCode/fromCodePoint/raw report the spec length (1) despite the rest parameter
     @Test
     public void test_from_char_code_and_from_code_point_length() {
         assertEquals(1, num("String.fromCharCode.length"));
@@ -287,7 +256,6 @@ public class StringBuiltinsTest {
         assertEquals(1, num("String.raw.length"));
     }
 
-    // normalize rejects an invalid form with a RangeError instead of leaking the JDK exception
     @Test
     public void test_normalize_invalid_form_throws_range_error() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("'a'.normalize('bogus')"));
@@ -343,10 +311,6 @@ public class StringBuiltinsTest {
         assertEquals("a  ", str("'a'.padEnd(3, undefined)"));
     }
 
-    // split/replace/replaceAll/match/search are generic: RequireObjectCoercible(this) runs, then the
-    // well-known-symbol delegation attempt against the raw receiver/argument, and only once that is
-    // ruled out does ToString(this) happen - so a poisoned receiver's toString must not fire when a
-    // matching delegate exists, even when called via .call() with a non-string `this`.
     @Test
     public void genericDispatchDelegatesBeforeCoercingThePoisonedReceiver() {
         assertTrue(bool("""
@@ -372,8 +336,6 @@ public class StringBuiltinsTest {
                 """));
     }
 
-    // Once delegation is ruled out (a non-object searchValue), ToString(this) still has to happen
-    // before ToString(searchValue) - the receiver-coercion order test262 pins down.
     @Test
     public void genericDispatchCoercesReceiverBeforeSeparatorWhenNoDelegate() {
         final var thrown = assertThrows(JsThrowException.class, () -> Interpreter.run("""
@@ -384,8 +346,6 @@ public class StringBuiltinsTest {
         assertEquals("receiver first", ((JsString) thrown.getValue()).getValue());
     }
 
-    // A defined-but-non-callable well-known-symbol delegate is a TypeError (GetMethod step 4), not a
-    // silent fall-through to the generic ToString path.
     @Test
     public void genericDispatchRejectsNonCallableDelegate() {
         assertThrows(TypeErrorException.class,

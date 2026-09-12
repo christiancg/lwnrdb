@@ -51,28 +51,21 @@ public class LogWriterTest {
         return date.format(DateTimeFormatter.ISO_DATE) + Globals.LOG_FILE_EXTENSION;
     }
 
-    // Create log directory and file when they don't exist
     @Test
     public void test_creates_log_directory_and_file_when_not_exists() throws IOException {
-        // Arrange
-
         File logDir = new File(TestGlobals.LOG_PATH);
         File expectedLogFile = new File(TestGlobals.LOG_PATH + Globals.FILE_SEPARATOR
                 + LocalDate.now().format(DateTimeFormatter.ISO_DATE) + Globals.LOG_FILE_EXTENSION);
 
-        // Act
         LogWriter.createLogPathAndRemoveOldFiles();
 
-        // Assert
         assertTrue(logDir.exists());
         assertTrue(expectedLogFile.exists());
     }
 
-    // Handle case when log directory creation fails
     @Test
     public void test_handles_failed_log_directory_creation()
             throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
         String testLogPath = "/invalid/path/that/cant/be/created";
         Configuration config = Configuration.getInstance();
         TestUtils.setPrivateField(config, "logPath", testLogPath);
@@ -80,20 +73,15 @@ public class LogWriterTest {
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
         System.setOut(new PrintStream(outputStream));
 
-        // Act
         LogWriter.createLogPathAndRemoveOldFiles();
 
-        // Assert
         assertTrue(outputStream.toString().contains("Error creating log directory"));
 
-        // Restore system output
         System.setOut(System.out);
     }
 
-    // Deletes files older than maxLogFiles days while keeping current and recent log files
     @Test
     public void test_deletes_old_files_keeps_recent() throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
         File tempDir = new File(TestGlobals.LOG_PATH);
         Configuration config = Configuration.getInstance();
         int maxLogFiles = 3;
@@ -114,19 +102,15 @@ public class LogWriterTest {
             fail("Failed creating old log file");
         }
 
-        // Act
         LogWriter.deleteOldLogFiles(tempDir);
 
-        // Assert
         assertTrue(currentFile.exists());
         assertTrue(recentFile.exists());
         assertFalse(oldFile.exists());
     }
 
-    // Directory contains no files to delete (all files are within retention period)
     @Test
     public void test_no_files_to_delete() throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
         File tempDir = new File(TestGlobals.LOG_PATH);
         Configuration config = Configuration.getInstance();
         int maxLogFiles = 3;
@@ -147,36 +131,26 @@ public class LogWriterTest {
             fail("Failed creating recent log file");
         }
 
-        // Act
         LogWriter.deleteOldLogFiles(tempDir);
 
-        // Assert
         assertTrue(currentFile.exists());
         assertTrue(recentFile1.exists());
         assertTrue(recentFile2.exists());
         assertEquals(3, Objects.requireNonNull(tempDir.listFiles()).length);
     }
 
-    // Successfully writes log entry to empty file
     @Test
     public void test_write_log_entry_to_empty_file() throws IOException {
-        // Arrange
         final var logFile = new File(TestGlobals.LOG_PATH + Globals.FILE_SEPARATOR + logFileName(LocalDate.now()));
-        // Act
         LogWriter.writeLogEntry("Test log message");
-        // Assert
         String fileContent = Files.readString(logFile.toPath());
         assertEquals("Test log message", fileContent);
     }
 
-    // Writing empty log entry string
     @Test
     public void test_write_empty_log_entry() throws IOException {
-        // Arrange
         final var logFile = new File(TestGlobals.LOG_PATH + Globals.FILE_SEPARATOR + logFileName(LocalDate.now()));
-        // Act
         LogWriter.writeLogEntry("");
-        // Assert
         String fileContent = Files.readString(logFile.toPath());
         assertEquals("", fileContent);
     }

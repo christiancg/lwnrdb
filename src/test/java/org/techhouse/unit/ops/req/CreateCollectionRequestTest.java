@@ -7,7 +7,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateCollectionRequest;
 
 public class CreateCollectionRequestTest {
-    // Constructor correctly sets OperationType.CREATE_COLLECTION as type
     @Test
     public void test_constructor_sets_create_collection_type() {
         CreateCollectionRequest request = new CreateCollectionRequest("testDb", "testCollection");
@@ -17,7 +16,6 @@ public class CreateCollectionRequestTest {
         assertEquals("testCollection", request.getCollectionName());
     }
 
-    // Constructor handles empty string for databaseName
     @Test
     public void test_constructor_accepts_empty_database_name() {
         CreateCollectionRequest request = new CreateCollectionRequest("", "testCollection");

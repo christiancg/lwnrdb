@@ -44,7 +44,6 @@ public class OperationProcessorAdminTest {
         TestUtils.standardTearDown();
     }
 
-    // An index-backed filter reports the index as used.
     @Test
     public void test_aggregation_with_analyze_reports_index_used() {
         final var coll = "analyzeIndexColl";
@@ -72,7 +71,6 @@ public class OperationProcessorAdminTest {
                 .contains(Cache.getCollectionIdentifier(TestGlobals.DB, coll) + "|status"));
     }
 
-    // No index on the filtered field → suggestion recommends creating one.
     @Test
     public void test_aggregation_with_analyze_no_index_suggests_creation() {
         final var coll = "analyzeNoIndexColl";
@@ -117,7 +115,6 @@ public class OperationProcessorAdminTest {
         assertTrue(after.getAccessCount() > beforeCount);
     }
 
-    // REINDEX: rebuild all registered indexes when no fieldNames given
     @Test
     public void test_reindex_all_fields_rebuilds_registered_indexes() {
         processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexField"));
@@ -131,7 +128,6 @@ public class OperationProcessorAdminTest {
         }
     }
 
-    // REINDEX: rebuild only the specified field
     @Test
     public void test_reindex_specific_field_rebuilds_only_that_field() {
         processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "reindexFieldA"));
@@ -147,7 +143,6 @@ public class OperationProcessorAdminTest {
         }
     }
 
-    // REINDEX: returns NOT_FOUND when a specified field has no registered index
     @Test
     public void test_reindex_unknown_field_returns_error() {
         ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("noSuchIndex"));

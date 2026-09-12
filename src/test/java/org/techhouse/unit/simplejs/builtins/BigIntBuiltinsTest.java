@@ -15,7 +15,6 @@ public class BigIntBuiltinsTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // The bigint parameter of asIntN/asUintN goes through ToBigInt: booleans, strings and objects
     @Test
     public void bigintParameterRunsToBigInt() {
         assertTrue(bool("BigInt.asIntN(2, false) === 0n"));
@@ -33,7 +32,6 @@ public class BigIntBuiltinsTest {
         assertTrue(bool("BigInt.asIntN(4, '12345678901234567890003') === 3n"));
     }
 
-    // ToBigInt rejects a number or symbol with a TypeError and an unparseable string with a SyntaxError
     @Test
     public void bigintParameterRejectsIncompatibleValues() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt.asIntN()"));
@@ -48,7 +46,6 @@ public class BigIntBuiltinsTest {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("BigInt.asIntN(0, '1n')"));
     }
 
-    // The bits parameter goes through ToIndex: NaN and nullish become 0, a fraction truncates
     @Test
     public void bitsParameterRunsToIndex() {
         assertTrue(bool("BigInt.asIntN(Object(0), 1n) === 0n"));
@@ -60,7 +57,6 @@ public class BigIntBuiltinsTest {
         assertTrue(bool("BigInt.asIntN(2.9, 5n) === 1n"));
     }
 
-    // ToIndex rejects a negative or unsafe index with a RangeError and a BigInt/symbol with a TypeError
     @Test
     public void bitsParameterRejectsOutOfRangeValues() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("BigInt.asIntN(-1, 0n)"));
@@ -74,7 +70,6 @@ public class BigIntBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("BigInt.asIntN(Symbol('1'), 0n)"));
     }
 
-    // The bits parameter is coerced before the bigint parameter
     @Test
     public void parametersAreCoercedInOrder() {
         assertTrue(bool("""

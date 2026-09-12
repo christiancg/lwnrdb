@@ -7,7 +7,6 @@ import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 
 public class LimitAggregationStepTest {
-    // Constructor initializes with positive limit value
     @Test
     public void test_constructor_with_positive_limit() {
         int expectedLimit = 10;
@@ -17,7 +16,6 @@ public class LimitAggregationStepTest {
         assertEquals(AggregationStepType.LIMIT, limitStep.getType());
     }
 
-    // Constructor handles zero limit value
     @Test
     public void test_constructor_with_zero_limit() {
         int expectedLimit = 0;
@@ -27,7 +25,6 @@ public class LimitAggregationStepTest {
         assertEquals(AggregationStepType.LIMIT, limitStep.getType());
     }
 
-    // test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         int initialLimit = 5;

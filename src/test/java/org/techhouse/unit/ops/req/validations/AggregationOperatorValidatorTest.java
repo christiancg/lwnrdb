@@ -22,7 +22,6 @@ import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.validations.AggregationStepValidator;
 
 public class AggregationOperatorValidatorTest {
-    // FILTER
     @Test
     public void validate_filterStep_validFieldOperator_returnsOk() {
         final var op = new FieldOperator(FieldOperatorType.EQUALS, "age", new JsonString("30"));
@@ -46,7 +45,6 @@ public class AggregationOperatorValidatorTest {
         assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
     }
 
-    // CUSTOM operators (geo distance / within)
     @Test
     public void validate_customOperator_validDistance_returnsOk() {
         new org.techhouse.ejson.EJson(); // register geo custom type
@@ -217,7 +215,6 @@ public class AggregationOperatorValidatorTest {
         assertFalse(AggregationStepValidator.validate(new MapAggregationStep(List.of(mapOp))).isValid());
     }
 
-    // Mid-operator: ArrayParam (SUM - min 1 operand)
     @Test
     public void validate_arrayParamMidOperator_sufficientOperands_returnsOk() {
         final var operands = new JsonArray();
@@ -239,7 +236,6 @@ public class AggregationOperatorValidatorTest {
                 .isValid());
     }
 
-    // Mid-operator: binary operators require 2+ operands
     @Test
     public void validate_arrayParamMidOperator_divideOneOperand_returnsFail() {
         final var operands = new JsonArray();
@@ -273,7 +269,6 @@ public class AggregationOperatorValidatorTest {
                 .validateMidOperator(new ArrayParamMidOperator(MidOperationType.ROOT, operands)).isValid());
     }
 
-    // Mid-operator: OneParam (ABS, SIZE)
     @Test
     public void validate_oneParamMidOperator_validOperand_returnsOk() {
         assertTrue(AggregationStepValidator
@@ -292,7 +287,6 @@ public class AggregationOperatorValidatorTest {
                 .isValid());
     }
 
-    // Mid-operator: CAST
     @Test
     public void validate_castMidOperator_valid_returnsOk() {
         assertTrue(AggregationStepValidator.validateMidOperator(new CastMidOperator("score", CastToType.STRING))
@@ -328,7 +322,6 @@ public class AggregationOperatorValidatorTest {
         assertTrue(AggregationStepValidator.validateMidOperator(new CastMidOperator("score", "datetime")).isValid());
     }
 
-    // Mid-operator: MAX, MIN, MULTIPLY, CONCAT
     @Test
     public void validate_maxOperator_withOperands_returnsOk() {
         final var operands = new JsonArray();

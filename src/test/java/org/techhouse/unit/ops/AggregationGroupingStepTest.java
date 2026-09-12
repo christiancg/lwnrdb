@@ -38,10 +38,8 @@ public class AggregationGroupingStepTest {
         TestUtils.standardTearDown();
     }
 
-    // Process group by operation with valid field name and data
     @Test
     public void test_process_group_by_operation_with_valid_field() throws IOException {
-        // Arrange
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         GroupByAggregationStep groupByStep = new GroupByAggregationStep("groupField");
         request.setAggregationSteps(List.of(groupByStep));
@@ -51,14 +49,11 @@ public class AggregationGroupingStepTest {
         JsonObject jsonObject2 = new JsonObject();
         jsonObject2.addProperty("groupField", "value1");
 
-        // Act
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
-        // Assert
         assertEquals(0, result.size());
     }
 
-    // Helper to insert entries directly into cache and page metadata for the test collection
     private void insertEntry(Cache cache, String id, Object fieldValue) {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
@@ -72,7 +67,6 @@ public class AggregationGroupingStepTest {
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
     }
 
-    // GROUP_BY groups documents by a given field value
     @Test
     public void test_group_by_groups_documents_by_field() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -88,8 +82,6 @@ public class AggregationGroupingStepTest {
         assertEquals(2, result.size());
     }
 
-    // ---- Index-backed aggregation steps (GROUP_BY, JOIN, SORT, DISTINCT) ----
-
     private void addDoc(Cache cache, String id, String field, JsonBaseElement value) {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
@@ -104,7 +96,6 @@ public class AggregationGroupingStepTest {
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(field));
     }
 
-    // GROUP_BY over an indexed field produces the same groups as a non-indexed scan
     @Test
     public void test_group_by_uses_index_groups_match_scan() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -129,7 +120,6 @@ public class AggregationGroupingStepTest {
         assertEquals(1, groupB.get("group").asJsonArray().size());
     }
 
-    // GROUP_BY after a FILTER must operate on the filtered subset (no index fast-path)
     @Test
     public void test_group_by_with_upstream_filter_does_not_use_index() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -149,7 +139,6 @@ public class AggregationGroupingStepTest {
         assertEquals(2, result.getFirst().get("group").asJsonArray().size());
     }
 
-    // GROUP_BY on a mixed scalar+object indexed field includes object-valued docs in the result
     @Test
     public void test_group_by_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
         final var cache = IocContainer.get(Cache.class);

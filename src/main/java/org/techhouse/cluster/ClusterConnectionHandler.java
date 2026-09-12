@@ -49,11 +49,8 @@ public class ClusterConnectionHandler implements Runnable {
 
     @Override
     public void run() {
-        // Two lanes, both virtual so a blocked handler costs no platform thread: one single-threaded, which
-        // is what keeps the requests handed to it in arrival order, and one unbounded for those ordered
-        // against nothing. Both are declared after the socket so both close first - close() drains what is
-        // outstanding, and draining while the socket is still open is what lets those answers still be
-        // written. A replicated write must not be dropped because the peer hung up.
+        // Both executors are declared after the socket so both close first: close() drains what is
+        // outstanding, and draining while the socket is still open is what lets those answers be written.
         try (socket;
                 var concurrent = Executors.newVirtualThreadPerTaskExecutor();
                 var ordered = Executors.newSingleThreadExecutor(Thread.ofVirtual().factory())) {
@@ -76,9 +73,6 @@ public class ClusterConnectionHandler implements Runnable {
                 if (mayOvertake(request.getType())) {
                     concurrent.execute(() -> respondSafely(writer, writerLock, request));
                 } else {
-                    // Everything else keeps the order the peer sent it in - replication correctness rests on
-                    // it - but on a single worker rather than on this thread, so that reading the next
-                    // request never waits on handling this one.
                     ordered.execute(() -> respondSafely(writer, writerLock, request));
                 }
             }
@@ -89,15 +83,8 @@ public class ClusterConnectionHandler implements Runnable {
         }
     }
 
-    // What may be answered out of order, because it is ordered against nothing else the peer sent.
-    //
-    // Gossip merges per node id under ConcurrentHashMap.compute, which already runs concurrently for every
-    // other peer's connection. A forwarded client request is an independent operation: two clients' writes
-    // have no order between them, and one client's are already sequential because it waits for each answer.
-    //
-    // The rest must keep the order the peer sent it in. Replication especially: ReplicatedApplyHelper does
-    // not compare versions before applying, so this connection is the only thing sequencing one
-    // coordinator's writes to a document.
+    // Everything else must keep the order the peer sent it in: ReplicatedApplyHelper does not compare
+    // versions before applying, so this connection is the only thing sequencing a coordinator's writes.
     private static boolean mayOvertake(ClusterMessageType type) {
         return type == ClusterMessageType.GOSSIP || type == ClusterMessageType.FORWARD_REQUEST;
     }
@@ -115,8 +102,6 @@ public class ClusterConnectionHandler implements Runnable {
         }
     }
 
-    // The off-thread caller: nothing above it can close the connection on a write failure, and a peer that
-    // hung up mid-request is the ordinary case rather than an error worth tearing anything down for.
     private void respondSafely(BufferedWriter writer, ReentrantLock writerLock, ClusterMessage request) {
         try {
             respond(writer, writerLock, request);
@@ -167,29 +152,24 @@ public class ClusterConnectionHandler implements Runnable {
                 response -> response.setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request)))));
     }
 
-    // Reports the script runs executing on this node for a cluster-wide LIST_SCRIPTS aggregation.
     private ClusterMessage handleListScripts() {
         return ClusterMessages.reply(ClusterMessageType.LIST_SCRIPTS_ACK, "Failed to list running scripts",
                 response -> response.setRunningScripts(scriptRunDirectory.localRuns()));
     }
 
-    // Cancels a run executing on this node. An id this node is not running is not an error: the operator
-    // asked every member and only the one running it answers true.
     private ClusterMessage handleCancelScript(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.CANCEL_SCRIPT_ACK, "Failed to cancel the running script",
                 response -> response.setCancelledRun(scriptRunRegistry.cancel(request.getCancelRunId())));
     }
 
-    // Reports the trigger runs recorded on this node. admin/trigger_runs is not replicated, so a run's
-    // record exists on exactly one node and only that node can answer for it.
+    // admin/trigger_runs is not replicated, so a run's record exists on exactly one node and only that
+    // node can answer for it.
     private ClusterMessage handleListTriggerRuns(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.LIST_TRIGGER_RUNS_ACK, "Failed to list trigger runs",
                 response -> response
                         .setTriggerRuns(triggerRunDirectory.localRuns(statusFilter(request.getTriggerRunDecision()))));
     }
 
-    // Replays or discards a run recorded here. A run this node does not hold is not an error: the operator
-    // asked every member and only the one holding it answers true.
     private ClusterMessage handleResolveTriggerRun(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.RESOLVE_TRIGGER_RUN_ACK, "Failed to resolve the trigger run",
                 response -> response.setTriggerRunResolved(
@@ -207,8 +187,6 @@ public class ClusterConnectionHandler implements Runnable {
         }
     }
 
-    // Reports this node's authoritative admin snapshot (epoch + databases/collections/users) for a rejoining
-    // or lagging peer to conform to.
     private ClusterMessage handleAdminSnapshot() {
         return ClusterMessages.reply(ClusterMessageType.ADMIN_SNAPSHOT_ACK, "Failed to build admin snapshot",
                 response -> response.setAdminSnapshot(adminAntiEntropyService.buildSnapshot()));
@@ -227,9 +205,8 @@ public class ClusterConnectionHandler implements Runnable {
                 });
     }
 
-    // Re-parses and executes a forwarded/replicated request directly through OperationProcessor (bypassing
-    // the router, so there is no forward loop). The edge already authenticated/authorized the client; a
-    // short-lived synthetic client carries the acting user so admin ops apply with the correct identity.
+    // Goes straight to OperationProcessor, bypassing the router, so a forwarded request cannot forward
+    // again. The synthetic client carries the acting user so admin ops apply with the correct identity.
     private OperationResponse executeForwarded(ClusterMessage request) {
         final var actingUser = request.getActingUser();
         final var clientId = actingUser != null ? clientTracker.registerForwardedClient(actingUser) : null;

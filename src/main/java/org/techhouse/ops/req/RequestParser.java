@@ -225,15 +225,12 @@ public final class RequestParser {
             final var operatorType = eJson.fromJson(operator.get("fieldOperatorType"), FieldOperatorType.class);
             parsedOperator = new FieldOperator(operatorType, fieldName, fieldValue);
         } else if (operator.has("script")) {
-            // Checked before the conjunction fallback: a malformed script operator would otherwise be
-            // read as a conjunction and fail with a confusing message about conjunctionType.
+            // Checked before the conjunction fallback, or a malformed script operator is read as one.
             parsedOperator = new ScriptOperator(operator.get("script").asJsonString().getValue());
         } else if (operator.has("customOperatorName")) {
             final var customOperatorName = operator.get("customOperatorName").asJsonString().getValue();
             final var fieldName = operator.get("field").asJsonString().getValue();
             final var fieldValue = operator.get("value");
-            // The operator object itself carries the remaining operator-specific parameters
-            // (comparator, distance, polygon, ...), which the custom type interprets.
             parsedOperator = new CustomOperator(customOperatorName, fieldName, fieldValue, operator);
         } else {
             final var conjunctionType = eJson.fromJson(operator.get("conjunctionType"), ConjunctionOperatorType.class);

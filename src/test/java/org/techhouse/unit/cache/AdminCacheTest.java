@@ -39,14 +39,11 @@ public class AdminCacheTest {
         TestUtils.standardTearDown();
     }
 
-    // Loading admin data populates the databases and collections maps correctly
     @Test
     public void test_load_admin_data_populates_maps_correctly()
             throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
         AdminCache cache = new AdminCache();
 
-        // Act
         cache.loadAdminData();
 
         final var jsonDb = new JsonObject();
@@ -75,19 +72,15 @@ public class AdminCacheTest {
         };
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
 
-        // Assert
         Assertions.assertFalse(databases.isEmpty());
         Assertions.assertFalse(collections.isEmpty());
     }
 
-    // Loading admin data when the file system is empty
     @Test
     public void test_load_admin_data_when_file_system_is_empty()
             throws IOException, IllegalAccessException, NoSuchFieldException {
-        // Arrange
         AdminCache cache = new AdminCache();
 
-        // Act
         cache.loadAdminData();
 
         final var typeDbs = new ReflectionUtils.TypeToken<Map<String, AdminDbEntry>>() {
@@ -96,12 +89,10 @@ public class AdminCacheTest {
         final var typeColl = new ReflectionUtils.TypeToken<Map<String, AdminCollEntry>>() {
         };
         final var collections = TestUtils.getPrivateField(cache, "collections", typeColl);
-        // Assert
         Assertions.assertTrue(databases.isEmpty());
         Assertions.assertTrue(collections.isEmpty());
     }
 
-    // Retrieve PkIndexEntry for existing database name
     @Test
     public void test_retrieve_pk_index_entry_existing_dbname() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -119,7 +110,6 @@ public class AdminCacheTest {
         assertEquals(expectedEntry, result);
     }
 
-    // Database name is an empty string
     @Test
     public void test_retrieve_pk_index_entry_empty_dbname() {
         AdminCache cache = new AdminCache();
@@ -129,7 +119,6 @@ public class AdminCacheTest {
         assertNull(result);
     }
 
-    // Adding a valid PkIndexEntry to databasesPkIndex
     @Test
     public void test_add_valid_pk_index_entry() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -143,7 +132,6 @@ public class AdminCacheTest {
         assertEquals(entry, databasesPkIndex.get("value1"));
     }
 
-    // Retrieve an existing AdminDbEntry by its database name
     @Test
     public void test_retrieve_existing_admin_db_entry() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -161,7 +149,6 @@ public class AdminCacheTest {
         assertEquals("testDb", result.get_id());
     }
 
-    // Database name is an empty string
     @Test
     public void test_empty_database_name() {
         AdminCache cache = new AdminCache();
@@ -171,7 +158,6 @@ public class AdminCacheTest {
         assertNull(result);
     }
 
-    // Retrieve existing PkIndexEntry for a valid collection identifier
     @Test
     public void test_retrieve_existing_pk_index_entry() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -189,7 +175,6 @@ public class AdminCacheTest {
         assertEquals(expectedEntry, result);
     }
 
-    // Adds a PkIndexEntry to collectionsPkIndex map
     @Test
     public void test_adds_pk_index_entry_to_map() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -203,7 +188,6 @@ public class AdminCacheTest {
         assertEquals(entry, collectionsPkIndex.get("value1"));
     }
 
-    // Retrieves an AdminCollEntry when the collection exists in the cache
     @Test
     public void test_retrieves_admin_coll_entry_when_exists_in_cache()
             throws NoSuchFieldException, IllegalAccessException {
@@ -224,7 +208,6 @@ public class AdminCacheTest {
         assertEquals(expectedEntry, result);
     }
 
-    // Handles null values for dbName and collName gracefully
     @Test
     public void test_handles_null_values_gracefully() {
         AdminCache cache = new AdminCache();
@@ -238,9 +221,8 @@ public class AdminCacheTest {
         assertNull(result3);
     }
 
-    // A collection dropped while a background index event is still in flight is no longer in the
-    // cache; getIndexesForCollection must return an empty set (not throw) so background maintenance
-    // becomes a clean no-op.
+    // A collection dropped mid-event is no longer cached; this must answer empty rather than throw, so
+    // background maintenance becomes a clean no-op.
     @Test
     public void test_get_indexes_for_missing_collection_returns_empty() {
         AdminCache cache = new AdminCache();
@@ -249,11 +231,9 @@ public class AdminCacheTest {
 
         assertNotNull(result);
         assertTrue(result.isEmpty());
-        // hasIndex builds on the same method and must report false rather than throwing.
         assertFalse(cache.hasIndex("goneDb", "goneColl", "anyField"));
     }
 
-    // When the collection exists, its registered indexes are returned as-is.
     @Test
     public void test_get_indexes_for_existing_collection_returns_indexes()
             throws NoSuchFieldException, IllegalAccessException {
@@ -273,7 +253,6 @@ public class AdminCacheTest {
         assertFalse(cache.hasIndex(dbName, collName, "missing"));
     }
 
-    // Successfully adds AdminDbEntry and PkIndexEntry to respective maps
     @Test
     public void test_successfully_adds_entries_to_maps() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -293,7 +272,6 @@ public class AdminCacheTest {
         assertEquals(pkIndexEntry, databasesPkIndex.get("testDb"));
     }
 
-    // Successfully removes an entry from databases map when dbName exists
     @Test
     public void test_remove_entry_when_dbname_exists() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -317,7 +295,6 @@ public class AdminCacheTest {
         assertFalse(databasesPkIndex.containsKey(dbName));
     }
 
-    // Successfully adds an AdminCollEntry and PkIndexEntry to their respective maps
     @Test
     public void test_successfully_adds_entries_to_collections_maps()
             throws NoSuchFieldException, IllegalAccessException {
@@ -338,7 +315,6 @@ public class AdminCacheTest {
         assertEquals(indexEntry, collectionsPkIndex.get(dbEntry.get_id()));
     }
 
-    // Removing an existing collection identifier from collections map
     @Test
     public void test_remove_existing_collection_identifier() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -362,7 +338,6 @@ public class AdminCacheTest {
         assertFalse(collectionsPkIndex.containsKey(collIdentifier));
     }
 
-    // Removing a collection identifier that does not exist in either map
     @Test
     public void test_remove_nonexistent_collection_identifier() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -381,7 +356,6 @@ public class AdminCacheTest {
         assertFalse(collectionsPkIndex.containsKey(collIdentifier));
     }
 
-    // Returns true if the specified field index exists in the collection
     @Test
     public void test_field_index_exists() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -425,7 +399,6 @@ public class AdminCacheTest {
         assertEquals(expectedIndexes, actualIndexes);
     }
 
-    // getCollectionNamesForDatabase returns only collections belonging to the given database
     @Test
     public void test_get_collection_names_for_database() throws IOException, InterruptedException {
         TestUtils.createTestDatabaseAndCollection();
@@ -435,7 +408,6 @@ public class AdminCacheTest {
         assertTrue(names.contains(TestGlobals.COLL));
     }
 
-    // getCollectionNamesForDatabase does not return collections from other databases
     @Test
     public void test_get_collection_names_excludes_other_databases() throws IOException, InterruptedException {
         TestUtils.createTestDatabaseAndCollection();
@@ -447,29 +419,23 @@ public class AdminCacheTest {
 
     @Test
     public void test_load_admin_data_with_existing_users_populates_users_map() throws Exception {
-        // Persist a user to disk
         final var userEntry = new org.techhouse.data.admin.AdminUserEntry("cachetest_user", "hash", false,
                 new java.util.HashSet<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
         org.techhouse.ops.AdminOperationHelper.saveUserEntry(userEntry);
 
-        // Clear in-memory user maps so loadAdminData must reload from disk
         AdminCache cache = IocContainer.get(AdminCache.class);
         TestUtils.setPrivateField(cache, "users", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(cache, "usersPkIndex", new ConcurrentHashMap<>());
 
-        // Reload — should find the persisted user
         cache.loadAdminData();
 
         assertNotNull(cache.getAdminUserEntry("cachetest_user"));
     }
 
-    // loadAdminData with pre-existing databases and collections populates all maps
     @Test
     public void test_load_admin_data_with_existing_databases_and_collections() throws Exception {
-        // Save a database and collection to disk
         TestUtils.createTestDatabaseAndCollection();
 
-        // Clear the in-memory cache so loadAdminData must reload from disk
         AdminCache cache = IocContainer.get(AdminCache.class);
         TestUtils.setPrivateField(cache, "databases", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(cache, "collections", new ConcurrentHashMap<>());
@@ -478,10 +444,8 @@ public class AdminCacheTest {
         TestUtils.setPrivateField(TestUtils.pageCacheOf(cache), "pages", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(TestUtils.pageCacheOf(cache), "pagesPkIndexes", new ConcurrentHashMap<>());
 
-        // Reload admin data — should find the saved database and collection
         cache.loadAdminData();
 
-        // Verify databases and collections were loaded
         assertNotNull(cache.getAdminDbEntry(TestGlobals.DB));
         assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
     }

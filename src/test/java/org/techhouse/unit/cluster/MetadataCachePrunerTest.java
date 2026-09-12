@@ -21,10 +21,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The trigger cache is partitioned by collection ownership: a node keeps only what it owns, because a trigger
- * only ever fires on its collection's owner.
- */
 public class MetadataCachePrunerTest {
     private final Cache cache = IocContainer.get(Cache.class);
     private final MetadataCachePruner pruner = IocContainer.get(MetadataCachePruner.class);
@@ -61,7 +57,6 @@ public class MetadataCachePrunerTest {
                 eJson.toJson(TriggerDefinition.toFileJson(List.of(definition))));
     }
 
-    // A single-node view owns everything, so nothing is pruned.
     @Test
     public void test_keeps_triggers_for_owned_collections() throws Exception {
         writeTriggers();
@@ -74,7 +69,6 @@ public class MetadataCachePrunerTest {
         assertEquals(1, cache.metadataCacheStats().triggerEntries());
     }
 
-    // Once this node is not on the ring at all it owns nothing, so every cached list is dropped.
     @Test
     public void test_prunes_triggers_for_collections_no_longer_owned() throws Exception {
         writeTriggers();

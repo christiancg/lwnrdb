@@ -55,7 +55,6 @@ public class IndexHelperReconcileTest {
         }
     }
 
-    // indexValueToElement converts each stored value kind back to its wire element
     @Test
     public void test_index_value_to_element_for_all_value_kinds() {
         // Integral numbers normalize so they compare/hash equal to a document-read integer
@@ -64,7 +63,6 @@ public class IndexHelperReconcileTest {
         assertEquals(42, numberElement.asJsonNumber().asInteger());
         assertEquals(new JsonNumber(42), numberElement);
 
-        // Non-integral numbers stay as doubles
         final var doubleElement = IndexHelper.indexValueToElement(5.5);
         assertTrue(doubleElement.isJsonNumber());
         assertEquals(5.5, doubleElement.asJsonNumber().getValue().doubleValue());
@@ -84,19 +82,15 @@ public class IndexHelperReconcileTest {
         assertSame(JsonNull.INSTANCE, IndexHelper.indexValueToElement(JsonNull.INSTANCE));
     }
 
-    // reconcilePending must handle a pending document with a null field value without forcing a
-    // full-scan fallback: getIndexEntriesForField must return non-null and include the null-valued id.
     @Test
     public void test_reconcilePending_null_value_does_not_force_full_scan() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
-        // One already-indexed doc with a scalar value and one pending doc with null.
         final var indexed = entryWith("s1", "status", new JsonString("active"));
         final var pending = entryWith("n1", "status", JsonNull.INSTANCE);
         setupCollection(cache, indexed, pending);
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status"));
 
-        // Mark "n1" as pending so reconcilePending is triggered.
         final var pendingWrites = IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class);
         pendingWrites.mark(TestGlobals.DB, TestGlobals.COLL, "n1");
 
@@ -108,8 +102,6 @@ public class IndexHelperReconcileTest {
         assertTrue(allIds.contains("n1"), "id of the null-valued pending doc must appear in the reconciled result");
     }
 
-    // elementToLookupValue converts each primitive element kind to the raw Java type used by
-    // getIdsFromIndex (Number, Boolean, String, JsonCustom); null/JsonNull/object/array yield null.
     @Test
     public void test_element_to_lookup_value_converts_primitives() {
         final var numResult = IndexHelper.elementToLookupValue(new JsonNumber(42));
@@ -129,7 +121,6 @@ public class IndexHelperReconcileTest {
         assertNull(IndexHelper.elementToLookupValue(new JsonArray()));
     }
 
-    // reconcilePending skips a pending document that no longer has the indexed field at all
     @Test
     public void test_reconcilePending_doc_missing_field_is_skipped() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -175,8 +166,6 @@ public class IndexHelperReconcileTest {
         assertEquals(Set.of("null1", "null2"), nullEntry.getIds());
     }
 
-    // reconcilePending creates a fresh Boolean-valued entry (scalarEntryFor) for a pending document
-    // whose value was never indexed before
     @Test
     public void test_reconcilePending_new_boolean_value_creates_entry_via_scalarEntryFor() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -195,8 +184,6 @@ public class IndexHelperReconcileTest {
         assertEquals(Set.of("b2"), falseEntry.getIds());
     }
 
-    // reconcilePending creates a fresh custom-typed entry (scalarEntryFor) for a pending document
-    // whose custom value was never indexed before
     @Test
     public void test_reconcilePending_new_custom_value_creates_entry_via_scalarEntryFor() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -216,7 +203,6 @@ public class IndexHelperReconcileTest {
         assertEquals(Set.of("ct1", "ct2"), allIds);
     }
 
-    // elementToLookupValue returns a custom-typed element unchanged (used as the lookup key itself)
     @Test
     public void test_element_to_lookup_value_returns_custom_instance_itself() {
         final var custom = new JsonTime("#time(10:00:00)");

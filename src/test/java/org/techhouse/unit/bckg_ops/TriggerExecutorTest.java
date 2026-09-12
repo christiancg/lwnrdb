@@ -44,7 +44,6 @@ public class TriggerExecutorTest {
         assertEquals(0L, executor.getDropped());
     }
 
-    // Nothing consumes the queue before start(), so submit must not silently accumulate events
     @Test
     public void test_submit_before_start_is_a_no_op() {
         executor = new TriggerExecutor();
@@ -53,7 +52,6 @@ public class TriggerExecutorTest {
         assertEquals(0L, executor.getDropped());
     }
 
-    // An unbounded queue of retained documents is a heap risk, so overflow drops the oldest and counts it
     @Test
     public void test_drops_oldest_when_queue_full() throws Exception {
         TestUtils.setPrivateField(Configuration.getInstance(), "triggerQueueSize", 2);
@@ -73,7 +71,6 @@ public class TriggerExecutorTest {
         });
         executor.submit(event("first"));
         assertTrue(started.await(5, TimeUnit.SECONDS));
-        // The single worker is now blocked, so the queue fills and then overflows.
         executor.submit(event("a"));
         executor.submit(event("b"));
         executor.submit(event("c"));
@@ -89,7 +86,6 @@ public class TriggerExecutorTest {
         assertEquals(2L, executor.getFailed());
     }
 
-    // A dispatcher that throws must be counted, not kill the worker
     @Test
     public void test_dispatcher_failure_is_counted_and_the_worker_survives() throws Exception {
         TestUtils.setPrivateField(Configuration.getInstance(), "triggerThreads", 1);
@@ -118,7 +114,6 @@ public class TriggerExecutorTest {
         });
         executor.stop();
         assertEquals(0, executor.getQueued());
-        // Submitting after stop is a no-op again, and a fresh start still consumes.
         executor.submit(event("ignored"));
         assertEquals(0, executor.getQueued());
         final var latch = new CountDownLatch(1);
@@ -127,7 +122,6 @@ public class TriggerExecutorTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS));
     }
 
-    // A retry is re-queued after its backoff rather than at once, and a zero delay skips the scheduler.
     @Test
     public void test_submit_after_requeues_once_the_delay_elapses() throws Exception {
         executor = new TriggerExecutor();

@@ -132,9 +132,6 @@ public class MemoryManagement {
         }
     }
 
-    // Synchronous, between-pages guard for the streaming read path. Reuses the same
-    // LFU eviction logic as the scheduled sweep so a long scan can reclaim other
-    // cached resources to make room for the next page instead of waiting for the timer.
     public void ensureHeadroomForBytes(long nextPageEstimateBytes) {
         if (isCachingDisabled() || isCacheUnlimited()) {
             return;

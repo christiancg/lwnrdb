@@ -13,15 +13,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
-/**
- * Admin/DDL anti-entropy: a node that was down during a structural change (CREATE/DROP DATABASE/COLLECTION/
- * INDEX, SET_DATABASE_OWNERS, user/permission ops) catches up on rejoin. On a membership change (and on a
- * periodic sweep) each node pulls the authoritative admin snapshot from live peers, keeps the highest-epoch
- * one, and — if it is ahead of this node's own epoch — conforms local databases, collections, indexes, owners
- * and users to it, then triggers a document pass to repopulate freshly-materialized collections. Authority is
- * decided by the single cluster-wide {@link AdminEpoch}, so a stale rejoining node never overwrites live
- * state. All of this is a no-op unless clustering is enabled.
- */
 public class AdminAntiEntropyService implements MembershipListener {
     private final Logger logger = Logger.logFor(AdminAntiEntropyService.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
@@ -37,7 +28,6 @@ public class AdminAntiEntropyService implements MembershipListener {
     // False until this node has completed one admin reconciliation since being started, so a node that just
     // became the admin coordinator does not commit admin ops on a stale base (see ClusterAdminHelper.guard).
     private final AtomicBoolean adminSyncCompleted = new AtomicBoolean(false);
-    // The gate is only enforced once the service is started (production wiring); otherwise it is inert.
     private volatile boolean started;
 
     public void start() {
@@ -56,16 +46,12 @@ public class AdminAntiEntropyService implements MembershipListener {
         sweep.stopPeriodic();
     }
 
-    // A coordinator must not serve coordinated admin ops until it has completed one reconciliation since
-    // joining. Inert (returns true) until the service is started, so the single-node/standalone path and the
-    // manually-wired tests are unaffected.
     public boolean hasCompletedAdminSync() {
         return !started || adminSyncCompleted.get();
     }
 
     // Gossiped so peers can keep a script off a node whose admin state is not caught up yet
-    // (cluster/ScriptPlacement). Inert while the service is stopped, which is what keeps the standalone path
-    // and the manually-wired tests eligible.
+    // (cluster/ScriptPlacement).
     private void publishSyncState() {
         membershipService.setAdminSyncing(!hasCompletedAdminSync());
     }
@@ -104,8 +90,6 @@ public class AdminAntiEntropyService implements MembershipListener {
         }
     }
 
-    // Builds this node's authoritative admin snapshot: its epoch plus every user database, collection (with
-    // its _id and indexes) and user (full record incl. password hash).
     public AdminSnapshotPayload buildSnapshot() {
         final var databases = new ArrayList<JsonObject>();
         for (final var dbEntry : cache.getAllAdminDbEntries()) {

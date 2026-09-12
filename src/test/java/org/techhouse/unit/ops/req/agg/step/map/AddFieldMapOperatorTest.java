@@ -11,7 +11,6 @@ import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperationType;
 
 public class AddFieldMapOperatorTest {
-    // Constructor creates instance with ADD_FIELD type, fieldName, condition and operator
     @Test
     public void test_constructor_creates_instance_with_valid_parameters() {
         String fieldName = "testField";
@@ -26,7 +25,6 @@ public class AddFieldMapOperatorTest {
         assertEquals(operator, addFieldMapOperator.getOperator());
     }
 
-    // Test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         String fieldName = "testField";

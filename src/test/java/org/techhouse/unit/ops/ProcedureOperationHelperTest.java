@@ -85,7 +85,6 @@ public class ProcedureOperationHelperTest {
         assertEquals(ErrorCode.SCRIPT_TOO_LARGE.getCode(), response.getErrorCode());
     }
 
-    // The point of a stored procedure over a client-side string: a broken body is refused at save time
     @Test
     public void test_save_rejects_unparseable_source() throws Exception {
         final var response = ProcedureOperationHelper.executeSave(saveRequest("return (;"), ACTOR);
@@ -135,7 +134,6 @@ public class ProcedureOperationHelperTest {
         assertEquals("return 2;", cache.getProcedure(TestGlobals.DB, "p").getSource());
     }
 
-    // 0 means "must not exist yet", not "unconditional"
     @Test
     public void test_if_version_zero_is_not_treated_as_absent() throws Exception {
         final var create = saveRequest("return 1;");
@@ -147,7 +145,6 @@ public class ProcedureOperationHelperTest {
                 ProcedureOperationHelper.executeSave(again, ACTOR).getErrorCode());
     }
 
-    // What keeps a re-executing peer byte-identical
     @Test
     public void test_save_stamps_request_for_deterministic_re_execution() throws Exception {
         final var request = saveRequest("return 1;");
@@ -158,7 +155,6 @@ public class ProcedureOperationHelperTest {
         assertEquals(stored.getUpdatedBy(), request.getStampedUpdatedBy());
     }
 
-    // Re-executing the stamped request writes the same record rather than bumping the version again
     @Test
     public void test_re_executing_a_stamped_request_is_idempotent() throws Exception {
         final var request = saveRequest("return 1;");

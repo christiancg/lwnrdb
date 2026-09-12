@@ -140,15 +140,12 @@ public final class ConfigurationValidator {
             return;
         }
         if (!Boolean.parseBoolean(enabledValue.trim())) {
-            // When TLS is disabled the keystore keys are ignored.
             return;
         }
         final var keystorePath = configs.get("tlsKeystorePath");
         if (keystorePath == null || keystorePath.isBlank()) {
             errors.add("tlsKeystorePath must be a non-blank path when tlsEnabled is true");
         } else {
-            // The keystore file itself may not exist yet (it is generated on first start),
-            // so we only require its parent directory to be creatable and writable.
             final Path parent = Paths.get(keystorePath.trim()).toAbsolutePath().getParent();
             if (parent != null) {
                 try {

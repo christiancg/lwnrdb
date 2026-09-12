@@ -11,7 +11,6 @@ import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.SaveSchemaRequest;
 
 public class SchemaRequestParserTest {
-    // SAVE_SCHEMA parses into a SaveSchemaRequest with its nested schema object
     @Test
     public void test_parse_save_schema() {
         final var message = "{\"type\":\"SAVE_SCHEMA\",\"databaseName\":\"myDb\",\"collectionName\":\"myColl\","
@@ -26,7 +25,6 @@ public class SchemaRequestParserTest {
         assertTrue(saveSchema.getSchema().has("required"));
     }
 
-    // DELETE_SCHEMA parses into a DeleteSchemaRequest
     @Test
     public void test_parse_delete_schema() {
         final var message = "{\"type\":\"DELETE_SCHEMA\",\"databaseName\":\"myDb\",\"collectionName\":\"myColl\"}";

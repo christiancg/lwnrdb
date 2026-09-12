@@ -24,7 +24,6 @@ public class PrimitiveWrapperProgramTest {
         return result.getErrorName();
     }
 
-    // A boxed primitive is an object, and each boxing is a distinct one
     @Test
     public void test_wrapper_identity_and_typeof() {
         assertEquals("[\"object\",\"object\",\"object\",\"object\",\"object\"]",
@@ -34,7 +33,6 @@ public class PrimitiveWrapperProgramTest {
         assertEquals("true", run("const o = {}; return Object(o) === o"));
     }
 
-    // Object called with new boxes exactly as Object called as a function does
     @Test
     public void test_new_object_boxes_primitives() {
         assertEquals("[true,true,true,true]",
@@ -44,7 +42,6 @@ public class PrimitiveWrapperProgramTest {
         assertEquals("\"object\"", run("return typeof new Object(null)"));
     }
 
-    // A String wrapper owns one non-writable enumerable property per code unit
     @Test
     public void test_string_wrapper_own_indices() {
         assertEquals("[\"0\",\"1\",\"length\"]", run("return Object.getOwnPropertyNames(new String('ab'))"));
@@ -57,7 +54,6 @@ public class PrimitiveWrapperProgramTest {
                 run("return Object.getOwnPropertyDescriptor(new String('ab'), '0')"));
     }
 
-    // length is the wrapper's own non-enumerable property, not the prototype's
     @Test
     public void test_string_wrapper_length() {
         assertEquals("[3,true,false]", run("const s = new String('abc');"
@@ -66,7 +62,6 @@ public class PrimitiveWrapperProgramTest {
         assertEquals("TypeError", errorName("new String('ab')[0] = 'z'"));
     }
 
-    // Each family's prototype methods unwrap the receiver from the wrapper
     @Test
     public void test_method_dispatch_through_wrapper() {
         assertEquals("\"b\"", run("return new String('ab').charAt(1)"));
@@ -78,7 +73,6 @@ public class PrimitiveWrapperProgramTest {
         assertEquals("\"x\"", run("return Object(Symbol('x')).description"));
     }
 
-    // A wrapper receiver is accepted, anything else is still rejected
     @Test
     public void test_incompatible_receiver_still_rejected() {
         assertEquals("TypeError", errorName("Boolean.prototype.valueOf.call({})"));
@@ -86,7 +80,6 @@ public class PrimitiveWrapperProgramTest {
         assertEquals("true", run("return Boolean.prototype.valueOf.call(new Boolean(true))"));
     }
 
-    // ToPrimitive runs the ordinary valueOf/toString path rather than reading the boxed slot
     @Test
     public void test_redefined_valueof_beats_the_slot() {
         assertEquals("8", run("const o = new String('ab'); o.valueOf = function () { return 7 }; return o + 1"));
@@ -95,7 +88,6 @@ public class PrimitiveWrapperProgramTest {
         assertEquals("4", run("const o = new Boolean(false); o.valueOf = function () { return 3 }; return o + 1"));
     }
 
-    // The wrapper is an object everywhere it matters, including truthiness and mixed BigInt arithmetic
     @Test
     public void test_wrapper_is_an_object() {
         assertEquals("true", run("return Object(false) ? true : false"));

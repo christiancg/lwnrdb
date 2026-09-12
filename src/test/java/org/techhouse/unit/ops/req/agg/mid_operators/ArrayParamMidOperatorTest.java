@@ -9,7 +9,6 @@ import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 
 public class ArrayParamMidOperatorTest {
-    // Create ArrayParamMidOperator with valid MidOperationType and non-empty JsonArray
     @Test
     public void test_create_with_valid_params() {
         JsonArray operands = new JsonArray();
@@ -22,7 +21,6 @@ public class ArrayParamMidOperatorTest {
         assertEquals(1, operator.getOperands().size());
     }
 
-    // Create operator with null JsonArray operands
     @Test
     public void test_create_with_null_operands() {
         ArrayParamMidOperator operator = new ArrayParamMidOperator(MidOperationType.AVG, null);
@@ -31,7 +29,6 @@ public class ArrayParamMidOperatorTest {
         assertNull(operator.getOperands());
     }
 
-    // Test getters and setters for ArrayParamMidOperator with non-null operands
     @Test
     public void test_getters_and_setters_with_non_null_operands() {
         JsonArray jsonArray = new JsonArray();

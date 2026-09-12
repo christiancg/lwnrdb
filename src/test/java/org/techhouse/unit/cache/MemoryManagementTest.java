@@ -167,7 +167,6 @@ public class MemoryManagementTest {
         final var mm = IocContainer.get(MemoryManagement.class);
         mm.recordAccess(AccessKind.COLLECTION, "userDb", "coll", null);
         mm.recordAccess(AccessKind.PK_INDEX, "userDb", "coll", null);
-        // size the cap to exactly the PK index size so the collection must go.
         final var pkBytes = cache.listCacheableResources().stream().filter(r -> r.kind() == AccessKind.PK_INDEX)
                 .mapToLong(CacheableResource::estimatedSizeBytes).sum();
         setMaxMemory(pkBytes);
@@ -431,7 +430,6 @@ public class MemoryManagementTest {
             mm.recordAccess(AccessKind.COLLECTION, "userDb", "hot", null);
         }
         mm.recordAccess(AccessKind.COLLECTION, "userDb", "cold", null);
-        // Cap leaves no room: any incoming page must trigger eviction of the LFU resource.
         setMaxMemory(1L);
         mm.ensureHeadroomForBytes(1L);
         final var remaining = cache.listCacheableResources();

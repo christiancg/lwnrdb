@@ -68,7 +68,6 @@ public class UserOperationHelperScriptPermissionTest {
         assertTrue(cache.getAdminUserEntry("levelclient").canManageScripts("mydb"));
     }
 
-    // A typo'd level must fail loudly rather than read as a denial nobody can explain
     @Test
     public void test_invalid_level_string_is_a_validation_error() {
         final var parsed = RequestParser

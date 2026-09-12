@@ -11,10 +11,8 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 
-// Field indexes are maintained asynchronously, so a committed write can be absent from the index it
-// belongs in. Every index-backed read closes that gap the same way: drop the ids still pending, then
-// re-derive them from the documents' current committed values. Skipping the drop leaves the stale
-// index entry answering, which is a false positive the index-consistency contract does not allow.
+// Field indexes are maintained asynchronously: an index-backed read must drop the ids still pending and
+// re-derive them from current committed values, or a stale entry answers with a false positive.
 public final class PendingWriteReconciler {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
@@ -22,21 +20,17 @@ public final class PendingWriteReconciler {
     private PendingWriteReconciler() {
     }
 
-    // Call this AFTER the index read. A write that committed before the read is either already indexed
-    // (so the index answered accurately) or still pending (so it is corrected here); snapshotting first
-    // would miss one that landed in between.
+    // Call this AFTER the index read: a write that committed before the read is either already indexed
+    // or still pending here; snapshotting first would miss one that landed in between.
     public static Set<String> pendingIds(String dbName, String collName) {
         return pendingIndexWrites.idsFor(dbName, collName);
     }
 
-    // The pending documents at their current committed value, read in one batch.
     public static List<DbEntry> pendingDocuments(String dbName, String collName, Set<String> pendingIds)
             throws IOException {
         return cache.getEntriesByIds(dbName, collName, pendingIds);
     }
 
-    // Corrects an id set the index produced: a pending document counts only if its current value still
-    // satisfies the caller's test, so a stale entry can neither add nor hide a match.
     public static Set<String> correctIds(Set<String> indexed, String dbName, String collName, Set<String> pendingIds,
             String fieldName, BiPredicate<JsonObject, String> matches) throws IOException {
         final var corrected = new HashSet<>(indexed);

@@ -7,7 +7,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.DeleteRequest;
 
 public class DeleteRequestTest {
-    // Constructor correctly sets DELETE operation type
     @Test
     public void test_constructor_sets_delete_operation_type() {
         DeleteRequest deleteRequest = new DeleteRequest("testDb", "testCollection");
@@ -17,7 +16,6 @@ public class DeleteRequestTest {
         assertEquals("testCollection", deleteRequest.getCollectionName());
     }
 
-    // Test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         DeleteRequest deleteRequest = new DeleteRequest("testDb", "testCollection");

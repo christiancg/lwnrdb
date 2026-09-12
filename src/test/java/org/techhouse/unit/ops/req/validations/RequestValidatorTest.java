@@ -20,7 +20,6 @@ import org.techhouse.ops.req.agg.step.LimitAggregationStep;
 import org.techhouse.ops.req.validations.RequestValidator;
 
 public class RequestValidatorTest {
-    // CLOSE_CONNECTION and LIST_DATABASES are always valid
     @Test
     public void validate_closeConnection_returnsOk() {
         assertTrue(RequestValidator.validate(new CloseConnectionRequest()).isValid());
@@ -54,7 +53,6 @@ public class RequestValidatorTest {
         assertTrue(RequestValidator.validate(new org.techhouse.ops.req.ListTransactionsRequest()).isValid());
     }
 
-    // SAVE
     @Test
     public void validate_save_validObjectNoId_returnsOk() {
         final var req = new SaveRequest("myDb", "myColl");
@@ -108,7 +106,6 @@ public class RequestValidatorTest {
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
-    // BULK_SAVE
     @Test
     public void validate_bulkSave_validObjects_returnsOk() {
         final var req = new BulkSaveRequest("myDb", "myColl");
@@ -148,7 +145,6 @@ public class RequestValidatorTest {
         assertTrue(RequestValidator.validate(req).isValid());
     }
 
-    // FIND_BY_ID
     @Test
     public void validate_findById_validId_returnsOk() {
         final var req = new FindByIdRequest("myDb", "myColl");
@@ -172,13 +168,11 @@ public class RequestValidatorTest {
 
     @Test
     public void validate_findById_adminDbAllowed_returnsOk() {
-        // FIND_BY_ID does not reject admin
         final var req = new FindByIdRequest("admin", "myColl");
         req.set_id("abc");
         assertTrue(RequestValidator.validate(req).isValid());
     }
 
-    // DELETE
     @Test
     public void validate_delete_validId_returnsOk() {
         final var req = new DeleteRequest("myDb", "myColl");
@@ -200,7 +194,6 @@ public class RequestValidatorTest {
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
-    // AGGREGATE
     @Test
     public void validate_aggregate_nullSteps_returnsFail() {
         final var req = new AggregateRequest("myDb", "myColl");

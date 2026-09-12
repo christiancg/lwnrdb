@@ -6,8 +6,6 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-// Holding the file lock across the rewrite is what stops a reader observing the half-written
-// .repair swap.
 final class MetadataFileStore {
     private MetadataFileStore() {
     }

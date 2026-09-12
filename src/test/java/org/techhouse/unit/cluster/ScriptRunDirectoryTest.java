@@ -168,7 +168,6 @@ public class ScriptRunDirectoryTest {
         assertEquals(run.runId(), rows.getFirst().get("runId").asJsonString().getValue());
     }
 
-    // Two runs that started at the same instant must report the same age
     @Test
     public void test_computes_age_from_a_single_now() throws Exception {
         withOtherMember();
@@ -224,7 +223,6 @@ public class ScriptRunDirectoryTest {
         assertFalse(directory.cancelClusterWide(UUID.randomUUID().toString()));
     }
 
-    // Clustering off means no gossip at all, not a broadcast to an empty member set
     @Test
     public void test_cancel_does_not_gossip_when_clustering_is_disabled() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", false);
@@ -234,7 +232,6 @@ public class ScriptRunDirectoryTest {
         verify(pool, never()).request(any(), any(), anyLong());
     }
 
-    // startedAt is a long field on the wire class, so it must survive the EJson round trip as a long
     @Test
     public void test_normalises_boxed_started_at_from_the_wire() {
         final var eJson = IocContainer.get(EJson.class);

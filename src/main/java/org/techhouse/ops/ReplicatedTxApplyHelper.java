@@ -7,12 +7,6 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
-/**
- * Applies a replicated transaction (a {@link TxReplicationPayload}) onto this replica as one atomic batch:
- * every collection the batch touches is write-locked up front (in a stable, sorted order to stay
- * deadlock-safe), then each entry is applied within that single window so no other writer interleaves
- * mid-transaction. A mid-batch failure NACKs; the owner's local commit stands and anti-entropy reconciles.
- */
 public final class ReplicatedTxApplyHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final Logger logger = Logger.logFor(ReplicatedTxApplyHelper.class);

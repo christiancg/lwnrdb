@@ -30,7 +30,6 @@ public class ScriptGoalProgramTest {
         assertNotNull(parseRelaxed(source), source);
     }
 
-    // A return outside function code is an early error, wherever the enclosing statement nests it
     @Test
     public void test_top_level_return_rejected() {
         assertRejectedOnlyByGoal("var x = 1; return;");
@@ -40,7 +39,6 @@ public class ScriptGoalProgramTest {
         assertRejectedOnlyByGoal("while (true) { return; }");
     }
 
-    // A return inside any function-like body stays legal under the goal
     @Test
     public void test_return_in_function_accepted() {
         assertAcceptedByBoth("function f() { return 1; }");
@@ -49,14 +47,12 @@ public class ScriptGoalProgramTest {
         assertAcceptedByBoth("var o = { m() { return 1; } };");
     }
 
-    // new.target is not reachable from global code, and an arrow does not introduce one
     @Test
     public void test_top_level_new_target_rejected() {
         assertRejectedOnlyByGoal("new.target;");
         assertRejectedOnlyByGoal("var f = () => new.target;");
     }
 
-    // Function and class-member code both provide a new.target
     @Test
     public void test_new_target_in_function_code_accepted() {
         assertAcceptedByBoth("function f() { return new.target; }");
@@ -65,8 +61,6 @@ public class ScriptGoalProgramTest {
         assertAcceptedByBoth("class C { static { new.target; } }");
     }
 
-    // A super property belongs to a method, so global code rejects it under either goal - the Script
-    // goal only adds the rejection for the arrow-wrapped form the host contract would otherwise allow
     @Test
     public void test_top_level_super_property_rejected() {
         assertRejectedByBoth("super.property;");
@@ -78,7 +72,6 @@ public class ScriptGoalProgramTest {
         assertThrows(SyntaxErrorException.class, () -> parseRelaxed(source), source);
     }
 
-    // A method, a field initializer and a static block all keep their super binding
     @Test
     public void test_super_property_in_class_accepted() {
         assertAcceptedByBoth("class C extends B { m() { return super.x; } }");
@@ -87,7 +80,6 @@ public class ScriptGoalProgramTest {
         assertAcceptedByBoth("var o = { m() { return super.x; } };");
     }
 
-    // import.meta belongs to the Module goal; a dynamic import() is legal in both
     @Test
     public void test_import_meta_rejected() {
         assertRejectedOnlyByGoal("import.meta;");
@@ -95,7 +87,6 @@ public class ScriptGoalProgramTest {
         assertAcceptedByBoth("import('args');");
     }
 
-    // Static import and export declarations belong to the Module goal
     @Test
     public void test_import_and_export_declarations_rejected() {
         assertRejectedOnlyByGoal("import v from './import.js';");
@@ -105,7 +96,6 @@ public class ScriptGoalProgramTest {
         assertRejectedOnlyByGoal("export * from 'args';");
     }
 
-    // A using declaration is rejected only at the script's own top level
     @Test
     public void test_top_level_using_rejected() {
         assertRejectedOnlyByGoal("using x = null;");
@@ -117,7 +107,6 @@ public class ScriptGoalProgramTest {
         assertAcceptedByBoth("class C { static { using x = null; } }");
     }
 
-    // The default goal is what the database host parses with, so its own contract is unchanged
     @Test
     public void test_relaxed_goal_still_parses_the_host_contract() {
         assertAcceptedByBoth("var x = 1;");

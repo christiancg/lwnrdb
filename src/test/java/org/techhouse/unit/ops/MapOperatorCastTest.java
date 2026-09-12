@@ -25,7 +25,6 @@ public class MapOperatorCastTest {
         TestUtils.releaseAllLocks();
     }
 
-    // Cast field values between different types (number, string, boolean)
     @Test
     public void test_cast_field_values() {
         JsonObject jsonObject = new JsonObject();
@@ -45,7 +44,6 @@ public class MapOperatorCastTest {
         assertTrue(result2.get("castedBooleanField").asJsonBoolean().getValue());
     }
 
-    // Cast invalid values between incompatible types
     @Test
     public void test_cast_invalid_values() {
         JsonObject jsonObject = new JsonObject();
@@ -59,7 +57,6 @@ public class MapOperatorCastTest {
         assertTrue(result.get("result").isJsonNull(), "Result should be null due to invalid cast");
     }
 
-    // CAST number to boolean (0 → false, non-zero → true)
     @Test
     public void test_cast_number_to_boolean() {
         JsonObject input = new JsonObject();
@@ -74,7 +71,6 @@ public class MapOperatorCastTest {
         assertTrue(r2.get("boolNonZero").asJsonBoolean().getValue());
     }
 
-    // CAST boolean to number is not supported — returns JsonNull
     @Test
     public void test_cast_boolean_to_number_returns_null() {
         JsonObject input = new JsonObject();
@@ -84,7 +80,6 @@ public class MapOperatorCastTest {
         assertTrue(result.get("n").isJsonNull());
     }
 
-    // CAST NUMBER when field is already a number of returns the number (L302)
     @Test
     public void test_cast_number_to_number_returns_same() {
         JsonObject input = new JsonObject();
@@ -94,7 +89,6 @@ public class MapOperatorCastTest {
         assertEquals(42, result.get("out").asJsonNumber().asInteger());
     }
 
-    // CAST NUMBER from a parseable string (L305)
     @Test
     public void test_cast_string_to_number_parseable() {
         JsonObject input = new JsonObject();
@@ -104,7 +98,6 @@ public class MapOperatorCastTest {
         assertEquals(3.14, result.get("out").asJsonNumber().getValue().doubleValue(), 0.001);
     }
 
-    // CAST STRING when field is already a string returns it (L313)
     @Test
     public void test_cast_string_to_string_returns_same() {
         JsonObject input = new JsonObject();
@@ -114,7 +107,6 @@ public class MapOperatorCastTest {
         assertEquals("hello", result.get("out").asJsonString().getValue());
     }
 
-    // CAST STRING from boolean (L318)
     @Test
     public void test_cast_boolean_to_string() {
         JsonObject input = new JsonObject();
@@ -124,7 +116,6 @@ public class MapOperatorCastTest {
         assertEquals("true", result.get("out").asJsonString().getValue());
     }
 
-    // CAST BOOLEAN when field is already boolean returns it (L324)
     @Test
     public void test_cast_boolean_to_boolean_returns_same() {
         JsonObject input = new JsonObject();
@@ -134,7 +125,6 @@ public class MapOperatorCastTest {
         assertFalse(result.get("out").asJsonBoolean().getValue());
     }
 
-    // CAST to NUMBER when field is JsonNull returns JsonNull (L309)
     @Test
     public void test_cast_null_field_to_number_returns_null() {
         JsonObject input = new JsonObject();
@@ -144,7 +134,6 @@ public class MapOperatorCastTest {
         assertTrue(result.get("out").isJsonNull());
     }
 
-    // CAST string to a custom type (datetime) via JSON_CUSTOM
     @Test
     public void test_cast_string_to_datetime_via_json_custom() {
         JsonObject input = new JsonObject();
@@ -155,7 +144,6 @@ public class MapOperatorCastTest {
         assertEquals("2024-01-15T10:30:00", ((JsonCustom<?>) result.get("out")).stringDataValue());
     }
 
-    // CAST invalid string to a custom type returns null
     @Test
     public void test_cast_invalid_string_to_custom_type_returns_null() {
         JsonObject input = new JsonObject();
@@ -165,7 +153,6 @@ public class MapOperatorCastTest {
         assertTrue(result.get("out").isJsonNull());
     }
 
-    // CAST custom type to same custom type returns the same value
     @Test
     public void test_cast_custom_type_to_same_custom_type_returns_same() {
         JsonObject input = new JsonObject();
@@ -175,7 +162,6 @@ public class MapOperatorCastTest {
         assertInstanceOf(JsonDateTime.class, result.get("out"));
     }
 
-    // CAST string to time custom type via JSON_CUSTOM
     @Test
     public void test_cast_string_to_time_via_json_custom() {
         JsonObject input = new JsonObject();
@@ -186,7 +172,6 @@ public class MapOperatorCastTest {
         assertEquals("10:30:00", ((JsonCustom<?>) result.get("out")).stringDataValue());
     }
 
-    // CAST custom type to STRING yields the data portion only
     @Test
     public void test_cast_datetime_to_string_yields_data_value() {
         JsonObject input = new JsonObject();
@@ -196,7 +181,6 @@ public class MapOperatorCastTest {
         assertEquals("2024-01-15T10:30", result.get("out").asJsonString().getValue());
     }
 
-    // CAST time custom type to STRING yields the data portion only
     @Test
     public void test_cast_time_to_string_yields_data_value() {
         JsonObject input = new JsonObject();

@@ -11,13 +11,11 @@ import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.test.JsEval;
 
 public class ObjectDefinePropertyBuiltinsTest {
-    // defineProperty with a value descriptor
     @Test
     public void test_define_property_value() {
         assertEquals(5, JsEval.num("let o = {}; Object.defineProperty(o, 'v', {value: 5}); o.v"));
     }
 
-    // defineProperty with an accessor descriptor invokes the getter/setter
     @Test
     public void test_define_property_accessor() {
         assertEquals(42, JsEval.num(
@@ -26,21 +24,18 @@ public class ObjectDefinePropertyBuiltinsTest {
                 "let o = {n: 0}; Object.defineProperty(o, 'v', {get: function() { return this.n; }, set: function(x) { this.n = x; }}); o.v = 8; o.n"));
     }
 
-    // defineProperty adding a new key to a frozen (non-extensible) object throws
     @Test
     public void test_define_property_frozen() {
         assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
                 () -> Interpreter.run("let o = Object.freeze({}); Object.defineProperty(o, 'v', {value: 5});"));
     }
 
-    // defineProperties applies multiple descriptors at once
     @Test
     public void test_define_properties() {
         assertEquals(3,
                 JsEval.num("let o = {}; Object.defineProperties(o, {a: {value: 1}, b: {value: 2}}); o.a + o.b"));
     }
 
-    // a non-writable data property ignores later assignment
     @Test
     public void test_define_property_non_writable() {
         assertThrows(TypeErrorException.class, () -> Interpreter
@@ -49,14 +44,12 @@ public class ObjectDefinePropertyBuiltinsTest {
                 "let o = {}; Object.defineProperty(o, 'v', {value: 1, writable: false}); try { o.v = 99; } catch (e) { } o.v"));
     }
 
-    // a writable:true data property accepts later assignment
     @Test
     public void test_define_property_writable() {
         assertEquals(99,
                 JsEval.num("let o = {}; Object.defineProperty(o, 'v', {value: 1, writable: true}); o.v = 99; o.v"));
     }
 
-    // a non-enumerable property is hidden from keys/values/entries and for-in, but visible to getOwnPropertyNames
     @Test
     public void test_define_property_non_enumerable() {
         final var setup = "let o = {a: 1}; Object.defineProperty(o, 'hidden', {value: 2, enumerable: false}); ";
@@ -67,7 +60,6 @@ public class ObjectDefinePropertyBuiltinsTest {
         assertEquals("a,hidden", JsEval.str(setup + "Object.getOwnPropertyNames(o).join(',')"));
     }
 
-    // redefining a non-configurable property in an incompatible way throws
     @Test
     public void test_redefine_non_configurable_throws() {
         assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
@@ -78,14 +70,12 @@ public class ObjectDefinePropertyBuiltinsTest {
                         + "Object.defineProperty(o, 'v', {configurable: true});"));
     }
 
-    // redefining a configurable property is allowed
     @Test
     public void test_redefine_configurable_allowed() {
         assertEquals(2, JsEval.num("let o = {}; Object.defineProperty(o, 'v', {value: 1, configurable: true});"
                 + "Object.defineProperty(o, 'v', {value: 2}); o.v"));
     }
 
-    // defineProperty defaults unspecified attributes to false for a new property
     @Test
     public void test_define_property_defaults_false() {
         final var setup = "let o = {}; Object.defineProperty(o, 'v', {value: 1}); ";
@@ -94,7 +84,6 @@ public class ObjectDefinePropertyBuiltinsTest {
         assertFalse(JsEval.bool(setup + "Object.getOwnPropertyDescriptor(o, 'v').configurable"));
     }
 
-    // Redefining a non-configurable data property as an accessor is rejected
     @Test
     public void test_redefine_data_to_accessor_rejected() {
         assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
@@ -102,7 +91,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                         + "Object.defineProperty(o, 'x', { get() { return 2; } });"));
     }
 
-    // Redefining a non-configurable accessor as a data property is rejected
     @Test
     public void test_redefine_accessor_to_data_rejected() {
         assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
@@ -110,7 +98,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                         + "configurable: false }); Object.defineProperty(o, 'x', { value: 2 });"));
     }
 
-    // Changing the getter of a non-configurable accessor is rejected
     @Test
     public void test_redefine_accessor_getter_change_rejected() {
         assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
@@ -119,7 +106,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                         + "Object.defineProperty(o, 'x', { get() { return 2; } });"));
     }
 
-    // Redefining a non-configurable accessor with the same getter is allowed
     @Test
     public void test_redefine_accessor_same_getter_allowed() {
         assertEquals(1,
@@ -128,7 +114,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                         + "Object.defineProperty(o, 'x', { get: g }); o.x"));
     }
 
-    // Changing +0 to -0 on a non-writable property is rejected under SameValue
     @Test
     public void test_redefine_value_signed_zero_rejected() {
         assertThrows(org.techhouse.simplejs.exceptions.TypeErrorException.class,
@@ -137,7 +122,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                         + "Object.defineProperty(o, 'x', { value: -0 });"));
     }
 
-    // Redefining a non-writable NaN value with NaN is allowed under SameValue
     @Test
     public void test_redefine_value_nan_allowed() {
         assertTrue(JsEval.bool("let o = {}; Object.defineProperty(o, 'x', "
@@ -145,14 +129,12 @@ public class ObjectDefinePropertyBuiltinsTest {
                 + "Object.defineProperty(o, 'x', { value: Number.NaN }); true"));
     }
 
-    // A configurable property may freely switch between data and accessor forms
     @Test
     public void test_configurable_redefine_allowed() {
         assertEquals(9, JsEval.num("let o = {}; Object.defineProperty(o, 'x', { value: 1, configurable: true }); "
                 + "Object.defineProperty(o, 'x', { get() { return 9; } }); o.x"));
     }
 
-    // an accessor defined with enumerable:true participates in enumeration
     @Test
     public void test_define_property_enumerable_accessor_is_enumerated() {
         final var source = """
@@ -163,7 +145,6 @@ public class ObjectDefinePropertyBuiltinsTest {
         assertEquals("x|7", JsEval.str(source));
     }
 
-    // a setter-only property enumerates with an undefined value
     @Test
     public void test_setter_only_property_enumerates_as_undefined() {
         final var source = """
@@ -173,7 +154,6 @@ public class ObjectDefinePropertyBuiltinsTest {
         assertEquals("x|undefined", JsEval.str(source));
     }
 
-    // changing the enumerable flag of a non-configurable property is rejected
     @Test
     public void test_redefine_enumerable_change_rejected() {
         assertThrows(TypeErrorException.class,
@@ -182,7 +162,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                                 + "Object.defineProperty(o, 'x', {enumerable: false});"));
     }
 
-    // changing the setter of a non-configurable accessor is rejected
     @Test
     public void test_redefine_accessor_setter_change_rejected() {
         assertThrows(TypeErrorException.class,
@@ -191,7 +170,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                         + "Object.defineProperty(o, 'x', { set(v) {} });"));
     }
 
-    // flipping writable from false to true on a non-configurable property is rejected
     @Test
     public void test_redefine_writable_false_to_true_rejected() {
         assertThrows(TypeErrorException.class,
@@ -222,7 +200,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                 () -> Interpreter.run("Object.defineProperty([], 'foo', { get() {}, value: 1 })"));
     }
 
-    // ToObject rejects only null/undefined, so getOwnPropertyDescriptor throws for them alone
     @Test
     public void test_get_own_property_descriptor_throws_on_undefined_target() {
         assertThrows(TypeErrorException.class,
@@ -230,14 +207,12 @@ public class ObjectDefinePropertyBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.getOwnPropertyDescriptor(null, 'x')"));
     }
 
-    // Object.defineProperties rejects a non-object Properties argument
     @Test
     public void test_define_properties_throws_on_undefined_props() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperties({}, undefined)"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Object.defineProperties({}, null)"));
     }
 
-    // defineProperty is honoured on an exotic target rather than silently returning it
     @Test
     public void test_define_property_on_exotic_target_is_honoured() {
         assertTrue(JsEval.bool("const m = new Map(); Object.defineProperty(m, 'x', { value: 1, enumerable: false });"
@@ -262,7 +237,6 @@ public class ObjectDefinePropertyBuiltinsTest {
         assertEquals(7, JsEval.num("globalThis.gAssigned = 1;"
                 + " Object.defineProperty(globalThis, 'gAssigned', { value: 7 }); gAssigned"));
         // A top-level `var` is a non-configurable but *writable* global property, so redefining its
-        // value is legal; only a non-writable one rejects.
         assertEquals(7, JsEval.num("var gVar = 1;" + " Object.defineProperty(globalThis, 'gVar', { value: 7 }); gVar"));
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("Object.defineProperty(globalThis, 'NaN', { value: 7 })"));
@@ -278,14 +252,12 @@ public class ObjectDefinePropertyBuiltinsTest {
         assertTrue(JsEval.bool("function f(a, b) {} Object.defineProperty(f, 'length', { value: 9 }); f.length === 9"));
     }
 
-    // 'get' and 'set' both present but neither callable is still an accessor: it reads as undefined
     @Test
     public void anAllUndefinedAccessorReadsAsUndefined() {
         assertEquals("undefined", JsEval
                 .str("const o = {}; Object.defineProperty(o, 'x', { get: undefined, set: undefined }); typeof o.x"));
     }
 
-    // A non-symbol key runs through ToPropertyKey, so a user toString/valueOf decides the name
     @Test
     public void definePropertyCoercesKeyThroughToPropertyKey() {
         assertEquals(7, JsEval.num("""
@@ -310,8 +282,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                 """));
     }
 
-    // ToPropertyKey(P) runs before the descriptor is inspected, so a poisoned key coercion is what
-    // escapes even when the descriptor is not an object at all.
     @Test
     public void definePropertyCoercesTheKeyBeforeReadingTheDescriptor() {
         assertEquals("key", JsEval.str("""
@@ -328,8 +298,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                 """));
     }
 
-    // ToPropertyDescriptor reads its fields in the normative order, so a poisoned accessor on the
-    // descriptor object is observed at exactly the right point.
     @Test
     public void definePropertyObservesDescriptorFieldsInSpecOrder() {
         assertEquals("enumerable,configurable,value,writable,get,set", JsEval.str("""
@@ -357,7 +325,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                 """));
     }
 
-    // A redefinition that clears writability has to take effect, not be dropped.
     @Test
     public void definePropertyAppliesAWritabilityChange() {
         assertTrue(JsEval.bool("""
@@ -376,8 +343,6 @@ public class ObjectDefinePropertyBuiltinsTest {
                 """));
     }
 
-    // A Date or Map receiver carries a PropertyTable, so a definition on it must land and read back
-    // rather than being silently discarded.
     @Test
     public void definePropertiesReachesExoticReceivers() {
         assertEquals("dateData", JsEval.str("""
@@ -396,8 +361,6 @@ public class ObjectDefinePropertyBuiltinsTest {
         assertEquals(1, JsEval.num("const m = new Map([[1, 2]]); m.tag = 'x'; m.size"));
     }
 
-    // ObjectDefineProperties walks every own key - including symbols - calling
-    // getOwnPropertyDescriptor on each one in key order, not skipping symbol keys ahead of that call.
     @Test
     public void definePropertiesConsultsEveryOwnKeyIncludingSymbols() {
         assertEquals("0,foo,symbol", JsEval.str("""

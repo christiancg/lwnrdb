@@ -3,8 +3,6 @@ package org.techhouse.cluster;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 
-// Every handler answers the same way: fill in an ack, or turn whatever went wrong into an ERROR the
-// caller can read. Handling it here keeps one failure shape across the whole protocol.
 final class ClusterMessages {
     private ClusterMessages() {
     }

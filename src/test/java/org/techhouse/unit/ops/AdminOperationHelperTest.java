@@ -36,7 +36,6 @@ public class AdminOperationHelperTest {
         TestUtils.standardTearDown();
     }
 
-    // bulkUpdateEntryCount on CREATED event records a new AdminPageEntry with byte size
     @Test
     public void test_bulk_update_entry_count_created_inserts_admin_page_entry() throws Exception {
         Cache cache = IocContainer.get(Cache.class);
@@ -61,8 +60,6 @@ public class AdminOperationHelperTest {
         assertTrue(pageZero.get().getPageSize() > 0);
     }
 
-    // Page-metadata written for a real collection lives physically under admin/pages/<db>_<coll>,
-    // not flat under admin/ (the whole point of the relocation).
     @Test
     public void test_page_metadata_written_under_admin_pages_folder() throws Exception {
         final var d = new JsonObject();
@@ -90,18 +87,14 @@ public class AdminOperationHelperTest {
         assertFalse(flatDir.exists(), "no flat admin/<db>_<coll> folder should be created");
     }
 
-    // Database entry creation and update with proper locking and cache management
     @Test
     public void test_save_database_entry_creates_and_updates_with_locking() throws Exception {
-        // Arrange
         AdminDbEntry dbEntry = new AdminDbEntry(Globals.ADMIN_DB_NAME);
         ResourceLocking locks = IocContainer.get(ResourceLocking.class);
         Cache cache = IocContainer.get(Cache.class);
 
-        // Act
         AdminOperationHelper.saveDatabaseEntry(dbEntry);
 
-        // Assert
         final var typeToken = new ReflectionUtils.TypeToken<Map<String, ReentrantReadWriteLock>>() {
         };
         final var actualLocks = TestUtils.getPrivateField(locks, "locks", typeToken);
@@ -111,31 +104,24 @@ public class AdminOperationHelperTest {
         assertNotNull(inserted);
     }
 
-    // saveDatabaseEntry for an already-existing database takes the update path (L204-205)
     @Test
     public void test_save_database_entry_updates_existing() {
-        // TestGlobals.DB was created in @BeforeEach — calling saveDatabaseEntry again triggers the update path
         AdminDbEntry dbEntry = new AdminDbEntry(TestGlobals.DB);
-        // This should update the existing entry rather than insert
         assertDoesNotThrow(() -> AdminOperationHelper.saveDatabaseEntry(dbEntry));
         Cache cache = IocContainer.get(Cache.class);
         assertNotNull(cache.getAdminDbEntry(TestGlobals.DB));
     }
 
-    // saveCollectionEntry for an already-existing collection takes the update path (L269-270)
     @Test
     public void test_save_collection_entry_updates_existing() {
         AdminCollEntry collEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
-        // TestGlobals.DB/COLL already exists — calling saveCollectionEntry triggers the update path
         assertDoesNotThrow(() -> AdminOperationHelper.saveCollectionEntry(collEntry));
         Cache cache = IocContainer.get(Cache.class);
         assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // deleteDatabaseEntry with collections iterates and deletes them (L229-231)
     @Test
     public void test_delete_database_entry_with_collections() throws Exception {
-        // Create a new database with a collection, then delete the database
         AdminDbEntry dbEntry = new AdminDbEntry("toDeleteWithColl");
         AdminOperationHelper.saveDatabaseEntry(dbEntry);
         AdminCollEntry collEntry = new AdminCollEntry("toDeleteWithColl", "aColl");
@@ -147,7 +133,6 @@ public class AdminOperationHelperTest {
         assertNull(cache.getAdminDbEntry("toDeleteWithColl"));
     }
 
-    // deleteCollectionEntry removes a collection (exercises L299-300 path)
     @Test
     public void test_delete_collection_entry_existing() throws Exception {
         AdminCollEntry collEntry = new AdminCollEntry(TestGlobals.DB, "tempColl");
@@ -200,7 +185,6 @@ public class AdminOperationHelperTest {
         final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, "");
         Cache cache = IocContainer.get(Cache.class);
         assertNotNull(cache.getPkIndexCollectionUsage(id));
-        // Second time goes through the UPDATE path
         mm.recordAccess(org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null);
         assertDoesNotThrow(() -> AdminOperationHelper.upsertCollectionUsage(event));
     }
@@ -217,7 +201,6 @@ public class AdminOperationHelperTest {
         assertNull(cache.getPkIndexCollectionUsage(id));
     }
 
-    // A usage event for a collection that has since been dropped must not recreate a usage row.
     @Test
     public void test_upsert_collection_usage_skips_when_collection_dropped() throws Exception {
         final var droppedDb = "droppedUsageDb";
@@ -241,20 +224,16 @@ public class AdminOperationHelperTest {
                 org.techhouse.cache.AccessKind.COLLECTION, TestGlobals.DB, TestGlobals.COLL, null,
                 System.currentTimeMillis());
         AdminOperationHelper.upsertCollectionUsage(event);
-        // Cleanup with maxAge=Long.MAX_VALUE — nothing should be removed (everything is recent).
         AdminOperationHelper.cleanupCollectionUsage(Long.MAX_VALUE);
         final var id = org.techhouse.data.admin.AdminCollectionUsageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, "");
         Cache cache = IocContainer.get(Cache.class);
         assertNotNull(cache.getPkIndexCollectionUsage(id));
         // Make sure the threshold strictly exceeds the recorded lastAccessMillis (avoid same-millisecond race).
         Thread.sleep(5);
-        // Cleanup with maxAge=0 — everything older than `now` removed (i.e. all entries).
         AdminOperationHelper.cleanupCollectionUsage(0L);
         assertNull(cache.getPkIndexCollectionUsage(id));
     }
 
-    // deleteDatabaseEntry must call deletePageCollections for each collection so that
-    // admin/pages/<db>_<coll> files and their in-memory entries do not outlive the database.
     @Test
     public void test_delete_database_entry_clears_page_collections() throws Exception {
         final var dbName = "pageLeakDb";
@@ -263,7 +242,6 @@ public class AdminOperationHelperTest {
         AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
         AdminOperationHelper.createPageCollections(dbName, collName);
 
-        // Populate the in-memory page entry so there is something to evict.
         final var cache = IocContainer.get(Cache.class);
         cache.updatePageSizeInMemory(dbName, collName, 0L, 64L);
         assertNotNull(cache.getAdminPageEntries(dbName, collName), "page entries must exist before drop");
@@ -278,23 +256,19 @@ public class AdminOperationHelperTest {
         assertFalse(pagesDir.exists(), "admin/pages/<db>_<coll> directory must be removed after drop");
     }
 
-    // Background CREATED event must not re-apply the delta that updatePageSizeInMemory already applied.
     @Test
     public void test_base_update_entry_count_created_does_not_double_count() throws Exception {
         final var cache = IocContainer.get(Cache.class);
 
-        // Simulate the synchronous call made by OperationProcessor after inserting.
         final long bytes = 64L;
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0L, bytes);
 
-        // Build a DbEntry that mimics what the background EntityEvent carries.
         final var data = new JsonObject();
         data.addProperty("foo", "bar");
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
         entry.set_id("doubleCountId");
         entry.setPage(0L);
 
-        // Background event arrives — must only persist, not bump again.
         AdminOperationHelper.bulkUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
                 java.util.List.of(entry));
 
@@ -306,11 +280,8 @@ public class AdminOperationHelperTest {
         assertEquals(bytes, page0.get().getPageSize(), "pageSize must equal the single insert, not double");
     }
 
-    // Admin collections call baseUpdateEntryCount directly without a prior updatePageSizeInMemory;
-    // multiple inserts onto the same page must each apply their delta normally.
     @Test
     public void test_base_update_entry_count_created_admin_coll_applies_delta() throws Exception {
-        // Insert two database entries (second goes onto the same page 0 the first already occupies).
         AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry("adminDeltaDb1"));
         AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry("adminDeltaDb2"));
 

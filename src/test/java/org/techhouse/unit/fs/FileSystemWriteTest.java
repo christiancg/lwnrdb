@@ -42,7 +42,6 @@ public class FileSystemWriteTest {
         }
     }
 
-    // Create and initialize database directory structure with proper permissions
     @Test
     public void test_create_base_db_path_success() {
         FileSystem fs = new FileSystem();
@@ -55,7 +54,6 @@ public class FileSystemWriteTest {
         assertTrue(dbDir.canWrite());
     }
 
-    // Handle non-existent directories and files gracefully
     @Test
     public void test_create_base_db_path_invalid_path() throws NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
@@ -65,7 +63,6 @@ public class FileSystemWriteTest {
         assertThrows(DirectoryNotFoundException.class, fs::createBaseDbPath);
     }
 
-    // Creates admin database folder successfully when it doesn't exist
     @Test
     public void test_creates_admin_database_successfully() throws IOException {
         FileSystem fileSystem = new FileSystem();
@@ -84,7 +81,6 @@ public class FileSystemWriteTest {
         assertTrue(collectionsCollection.exists());
     }
 
-    // Creates new database folder when it doesn't exist and returns true
     @Test
     public void test_creates_new_db_folder_successfully() throws NoSuchFieldException, IllegalAccessException {
         String testDbPath = System.getProperty("java.io.tmpdir");
@@ -99,7 +95,6 @@ public class FileSystemWriteTest {
         assertTrue(dbFolder.delete());
     }
 
-    // Successfully inserts multiple DbEntry objects into collection file
     @Test
     public void test_bulk_insert_multiple_entries_success()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -132,7 +127,6 @@ public class FileSystemWriteTest {
         assertNotNull(result.getFirst().getIndex());
     }
 
-    // bulkInsert with entries on different pages writes each entry to its own page only
     @Test
     public void test_bulk_insert_groups_entries_by_page()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -170,7 +164,6 @@ public class FileSystemWriteTest {
         assertTrue(page1.containsKey("p1-1"));
     }
 
-    // Handle empty list of entries
     @Test
     public void test_bulk_insert_empty_list() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
@@ -184,7 +177,6 @@ public class FileSystemWriteTest {
         assertTrue(result.isEmpty());
     }
 
-    // Successfully updates multiple entries in collection and returns updated IndexedDbEntry list
     @Test
     public void test_bulk_update_multiple_entries_success()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -217,7 +209,6 @@ public class FileSystemWriteTest {
         assertEquals(TestGlobals.COLL, result.getFirst().getCollectionName());
     }
 
-    // Empty entries list handling
     @Test
     public void test_bulk_update_empty_entries_list() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
@@ -232,8 +223,6 @@ public class FileSystemWriteTest {
         assertTrue(result.compactions().isEmpty());
     }
 
-    // Updating multiple entries that share a page in one batch must NOT corrupt the page: each
-    // document still reads back with its updated content and correct position afterwards.
     @Test
     public void test_bulk_update_multiple_same_page_entries_no_corruption() throws Exception {
         FileSystem fileSystem = new FileSystem();
@@ -253,7 +242,6 @@ public class FileSystemWriteTest {
 
         final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, inserted);
 
-        // Every updated entry must read back from disk with its new content at its reported position.
         for (var ie : result.updated()) {
             final var read = fileSystem.getById(ie.getIndex());
             assertEquals("updated-value-for-" + ie.get_id() + "-longer",
@@ -262,7 +250,6 @@ public class FileSystemWriteTest {
         }
     }
 
-    // Correctly updates file length after modification
     @Test
     public void test_update_file_length() throws NoSuchFieldException, IllegalAccessException, IOException {
         FileSystem fileSystem = new FileSystem();
@@ -281,8 +268,6 @@ public class FileSystemWriteTest {
         assertTrue(file.length() > originalFileLength);
     }
 
-    // Concurrent inserts and reads on the same page never corrupt the file: every insert lands and
-    // every concurrent read returns only complete, parseable entries (exercises the per-file locks).
     @Test
     public void test_concurrent_inserts_and_reads_keep_page_coherent() throws Exception {
         final var fileSystem = new FileSystem();
@@ -317,11 +302,6 @@ public class FileSystemWriteTest {
         final var page = fileSystem.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0);
         assertEquals(writers * perWriter, page.size());
     }
-
-    // ── PK-index per-page reindex correctness (regression for bulk/multi-page update corruption) ──
-
-    // Reads the entry back the way a cache-disabled / post-restart read does: from the persisted PK
-    // index file, not from any in-memory copy. Also asserts the stored position is not corrupt.
 
     @Test
     public void test_bulk_update_multi_page_reads_back_intact() throws Exception {

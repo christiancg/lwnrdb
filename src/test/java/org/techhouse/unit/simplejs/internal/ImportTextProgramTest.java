@@ -46,7 +46,6 @@ public class ImportTextProgramTest {
         return result.getValue().asJsonNumber().getValue().doubleValue();
     }
 
-    // importText returns the imported module's default export
     @Test
     public void test_import_text_default_export() {
         final var result = run("""
@@ -56,7 +55,6 @@ public class ImportTextProgramTest {
         assertEquals(42, number(result));
     }
 
-    // Named exports land on the returned namespace and stay callable
     @Test
     public void test_import_text_named_export() {
         final var result = run("""
@@ -67,7 +65,6 @@ public class ImportTextProgramTest {
         assertEquals("hi world", text(result));
     }
 
-    // The imported module shares the importer's realm, so cross-boundary prototypes still match
     @Test
     public void test_import_text_shares_realm_intrinsics() {
         final var result = run("""
@@ -84,7 +81,6 @@ public class ImportTextProgramTest {
         assertEquals("true|true|boom", text(result));
     }
 
-    // A promise created by imported code settles on the importer's event loop
     @Test
     public void test_import_text_promise_settles_in_importer() {
         final var result = run("""
@@ -96,7 +92,6 @@ public class ImportTextProgramTest {
         assertEquals("fired", text(result));
     }
 
-    // An async export resolves through the shared loop too
     @Test
     public void test_import_text_async_export_resolves() {
         final var result = run("""
@@ -107,7 +102,6 @@ public class ImportTextProgramTest {
         assertEquals(5, number(result));
     }
 
-    // A top-level await inside the imported module parks the importer's coroutine
     @Test
     public void test_import_text_top_level_await() {
         final var result = run("""
@@ -117,7 +111,6 @@ public class ImportTextProgramTest {
         assertEquals(9, number(result));
     }
 
-    // The imported module runs on the importer's thread, so an open transaction stays usable
     @Test
     public void test_import_text_inside_transaction() {
         final var database = new FakeDatabaseAccess();
@@ -135,7 +128,6 @@ public class ImportTextProgramTest {
         assertTrue(database.calls.contains("commitTransaction"));
     }
 
-    // The same text is one module: it evaluates once and both imports share the namespace
     @Test
     public void test_import_text_evaluated_once() {
         final var database = new FakeDatabaseAccess();
@@ -150,7 +142,6 @@ public class ImportTextProgramTest {
         assertEquals(1, database.calls.stream().filter(call -> call.equals("delete:d/c/once")).count());
     }
 
-    // An explicit module id makes two different sources the same module
     @Test
     public void test_import_text_explicit_module_id_is_the_key() {
         final var result = run("""
@@ -162,7 +153,6 @@ public class ImportTextProgramTest {
         assertEquals(1, number(result));
     }
 
-    // A module that throws stays failed and rethrows the original error without re-running
     @Test
     public void test_import_text_failure_is_sticky() {
         final var database = new FakeDatabaseAccess();
@@ -179,7 +169,6 @@ public class ImportTextProgramTest {
         assertEquals(1, database.calls.stream().filter(call -> call.equals("delete:d/c/boom")).count());
     }
 
-    // A module importing itself is detected as a cycle rather than recursing to the depth cap
     @Test
     public void test_import_text_cycle_detected() {
         final var result = run("""
@@ -195,7 +184,6 @@ public class ImportTextProgramTest {
         assertEquals("Error:Circular import of module 'A'", text(result));
     }
 
-    // A chain of distinct modules is bounded by maxModuleDepth, and the abort is not catchable
     @Test
     public void test_import_text_module_depth_exceeded() {
         final var result = run(
@@ -216,7 +204,6 @@ public class ImportTextProgramTest {
         assertEquals("Script exceeded its maximum module nesting depth", result.getErrorMessage());
     }
 
-    // Nested modules spend the importer's single instruction budget, including when they throw
     @Test
     public void test_import_text_shares_instruction_budget() {
         final var result = run("""
@@ -231,7 +218,6 @@ public class ImportTextProgramTest {
         assertEquals("Script exceeded its instruction budget", result.getErrorMessage());
     }
 
-    // The imported module sees the same args and the same database binding
     @Test
     public void test_import_text_sees_shared_args_and_db() {
         final var database = new FakeDatabaseAccess();
@@ -250,7 +236,6 @@ public class ImportTextProgramTest {
         assertTrue(database.calls.contains("findById:d/c/1"));
     }
 
-    // A module's var declarations stay in the module scope, but globals remain visible to it
     @Test
     public void test_import_text_module_scope_is_private() {
         final var result = run("""
@@ -262,7 +247,6 @@ public class ImportTextProgramTest {
         assertEquals("undefined|outer", text(result));
     }
 
-    // The capability is off unless the host turns it on
     @Test
     public void test_import_text_disabled_by_default() {
         final var result = engine.run("""
@@ -277,7 +261,6 @@ public class ImportTextProgramTest {
         assertEquals("Error:Script text import is not available", text(result));
     }
 
-    // The gate applies through dynamic import too
     @Test
     public void test_import_text_disabled_via_dynamic_import() {
         final var result = engine.run("""
@@ -292,7 +275,6 @@ public class ImportTextProgramTest {
         assertEquals("Script text import is not available", text(result));
     }
 
-    // Every static import form binds the script module
     @Test
     public void test_script_module_import_forms() {
         assertEquals(1, number(run("""
@@ -305,7 +287,6 @@ public class ImportTextProgramTest {
                 """)));
     }
 
-    // A malformed source is a catchable SyntaxError, not an abort
     @Test
     public void test_import_text_syntax_error_is_catchable() {
         final var result = run("""
@@ -320,7 +301,6 @@ public class ImportTextProgramTest {
         assertEquals("SyntaxError", text(result));
     }
 
-    // An error thrown by the module body reaches the importer's own catch
     @Test
     public void test_import_text_thrown_error_is_catchable() {
         final var result = run("""
@@ -335,7 +315,6 @@ public class ImportTextProgramTest {
         assertEquals("from module", text(result));
     }
 
-    // An empty source is a valid module with no exports
     @Test
     public void test_import_text_empty_source() {
         final var result = run("""
@@ -346,7 +325,6 @@ public class ImportTextProgramTest {
         assertEquals("undefined|1", text(result));
     }
 
-    // A missing argument coerces to the string "undefined", which is a valid (empty) program
     @Test
     public void test_import_text_without_argument() {
         final var result = run("""
@@ -356,7 +334,6 @@ public class ImportTextProgramTest {
         assertEquals("undefined", text(result));
     }
 
-    // A non-string source is coerced before parsing
     @Test
     public void test_import_text_coerces_source() {
         final var result = run("""
@@ -366,7 +343,6 @@ public class ImportTextProgramTest {
         assertEquals("undefined", text(result));
     }
 
-    // A script imported by text can itself import a third script, transitively
     @Test
     public void test_import_text_nests_three_levels() {
         final var result = run("""
@@ -383,7 +359,6 @@ public class ImportTextProgramTest {
         assertEquals(111, number(result));
     }
 
-    // A diamond graph evaluates the shared leaf once and hands both branches the same namespace
     @Test
     public void test_import_text_diamond_evaluates_shared_module_once() {
         final var database = new FakeDatabaseAccess();
@@ -403,7 +378,6 @@ public class ImportTextProgramTest {
         assertEquals(1, database.calls.stream().filter(call -> call.equals("delete:d/c/leaf")).count());
     }
 
-    // A nested module keeps the shared realm and event loop at depth
     @Test
     public void test_import_text_nested_module_shares_realm_and_loop() {
         final var result = run("""
@@ -418,7 +392,6 @@ public class ImportTextProgramTest {
         assertEquals("true|2", text(result));
     }
 
-    // A top-level return inside an imported module does not leak into the importer's contract
     @Test
     public void test_import_text_module_top_level_return_is_discarded() {
         final var result = run("""

@@ -12,8 +12,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-// The page-level fixture the PK-index and write suites both drive: a FileSystem rooted at the test
-// path, an entry placed on a chosen page, and a read back through the index rather than the cache.
 final class FileSystemPages {
 
     private FileSystemPages() {

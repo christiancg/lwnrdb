@@ -58,7 +58,6 @@ public class SimpleJsMetricsTest {
                 "expected " + big.instructions() + " > " + small.instructions());
     }
 
-    // An unlimited budget still reports a figure: the count is not derived from what is left.
     @Test
     public void test_unlimited_budget_still_counts_instructions() {
         final var result = run("let t = 0; for (let i = 0; i < 20; i++) { t += i; } return t;");
@@ -73,7 +72,6 @@ public class SimpleJsMetricsTest {
         assertTrue(result.getMetrics().instructions() > 0);
     }
 
-    // The holder is filled by the interpreter's finally, so an abort reports what it burned.
     @Test
     public void test_an_exhausted_instruction_budget_still_reports_metrics() {
         final var result = engine.run("while (true) {}", withLimits(new ResourceLimits(500, -1, 100)));

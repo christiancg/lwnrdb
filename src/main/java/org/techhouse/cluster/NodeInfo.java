@@ -125,9 +125,8 @@ public class NodeInfo {
     }
 
     /**
-     * Adopts the telemetry a peer reports about itself - load and admin-catch-up state, the fields that move
-     * on their own between gossip rounds. Deliberately separate from the membership fields: a change here is
-     * not a membership change, so it must not fire the membership listeners.
+     * Deliberately separate from the membership fields: a change here is not a membership change, so it must
+     * not fire the membership listeners.
      */
     public void copyTelemetryFrom(NodeInfo incoming) {
         scriptLoad = incoming.getScriptLoad();

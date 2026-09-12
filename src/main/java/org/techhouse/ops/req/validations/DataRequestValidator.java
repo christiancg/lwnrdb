@@ -90,9 +90,6 @@ public final class DataRequestValidator {
         return validateAggregationSteps(request.getAggregationSteps());
     }
 
-    // Validates each step in isolation and enforces the only positional rule: COUNT collapses the
-    // stream to a single {count:N} document, so it is only meaningful as the final step. A COUNT
-    // anywhere but last (e.g. followed by a FILTER) is rejected.
     static ValidationResult validateAggregationSteps(List<BaseAggregationStep> steps) {
         for (var i = 0; i < steps.size(); i++) {
             final var step = steps.get(i);

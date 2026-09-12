@@ -38,10 +38,8 @@ public class IndexHelperTest {
         TestUtils.standardTearDown();
     }
 
-    // Creating new index for field with primitive values (number, string, boolean)
     @Test
     public void test_create_index_with_primitive_values() throws Exception {
-        // Arrange
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
         String fieldName = "testField";
@@ -66,11 +64,9 @@ public class IndexHelperTest {
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj3));
 
-        // Act
         IndexHelper.createIndex(dbName, collName, fieldName);
         final var index = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
 
-        // Assert
         assertNotNull(index);
         assertEquals(1, index.size());
         final var first = index.stream().findFirst();
@@ -78,10 +74,8 @@ public class IndexHelperTest {
         assertTrue(first.get().getIds().contains("1"));
     }
 
-    // Handling null values in indexed fields
     @Test
     public void test_create_index_with_null_values() throws Exception {
-        // Arrange
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
         String fieldName = "testField";
@@ -101,11 +95,9 @@ public class IndexHelperTest {
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
         cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
 
-        // Act
         IndexHelper.createIndex(dbName, collName, fieldName);
         final var index = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
 
-        // Assert
         assertNotNull(index);
         assertEquals(1, index.size());
         final var first = index.stream().findFirst();
@@ -113,7 +105,6 @@ public class IndexHelperTest {
         assertTrue(first.get().getIds().contains("1"));
     }
 
-    // Successfully delete index file for valid database, collection and field name
     @Test
     public void test_drop_index_success() throws IOException {
         String dbName = TestGlobals.DB;
@@ -126,7 +117,6 @@ public class IndexHelperTest {
         assertNull(index);
     }
 
-    // Return false when collection folder does not exist
     @Test
     public void test_drop_index_nonexistent_collection() {
         String dbName = TestGlobals.DB;
@@ -136,7 +126,6 @@ public class IndexHelperTest {
         assertFalse(result);
     }
 
-    // Return false when collection folder does not exist
     @Test
     public void test_drop_index_existent_collection_but_no_index() {
         String dbName = TestGlobals.DB;
@@ -185,7 +174,6 @@ public class IndexHelperTest {
                 kind);
     }
 
-    // createIndex builds separate Object and Array hash index files for object/array valued fields
     @Test
     public void test_create_index_with_object_and_array_values() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -196,7 +184,6 @@ public class IndexHelperTest {
 
         final var objIndex = readHashIndex(IndexKind.OBJECT);
         assertNotNull(objIndex);
-        // Two distinct objects: {n:1} (ids o1, o2) and {n:2} (id o3)
         assertEquals(2, objIndex.size());
         final var objIds = objIndex.stream().flatMap(e -> e.getIds().stream())
                 .collect(java.util.stream.Collectors.toSet());
@@ -207,7 +194,6 @@ public class IndexHelperTest {
         assertEquals(1, arrIndex.size());
         assertTrue(arrIndex.getFirst().getIds().contains("a1"));
 
-        // The scalar value still lands in its own String index
         final var stringIndex = cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "data",
                 String.class);
         assertNotNull(stringIndex);

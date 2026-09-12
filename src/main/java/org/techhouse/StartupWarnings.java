@@ -5,8 +5,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.log.Logger;
 import org.techhouse.simplejs.host.HostAllowlist;
 
-// Configuration that starts the server but should not be left as-is in production: a default
-// credential, an outbound-fetch surface, or memory budgets that together exceed the heap.
 public final class StartupWarnings {
     private static final Configuration config = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(StartupWarnings.class);
@@ -22,8 +20,6 @@ public final class StartupWarnings {
         }
     }
 
-    // Outbound HTTP from stored code is a capability worth naming at startup rather than leaving in a
-    // config file: an operator reading the log should be able to see what this node may reach.
     public static void warnIfScriptFetchEnabled() {
         if (!config.isScriptFetchEnabled()) {
             return;
@@ -43,8 +39,6 @@ public final class StartupWarnings {
         }
     }
 
-    // The metadata caps are budgeted separately from maxMemory, so the heap a fully-warm node needs is the
-    // sum of the two. Warned about together because an operator sizing -Xmx from maxMemory alone undercounts.
     public static void warnIfCachesExceedHeap() {
         final var xmx = Runtime.getRuntime().maxMemory();
         final var metadataCap = config.getMetadataCacheMaxBytes();
@@ -59,9 +53,6 @@ public final class StartupWarnings {
         }
     }
 
-    // The concurrent interpreters this node can hold at once: client runs are capped by
-    // maxConcurrentScripts, triggers and schedules by their own worker pools. Each may allocate up to
-    // scriptMaxMemoryBytes, and that is additive with the cache budgets.
     private static long scriptBudgetBytes() {
         if (!config.isScriptsEnabled()) {
             return 0L;

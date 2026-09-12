@@ -62,7 +62,6 @@ public final class AuthorizationChecker {
                     : AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
-        // DROP_DATABASE requires ownership — global permission alone is not sufficient
         if (type == OperationType.DROP_DATABASE) {
             final var dbEntry = cache.getAdminDbEntry(req.getDatabaseName());
             if (dbEntry != null && dbEntry.isOwner(user.get_id())) {
@@ -76,28 +75,22 @@ public final class AuthorizationChecker {
             return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
-        // Owners have full access to their database and all its collections
         final var dbEntry = cache.getAdminDbEntry(dbName);
         if (dbEntry != null && dbEntry.isOwner(user.get_id())) {
             return AuthorizationResult.allow();
         }
 
-        // Admins (allowed above) and owners (just above) may always run a script; anybody else needs the
-        // script permission for this specific database. Each operation the script issues is authorized on
-        // its own request, so the grant alone never widens what the script may read or write.
+        // Each operation the script issues is authorized on its own request, so this grant alone never
+        // widens what the script may read or write.
         if (type == OperationType.RUN_SCRIPT || type == OperationType.CALL_PROCEDURE) {
             return user.canRunScripts(dbName)
                     ? AuthorizationResult.allow()
                     : AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
-        // Installing is its own level rather than a fall-through to the collection-permission check below.
-        // A procedure called through CALL_PROCEDURE runs with the caller's authority, so whoever installs
-        // one hands every higher-privileged caller code to execute - and a trigger runs with the
-        // installer's authority, which makes installing strictly more powerful than writing. Neither
-        // should follow from a READ_WRITE grant on a collection. These ops are deliberately NOT in
-        // ADMIN_ONLY_OPERATIONS: that set is tested before the ownership short-circuit above, so putting
-        // them there would lock out database owners.
+        // Installing is its own level: a procedure runs with the caller's authority and a trigger with the
+        // installer's, so it must not follow from READ_WRITE. Not in ADMIN_ONLY_OPERATIONS, which is tested
+        // before the ownership short-circuit above and would lock out database owners.
         if (isScriptManagementOperation(type)) {
             return user.canManageScripts(dbName)
                     ? AuthorizationResult.allow()
@@ -111,8 +104,6 @@ public final class AuthorizationChecker {
             return AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
-        // Aggregations and LISTEN may read additional collections through JOIN steps (within the
-        // same database). The user must have READ access to every joined collection as well.
         final java.util.List<org.techhouse.ops.req.agg.BaseAggregationStep> stepsToCheck;
         if (req instanceof AggregateRequest aggReq && aggReq.getAggregationSteps() != null) {
             stepsToCheck = aggReq.getAggregationSteps();
@@ -128,9 +119,8 @@ public final class AuthorizationChecker {
             }
         }
 
-        // A pipeline carrying a script executes code, which is a strictly wider capability than the READ
-        // the operation itself needs - so it takes the same per-database grant RUN_SCRIPT does. Admins and
-        // owners short-circuited above, exactly as they do for RUN_SCRIPT.
+        // A pipeline carrying a script executes code, so it takes the same per-database grant RUN_SCRIPT
+        // does; admins and owners short-circuited above.
         if (AggregationStepValidator.containsScript(stepsToCheck) && !user.canRunScripts(dbName)) {
             return AuthorizationResult.deny("action is forbidden, no permissions");
         }

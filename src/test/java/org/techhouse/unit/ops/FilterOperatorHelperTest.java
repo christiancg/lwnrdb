@@ -35,7 +35,6 @@ public class FilterOperatorHelperTest {
         TestUtils.standardTearDown();
     }
 
-    // getTester: field does not exist in object returns false
     @Test
     public void test_missing_field_returns_false() {
         JsonObject obj = new JsonObject();
@@ -66,8 +65,6 @@ public class FilterOperatorHelperTest {
         addObjEntry(cache, "o2", 1);
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
 
-        // Simulate a background-processing failure: o1's value changes to {n:99} in the document store,
-        // but the Object hash index still maps hash({n:1}) -> o1 (a stale entry, and o1 is not pending).
         addObjEntry(cache, "o1", 99);
 
         FieldOperator op = new FieldOperator(FieldOperatorType.EQUALS, "data", objField(1));

@@ -63,8 +63,8 @@ public class RequestValidator {
             case SET_PASSWORD -> UserRequestValidator.validateSetPassword((SetPasswordRequest) request);
             case LISTEN -> ControlRequestValidator.validateListen((ListenRequest) request);
             case STOP_LISTEN -> ControlRequestValidator.validateStopListen((StopListenRequest) request);
-            // Transaction control operations carry no db/coll/payload of their own — the transaction is
-            // scoped to the connection. Authentication is still enforced in MessageProcessor.
+            // Transaction control operations carry no db/coll/payload; authentication is still enforced
+            // in MessageProcessor.
             case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION, LIST_TRANSACTIONS, LIST_SCRIPTS ->
                 ValidationResult.ok();
             case RESOLVE_TRANSACTION ->

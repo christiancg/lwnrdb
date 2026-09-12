@@ -15,7 +15,6 @@ public final class ControlRequestValidator {
     private ControlRequestValidator() {
     }
 
-    // The run id is a UUID the server itself minted, so anything else names no run that could ever exist.
     static ValidationResult validateCancelScript(CancelScriptRequest request) {
         final var runId = request.getRunId();
         if (runId == null || runId.isBlank()) {
@@ -73,8 +72,7 @@ public final class ControlRequestValidator {
         if (request.getAggregationSteps() == null) {
             return ValidationResult.fail("LISTEN request requires an aggregationSteps array");
         }
-        // A LISTEN pipeline re-runs on every matching change, so a script in it would execute per write
-        // with no client-visible budget to bound it.
+        // A LISTEN pipeline re-runs on every matching change, so a script in it would run per write.
         if (AggregationStepValidator.containsScript(request.getAggregationSteps())) {
             return ValidationResult.fail(ErrorCode.SCRIPT_NOT_ALLOWED_IN_LISTEN,
                     ErrorCode.SCRIPT_NOT_ALLOWED_IN_LISTEN.getDefaultMessage());

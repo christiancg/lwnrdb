@@ -95,7 +95,7 @@ public class StackTraceProgramTest {
     }
 
     // A function expression assigned to a binding takes that binding's name, so a truly anonymous frame
-    // needs a callee the spec never names
+    // needs a callee the spec never names.
     @Test
     public void test_anonymous_frame_is_rendered() {
         final var result = run("""
@@ -106,7 +106,6 @@ public class StackTraceProgramTest {
         assertTrue(result.getErrorStack().getFirst().startsWith("<anonymous> ("), result.getErrorStack()::toString);
     }
 
-    // A suspended generator's frame must not appear in the trace of whatever resumed it
     @Test
     public void test_suspended_generator_frame_is_not_visible_to_its_consumer() {
         final var result = run("""
@@ -196,7 +195,6 @@ public class StackTraceProgramTest {
         assertEquals(List.of("main:1:1"), result.getErrorStack());
     }
 
-    // A sandbox abort is not a program error, so it deliberately reports no frames
     @Test
     public void test_limit_abort_carries_no_stack() {
         final var host = new SimpleHostBindings(new JsonObject(), null, null, new ResourceLimits(2000, 5000, 20));
@@ -227,7 +225,6 @@ public class StackTraceProgramTest {
         assertTrue(result.getErrorStack().getLast().startsWith("... "), result.getErrorStack()::toString);
     }
 
-    // Two runs on different threads must not share or interleave their stacks
     @Test
     public void test_concurrent_runs_keep_separate_stacks() throws Exception {
         final var ready = new CountDownLatch(2);
@@ -252,7 +249,6 @@ public class StackTraceProgramTest {
         assertTrue(second.get().getFirst().startsWith("beta ("), second.get()::toString);
     }
 
-    // The engine's own `stack` accessor renders the same frames
     @Test
     public void test_error_stack_property_renders_frames() {
         final var result = run("""

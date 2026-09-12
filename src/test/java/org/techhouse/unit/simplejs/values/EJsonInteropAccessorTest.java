@@ -27,7 +27,6 @@ public class EJsonInteropAccessorTest {
         return object;
     }
 
-    // Without an interpreter to call the getter with, the data-property-only behaviour is kept
     @Test
     public void test_reads_data_value_when_ops_is_null() {
         final var converted = EJsonInterop.toHostEjson(withGetter()).asJsonObject();
@@ -56,7 +55,6 @@ public class EJsonInteropAccessorTest {
         assertEquals("RangeError", result.getErrorName());
     }
 
-    // Enumerability still filters first, so a non-enumerable accessor stays out
     @Test
     public void test_non_enumerable_accessor_is_skipped() {
         final var result = run("""
@@ -84,7 +82,6 @@ public class EJsonInteropAccessorTest {
                 result.getValue().asJsonArray().get(0).asJsonObject().get("n").asJsonNumber().getValue().intValue());
     }
 
-    // The cycle guard still fires when a getter hands back the object being converted
     @Test
     public void test_cyclic_getter_is_rejected() {
         final var result = run("""

@@ -39,9 +39,6 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
-// Covers the index read/write consistency layer: the PendingIndexWrites overlay (no false positives
-// or negatives across FILTER/COUNT/GROUP_BY/SORT/DISTINCT/JOIN), evict-on-write convergence, and the
-// UserCache snapshot/eviction helpers.
 public class IndexConsistencyTest {
     private static final String STATUS = "status";
     private Cache cache;
@@ -60,8 +57,6 @@ public class IndexConsistencyTest {
     public void tearDown() throws NoSuchFieldException, IllegalAccessException {
         TestUtils.standardTearDown();
     }
-
-    // ── helpers ──────────────────────────────────────────────────────────────
 
     private void addDoc(String id, JsonBaseElement value) {
         final var obj = new JsonObject();
@@ -83,10 +78,6 @@ public class IndexConsistencyTest {
                 .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue()).collect(Collectors.toSet());
     }
 
-    // ── evict-on-write convergence (Problem 3) ─────────────────────────────--
-
-    // After the background entity event runs, the index is rewritten + cache evicted and the pending
-    // mark cleared, so the document is found via the index alone (no longer via the overlay).
     @Test
     public void test_background_indexing_converges_and_clears_pending() throws IOException, InterruptedException {
         addDoc("1", new JsonString("active"));
@@ -109,8 +100,6 @@ public class IndexConsistencyTest {
         EventProcessorHelper.processEvent(new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry));
     }
 
-    // ── DELETE (Finding 1) ─────────────────────────────────────────────────--
-
     private void saveViaProcessor(OperationProcessor processor, String id, String value) {
         final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         final var obj = new JsonObject();
@@ -123,14 +112,10 @@ public class IndexConsistencyTest {
         processor.processMessage(save);
     }
 
-    // ── order-independent re-read (Finding 2) ──────────────────────────────--
-
-    // Index maintenance indexes the CURRENT committed document, not a (possibly stale) event snapshot.
     @Test
     public void test_update_indexes_uses_current_doc_not_snapshot() throws IOException, InterruptedException {
         addDoc("1", new JsonString("B"));
         enableIndex();
-        // The document's current value moves to C; maintenance must index C, not the old B.
         addDoc("1", new JsonString("C"));
 
         IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "1");
@@ -139,12 +124,10 @@ public class IndexConsistencyTest {
         assertTrue(filterIds(new JsonString("B")).isEmpty());
     }
 
-    // When the document no longer exists (deleted), maintenance removes it from the index.
     @Test
     public void test_update_indexes_removes_when_doc_absent() throws IOException, InterruptedException {
         addDoc("1", new JsonString("active"));
         enableIndex();
-        // Simulate a committed delete: gone from cache (and never in the PK index in this test).
         cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "1");
 
         IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "1");
@@ -152,8 +135,6 @@ public class IndexConsistencyTest {
         assertTrue(filterIds(new JsonString("active")).isEmpty());
     }
 
-    // Re-applying maintenance for the same id (simulating an older event running last) converges to the
-    // current value rather than regressing to a stale one.
     @Test
     public void test_update_indexes_is_idempotent_across_reorder() throws IOException, InterruptedException {
         addDoc("1", new JsonString("old"));
@@ -167,7 +148,6 @@ public class IndexConsistencyTest {
         assertTrue(filterIds(new JsonString("old")).isEmpty());
     }
 
-    // bulkUpdateIndexes upserts present ids and removes absent (deleted) ids in one pass.
     @Test
     public void test_bulk_update_indexes_mixed_present_and_absent() throws IOException, InterruptedException {
         addDoc("p", new JsonString("present"));
@@ -190,8 +170,6 @@ public class IndexConsistencyTest {
         assertDoesNotThrow(() -> IndexHelper.bulkUpdateIndexes(TestGlobals.DB, "nonexistent_coll", List.of("1", "2")));
     }
 
-    // ── CREATE_INDEX / DROP_INDEX synchronous registration (Finding 3) ───────--
-
     private Set<String> indexesOf() {
         return cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).getIndexes();
     }
@@ -208,15 +186,11 @@ public class IndexConsistencyTest {
         final var resp = processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "status"));
 
         assertEquals(OperationStatus.OK, resp.getStatus());
-        // Registered synchronously — no IndexEvent processed in this test.
         assertTrue(indexesOf().contains("status"));
-        // The pre-existing documents are present in the freshly built index.
         assertEquals(Set.of("1"), filterIds(new JsonString("active")));
         assertEquals(Set.of("2"), filterIds(new JsonString("inactive")));
     }
 
-    // DROP_INDEX deletes the index files and unregisters the field synchronously, so the field is no
-    // longer a known index the instant the request returns.
     @Test
     public void test_drop_index_unregisters_field_synchronously() {
         final var processor = new OperationProcessor();
@@ -243,7 +217,7 @@ public class IndexConsistencyTest {
         final var del = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
         del.set_id("a");
         processor.processMessage(del);
-        saveViaProcessor(processor, "b", "beta2"); // update -> compacts the page, shifts "c"
+        saveViaProcessor(processor, "b", "beta2");
 
         // Force positioned reads from disk for the survivors.
         cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "b");
@@ -272,7 +246,6 @@ public class IndexConsistencyTest {
         assertEquals(OperationStatus.OK, resp.getStatus());
         assertEquals(List.of("a"), resp.getUpdated(), "smallest id must be treated as an update");
         assertTrue(resp.getInserted().isEmpty(), "must not insert a duplicate");
-        // No duplicate PK entry: exactly three ids remain.
         assertEquals(3, cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).size());
         assertEquals("alpha2", readStatus(processor, "a"));
     }
@@ -284,9 +257,6 @@ public class IndexConsistencyTest {
         return resp.getObject().get("status").asJsonString().getValue();
     }
 
-    // ── UserCache helpers ────────────────────────────────────────────────────
-
-    // evictFieldIndexAllTypes drops every per-type list for a field while leaving other fields cached.
     @Test
     public void test_evict_field_index_all_types_removes_only_the_field() throws Exception {
         final var userCache = IocContainer.get(UserCache.class);
@@ -305,7 +275,6 @@ public class IndexConsistencyTest {
         assertEquals(Set.of("other" + Globals.COLL_IDENTIFIER_SEPARATOR + "Double"), inner.keySet());
     }
 
-    // When the last field is evicted, the collection's index map entry is removed entirely.
     @Test
     public void test_evict_field_index_all_types_removes_empty_collection_entry() throws Exception {
         final var userCache = IocContainer.get(UserCache.class);
@@ -322,7 +291,6 @@ public class IndexConsistencyTest {
         assertFalse(fieldIndexMap.containsKey(collId));
     }
 
-    // getIdsFromIndex returns a detached snapshot that does not alias cached state.
     @Test
     public void test_get_ids_from_index_returns_detached_snapshot() throws IOException {
         addDoc("1", new JsonString("active"));

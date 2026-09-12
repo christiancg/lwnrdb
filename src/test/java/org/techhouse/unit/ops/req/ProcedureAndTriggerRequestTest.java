@@ -42,7 +42,6 @@ public class ProcedureAndTriggerRequestTest {
         assertEquals(5L, request.getStampedVersion());
         assertEquals(6L, request.getStampedUpdatedAt());
         assertEquals("alice", request.getStampedUpdatedBy());
-        // Absent enabled reads as enabled
         assertTrue(request.isEnabled());
         request.setEnabled(false);
         assertFalse(request.isEnabled());
@@ -66,7 +65,6 @@ public class ProcedureAndTriggerRequestTest {
     public void test_call_procedure_request_accessors() {
         final var request = new CallProcedureRequest();
         assertEquals(OperationType.CALL_PROCEDURE, request.getType());
-        // Absent args read as an empty object rather than null
         assertTrue(request.getArgs().entrySet().isEmpty());
         request.setProcedureName("p");
         final var args = new JsonObject();
@@ -99,7 +97,6 @@ public class ProcedureAndTriggerRequestTest {
         assertEquals(4L, request.getStampedUpdatedAt());
         assertEquals("bob", request.getStampedUpdatedBy());
         assertEquals("owner", request.getStampedDefiner());
-        // Defaults: cascade off, enabled on
         assertFalse(request.isAllowCascade());
         assertTrue(request.isEnabled());
         request.setAllowCascade(true);

@@ -3,9 +3,8 @@ package org.techhouse.fs;
 import java.io.File;
 import org.techhouse.config.Globals;
 
-// Every physical path in the store is built here. The reserved logical db name ADMIN_PAGES_DB_NAME
-// maps to the physical admin/pages subfolder, and because all builders funnel through
-// databaseFolder, this class is the only place that translation happens.
+// Every builder funnels through databaseFolder, making this the only place the reserved logical db
+// name ADMIN_PAGES_DB_NAME is translated to the physical admin/pages subfolder.
 final class FilePaths {
     private String dbPath;
 
@@ -67,9 +66,8 @@ final class FilePaths {
         return new File(databaseFolder(dbName).getPath() + Globals.FILE_SEPARATOR + Globals.PROCEDURES_FOLDER);
     }
 
-    // The procedure name becomes a path segment here and nowhere else. RequestValidator has already
-    // matched it against the collection-name rule (3-64 alphanumerics plus '_' and '-'), so a separator,
-    // a dot or a '..' segment is unrepresentable by the time it reaches this method.
+    // The name becomes a path segment here and nowhere else; RequestValidator has already matched it
+    // against the collection-name rule, so a separator or a '..' segment is unrepresentable.
     File procedureFile(String dbName, String name) {
         return new File(
                 proceduresFolder(dbName).getPath() + Globals.FILE_SEPARATOR + name + Globals.PROCEDURE_FILE_EXTENSION);
@@ -79,8 +77,6 @@ final class FilePaths {
         return new File(databaseFolder(dbName).getPath() + Globals.FILE_SEPARATOR + Globals.SCHEDULES_FOLDER);
     }
 
-    // Same contract as procedureFile: the schedule name has already been matched against the
-    // collection-name rule, so it cannot contain a separator, a dot or a '..' segment.
     File scheduleFile(String dbName, String name) {
         return new File(
                 schedulesFolder(dbName).getPath() + Globals.FILE_SEPARATOR + name + Globals.SCHEDULE_FILE_EXTENSION);

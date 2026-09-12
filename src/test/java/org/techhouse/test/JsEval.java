@@ -5,11 +5,6 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * Runs a snippet through the interpreter and unwraps the result as the type the assertion needs.
- * Shared so that the SimpleJS suites - and the sibling classes a large one is split into - do not
- * each carry their own copy.
- */
 public final class JsEval {
 
     private JsEval() {

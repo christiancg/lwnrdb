@@ -27,7 +27,6 @@ public class MapOperatorArithmeticTest {
         TestUtils.releaseAllLocks();
     }
 
-    // Process MapOperator with ADD_FIELD type and valid numeric operations (sum, multiply, avg)
     @Test
     public void test_add_field_numeric_operations() {
         JsonObject input = new JsonObject();
@@ -60,7 +59,6 @@ public class MapOperatorArithmeticTest {
         assertEquals(15.0, result.get("avg_result").asJsonNumber().getValue());
     }
 
-    // Calculate mathematical operations (pow, root, abs) on numeric fields
     @Test
     public void test_calculate_math_operations() {
         JsonObject jsonObject = new JsonObject();
@@ -81,7 +79,6 @@ public class MapOperatorArithmeticTest {
         assertEquals(4.0, absResult.get("absResult").asJsonNumber().getValue().doubleValue());
     }
 
-    // Handle division by zero in numeric operations
     @Test
     public void test_division_by_zero() {
         JsonObject jsonObject = new JsonObject();
@@ -101,7 +98,6 @@ public class MapOperatorArithmeticTest {
                 "Result should be infinite due to division by zero");
     }
 
-    // Process size operation on strings and arrays
     @Test
     public void test_size_operation_on_strings_and_arrays() {
         JsonObject jsonObject = new JsonObject();
@@ -127,7 +123,6 @@ public class MapOperatorArithmeticTest {
         assertEquals(2, result.get("arraySize").asJsonNumber().asInteger(), "The size of the array should be 2.");
     }
 
-    // Sum multiple numeric values from different fields and constants
     @Test
     public void test_sum_multiple_numeric_values() {
         JsonObject jsonObject = new JsonObject();
@@ -143,7 +138,6 @@ public class MapOperatorArithmeticTest {
         assertEquals(35, result.get("result").asJsonNumber().asInteger());
     }
 
-    // Calculate average of mixed field references and direct numbers
     @Test
     public void test_calculate_average_mixed_fields_and_numbers() {
         JsonObject jsonObject = new JsonObject();
@@ -161,7 +155,6 @@ public class MapOperatorArithmeticTest {
         assertEquals(20.0, result.get("average").asJsonNumber().getValue().doubleValue());
     }
 
-    // Handle empty operand lists in numeric operations
     @Test
     public void test_handle_empty_operand_list_in_numeric_operations() {
         JsonObject jsonObject = new JsonObject();
@@ -175,7 +168,6 @@ public class MapOperatorArithmeticTest {
         assertEquals(0.0, result.get("sum").asJsonNumber().getValue().doubleValue());
     }
 
-    // ADD_FIELD with a false condition does not add the field
     @Test
     public void test_add_field_with_false_condition_skips_operation() {
         JsonObject input = new JsonObject();
@@ -193,7 +185,6 @@ public class MapOperatorArithmeticTest {
         assertFalse(result.has("doubled"));
     }
 
-    // Condition with XOR conjunction matching exactly one operator adds the field
     @Test
     public void test_xor_condition_one_match_adds_field() {
         JsonObject input = new JsonObject();

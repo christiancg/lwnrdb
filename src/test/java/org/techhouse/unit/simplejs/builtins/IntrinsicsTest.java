@@ -40,7 +40,6 @@ public class IntrinsicsTest {
         return ((JsNumber) Interpreter.run(source)).getValue();
     }
 
-    // An unknown name is not resolved by any family
     @Test
     public void test_unknown_name_is_not_resolved() {
         assertNull(ArrayBuiltins.getMethod(new JsArray(), "nope", null, null));
@@ -55,46 +54,38 @@ public class IntrinsicsTest {
         assertNull(FunctionProtoBuiltins.metadata(new JsNativeFunction("f", (_, _) -> null), "nope"));
     }
 
-    // a subclass of BigInt with no JsObject internal state wraps the produced primitive, so a
-    // BigInt.prototype method resolves the receiver via the unwrap fallback rather than direct instanceof
     @Test
     public void test_bigint_subclass_unwraps() {
         assertEquals("5", run("class B extends BigInt { constructor(v) { super(v); } } new B(5).toString()"));
     }
 
-    // a subclass of RegExp wraps the produced primitive for RegExp.prototype methods
     @Test
     public void test_regexp_subclass_unwraps() {
         assertTrue(bool("class R extends RegExp { constructor(p) { super(p); } } new R('a').test('a')"));
     }
 
-    // a subclass of Promise wraps the produced primitive for Promise.prototype methods
     @Test
     public void test_promise_subclass_unwraps() {
         assertEquals("object", run("class P extends Promise { constructor(e) { super(e); } } "
                 + "typeof new P((res) => res(1)).then(() => {})"));
     }
 
-    // a subclass of Set wraps the produced primitive for Set.prototype methods
     @Test
     public void test_set_subclass_unwraps() {
         assertTrue(bool("class MySet extends Set { constructor(v) { super(v); } } new MySet([1, 2]).has(1)"));
     }
 
-    // a subclass of Date wraps the produced primitive for Date.prototype methods
     @Test
     public void test_date_subclass_unwraps() {
         assertEquals(0, num("class D extends Date { constructor(v) { super(v); } } new D(0).getTime()"));
     }
 
-    // a subclass of DataView wraps the produced primitive for DataView.prototype methods
     @Test
     public void test_data_view_subclass_unwraps() {
         assertEquals(0,
                 num("class V extends DataView { constructor(b) { super(b); } } new V(new ArrayBuffer(4)).getInt8(0)"));
     }
 
-    // %ThrowTypeError% is one frozen, anonymous function shared by every poison-pill accessor
     @Test
     public void throwTypeErrorIsASharedFrozenIntrinsic() {
         assertTrue(bool("""
@@ -106,7 +97,6 @@ public class IntrinsicsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("(function () { return arguments; })().callee"));
     }
 
-    // Generator/async function objects sit on their own intrinsic prototypes, not Function.prototype
     @Test
     public void generatorAndAsyncFunctionIntrinsicsExist() {
         assertEquals("GeneratorFunction", run("Object.getPrototypeOf(function* () {}).constructor.name"));
@@ -123,7 +113,6 @@ public class IntrinsicsTest {
                 """));
     }
 
-    // A regex own property is a real own property, so RegExpExec can see an overridden `exec`
     @Test
     public void regExpOwnPropertyAssignmentLands() {
         assertEquals(1, num("const r = /b/; r.exec = () => 1; r.exec()"));
@@ -131,9 +120,6 @@ public class IntrinsicsTest {
         assertTrue(bool("const r = /b/; r.exec = () => 1; typeof /c/.exec === 'function'"));
     }
 
-    // Map.prototype.size/Set.prototype.size are real accessor properties, reachable off a foreign
-    // receiver (which must throw) and off a builtin-subclass instance (which wraps its JsMap/JsSet in
-    // the JsObject primitive slot, so the accessor's brand check has to unwrap it, not reject it).
     @Test
     public void mapAndSetSizeAreAccessorsThatHandleSubclasses() {
         assertEquals(2, num("(new Map([['a', 1], ['b', 2]])).size"));

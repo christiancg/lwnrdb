@@ -26,11 +26,9 @@ public class UserCacheCollectionTest {
         TestUtils.standardTearDown();
     }
 
-    // Handles the case where the collection is not in the cache
     @Test
     public void handles_collection_not_in_cache() throws Exception {
         TestUtils.createTestDatabaseAndCollection();
-        // Arrange
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
         PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100, 0);
@@ -47,10 +45,8 @@ public class UserCacheCollectionTest {
 
         when(fsMock.getById(idxEntry)).thenReturn(expectedEntry);
 
-        // Act
         DbEntry result = cache.getById(dbName, collName, idxEntry);
 
-        // Assert
         assertEquals(expectedEntry, result);
     }
 }

@@ -13,7 +13,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.host.ConsoleCapture;
 
 public class ConsoleCaptureTest {
-    // Lines below the cap are all retained, in order, with no truncation flag
     @Test
     public void test_retains_lines_under_cap() {
         final var capture = new ConsoleCapture(10, 100);
@@ -24,7 +23,6 @@ public class ConsoleCaptureTest {
         assertFalse(capture.isTruncated());
     }
 
-    // Over the cap the ring buffer drops the OLDEST lines and keeps the newest
     @Test
     public void test_evicts_oldest_over_cap() {
         final var capture = new ConsoleCapture(2, 100);
@@ -35,7 +33,6 @@ public class ConsoleCaptureTest {
         assertTrue(capture.isTruncated());
     }
 
-    // A single line longer than the per-line cap is clipped and flags truncation
     @Test
     public void test_clips_overlong_line() {
         final var capture = new ConsoleCapture(10, 4);
@@ -44,7 +41,6 @@ public class ConsoleCaptureTest {
         assertTrue(capture.isTruncated());
     }
 
-    // A line exactly at the per-line cap is kept whole
     @Test
     public void test_line_at_exact_cap_is_not_clipped() {
         final var capture = new ConsoleCapture(10, 4);
@@ -53,7 +49,6 @@ public class ConsoleCaptureTest {
         assertFalse(capture.isTruncated());
     }
 
-    // A zero line cap disables capture entirely without throwing
     @Test
     public void test_zero_cap_disables_capture() {
         final var capture = new ConsoleCapture(0, 100);
@@ -62,7 +57,6 @@ public class ConsoleCaptureTest {
         assertFalse(capture.isTruncated());
     }
 
-    // A negative line cap behaves like zero
     @Test
     public void test_negative_cap_disables_capture() {
         final var capture = new ConsoleCapture(-1, 100);
@@ -70,7 +64,6 @@ public class ConsoleCaptureTest {
         assertTrue(capture.lines().isEmpty());
     }
 
-    // A non-positive per-line cap means no clipping
     @Test
     public void test_zero_line_char_cap_disables_clipping() {
         final var capture = new ConsoleCapture(10, 0);
@@ -79,7 +72,6 @@ public class ConsoleCaptureTest {
         assertFalse(capture.isTruncated());
     }
 
-    // A null line is captured as the string "null" rather than throwing
     @Test
     public void test_null_line_is_captured_as_text() {
         final var capture = new ConsoleCapture(10, 100);
@@ -87,7 +79,6 @@ public class ConsoleCaptureTest {
         assertEquals(List.of("null"), capture.lines());
     }
 
-    // lines() is an immutable snapshot: it cannot be mutated and does not track later writes
     @Test
     public void test_lines_is_an_immutable_snapshot() {
         final var capture = new ConsoleCapture(10, 100);
@@ -99,7 +90,6 @@ public class ConsoleCaptureTest {
         assertEquals(List.of("a", "b"), capture.lines());
     }
 
-    // Concurrent writers (a fetch settlement and a coroutine body) never corrupt the buffer
     @Test
     public void test_concurrent_writes_are_safe() throws Exception {
         final var capture = new ConsoleCapture(1000, 100);

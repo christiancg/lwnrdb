@@ -5,7 +5,7 @@ import java.util.function.Predicate;
 import java.util.function.Supplier;
 import org.techhouse.config.Globals;
 
-// Misses are held in a cache separate from the values, so a caller naming thousands of nonexistent
+// Misses live in a cache separate from the values, so a caller naming thousands of nonexistent
 // definitions cannot evict the ones in use.
 final class DefinitionCache<T> {
     private final Supplier<BoundedLruCache<T>> values;
@@ -13,8 +13,7 @@ final class DefinitionCache<T> {
     private final String missPrefix;
     private final BiFunction<String, String, T> loader;
 
-    // Resolved per call, not captured: AdminCache owns these caches, and holding a direct reference
-    // would keep answering from a stale one if an instance is ever replaced underneath.
+    // Suppliers, not direct references: AdminCache owns these caches and may replace an instance.
     DefinitionCache(Supplier<BoundedLruCache<T>> values, Supplier<BoundedLruCache<Boolean>> misses, String missPrefix,
             BiFunction<String, String, T> loader) {
         this.values = values;

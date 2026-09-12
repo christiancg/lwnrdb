@@ -33,7 +33,6 @@ public class ParserLoopSyntaxTest {
         return parse(source).getBody().getFirst();
     }
 
-    // a using declaration is allowed in a for-of head
     @Test
     public void test_using_in_for_of_head() {
         final var statement = assertInstanceOf(ForOfStatement.class, firstStatement("for (using r of xs) {}"));
@@ -42,14 +41,12 @@ public class ParserLoopSyntaxTest {
         assertNull(declaration.getDeclarations().getFirst().getInit());
     }
 
-    // `using` before `of` stays the loop variable, not a declaration
     @Test
     public void test_using_as_for_of_variable() {
         final var statement = assertInstanceOf(ForOfStatement.class, firstStatement("for (using of xs) {}"));
         assertInstanceOf(Identifier.class, statement.getLeft());
     }
 
-    // a using declaration is rejected in a for-in head, and needs an initializer in a classic head
     @Test
     public void test_using_rejected_in_for_in_head() {
         assertThrows(SyntaxErrorException.class, () -> parse("for (using k in obj) {}"));
@@ -69,7 +66,6 @@ public class ParserLoopSyntaxTest {
         assertInstanceOf(BinaryExpression.class, loop.getTest());
     }
 
-    // A do-while whose while clause is missing is a parse error
     @Test
     public void test_do_while_missing_while_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("do x; y;"));
@@ -159,13 +155,11 @@ public class ParserLoopSyntaxTest {
         assertThrows(UnexpectedTokenException.class, () -> parse("for (let a, b of y);"));
     }
 
-    // get before an async member is invalid
     @Test
     public void test_get_before_async_member_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("class C { get async foo() {} }"));
     }
 
-    // A for-of loop declares a pattern binding
     @Test
     public void test_for_of_pattern_declaration() {
         final var forOf = assertInstanceOf(ForOfStatement.class, firstStatement("for (const [a, b] of x) {}"));
@@ -173,14 +167,12 @@ public class ParserLoopSyntaxTest {
         assertInstanceOf(ArrayPattern.class, declaration.getDeclarations().getFirst().getId());
     }
 
-    // A for-of loop reinterprets an expression LHS into a pattern
     @Test
     public void test_for_of_pattern_assignment() {
         final var forOf = assertInstanceOf(ForOfStatement.class, firstStatement("for ([a] of x) {}"));
         assertInstanceOf(ArrayPattern.class, forOf.getLeft());
     }
 
-    // A rest element before the end of an array pattern is invalid
     @Test
     public void test_rest_before_end_array_pattern_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("const [...r, a] = x"));

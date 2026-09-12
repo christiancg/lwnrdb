@@ -15,8 +15,6 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
-// Keeps admin/pages in step with what the collections actually hold: the per-collection entry and
-// byte counts, and the page rows themselves.
 public final class AdminPageHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -53,9 +51,7 @@ public final class AdminPageHelper {
         }
         lockAdminPageCollection(dbName, collName);
         try {
-            // Re-check after acquiring the lock: a concurrent drop may have removed the collection
-            // between the caller's early guard and here, which would otherwise cause insertAdminPages
-            // to re-create orphan page metadata for the deleted collection.
+            // Re-check under the lock: a concurrent drop must not lead to orphan page metadata.
             if (!Globals.ADMIN_DB_NAME.equals(dbName) && cache.getAdminCollectionEntry(dbName, collName) == null) {
                 return;
             }

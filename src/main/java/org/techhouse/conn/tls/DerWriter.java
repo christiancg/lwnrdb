@@ -9,11 +9,6 @@ import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
 
-/**
- * Minimal ASN.1 DER encoder, written with only public JDK APIs so the database keeps its
- * zero-dependency promise (the same spirit as the hand-rolled {@code ejson} serializer). It exposes
- * just the building blocks needed to assemble a self-signed X.509 certificate.
- */
 public final class DerWriter {
     static final int TAG_INTEGER = 0x02;
     static final int TAG_BIT_STRING = 0x03;
@@ -31,7 +26,6 @@ public final class DerWriter {
     private DerWriter() {
     }
 
-    /** Wraps the given content in a tag-length-value triple. */
     public static byte[] tlv(int tag, byte[] content) {
         final var out = new ByteArrayOutputStream();
         out.write(tag);
@@ -92,12 +86,10 @@ public final class DerWriter {
         return tlv(TAG_UTC_TIME, text.getBytes(StandardCharsets.US_ASCII));
     }
 
-    /** Encodes an explicit context-specific constructed tag {@code [tagNumber]}. */
     public static byte[] explicit(int tagNumber, byte[] content) {
         return tlv(0xA0 | tagNumber, content);
     }
 
-    /** Encodes a primitive context-specific tag {@code [tagNumber]} (used for GeneralName values). */
     public static byte[] contextPrimitive(int tagNumber, byte[] content) {
         return tlv(0x80 | tagNumber, content);
     }

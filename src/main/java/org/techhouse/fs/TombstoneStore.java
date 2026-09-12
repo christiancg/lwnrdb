@@ -12,9 +12,6 @@ import java.util.Map;
 import java.util.function.ObjLongConsumer;
 import org.techhouse.config.Globals;
 
-// The cluster's delete tombstones (id|version), append-only and deduplicated on read by keeping the
-// highest version per id. A torn line is skipped rather than failing the read, mirroring the
-// self-healing index loaders.
 final class TombstoneStore {
     private TombstoneStore() {
     }
@@ -45,9 +42,6 @@ final class TombstoneStore {
         return result;
     }
 
-    // Keeps only the highest version per id and drops any tombstone older than minVersionToKeep (an
-    // epoch-millis cutoff), so this both deduplicates the append-only file and removes fully-converged
-    // deletes. A missing file is left untouched.
     static void compact(File file, long minVersionToKeep) throws IOException {
         if (!file.exists()) {
             return;
@@ -81,7 +75,6 @@ final class TombstoneStore {
             try {
                 consumer.accept(cleaned.substring(0, sep), Long.parseLong(cleaned.substring(sep + 1)));
             } catch (NumberFormatException ignored) {
-                // A torn line names no usable version, so it cannot participate in the merge.
             }
         }
     }

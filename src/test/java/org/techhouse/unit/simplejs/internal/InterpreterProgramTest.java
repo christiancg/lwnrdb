@@ -18,7 +18,6 @@ public class InterpreterProgramTest {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
-    // A for loop builds a Fibonacci sequence in an array
     @Test
     public void test_fibonacci_by_array() {
         final var source = """
@@ -31,7 +30,6 @@ public class InterpreterProgramTest {
         assertEquals(34, num(source));
     }
 
-    // A while loop computes a factorial
     @Test
     public void test_factorial_by_while() {
         final var source = """
@@ -46,7 +44,6 @@ public class InterpreterProgramTest {
         assertEquals(120, num(source));
     }
 
-    // Nested labeled loops break out of the outer loop on a condition
     @Test
     public void test_nested_labeled_break() {
         final var source = """
@@ -62,13 +59,11 @@ public class InterpreterProgramTest {
         assertEquals(6, num(source));
     }
 
-    // Mixed-precedence arithmetic evaluates left-to-right within precedence levels
     @Test
     public void test_operator_precedence() {
         assertEquals(5, num("let x = 1 + 2 * 3 - 4 / 2; x"));
     }
 
-    // A loop accumulates into an object property
     @Test
     public void test_object_accumulation() {
         final var source = """
@@ -81,7 +76,6 @@ public class InterpreterProgramTest {
         assertEquals(10, num(source));
     }
 
-    // try/catch/finally recovers from a thrown error and still runs cleanup
     @Test
     public void test_try_catch_finally_recovery() {
         final var source = """
@@ -104,7 +98,6 @@ public class InterpreterProgramTest {
         assertEquals("RangeError:done=-1", str(source));
     }
 
-    // A switch-based dispatcher selects a branch with fall-through
     @Test
     public void test_switch_dispatcher() {
         final var source = """
@@ -124,7 +117,6 @@ public class InterpreterProgramTest {
         assertEquals("odd,even", str(source));
     }
 
-    // Object destructuring with a default feeds an array method pipeline
     @Test
     public void test_destructure_and_map() {
         final var source = """
@@ -135,7 +127,6 @@ public class InterpreterProgramTest {
         assertEquals("6,4", str(source));
     }
 
-    // A map/filter/reduce pipeline computes a total
     @Test
     public void test_pipeline() {
         final var source = """
@@ -145,7 +136,6 @@ public class InterpreterProgramTest {
         assertEquals(56, num(source));
     }
 
-    // Object.entries rebuilds a transformed object
     @Test
     public void test_entries_rebuild() {
         final var source = """
@@ -157,7 +147,6 @@ public class InterpreterProgramTest {
         assertEquals("2,4", str(source));
     }
 
-    // JSON round-trips through a transformation
     @Test
     public void test_json_transform() {
         final var source = """
@@ -168,7 +157,6 @@ public class InterpreterProgramTest {
         assertEquals(4, num(source));
     }
 
-    // Object spread merges two sources with override
     @Test
     public void test_object_spread_merge() {
         final var source = """
@@ -180,7 +168,6 @@ public class InterpreterProgramTest {
         assertEquals("1,9,3", str(source));
     }
 
-    // A Stack class encapsulates a private field behind push/pop and a size getter
     @Test
     public void test_stack_class_with_private_field() {
         final var source = """
@@ -198,7 +185,6 @@ public class InterpreterProgramTest {
         assertEquals("3:2", str(source));
     }
 
-    // An inheritance chain overrides area() and reuses the base via super
     @Test
     public void test_shape_inheritance_with_super() {
         final var source = """
@@ -216,7 +202,6 @@ public class InterpreterProgramTest {
         assertEquals("circle=12", str(source));
     }
 
-    // A static field and method maintain a shared instance counter
     @Test
     public void test_static_instance_counter() {
         final var source = """
@@ -233,7 +218,6 @@ public class InterpreterProgramTest {
         assertEquals(3, num(source));
     }
 
-    // classic for (let ...) closures capture a fresh per-iteration binding
     @Test
     public void test_classic_for_let_per_iteration_binding() {
         final var source = """
@@ -244,7 +228,6 @@ public class InterpreterProgramTest {
         assertEquals(3, num(source));
     }
 
-    // classic for (var ...) shares one binding across iterations
     @Test
     public void test_classic_for_var_shares_binding() {
         final var source = """
@@ -255,7 +238,6 @@ public class InterpreterProgramTest {
         assertEquals(9, num(source));
     }
 
-    // break and continue still work with per-iteration bindings
     @Test
     public void test_classic_for_break_continue() {
         final var source = """
@@ -270,14 +252,12 @@ public class InterpreterProgramTest {
         assertEquals(8, num(source));
     }
 
-    // an empty-header and lexical-header loop that immediately breaks does not crash
     @Test
     public void test_classic_for_empty_and_lexical_headers() {
         assertEquals(1, num("let n = 0; for (;;) { n = 1; break; } n"));
         assertEquals(1, num("let n = 0; for (let i = 0;;) { n = 1; break; } n"));
     }
 
-    // a parameter binding exists but stays uninitialized until its own element is bound
     @Test
     public void test_parameter_self_reference_is_a_reference_error() {
         assertThrows(ReferenceErrorException.class, () -> Interpreter.run("function f(a = a) {} f()"));
@@ -285,34 +265,24 @@ public class InterpreterProgramTest {
         assertEquals(2, num("function f(a, b = a + 1) { return b; } f(1)"));
     }
 
-    // a symbol-keyed property is deleted by key, not by a string coercion that would throw
     @Test
     public void test_delete_symbol_keyed_property() {
         assertEquals(1, num("const s = Symbol(); const o = {[s]: 2}; delete o[s]; o[s] === undefined ? 1 : 0"));
         assertEquals(1, num("const s = Symbol(); const o = {}; delete o[s] ? 1 : 0"));
     }
 
-    // the lexer's whitespace set is the spec's, not Java's
     @Test
     public void test_spec_whitespace_between_tokens() {
         assertEquals(3, num("var\u00A0a\u00A0=\u00A01;\u2007a\u202F+\u00A02"));
         assertEquals(1, num("\uFEFF1"));
     }
 
-    // `typeof` only suppresses ReferenceError for a truly unresolvable reference (GetValue is never
-    // reached). A `let`/`const` binding that exists but is still in its TDZ is resolvable, so
-    // GetValue runs and its ReferenceError is not swallowed - unlike a name that was never declared.
     @Test
     public void test_typeof_throws_for_tdz_binding_but_not_for_undeclared_name() {
         assertThrows(ReferenceErrorException.class, () -> Interpreter.run("(function() { typeof x; let x; })()"));
         assertEquals("undefined", str("typeof neverDeclaredAnywhere"));
     }
 
-    // ForIn/OfHeadEvaluation creates the lexical binding for a ForDeclaration's name(s) - still
-    // uninitialised - before evaluating the source expression, so a closure created while
-    // evaluating that expression captures the head's TDZ binding rather than an outer same-named
-    // variable; `typeof` on that captured binding still throws (it is resolvable, just
-    // uninitialised) rather than resolving to the outer value or silently reporting "undefined".
     @Test
     public void test_for_in_head_expression_sees_uninitialized_loop_binding() {
         final var source = """
@@ -326,19 +296,11 @@ public class InterpreterProgramTest {
         assertEquals("true", str(source));
     }
 
-    // ResolveBinding for a plain identifier assignment target runs before the right-hand side is
-    // evaluated: an assignment that becomes resolvable only because the right-hand side just
-    // created the same-named global (`this.undeclared = 5`) still throws, since PutValue acts on
-    // the resolution captured before that side effect ran.
     @Test
     public void test_assignment_target_resolved_before_right_hand_side_creates_it() {
         assertThrows(ReferenceErrorException.class, () -> Interpreter.run("undeclared = (this.undeclared = 5);"));
     }
 
-    // An `await using` of a nullish resource still implies an Await when the declaration's scope
-    // exits (CreateDisposableResource/Dispose keep a no-op resource on the stack for the
-    // async-dispose hint even though no dispose method is ever called), so statements after the
-    // block run in a later microtask rather than synchronously.
     @Test
     public void test_await_using_nullish_still_implies_a_microtask_tick() {
         final var source = """
@@ -355,10 +317,6 @@ public class InterpreterProgramTest {
         assertEquals("false", str(source));
     }
 
-    // GetBindingValue on a Global Environment Record consults HasProperty/Get(globalObj, name), not
-    // just declared var/function bindings - a globalThis-only accessor (added via
-    // Object.defineProperty, never a declared binding) is reachable as a bare identifier, and
-    // `typeof` on it invokes the getter exactly once.
     @Test
     public void test_typeof_reaches_globalthis_only_accessor() {
         final var source = """
@@ -369,10 +327,6 @@ public class InterpreterProgramTest {
         assertEquals("number:1", str(source));
     }
 
-    // NamedEvaluation for an anonymous class expression threads the inferred name in before
-    // ClassDefinitionEvaluation runs its static field initializers/blocks, so `this.name` inside one
-    // already sees it - regardless of which syntactic position supplies the name (a variable
-    // declarator's init, or a plain assignment's right-hand side).
     @Test
     public void test_anonymous_class_name_visible_in_static_initializer_via_declarator() {
         assertEquals("C", str("var C = class { static f = this.name; }; C.f"));
@@ -383,10 +337,6 @@ public class InterpreterProgramTest {
         assertEquals("D", str("var D; D = class { static f = this.name; }; D.f"));
     }
 
-    // PutValue on a primitive base: a data-property write can never succeed (there is nowhere to
-    // create an own property on a primitive receiver), but a setter found anywhere along the
-    // prototype chain is invoked with `this` bound to the primitive, exactly like any other
-    // receiver - including through a Proxy standing in the chain.
     @Test
     public void test_primitive_write_reaches_prototype_setter() {
         final var source = """
@@ -410,10 +360,6 @@ public class InterpreterProgramTest {
         assertEquals(1, num(source));
     }
 
-    // A no-trap Proxy forwarding `delete` to an array target routes through the same array-aware
-    // helper (InterpreterUtils.deleteArrayElement) ExpressionEvaluator.evalDelete's own JsArray arm
-    // uses, rather than the generic JsValue.deleteOwnProperty - so an element delete through the
-    // proxy leaves a real hole exactly like a direct delete would.
     @Test
     public void test_proxy_delete_forwards_array_element_delete() {
         final var source = """

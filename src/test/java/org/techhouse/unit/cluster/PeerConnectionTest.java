@@ -85,7 +85,6 @@ public class PeerConnectionTest {
             writer.newLine();
             writer.flush();
         } catch (Exception ignored) {
-            // test helper, nothing to do
         }
     }
 
@@ -95,7 +94,6 @@ public class PeerConnectionTest {
             socket.setKeepAlive(true);
             Thread.sleep(1500);
         } catch (Exception ignored) {
-            // test helper, nothing to do
         }
     }
 
@@ -103,7 +101,6 @@ public class PeerConnectionTest {
         try {
             listener.accept().close();
         } catch (Exception ignored) {
-            // test helper, nothing to do
         }
     }
 }

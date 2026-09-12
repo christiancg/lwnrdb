@@ -53,17 +53,14 @@ public class IndexHelperReadTest {
         }
     }
 
-    // getIndexEntriesForField returns null when the field has no index (caller falls back to scan)
     @Test
     public void test_get_index_entries_for_field_returns_null_when_no_index() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
         DbEntry entry = entryWith("n1", "tag", new JsonString("alpha"));
         setupCollection(cache, entry);
-        // No index created on "tag"
         assertNull(IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag"));
     }
 
-    // getIndexEntriesForField returns all entries (value -> ids) for an indexed field
     @Test
     public void test_get_index_entries_for_field_returns_entries_when_indexed() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -74,7 +71,6 @@ public class IndexHelperReadTest {
 
         final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "tag");
         assertNotNull(entries);
-        // Two distinct values: alpha (ids n1, n3) and beta (id n2)
         assertEquals(2, entries.size());
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
                 .collect(java.util.stream.Collectors.toSet());
@@ -95,7 +91,6 @@ public class IndexHelperReadTest {
         return arr;
     }
 
-    // getIndexEntriesForField on a mixed scalar+object field returns entries for all docs
     @Test
     public void test_getIndexEntriesForField_mixed_scalar_and_object_includes_all_docs() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -110,13 +105,11 @@ public class IndexHelperReadTest {
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
                 .collect(java.util.stream.Collectors.toSet());
         assertEquals(Set.of("s1", "s2", "o1", "o2"), allIds);
-        // The object-valued entries carry actual JsonObject values, not hash strings
         final var hasObjectEntry = entries.stream()
                 .anyMatch(e -> e.getValue() instanceof JsonBaseElement el && el.isJsonObject());
         assertTrue(hasObjectEntry);
     }
 
-    // getIndexEntriesForField on a mixed scalar+array field returns entries for all docs
     @Test
     public void test_getIndexEntriesForField_mixed_scalar_and_array_includes_all_docs() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -132,7 +125,6 @@ public class IndexHelperReadTest {
         assertEquals(Set.of("s1", "a1", "a2"), allIds);
     }
 
-    // getIndexEntriesForField on a pure scalar field still returns scalar entries (regression)
     @Test
     public void test_getIndexEntriesForField_pure_scalar_field_unchanged() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -148,7 +140,6 @@ public class IndexHelperReadTest {
         assertEquals(Set.of("n1", "n2", "n3"), allIds);
     }
 
-    // getIndexEntriesForField on a pure object field returns actual-value entries (not null)
     @Test
     public void test_getIndexEntriesForField_pure_object_field_returns_entries() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -159,14 +150,12 @@ public class IndexHelperReadTest {
 
         final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
         assertNotNull(entries);
-        // Two distinct object values: {n:1} (ids o1, o2) and {n:2} (id o3)
         assertEquals(2, entries.size());
         final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
                 .collect(java.util.stream.Collectors.toSet());
         assertEquals(Set.of("o1", "o2", "o3"), allIds);
     }
 
-    // getIndexEntriesForField groups docs with identical object values into one entry
     @Test
     public void test_getIndexEntriesForField_same_object_value_grouped_into_one_entry() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -181,18 +170,15 @@ public class IndexHelperReadTest {
         assertEquals(Set.of("o1", "o2", "o3"), entries.getFirst().getIds());
     }
 
-    // getMatchingIdsForJoin returns null when the remote field has no index (caller falls back to scan)
     @Test
     public void test_get_matching_ids_for_join_returns_null_when_no_index() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(1)));
-        // No index created on "refKey"
         final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey",
                 Set.of(new JsonNumber(1)));
         assertNull(result);
     }
 
-    // getMatchingIdsForJoin returns only the ids whose remote field matches a local value
     @Test
     public void test_get_matching_ids_for_join_returns_matching_ids() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -208,8 +194,6 @@ public class IndexHelperReadTest {
         assertEquals(Set.of("r1", "r3"), result);
     }
 
-    // getIndexEntriesForField throws IOException when the calling thread is interrupted while
-    // blocked acquiring the field's index read lock (blocked here by a write lock held elsewhere)
     @Test
     public void test_getIndexEntriesForField_interrupted_while_acquiring_read_lock() throws Exception {
         String fieldName = "lockedField";
@@ -244,8 +228,6 @@ public class IndexHelperReadTest {
         }
     }
 
-    // getIndexEntriesForField records the field as index-used and its read lock as acquired when an
-    // analyze context is active on the calling thread
     @Test
     public void test_getIndexEntriesForField_records_analyze_context() throws IOException {
         Cache cache = IocContainer.get(Cache.class);
@@ -294,8 +276,6 @@ public class IndexHelperReadTest {
         assertFalse(allIds.contains("scalarNow1"));
     }
 
-    // getMatchingIdsForJoin skips null-valued and object-valued local join keys, matching only the
-    // scalar value against the remote index
     @Test
     public void test_get_matching_ids_for_join_skips_null_and_object_values() throws IOException {
         Cache cache = IocContainer.get(Cache.class);

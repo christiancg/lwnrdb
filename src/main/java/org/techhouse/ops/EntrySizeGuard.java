@@ -5,15 +5,13 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.resp.OperationResponse;
 
-// maxEntrySize is enforced on every write path, transactional or not, and a rejection has to name the
-// same numbers wherever it comes from - the client sees one error for one condition.
+// maxEntrySize is enforced on every write path, transactional or not - one error for one condition.
 public final class EntrySizeGuard {
     private static final Configuration configuration = Configuration.getInstance();
 
     private EntrySizeGuard() {
     }
 
-    // Null when the entry fits; otherwise the rejection to return to the client.
     public static OperationResponse check(DbEntry entry, OperationType type) {
         return checkSize(entry.byteSize(), type);
     }

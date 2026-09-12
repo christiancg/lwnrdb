@@ -31,7 +31,6 @@ public class MapOperatorConjunctionTest {
         TestUtils.releaseAllLocks();
     }
 
-    // Process empty or invalid conjunction operator lists
     @Test
     public void test_empty_conjunction_operator_list() {
         JsonObject jsonObject = new JsonObject();
@@ -44,7 +43,6 @@ public class MapOperatorConjunctionTest {
         assertTrue(result.isEmpty());
     }
 
-    // Support recursive conjunction operator processing
     @Test
     public void test_recursive_conjunction_operator_processing() {
         JsonObject jsonObject = new JsonObject();
@@ -63,7 +61,6 @@ public class MapOperatorConjunctionTest {
         assertFalse(result.has("field1"));
     }
 
-    // Validate operator type compatibility before processing
     @Test
     public void test_operator_type_compatibility() {
         JsonObject jsonObject = new JsonObject();
@@ -76,7 +73,6 @@ public class MapOperatorConjunctionTest {
                 () -> MapOperatorHelper.processOperator(addFieldMapOperator, jsonObject));
     }
 
-    // Process AND conjunction with all true conditions
     @Test
     public void test_and_conjunction_all_true() {
         JsonObject jsonObject = new JsonObject();
@@ -105,7 +101,6 @@ public class MapOperatorConjunctionTest {
         return new AddFieldMapOperator("result", conjunctionOp, midOperator);
     }
 
-    // Nested conjunction operator as condition is processed recursively (L50)
     @Test
     public void test_nested_conjunction_as_condition() {
         JsonObject input = new JsonObject();

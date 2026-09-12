@@ -23,77 +23,65 @@ public class ReflectBuiltinsTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // Reflect.get reads a property from a target
     @Test
     public void test_get() {
         assertEquals(5, num("Reflect.get({ a: 5 }, 'a')"));
     }
 
-    // Reflect.set writes a property and returns true
     @Test
     public void test_set() {
         assertEquals(9, num("const o = {}; Reflect.set(o, 'x', 9); o.x"));
         assertTrue(bool("Reflect.set({}, 'x', 1)"));
     }
 
-    // Reflect.has mirrors the `in` operator
     @Test
     public void test_has() {
         assertTrue(bool("Reflect.has({ a: 1 }, 'a')"));
         assertFalse(bool("Reflect.has({ a: 1 }, 'b')"));
     }
 
-    // Reflect.deleteProperty removes a property and returns true
     @Test
     public void test_delete_property() {
         assertFalse(bool("const o = { a: 1 }; Reflect.deleteProperty(o, 'a'); 'a' in o"));
     }
 
-    // Reflect.ownKeys lists a target's own keys
     @Test
     public void test_own_keys() {
         assertEquals("a,b", str("Reflect.ownKeys({ a: 1, b: 2 }).join(',')"));
     }
 
-    // Reflect.ownKeys on an array reports its indices plus length
     @Test
     public void test_own_keys_array() {
         assertEquals("0,1,length", str("Reflect.ownKeys([10, 20]).join(',')"));
     }
 
-    // Reflect.deleteProperty removes an array element by index
     @Test
     public void test_delete_property_array() {
         assertTrue(bool("Reflect.deleteProperty([1, 2, 3], '0')"));
     }
 
-    // Reflect.deleteProperty falls through a proxy without a deleteProperty trap
     @Test
     public void test_delete_property_proxy() {
         assertFalse(bool("const t = { a: 1 }; const p = new Proxy(t, {}); Reflect.deleteProperty(p, 'a'); 'a' in t"));
     }
 
-    // CreateListFromArrayLike rejects a missing (non-object) arguments list
     @Test
     public void test_apply_missing_args_list() {
         assertEquals("TypeError", str("let name = 'none';"
                 + "try { Reflect.apply(function () { return 42; }, null); } catch (e) { name = e.name; } name"));
     }
 
-    // Reflect.get with a missing key reads the "undefined" property
     @Test
     public void test_get_missing_key() {
         assertTrue(bool("Reflect.get({}) === undefined"));
     }
 
-    // Reflect.apply invokes a function with an explicit this and argument list
     @Test
     public void test_apply() {
         assertEquals(6, num("Reflect.apply(function (a, b) { return a + b; }, null, [2, 4])"));
         assertEquals(3, num("Reflect.apply(function () { return this.n; }, { n: 3 }, [])"));
     }
 
-    // Reflect.construct builds an instance from a constructor and argument list
     @Test
     public void test_construct() {
         final var source = """
@@ -104,7 +92,6 @@ public class ReflectBuiltinsTest {
         assertEquals(7, num(source));
     }
 
-    // Reflect.getPrototypeOf / setPrototypeOf read and replace the prototype link
     @Test
     public void test_prototype_ops() {
         final var source = """
@@ -116,7 +103,6 @@ public class ReflectBuiltinsTest {
         assertTrue(bool(source));
     }
 
-    // Reflect.defineProperty installs a descriptor and returns true
     @Test
     public void test_define_property() {
         final var source = """
@@ -127,7 +113,6 @@ public class ReflectBuiltinsTest {
         assertTrue(bool(source));
     }
 
-    // Reflect.defineProperty returns false instead of throwing on an illegal redefine
     @Test
     public void test_define_property_returns_false() {
         final var source = """
@@ -138,7 +123,6 @@ public class ReflectBuiltinsTest {
         assertFalse(bool(source));
     }
 
-    // Reflect.getOwnPropertyDescriptor reports the real descriptor flags
     @Test
     public void test_get_own_property_descriptor() {
         final var source = """
@@ -150,78 +134,66 @@ public class ReflectBuiltinsTest {
         assertTrue(bool(source));
     }
 
-    // Reflect.isExtensible / preventExtensions mirror the Object.* extensibility state
     @Test
     public void test_reflect_extensibility() {
         assertTrue(bool("Reflect.isExtensible({})"));
         assertFalse(bool("let o = {}; Reflect.preventExtensions(o); Reflect.isExtensible(o)"));
     }
 
-    // Reflect.getPrototypeOf reports the object's prototype
     @Test
     public void test_reflect_get_prototype_of() {
         assertTrue(bool("let p = {}; let o = Object.create(p); Reflect.getPrototypeOf(o) === p"));
     }
 
-    // Reflect.get invokes a getter with the supplied receiver
     @Test
     public void test_get_with_receiver() {
         assertEquals(42, num("let t = { get x() { return this.y; } }; let r = { y: 42 }; Reflect.get(t, 'x', r)"));
     }
 
-    // Reflect.set invokes a setter with the supplied receiver
     @Test
     public void test_set_with_receiver() {
         assertEquals(9, num("let t = { set x(v) { this._w = v; } }; let r = {}; Reflect.set(t, 'x', 9, r); r._w"));
     }
 
-    // Reflect.construct rejects a target without [[Construct]]
     @Test
     public void test_construct_rejects_non_constructor_target() {
         assertEquals("TypeError",
                 str("let n = 'none';" + "try { Reflect.construct(Math.max, []); } catch (e) { n = e.name; } n"));
     }
 
-    // Reflect.construct rejects a newTarget without [[Construct]]
     @Test
     public void test_construct_rejects_non_constructor_new_target() {
         assertEquals("TypeError", str("let n = 'none';"
                 + "try { Reflect.construct(function () {}, [], Math.max); } catch (e) { n = e.name; } n"));
     }
 
-    // An omitted newTarget defaults to the target itself
     @Test
     public void test_construct_defaults_new_target_to_target() {
         assertTrue(bool("function F() {} Reflect.construct(F, []) instanceof F"));
     }
 
-    // The created instance's prototype comes from Get(newTarget, "prototype")
     @Test
     public void test_construct_derives_proto_from_new_target() {
         assertTrue(bool("function F() {} function G() {} Reflect.construct(F, [], G) instanceof G"));
     }
 
-    // CreateListFromArrayLike walks any object by length + indexed Get
     @Test
     public void test_construct_accepts_array_like_arguments_list() {
         assertEquals(3,
                 num("function F(a, b) { this.sum = a + b; }" + "Reflect.construct(F, { length: 2, 0: 1, 1: 2 }).sum"));
     }
 
-    // A non-object arguments list is a TypeError, not an empty list
     @Test
     public void test_construct_throws_on_non_object_arguments_list() {
         assertEquals("TypeError",
                 str("let n = 'none';" + "try { Reflect.construct(function () {}, 1); } catch (e) { n = e.name; } n"));
     }
 
-    // Reflect.apply accepts the same array-like arguments list
     @Test
     public void test_apply_accepts_array_like_arguments_list() {
         assertEquals(3, num("Reflect.apply(function (a, b) { return a + b; }, null, { length: 2, 0: 1, 1: 2 })"));
     }
 
-    // Every Reflect method rejects a non-object target before doing anything else
     @Test
     public void test_non_object_target_is_a_type_error() {
         final var methods = "get,set,has,deleteProperty,ownKeys,getPrototypeOf,setPrototypeOf,isExtensible,"
@@ -237,7 +209,6 @@ public class ReflectBuiltinsTest {
                 """.formatted(methods)));
     }
 
-    // A property key is resolved through ToPropertyKey, so an abrupt toString propagates
     @Test
     public void test_property_key_coercion_is_observable() {
         assertEquals("boom", str("""
@@ -248,7 +219,6 @@ public class ReflectBuiltinsTest {
                 """));
     }
 
-    // OrdinarySetPrototypeOf answers false instead of throwing on a cycle or a sealed target
     @Test
     public void test_set_prototype_of_returns_false_rather_than_throwing() {
         assertFalse(bool("const o = {}; const child = Object.create(o); Reflect.setPrototypeOf(o, child)"));
@@ -256,14 +226,12 @@ public class ReflectBuiltinsTest {
         assertTrue(bool("const o = Object.preventExtensions(Object.create(null)); Reflect.setPrototypeOf(o, null)"));
     }
 
-    // A prototype that is neither an object nor null is a TypeError
     @Test
     public void test_set_prototype_of_rejects_a_primitive_prototype() {
         assertEquals("TypeError",
                 str("let n = 'none'; try { Reflect.setPrototypeOf({}, 1); } catch (e) { n = e.name; } n"));
     }
 
-    // With a receiver, the write lands on the receiver and the target is left untouched
     @Test
     public void test_set_with_a_receiver_writes_to_the_receiver() {
         assertEquals("42:1", str("""
@@ -274,7 +242,6 @@ public class ReflectBuiltinsTest {
                 """));
     }
 
-    // A receiver whose property is an accessor or non-writable refuses the write
     @Test
     public void test_set_with_a_receiver_reports_a_refusal() {
         assertFalse(bool("""
@@ -290,7 +257,6 @@ public class ReflectBuiltinsTest {
         assertFalse(bool("Reflect.set({ p: 1 }, 'p', 2, 'not an object')"));
     }
 
-    // An inherited setter runs with the receiver as its `this`
     @Test
     public void test_set_with_a_receiver_runs_an_inherited_setter() {
         assertEquals(5, num("""
@@ -302,7 +268,6 @@ public class ReflectBuiltinsTest {
                 """));
     }
 
-    // A non-writable target property refuses the write even before the receiver is consulted
     @Test
     public void test_set_with_a_receiver_honours_a_non_writable_target() {
         assertFalse(bool("""
@@ -312,10 +277,8 @@ public class ReflectBuiltinsTest {
                 """));
     }
 
-    // Reflect.set on a typed array target with a canonical numeric index that is not a valid
-    // integer index (out of range, or fractional) is a silent success that never coerces the value
-    // and never walks the prototype chain - it must not reach a setter installed on the per-kind
-    // prototype (10.4.5.5 [[Set]] step 3.b.ii).
+    // An invalid canonical numeric index on a typed array is a silent success that never coerces the value
+    // and never walks the prototype chain (10.4.5.5 [[Set]] step 3.b.ii).
     @Test
     public void test_set_typed_array_invalid_index_short_circuits() {
         assertTrue(bool("""
@@ -332,9 +295,6 @@ public class ReflectBuiltinsTest {
                 """));
     }
 
-    // A valid index with a foreign receiver still falls through to the generic OrdinarySet path
-    // (unaffected by the typed-array short-circuit): the write lands on the receiver, the target
-    // itself is untouched.
     @Test
     public void test_set_typed_array_valid_index_with_foreign_receiver() {
         assertEquals("5:7", str("""

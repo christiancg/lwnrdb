@@ -39,11 +39,6 @@ import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The cluster-wide half of LIST_TRIGGER_RUNS / RESOLVE_TRIGGER_RUN. The fan-out matters more here than it
- * does for running scripts: admin/trigger_runs is not replicated, so a run's record exists on exactly one
- * node and the operator is rarely connected to it.
- */
 public class TriggerRunDirectoryTest {
     private final Configuration config = Configuration.getInstance();
     private final TriggerRunDirectory directory = IocContainer.get(TriggerRunDirectory.class);
@@ -187,7 +182,6 @@ public class TriggerRunDirectoryTest {
         assertEquals("127.0.0.1:5001", remote.get("node").asJsonString().getValue());
     }
 
-    // An unreachable peer costs the operator its rows, not the whole listing.
     @Test
     public void test_an_unreachable_peer_is_skipped() throws Exception {
         withOtherMember();
@@ -248,8 +242,6 @@ public class TriggerRunDirectoryTest {
         verify(pool, never()).request(any(), any(), anyLong());
     }
 
-    // A peer that answers with an error, or with no rows at all, contributes nothing rather than breaking
-    // the listing.
     @Test
     public void test_a_peer_error_reply_contributes_nothing() throws Exception {
         withOtherMember();
@@ -281,7 +273,6 @@ public class TriggerRunDirectoryTest {
         assertFalse(directory.resolveClusterWide("remote-run", ResolveTriggerRunRequest.DECISION_DISCARD));
     }
 
-    // A node with no membership identity yet still labels its own rows rather than failing the listing.
     @Test
     public void test_rows_from_a_node_without_an_identity_are_labelled_local() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", false);

@@ -17,45 +17,38 @@ public class SymbolBuiltinsTest {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
-    // Symbol() creates a distinct symbol each call
     @Test
     public void test_symbol_uniqueness() {
         assertTrue(bool("Symbol('x') !== Symbol('x')"));
     }
 
-    // typeof a symbol is "symbol"
     @Test
     public void test_symbol_typeof() {
         assertEquals("symbol", str("typeof Symbol('x')"));
     }
 
-    // Symbol.for returns the same registered symbol for a given key
     @Test
     public void test_symbol_for_registry() {
         assertTrue(bool("Symbol.for('shared') === Symbol.for('shared')"));
         assertTrue(bool("Symbol.for('a') !== Symbol.for('b')"));
     }
 
-    // Symbol.keyFor reverse-looks-up a registered symbol
     @Test
     public void test_symbol_key_for() {
         assertEquals("registered", str("Symbol.keyFor(Symbol.for('registered'))"));
     }
 
-    // Symbol.keyFor of an unregistered symbol is undefined
     @Test
     public void test_symbol_key_for_unregistered() {
         assertEquals("undefined", str("typeof Symbol.keyFor(Symbol('local'))"));
     }
 
-    // The well-known Symbol.iterator is a stable symbol value
     @Test
     public void test_well_known_iterator() {
         assertEquals("symbol", str("typeof Symbol.iterator"));
         assertTrue(bool("Symbol.iterator === Symbol.iterator"));
     }
 
-    // The Phase 2 well-known symbols are registered as stable, distinct symbol values
     @Test
     public void test_well_known_symbols_registered() {
         assertEquals("symbol", str("typeof Symbol.hasInstance"));
@@ -68,7 +61,6 @@ public class SymbolBuiltinsTest {
         assertTrue(bool("Symbol.hasInstance !== Symbol.toStringTag"));
     }
 
-    // A symbol exposes its description and a readable toString
     @Test
     public void test_description_and_to_string() {
         assertEquals("x", str("Symbol('x').description"));
@@ -79,7 +71,6 @@ public class SymbolBuiltinsTest {
         assertTrue(bool("Symbol('x').nope === undefined"));
     }
 
-    // The two newly exposed well-known symbols have a stable identity
     @Test
     public void test_new_well_known_symbols() {
         assertTrue(bool("typeof Symbol.matchAll === 'symbol'"));
@@ -88,7 +79,6 @@ public class SymbolBuiltinsTest {
         assertTrue(bool("Symbol.matchAll !== Symbol.isConcatSpreadable"));
     }
 
-    // String.matchAll delegates to a Symbol.matchAll method on a plain object
     @Test
     public void test_symbol_match_all_hook() {
         assertEquals("got:abc", str("'abc'.matchAll({ [Symbol.matchAll](s) { return 'got:' + s } })"));
@@ -107,7 +97,6 @@ public class SymbolBuiltinsTest {
         assertEquals("", str("Symbol('').description"));
     }
 
-    // Every well-known symbol is a non-writable, non-configurable own property of the constructor
     @Test
     public void wellKnownSymbolsAreNonWritableAndNonConfigurable() {
         final var names = new String[]{"asyncDispose", "asyncIterator", "dispose", "hasInstance", "isConcatSpreadable",
@@ -121,7 +110,6 @@ public class SymbolBuiltinsTest {
         }
     }
 
-    // Symbol.prototype members accept a wrapper receiver, not only a primitive symbol
     @Test
     public void symbolPrototypeMembersAcceptAWrapperReceiver() {
         assertEquals("x", str("Object(Symbol('x')).description"));
@@ -131,7 +119,6 @@ public class SymbolBuiltinsTest {
         assertEquals("Symbol(x)", str("Symbol.prototype.toString.call(Object(Symbol('x')))"));
     }
 
-    // Symbol() and Symbol.for run ToString over their argument, so user code decides the description
     @Test
     public void symbolDescriptionRunsToString() {
         assertEquals("42", str("Symbol({ toString() { return '42' } }).description"));
@@ -139,7 +126,6 @@ public class SymbolBuiltinsTest {
         assertEquals("1", str("Symbol(1).description"));
     }
 
-    // Symbol.keyFor rejects a non-symbol, including a symbol wrapper object
     @Test
     public void symbolKeyForRejectsNonSymbols() {
         assertTrue(bool(threwTypeError("Symbol.keyFor(null)")));
@@ -185,8 +171,6 @@ public class SymbolBuiltinsTest {
                 """));
     }
 
-    // The well-known symbols (Symbol.iterator etc.) are not registered through Symbol.for, so they
-    // remain valid weak keys.
     @Test
     public void wellKnownSymbolsAreNotTreatedAsRegistered() {
         assertTrue(bool("""

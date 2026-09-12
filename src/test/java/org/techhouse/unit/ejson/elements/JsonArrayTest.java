@@ -13,7 +13,6 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
 
 public class JsonArrayTest {
-    // Add JsonBaseElement to array and verify size increases
     @Test
     public void test_add_element_increases_size() {
         JsonArray array = new JsonArray();
@@ -25,7 +24,6 @@ public class JsonArrayTest {
         assertTrue(array.contains(element));
     }
 
-    // Add null element and verify it's converted to JsonNull.INSTANCE
     @Test
     public void test_add_null_converts_to_json_null() {
         JsonArray array = new JsonArray();
@@ -37,7 +35,6 @@ public class JsonArrayTest {
         assertEquals(JsonNull.INSTANCE, array.get(0));
     }
 
-    // Add valid JsonBaseElement to array and verify it's added correctly
     @Test
     public void test_add_valid_element() {
         JsonArray array = new JsonArray();
@@ -49,7 +46,6 @@ public class JsonArrayTest {
         assertSame(element, array.get(0));
     }
 
-    // Adding all elements from a non-empty source array to an empty target array
     @Test
     public void test_add_all_from_non_empty_source() {
         JsonArray target = new JsonArray();
@@ -64,7 +60,6 @@ public class JsonArrayTest {
         assertEquals(new JsonString("test2"), target.get(1));
     }
 
-    // Adding elements from null source array
     @Test
     public void test_add_all_from_null_source() {
         JsonArray target = new JsonArray();
@@ -74,7 +69,6 @@ public class JsonArrayTest {
         assertEquals(0, target.size());
     }
 
-    // Adding a non-empty string creates a new JsonString element in the array
     @Test
     public void test_add_string_creates_json_string_element() {
         JsonArray array = new JsonArray();
@@ -87,7 +81,6 @@ public class JsonArrayTest {
         assertEquals(testString, ((JsonString) array.get(0)).getValue());
     }
 
-    // Adding null string should create JsonString with null value
     @Test
     public void test_add_null_string_creates_json_string_with_null() {
         JsonArray array = new JsonArray();
@@ -99,7 +92,6 @@ public class JsonArrayTest {
         assertNull(((JsonString) array.get(0)).getValue());
     }
 
-    // Set valid JsonBaseElement at existing index and return previous element
     @Test
     public void set_valid_element_returns_previous_element() {
         JsonArray array = new JsonArray();
@@ -112,7 +104,6 @@ public class JsonArrayTest {
         assertEquals(newElement, array.get(0));
     }
 
-    // Set element at index 0 in empty array throws IndexOutOfBoundsException
     @Test
     public void set_element_in_empty_array_throws_exception() {
         JsonArray array = new JsonArray();
@@ -121,7 +112,6 @@ public class JsonArrayTest {
         assertThrows(IndexOutOfBoundsException.class, () -> array.set(0, element));
     }
 
-    // Remove existing element from array and return true
     @Test
     public void test_remove_existing_element_returns_true() {
         JsonArray array = new JsonArray();
@@ -134,7 +124,6 @@ public class JsonArrayTest {
         assertEquals(0, array.size());
     }
 
-    // Remove element from empty array returns false
     @Test
     public void test_remove_from_empty_array_returns_false() {
         JsonArray array = new JsonArray();
@@ -146,7 +135,6 @@ public class JsonArrayTest {
         assertEquals(0, array.size());
     }
 
-    // Remove element at valid index and return the removed element
     @Test
     public void test_remove_element_at_valid_index() {
         JsonArray array = new JsonArray();
@@ -162,7 +150,6 @@ public class JsonArrayTest {
         assertEquals(element1, array.get(0));
     }
 
-    // Remove element at index 0 from array with single element
     @Test
     public void test_remove_single_element() {
         JsonArray array = new JsonArray();
@@ -176,7 +163,6 @@ public class JsonArrayTest {
         assertTrue(array.isEmpty());
     }
 
-    // Check if array contains a previously added JsonBaseElement
     @Test
     public void test_contains_added_element() {
         JsonArray array = new JsonArray();
@@ -186,7 +172,6 @@ public class JsonArrayTest {
         assertTrue(array.contains(element));
     }
 
-    // Check contains() with null element
     @Test
     public void test_contains_null_element() {
         JsonArray array = new JsonArray();
@@ -195,7 +180,6 @@ public class JsonArrayTest {
         assertTrue(array.contains(JsonNull.INSTANCE));
     }
 
-    // Returns 0 for a newly created empty JsonArray
     @Test
     public void test_empty_array_size_is_zero() {
         JsonArray array = new JsonArray();
@@ -203,7 +187,6 @@ public class JsonArrayTest {
         assertEquals(0, array.size());
     }
 
-    // Size remains unchanged after failed operations
     @Test
     public void test_size_unchanged_after_failed_remove() {
         JsonArray array = new JsonArray();
@@ -215,7 +198,6 @@ public class JsonArrayTest {
         assertEquals(initialSize, array.size());
     }
 
-    // Return true when JsonArray is initialized with no elements
     @Test
     public void test_empty_array_is_empty() {
         JsonArray jsonArray = new JsonArray();
@@ -223,7 +205,6 @@ public class JsonArrayTest {
         assertTrue(jsonArray.isEmpty());
     }
 
-    // Verify isEmpty behavior after adding and removing same element
     @Test
     public void test_array_empty_after_add_remove() {
         JsonArray jsonArray = new JsonArray();
@@ -236,7 +217,6 @@ public class JsonArrayTest {
         assertTrue(jsonArray.isEmpty());
     }
 
-    // Get element at valid index returns correct JsonBaseElement
     @Test
     public void test_get_element_at_valid_index() {
         JsonArray array = new JsonArray();
@@ -248,7 +228,6 @@ public class JsonArrayTest {
         assertEquals(element, result);
     }
 
-    // Get element at negative index throws IndexOutOfBoundsException
     @Test
     public void test_get_element_at_negative_index_throws_exception() {
         JsonArray array = new JsonArray();
@@ -257,7 +236,6 @@ public class JsonArrayTest {
         assertThrows(IndexOutOfBoundsException.class, () -> array.get(-1));
     }
 
-    // Return list containing multiple JsonBaseElement objects
     @Test
     public void test_asList_returns_list_with_multiple_elements() {
         JsonArray jsonArray = new JsonArray();
@@ -273,7 +251,6 @@ public class JsonArrayTest {
         assertInstanceOf(JsonNull.class, result.get(2));
     }
 
-    // Verify returned list is modifiable without affecting original JsonArray
     @Test
     public void test_asList_modifications_do_not_affect_original() {
         JsonArray jsonArray = new JsonArray();
@@ -289,7 +266,6 @@ public class JsonArrayTest {
         assertEquals(new JsonNumber(123), jsonArray.get(1));
     }
 
-    // Compare JsonArray with itself returns true
     @Test
     public void test_equals_with_same_instance() {
         JsonArray array = new JsonArray();
@@ -301,7 +277,6 @@ public class JsonArrayTest {
         assertTrue(result);
     }
 
-    // Compare JsonArray with itself returns true
     @Test
     public void test_equals_with_other_instance() {
         JsonArray array = new JsonArray();
@@ -317,7 +292,6 @@ public class JsonArrayTest {
         assertTrue(result);
     }
 
-    // Compare with null returns false
     @Test
     public void test_equals_with_null() {
         JsonArray array = new JsonArray();
@@ -328,7 +302,6 @@ public class JsonArrayTest {
         assertFalse(result);
     }
 
-    // Returns same hash code for JsonArrays with identical elements in same order
     @Test
     public void test_identical_arrays_have_same_hashcode() {
         JsonArray array1 = new JsonArray();
@@ -342,7 +315,6 @@ public class JsonArrayTest {
         assertEquals(array1.hashCode(), array2.hashCode());
     }
 
-    // Returns valid hash code for empty JsonArray
     @Test
     public void test_empty_array_hashcode() {
         JsonArray emptyArray = new JsonArray();
@@ -354,7 +326,6 @@ public class JsonArrayTest {
         assertNotEquals(0, hashCode);
     }
 
-    // Iterator returns elements in the same order they were added
     @Test
     public void test_iterator_maintains_insertion_order() {
         JsonArray array = new JsonArray();
@@ -376,7 +347,6 @@ public class JsonArrayTest {
         assertFalse(iterator.hasNext());
     }
 
-    // Iterator behavior on empty JsonArray
     @Test
     public void test_iterator_empty_array() {
         JsonArray array = new JsonArray();
@@ -385,7 +355,6 @@ public class JsonArrayTest {
         assertFalse(iterator.hasNext());
     }
 
-    // Deep copy of empty array returns new empty array
     @Test
     public void test_empty_array_deep_copy() {
         JsonArray originalArray = new JsonArray();
@@ -397,7 +366,6 @@ public class JsonArrayTest {
                 () -> assertNotSame(originalArray, copiedArray));
     }
 
-    // Deep copy of array containing null elements
     @Test
     public void test_array_with_null_deep_copy() {
         JsonArray originalArray = new JsonArray();

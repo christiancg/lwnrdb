@@ -17,7 +17,6 @@ public class EJsonEscapingTest {
         return EJSON.fromJson(json, JsonObject.class).get("v").asJsonString().getValue();
     }
 
-    // Values containing the characters that used to produce invalid JSON survive a write/read cycle
     @Test
     public void test_round_trip_special_characters() {
         assertEquals("he said \"hi\"", roundTrip("he said \"hi\""));
@@ -28,14 +27,12 @@ public class EJsonEscapingTest {
         assertEquals("a\u0001b", roundTrip("a\u0001b"));
     }
 
-    // Non-ASCII text including a surrogate pair round-trips
     @Test
     public void test_round_trip_unicode() {
         assertEquals("café", roundTrip("café"));
         assertEquals("\uD83D\uDE00", roundTrip("\uD83D\uDE00"));
     }
 
-    // A key containing a quote is escaped and read back
     @Test
     public void test_round_trip_key_with_quote() {
         final var source = new JsonObject();
@@ -45,7 +42,6 @@ public class EJsonEscapingTest {
         assertEquals("v", EJSON.fromJson(json, JsonObject.class).get("quo\"te").asJsonString().getValue());
     }
 
-    // Escapes are decoded while reading
     @Test
     public void test_reader_decodes_escapes() {
         assertEquals("A\uD83D\uDE00", EJSON.fromJson("{\"v\":\"\\u0041\\uD83D\\uDE00\"}", JsonObject.class).get("v")
@@ -53,7 +49,6 @@ public class EJsonEscapingTest {
         assertEquals("a/b", EJSON.fromJson("{\"v\":\"a\\/b\"}", JsonObject.class).get("v").asJsonString().getValue());
     }
 
-    // An unrecognised escape is kept verbatim rather than failing the read
     @Test
     public void test_reader_tolerates_unknown_escape() {
         assertEquals("C:\\qmp",
@@ -63,7 +58,6 @@ public class EJsonEscapingTest {
                 EJSON.fromJson("{\"v\":\"\\uZZZZ\"}", JsonObject.class).get("v").asJsonString().getValue());
     }
 
-    // A custom type keeps its marker syntax through escaping
     @Test
     public void test_custom_type_unaffected() {
         final var json = "{\"g\":\"#geo(1.5,2.5)\"}";

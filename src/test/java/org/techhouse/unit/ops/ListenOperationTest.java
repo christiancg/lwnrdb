@@ -40,7 +40,6 @@ public class ListenOperationTest {
         TestUtils.standardTearDown();
     }
 
-    // LISTEN on an existing collection returns a ListenResponse with OK status
     @Test
     public void processListen_existingCollection_returnsListenResponse() {
         final var req = new ListenRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -56,7 +55,6 @@ public class ListenOperationTest {
         assertNotNull(((ListenResponse) resp).getResults());
     }
 
-    // LISTEN returns initial results when documents exist
     @Test
     public void processListen_withExistingDocument_returnsItInResults() {
         final var saveReq = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -74,7 +72,6 @@ public class ListenOperationTest {
                 .anyMatch(r -> "listen-doc-1".equals(r.get("_id").asJsonString().getValue())));
     }
 
-    // STOP_LISTEN with a valid registered listenId returns StopListenResponse
     @Test
     public void processStopListen_validId_returnsStopListenResponse() {
         final var clientId = UUID.randomUUID();
@@ -91,7 +88,6 @@ public class ListenOperationTest {
         assertEquals(OperationStatus.OK, stopResp.getStatus());
     }
 
-    // STOP_LISTEN with an unknown listenId returns 404-7
     @Test
     public void processStopListen_unknownId_returns404() {
         final var stopReq = new StopListenRequest();
@@ -103,7 +99,6 @@ public class ListenOperationTest {
         assertEquals("404-7", resp.getErrorCode());
     }
 
-    // STOP_LISTEN cannot be cancelled a second time (already removed)
     @Test
     public void processStopListen_alreadyUnregistered_returns404() {
         final var clientId = UUID.randomUUID();
@@ -119,7 +114,6 @@ public class ListenOperationTest {
         assertEquals(OperationStatus.NOT_FOUND, secondStop.getStatus());
     }
 
-    // DROP_COLLECTION drops all listeners on that collection
     @Test
     public void dropCollection_dropsActiveListeners() {
         final var dropColl = "listenDropColl";
@@ -140,7 +134,6 @@ public class ListenOperationTest {
         assertEquals(OperationStatus.NOT_FOUND, stopResp.getStatus());
     }
 
-    // DROP_DATABASE drops all listeners on all collections in that database
     @Test
     public void dropDatabase_dropsActiveListeners() {
         final var dropDb = "listenDropDb";

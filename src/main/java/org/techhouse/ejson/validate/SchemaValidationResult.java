@@ -26,7 +26,6 @@ public final class SchemaValidationResult {
         return new SchemaValidationResult(false, List.of(error), List.of());
     }
 
-    // Builds a result whose validity is decided solely by the errors; warnings never fail validation.
     public static SchemaValidationResult of(List<String> errors, List<String> warnings) {
         if (errors.isEmpty() && warnings.isEmpty()) {
             return VALID;

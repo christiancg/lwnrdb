@@ -33,7 +33,6 @@ public class OperationResponseTest {
         assertNull(response.getMessage());
     }
 
-    // Three-arg constructor sets errorCode to null
     @Test
     public void create_operation_response_three_arg_has_null_error_code() {
         OperationResponse response = new OperationResponse(OperationType.SAVE, OperationStatus.OK, "ok");
@@ -41,7 +40,6 @@ public class OperationResponseTest {
         assertNull(response.getErrorCode());
     }
 
-    // (type, ErrorCode) constructor derives status and message from ErrorCode
     @Test
     public void create_operation_response_error_code_constructor_sets_code_and_message() {
         OperationResponse response = new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
@@ -51,7 +49,6 @@ public class OperationResponseTest {
         assertEquals(ErrorCode.ENTRY_NOT_FOUND.getStatus(), response.getStatus());
     }
 
-    // (type, String, ErrorCode) constructor uses the provided message, status from ErrorCode
     @Test
     public void create_operation_response_custom_message_with_error_code() {
         OperationResponse response = new OperationResponse(OperationType.DELETE, "Entry with id abc123 not found",
@@ -62,7 +59,6 @@ public class OperationResponseTest {
         assertEquals(ErrorCode.ENTRY_NOT_FOUND.getStatus(), response.getStatus());
     }
 
-    // (type, ErrorCode, String detail) constructor appends detail to defaultMessage
     @Test
     public void create_operation_response_error_code_with_detail() {
         OperationResponse response = new OperationResponse(OperationType.DROP_INDEX, ErrorCode.INDEX_NOT_FOUND,

@@ -11,9 +11,8 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
 
 // Regression coverage for test262 built-ins/Object/defineProperty/15.2.3.6-4-243-2.js: writing
-// through a getter-only accessor - whether it lives at an array index or at a plain named property
-// on the array - must reject the write (throwing TypeError, since the engine is always-strict)
-// rather than silently no-opping as if the assignment had succeeded.
+// through a getter-only accessor must reject the write (throwing TypeError, since the engine is
+// always-strict) rather than silently no-opping as if the assignment had succeeded.
 public class JsArrayAccessorWriteTest {
     private static boolean bool() {
         return ((JsBoolean) Interpreter.run("""
@@ -25,8 +24,6 @@ public class JsArrayAccessorWriteTest {
                 """)).getValue();
     }
 
-    // Assigning to an array-index accessor property with only a getter must throw TypeError, and the
-    // getter-backed value/attributes must be left untouched.
     @Test
     public void test_write_to_index_accessor_with_no_setter_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("""
@@ -49,7 +46,6 @@ public class JsArrayAccessorWriteTest {
         assertTrue(bool());
     }
 
-    // Same mechanism for a plain (non-index) named property defined directly on the array instance.
     @Test
     public void test_write_to_named_prop_accessor_with_no_setter_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("""
@@ -59,7 +55,6 @@ public class JsArrayAccessorWriteTest {
                 """));
     }
 
-    // A getter/setter pair on either kind of accessor still writes through normally.
     @Test
     public void test_write_to_accessor_with_setter_still_succeeds() {
         assertEquals(9, ((JsNumber) Interpreter.run("""

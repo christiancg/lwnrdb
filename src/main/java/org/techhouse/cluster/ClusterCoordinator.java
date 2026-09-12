@@ -19,10 +19,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.OperationRequest;
 
-/**
- * Write-path facade the operation layer consults when clustering is enabled: it decides whether this node
- * may coordinate a write (ownership + quorum) and, after the local commit, replicates it to a majority.
- */
 public class ClusterCoordinator {
     private final Logger logger = Logger.logFor(ClusterCoordinator.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
@@ -87,9 +83,6 @@ public class ClusterCoordinator {
         return clusterConfig.isEnabled() && !ownershipManager.hasQuorum();
     }
 
-    // Replicates a just-committed transaction to a majority as one atomic batch, built from the transaction's
-    // overlay: per touched collection, the net upserts (with their committed versions) and deletes (with
-    // fresh tombstone versions). Returns NOT_APPLICABLE when clustering is off or nothing needs shipping.
     public ReplicationOutcome replicateTransaction(Transaction transaction) {
         if (!clusterConfig.isEnabled()) {
             return ReplicationOutcome.NOT_APPLICABLE;
@@ -142,8 +135,7 @@ public class ClusterCoordinator {
         }
     }
 
-    // Admin/DDL ops are serialized by the admin coordinator; a node without a write quorum must not apply
-    // them (split-brain protection), mirroring the per-collection write guard.
+    // A node without a write quorum must not apply admin/DDL ops (split-brain protection).
     public WriteGuard guardAdmin() {
         if (!clusterConfig.isEnabled()) {
             return WriteGuard.allow();
@@ -151,8 +143,7 @@ public class ClusterCoordinator {
         return ownershipManager.hasQuorum() ? WriteGuard.allow() : WriteGuard.noQuorum();
     }
 
-    // Broadcasts an admin/DDL op (re-executed as actingUser) to a majority. Only the coordinator replicates,
-    // so peers applying an inbound REPLICATE_ADMIN never re-broadcast.
+    // Only the coordinator replicates, so peers applying an inbound REPLICATE_ADMIN never re-broadcast.
     public ReplicationOutcome replicateAdminOp(OperationRequest request, String actingUser) {
         if (!clusterConfig.isEnabled() || !ownershipManager.isAdminCoordinator()) {
             return ReplicationOutcome.NOT_APPLICABLE;
@@ -160,8 +151,8 @@ public class ClusterCoordinator {
         return replicator.broadcastAdmin(eJson.toJson(request), actingUser);
     }
 
-    // Replicates a user mutation by shipping the committed admin/users record (or a delete by username), so
-    // the salted password hash is identical on every node rather than re-hashed per node.
+    // Ships the committed admin/users record so the salted password hash is identical on every node rather
+    // than re-hashed per node.
     public ReplicationOutcome replicateUserOp(String username, boolean delete) {
         if (!clusterConfig.isEnabled() || !ownershipManager.isAdminCoordinator()) {
             return ReplicationOutcome.NOT_APPLICABLE;

@@ -9,7 +9,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.DeleteResponse;
 
 public class DeleteResponseTest {
-    // Create DeleteResponse with OK status and success message
     @Test
     public void test_create_delete_response_with_ok_status_and_message() {
         String successMessage = "Successfully deleted";
@@ -20,7 +19,6 @@ public class DeleteResponseTest {
         assertEquals(successMessage, response.getMessage());
     }
 
-    // Create DeleteResponse with null message
     @Test
     public void test_create_delete_response_with_null_message() {
         DeleteResponse response = new DeleteResponse(null);

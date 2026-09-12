@@ -24,8 +24,6 @@ import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 
-// FIND_BY_ID and AGGREGATE. Both read under the collection read lock unless the request opted into a
-// dirty read, and AGGREGATE additionally owns the analyze context for the whole pipeline.
 public final class ReadPathHelper {
     private static final Logger logger = Logger.logFor(ReadPathHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -39,8 +37,6 @@ public final class ReadPathHelper {
         final var dbName = findbyIdRequest.getDatabaseName();
         final var collName = findbyIdRequest.getCollectionName();
         final var id = findbyIdRequest.get_id();
-        // Read-your-writes: if the caller's open transaction has buffered a write for this id, serve it
-        // (a buffered save returns the buffered document; a buffered delete reads as not-found).
         if (activeTransaction != null) {
             final var overlay = activeTransaction.overlayFor(Cache.getCollectionIdentifier(dbName, collName));
             if (overlay != null && overlay.containsKey(id)) {
@@ -86,9 +82,8 @@ public final class ReadPathHelper {
             }
             final List<org.techhouse.ejson.elements.JsonObject> results;
             if (overlay != null && !overlay.isEmpty()) {
-                // Read-your-writes: run the pipeline over the committed documents with the transaction's
-                // buffered mutations applied at the source. Passing a prepared source stream also disables
-                // the index-backed source fast-paths, so the overlaid documents are honoured exactly.
+                // Passing a prepared source stream also disables the index-backed source fast-paths, so
+                // the transaction's overlaid documents are honoured exactly.
                 final var committed = cache.initializeStreamIfNecessary(null, dbName, collName);
                 final var source = TransactionOperationHelper.applyOverlayToStream(activeTransaction,
                         Cache.getCollectionIdentifier(dbName, collName), committed);
@@ -99,8 +94,7 @@ public final class ReadPathHelper {
             CollectionAccessHelper.recordCollectionAccess(aggregateRequest.getDatabaseName(),
                     aggregateRequest.getCollectionName());
             if (analyzeContext != null) {
-                // In analyze mode the diagnostic is always returned (even with no results), so the empty
-                // result returns an AggregateAnalyzeResponse instead of the NO_RESULTS error response.
+                // In analyze mode an empty result still answers with the analysis rather than NO_RESULTS.
                 return new AggregateAnalyzeResponse("Ok", results,
                         AnalyzeHelper.build(aggregateRequest, analyzeContext));
             }

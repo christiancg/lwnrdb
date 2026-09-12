@@ -74,7 +74,6 @@ public class TlsClusterServerTest {
                             new NodeInfo("client", "127.0.0.1", 2, NodeState.ALIVE, 1L, 1L), null),
                     3000);
         } catch (Exception ignored) {
-            // The TLS branch of the pool has been exercised regardless of handshake trust outcome.
         } finally {
             pool.closeAll();
         }

@@ -8,10 +8,6 @@ import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * String coercion on the data-only path - the one that must not call back into user code. Array joining
- * reaches it for every element, so each value type has to render itself without a ToPrimitive round trip.
- */
 public class DataOnlyStringCoercionTest {
     private static String str(String source) {
         return ((JsString) Interpreter.run(source)).getValue();
@@ -50,7 +46,6 @@ public class DataOnlyStringCoercionTest {
                 """));
     }
 
-    // The four EJson custom types render as their wire text, which is what makes them round-trip
     @Test
     public void test_the_database_custom_types_render_as_their_wire_text() {
         assertEquals("#geo(1.0,2.0)|#vector(1.0,2.0)|#datetime(2026-01-02T03:04:05)|#time(03:04:05)", str("""

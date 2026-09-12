@@ -74,9 +74,6 @@ public final class SearchUtils {
                 : toIdSet(entries, 0, index + 1);
     }
 
-    // The index where the operator's matching run begins (for GREATER_*) or ends (for SMALLER_*), or -1
-    // when nothing matches. Scalar and custom values differ only in how two values compare, so both go
-    // through the same search.
     private static <T> int boundaryIndex(List<FieldIndexEntry<T>> entries, T value, GreaterSmallerEqualsType type) {
         if (value instanceof Number n) {
             return binarySearchBoundary(castToDoubleList(entries), n.doubleValue(), type, Double::compareTo);
@@ -93,8 +90,7 @@ public final class SearchUtils {
         return -1;
     }
 
-    // compare.applyAsInt(entryValue, target) orders an indexed value against the operand, so this is the
-    // one binary search behind every range operator. Entries are sorted by value (see FieldIndexLoader).
+    // Relies on the entries being sorted by value, which FieldIndexLoader guarantees.
     private static <V> int binarySearchBoundary(List<FieldIndexEntry<V>> entries, V value,
             GreaterSmallerEqualsType type, ToIntBiFunction<V, V> compare) {
         int start = 0;
@@ -102,7 +98,6 @@ public final class SearchUtils {
         if (end == 0) {
             return -1;
         }
-        // A target beyond the run's far end resolves to that end directly.
         switch (type) {
             case SMALLER_THAN -> {
                 if (compare.applyAsInt(entries.get(end).getValue(), value) < 0) {

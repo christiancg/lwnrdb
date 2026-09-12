@@ -43,8 +43,6 @@ public class MembershipViewTest {
         assertEquals(List.of("peer"), view.peers(self).stream().map(NodeInfo::getNodeId).toList());
     }
 
-    // A node's own identity is only set when it joins, so every caller of peers() may reach it before
-    // that: a sweep firing pre-join must see an empty peer set, not a NullPointerException.
     @Test
     public void test_peers_tolerates_a_null_self_before_this_node_joined() {
         final var view = new MembershipView(List.of(node("a", NodeState.ALIVE), node("b", NodeState.DEAD)));

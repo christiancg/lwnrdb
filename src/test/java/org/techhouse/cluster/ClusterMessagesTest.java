@@ -18,8 +18,6 @@ public class ClusterMessagesTest {
         assertEquals(7L, reply.getAdminEpoch());
     }
 
-    // Every handler funnels its failures through here, so a thrown builder must come back as a
-    // readable ERROR rather than propagating and killing the connection.
     @Test
     public void test_reply_wraps_a_failing_builder_as_an_error_ack() {
         final var reply = ClusterMessages.reply(ClusterMessageType.ADMIN_SNAPSHOT_ACK, "Snapshot failed", _ -> {
@@ -30,7 +28,6 @@ public class ClusterMessagesTest {
         assertEquals("Snapshot failed: disk gone", reply.getErrorMessage());
     }
 
-    // The ack type is set before the builder runs, so a builder that fails must not leave it behind.
     @Test
     public void test_a_failure_replaces_the_ack_type_it_had_already_set() {
         final var reply = ClusterMessages.reply(ClusterMessageType.REPLICATE_USER_ACK, "Replication failed", _ -> {

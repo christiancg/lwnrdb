@@ -19,9 +19,8 @@ import org.techhouse.test.TestUtils;
 public class MainTest {
     @AfterEach
     public void tearDown() throws NoSuchFieldException, IllegalAccessException {
-        // Main.main starts background workers and the memory-management sweep on the shared singletons.
-        // Stop them here so they do not keep draining the queue / sweeping into later tests in the same
-        // JVM fork (a leaked worker writing admin/collection_usage was corrupting other tests' state).
+        // Stop them here, or a leaked worker writing admin/collection_usage corrupts later tests in the
+        // same JVM fork.
         IocContainer.get(BackgroundTaskManager.class).stopBackgroundWorkers();
         IocContainer.get(MemoryManagement.class).stopSweepThread();
         final var dbPath = new File(TestGlobals.PATH);
@@ -35,7 +34,6 @@ public class MainTest {
         TestUtils.releaseAllLocks();
     }
 
-    // Main initializes system with default port from Configuration when no args provided
     @Test
     public void test_init_with_default_port()
             throws NoSuchFieldException, IllegalAccessException, InterruptedException {
@@ -63,7 +61,6 @@ public class MainTest {
         }
     }
 
-    // Main starts a TLS server and generates a self-signed keystore when tlsEnabled is true
     @Test
     public void test_init_with_tls_enabled() throws NoSuchFieldException, IllegalAccessException, InterruptedException {
         Configuration config = Configuration.getInstance();
@@ -95,7 +92,6 @@ public class MainTest {
         }
     }
 
-    // Invalid port number provided as command line argument
     @Test
     public void test_invalid_port_throws_exception() {
         String[] args = new String[]{"invalid_port"};
@@ -103,7 +99,6 @@ public class MainTest {
         assertThrows(InvalidPortException.class, () -> Main.main(args));
     }
 
-    // Valid port number provided as command line argument is parsed correctly
     @Test
     public void test_valid_port_arg_starts_server() throws Exception {
         Configuration config = Configuration.getInstance();

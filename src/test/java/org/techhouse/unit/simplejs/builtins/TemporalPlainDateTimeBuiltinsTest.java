@@ -88,15 +88,12 @@ public class TemporalPlainDateTimeBuiltinsTest {
                 () -> Interpreter.run("new Temporal.PlainDateTime(2020, 1, 1).add({years: 1, months: -1})"));
     }
 
-    // A duration-like object with none of the ten recognized properties present is a TypeError
     @Test
     public void test_add_rejects_duration_like_with_no_recognized_fields() {
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("new Temporal.PlainDateTime(2020, 6, 15).add({})"));
     }
 
-    // until()/since() round a computed Duration, so a day-unit increment greater than 1 is valid
-    // when largestUnit is not larger than "day" (unlike round(), which only ever accepts 1)
     @Test
     public void test_until_allows_day_increment_greater_than_one() {
         assertEquals(10,
@@ -104,7 +101,6 @@ public class TemporalPlainDateTimeBuiltinsTest {
                         + "{smallestUnit: 'day', roundingIncrement: 10, roundingMode: 'floor'}).days"));
     }
 
-    // until/since return a real Temporal.Duration
     @Test
     public void test_until_and_since_return_real_duration() {
         assertTrue(bool("new Temporal.PlainDateTime(2020, 1, 1)"
@@ -237,9 +233,6 @@ public class TemporalPlainDateTimeBuiltinsTest {
                 + ".until(new Temporal.PlainDateTime(2020, 1, 2), {largestUnit: 'day', smallestUnit: 'year'})"));
     }
 
-    // Calendar-unit rounding (largestUnit/smallestUnit above "day") is implemented via
-    // RelativeDurationMath, with the receiver itself as the implicit relativeTo anchor - no
-    // RangeError, a real years/months breakdown instead.
     @Test
     public void test_difference_calendar_unit_rounding() {
         assertEquals("1,2", str("var d = new Temporal.PlainDateTime(2020, 1, 1)"
@@ -247,8 +240,6 @@ public class TemporalPlainDateTimeBuiltinsTest {
                 + "d.years + ',' + d.months"));
     }
 
-    // Exercises the "since" borrow-a-day branch where the date moves backward but the time-of-day
-    // moves forward (the mirror image of test_until_and_since_return_real_duration's coverage).
     @Test
     public void test_since_borrows_day_when_time_moves_forward() {
         assertEquals(23, num("new Temporal.PlainDateTime(2020, 1, 2, 0)"
@@ -310,16 +301,12 @@ public class TemporalPlainDateTimeBuiltinsTest {
         assertTrue(bool("new Temporal.PlainDateTime(2020, 6, 15).eraYear === undefined"));
     }
 
-    // The representable range is one day wider than Temporal.Instant's own +/-8.64e21ns limit, except
-    // at the very edge nanosecond - see requireWithinLimits.
     @Test
     public void test_representable_range_edge() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainDateTime(-271821, 4, 19)"));
         assertEquals(1, num("new Temporal.PlainDateTime(-271821, 4, 19, 0, 0, 0, 0, 0, 1).nanosecond"));
     }
 
-    // Reflect.construct with a subclass links [[Prototype]] to the subclass's prototype rather than
-    // the intrinsic one.
     @Test
     public void test_reflect_construct_subclass_prototype() {
         assertTrue(bool("class Sub extends Temporal.PlainDateTime {}"
@@ -356,9 +343,6 @@ public class TemporalPlainDateTimeBuiltinsTest {
                 () -> Interpreter.run("new Temporal.PlainDateTime(2020, 6, 15).with({year: 2021, timeZone: 'UTC'})"));
     }
 
-    // compare() must use the subclass instance's internal slot directly, never the generic
-    // property-bag path (which would invoke overridable getters) - a subclass instance is a wrapper
-    // object once its prototype differs from the intrinsic one.
     @Test
     public void test_compare_uses_internal_slots_not_getters() {
         assertEquals(-1, num("class AvoidGettersDateTime extends Temporal.PlainDateTime {"

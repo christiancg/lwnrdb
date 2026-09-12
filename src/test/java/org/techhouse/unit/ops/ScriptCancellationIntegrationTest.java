@@ -61,10 +61,6 @@ import org.techhouse.ops.resp.RunScriptResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The whole feature on the real setup: a run appears in LIST_SCRIPTS, CANCEL_SCRIPT stops it, and the
- * cancelled caller learns why.
- */
 public class ScriptCancellationIntegrationTest {
     private static final String ADMIN = "cancelclient";
     private static final String OUTPUT_COLL = "cancelOutput";
@@ -175,7 +171,6 @@ public class ScriptCancellationIntegrationTest {
         return condition.getAsBoolean();
     }
 
-    // Waits for the listing to report a run, so the test never races the run's own start-up.
     private JsonObject awaitOneScript() throws Exception {
         if (!await(() -> !listScripts().isEmpty())) {
             throw new AssertionError("the run never appeared in LIST_SCRIPTS");
@@ -320,7 +315,6 @@ public class ScriptCancellationIntegrationTest {
         assertEquals(java.util.UUID.fromString(response.getRunId()).toString(), response.getRunId());
     }
 
-    // The log line is the operator's other way of learning a run's id, so it has to carry it
     @Test
     public void test_run_id_appears_in_the_log_line() throws Exception {
         final var origLogPath = configuration.getLogPath();
@@ -387,7 +381,6 @@ public class ScriptCancellationIntegrationTest {
         assertEquals(0, scriptLoad.current());
     }
 
-    // Cancelling a run that has already finished is not an error: it is the state the caller wanted
     @Test
     public void test_cancelling_a_finished_run_returns_false() {
         final var response = (RunScriptResponse) ScriptOperationHelper
@@ -395,7 +388,6 @@ public class ScriptCancellationIntegrationTest {
         assertFalse(cancel(response.getRunId()).isCancelled());
     }
 
-    // A cancelled db.transaction must roll back and strand no collection lock
     @Test
     public void test_cancelling_a_transactional_script_rolls_back_and_strands_no_lock() throws Exception {
         final var script = "import db from 'db';\n" + "db.transaction(() => {\n" + "  db.save(db.name, '" + OUTPUT_COLL

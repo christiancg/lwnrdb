@@ -29,8 +29,7 @@ import org.techhouse.ops.resp.SaveResponse;
 public final class SaveOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
-    // Not final so tests can substitute a task manager whose workers are never started, keeping the
-    // relocation's DELETED/CREATED events unprocessed while a pending-write assertion runs.
+    // Not final so tests can substitute a task manager whose workers are never started.
     @SuppressWarnings("FieldMayBeFinal")
     private static BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
@@ -40,9 +39,7 @@ public final class SaveOperationHelper {
     private SaveOperationHelper() {
     }
 
-    // Executes a single SAVE against the real collection. The caller must already hold the collection
-    // write lock (the normal SAVE handler acquires it; a transaction commit already holds it). Shared
-    // by the normal write path and the transaction-commit replay so their behaviour cannot drift.
+    // The caller must already hold the collection write lock.
     public static OperationResponse executeSave(SaveRequest saveRequest) throws Exception {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
@@ -62,9 +59,8 @@ public final class SaveOperationHelper {
         if (foundIndexEntry >= 0) {
             final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
             if (wouldOverflowPage(dbName, collName, idxEntry, entry)) {
-                // The grown document no longer fits on its page; relocate it instead of rewriting in
-                // place (which would push the page past maxPageSize). Handled as a delete + insert so
-                // page metadata and field indexes stay correct via the standard background events.
+                // The grown document no longer fits its page; relocate as delete + insert so page metadata
+                // and field indexes stay correct through the standard background events.
                 final var relocatedPkIndexEntry = relocateOnGrowUpdate(dbName, collName, entry, idxEntry,
                         primaryKeyIndex);
                 listenManager.markDirty(dbName, collName);
@@ -88,8 +84,7 @@ public final class SaveOperationHelper {
         }
         primaryKeyIndex.add(insertAt, savedPkIndexEntry);
         cache.addEntryToCache(dbName, collName, entry);
-        // Mark the id pending (committed, but its field-index update is asynchronous) before
-        // releasing the write lock, so index-backed reads reconcile it until indexing completes.
+        // Mark pending before releasing the write lock, so index-backed reads reconcile it until indexed.
         pendingIndexWrites.mark(dbName, collName, entry.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
         listenManager.markDirty(dbName, collName);
@@ -97,15 +92,12 @@ public final class SaveOperationHelper {
         return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue());
     }
 
-    // Executes a BULK_SAVE against the real collection. As with executeSave, the caller must already
-    // hold the collection write lock. Shared by the normal path and the transaction-commit replay.
+    // The caller must already hold the collection write lock.
     public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest) throws Exception {
         return executeBulkSave(bulkSaveRequest, null);
     }
 
-    // Versioned overload: when {@code versions} is non-null it supplies the last-write-wins version for each
-    // object (aligned by index), as used by the replica-apply path so replicas persist the owner's version
-    // rather than assigning their own. When null, each entry is stamped with a fresh local version.
+    // A non-null versions list supplies the owner's version per object, so replicas do not assign their own.
     public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest, List<Long> versions)
             throws Exception {
         final var dbName = bulkSaveRequest.getDatabaseName();
@@ -115,8 +107,7 @@ public final class SaveOperationHelper {
         for (var i = 0; i < objects.size(); i++) {
             final var entry = DbEntry.fromJsonObject(dbName, collName, objects.get(i));
             if (versions != null) {
-                // Versions arriving over the wire deserialize as a boxed Integer/Long/Double; the Number
-                // supertype reads the value as a long regardless of the concrete boxed type.
+                // Versions deserialize as a boxed Integer/Long/Double, so read them through Number.
                 final Number version = versions.get(i);
                 entry.setVersion(version.longValue());
                 WriteVersion.observe(version.longValue());
@@ -162,8 +153,7 @@ public final class SaveOperationHelper {
         if (!indexedDbEntriesToUpdate.isEmpty()) {
             final var bulkResult = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate);
             updatedIndexEntries.addAll(bulkResult.updated());
-            // Fix the in-memory positions of non-updated survivors shifted by the batch, then
-            // replace the updated entries with their new (relocated) index entries.
+            // Fix the in-memory positions of survivors shifted by the batch before replacing the updated ones.
             bulkResult.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
             primaryKeyIndex.removeIf(pkIndexEntry -> updatedIndexEntries.stream()
                     .anyMatch(pkIndexEntry1 -> pkIndexEntry1.get_id().equals(pkIndexEntry.getValue())));
@@ -193,8 +183,7 @@ public final class SaveOperationHelper {
         cache.addEntriesToCache(dbName, collName, insertedDbEntries);
         final var updatedIds = updatedDbEntries.stream().map(DbEntry::get_id).toList();
         final var insertedIds = insertedDbEntries.stream().map(DbEntry::get_id).toList();
-        // Mark all committed ids pending before releasing the write lock, so index-backed reads
-        // reconcile them until their asynchronous field-index update completes.
+        // Mark the committed ids pending before releasing the write lock, so index-backed reads reconcile them.
         pendingIndexWrites.mark(dbName, collName, updatedIds);
         pendingIndexWrites.mark(dbName, collName, insertedIds);
         taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
@@ -203,9 +192,6 @@ public final class SaveOperationHelper {
         return new BulkSaveResponse("Successfully saved entries", insertedIds, updatedIds);
     }
 
-    // True when rewriting the existing entry in place with the new (larger) value would push its page
-    // past maxPageSize. Uses the cached page byte size (minus the old entry, plus the new one); when no
-    // page metadata is available the check is skipped (falls back to the in-place update).
     public static boolean wouldOverflowPage(String dbName, String collName, PkIndexEntry idxEntry, DbEntry entry) {
         final var pageEntry = cache.getAdminPageEntry(dbName, collName, idxEntry.getPage());
         if (pageEntry == null) {
@@ -215,13 +201,7 @@ public final class SaveOperationHelper {
         return projectedPageSize > configuration.getMaxPageSize();
     }
 
-    // Relocates a grown document that no longer fits on its page: removes it from the current page
-    // (compacting the survivors) and re-inserts it into a fitting page. Modeled as a DELETE of the old
-    // version followed by a CREATE of the new one so per-page metadata (the old page loses the entry,
-    // the new page gains it) and the field indexes are maintained through the same background events the
-    // standalone delete/insert paths emit. Runs while the caller already holds the collection write lock;
-    // the caller performs the cross-cutting bookkeeping (markDirty / recordCollectionAccess) on the
-    // returned entry.
+    // The caller must already hold the collection write lock.
     public static PkIndexEntry relocateOnGrowUpdate(String dbName, String collName, DbEntry entry,
             PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex) throws Exception {
         final var oldEntry = cache.getById(dbName, collName, idxEntry);

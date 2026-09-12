@@ -51,7 +51,6 @@ public class CompiledScriptCacheTest {
         assertEquals(2, cache.size());
     }
 
-    // The failure is cached too: a client looping on a broken script would otherwise re-parse every call
     @Test
     public void test_syntax_error_is_cached_and_replayed() {
         final var cache = new CompiledScriptCache();

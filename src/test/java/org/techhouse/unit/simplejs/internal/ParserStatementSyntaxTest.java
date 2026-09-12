@@ -51,7 +51,6 @@ public class ParserStatementSyntaxTest {
         return ((ExpressionStatement) firstStatement(source)).getExpression();
     }
 
-    // A stray semicolon becomes an empty statement
     @Test
     public void test_empty_statement() {
         assertInstanceOf(EmptyStatement.class, firstStatement(";"));
@@ -70,11 +69,8 @@ public class ParserStatementSyntaxTest {
         assertEquals("delete", assertInstanceOf(UnaryExpression.class, firstExpression("delete a.b")).getOperator());
     }
 
-    // PropertyDefinition : CoverInitializedName is always a Syntax Error (12.2.6 Early Errors)
-    // unless the object literal is reinterpreted as an ObjectAssignmentPattern by an immediately
-    // following `=` - `({ a = 1 })` used as a bare expression statement is never reinterpreted, so it
-    // must throw rather than silently parse as an object literal with an assignment-valued shorthand
-    // property (see Parser.rejectCoverInitializedName).
+    // PropertyDefinition : CoverInitializedName is always a Syntax Error (12.2.6 Early Errors) unless the
+    // object literal is reinterpreted as an ObjectAssignmentPattern by an immediately following `=`.
     @Test
     public void test_object_cover_initialized_shorthand_as_bare_expression_throws() {
         assertThrows(SyntaxErrorException.class, () -> firstExpression("({ a = 1 })"));
@@ -88,8 +84,6 @@ public class ParserStatementSyntaxTest {
         assertInstanceOf(BlockStatement.class, arrow.getBody());
     }
 
-    // Statements
-
     @Test
     public void test_variable_declaration_kinds_and_multiple_declarators() {
         assertEquals("var", assertInstanceOf(VariableDeclaration.class, firstStatement("var x = 1;")).getKind());
@@ -101,7 +95,6 @@ public class ParserStatementSyntaxTest {
                 .getInit());
     }
 
-    // using / await using declarations reuse VariableDeclaration with a distinct kind
     @Test
     public void test_using_declaration() {
         final var decl = assertInstanceOf(VariableDeclaration.class, firstStatement("using r = getResource();"));
@@ -116,13 +109,11 @@ public class ParserStatementSyntaxTest {
         assertEquals("await using", decl.getKind());
     }
 
-    // A using declaration without an initializer is a parse error
     @Test
     public void test_using_missing_initializer_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("using r;"));
     }
 
-    // `using` stays a plain identifier when not directly followed by a binding identifier
     @Test
     public void test_using_as_identifier() {
         assertInstanceOf(ExpressionStatement.class, firstStatement("using;"));
@@ -130,7 +121,6 @@ public class ParserStatementSyntaxTest {
         assertInstanceOf(ExpressionStatement.class, firstStatement("using[a] = arr;"));
     }
 
-    // a using declaration may not sit directly in a case or default clause's statement list
     @Test
     public void test_using_rejected_in_switch_clause() {
         assertThrows(SyntaxErrorException.class, () -> parse("switch (x) { case 0: using r = a; }"));
@@ -236,8 +226,6 @@ public class ParserStatementSyntaxTest {
         assertEquals(2, fn.getParams().size());
     }
 
-    // Negative tests
-
     @Test
     public void test_incomplete_binary_throws_end_of_input() {
         assertThrows(UnexpectedEndOfInputException.class, () -> parse("1 +"));
@@ -280,10 +268,8 @@ public class ParserStatementSyntaxTest {
         assertThrows(UnexpectedTokenException.class, () -> parse("var `t`"));
     }
 
-    // "undefined" is not a reserved word - `var undefined;` is legal (CreateGlobalVarBinding is a
-    // no-op against the existing, non-configurable global property), but `let`/`const undefined` is
-    // a SyntaxError in real engines (colliding with a restricted global) - this engine reaches that
-    // same SyntaxError outcome by simply never accepting "undefined" as a lexical BindingIdentifier.
+    // `var undefined;` is legal but `let`/`const undefined` is a SyntaxError in real engines; this engine
+    // reaches the same outcome by never accepting "undefined" as a lexical BindingIdentifier.
     @Test
     public void test_var_undefined_parses_but_lexical_undefined_throws() {
         assertDoesNotThrow(() -> parse("var undefined;"));
@@ -311,7 +297,6 @@ public class ParserStatementSyntaxTest {
         assertThrows(UnexpectedEndOfInputException.class, () -> parse("switch (x) { case 1:"));
     }
 
-    // async function declaration carries the async flag only
     @Test
     public void test_async_function_declaration() {
         final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("async function f() {}"));
@@ -319,7 +304,6 @@ public class ParserStatementSyntaxTest {
         assertFalse(fn.isGenerator());
     }
 
-    // generator function declaration carries the generator flag only
     @Test
     public void test_generator_function_declaration() {
         final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function* f() {}"));
@@ -327,7 +311,6 @@ public class ParserStatementSyntaxTest {
         assertFalse(fn.isAsync());
     }
 
-    // async arrow with a block body
     @Test
     public void test_async_arrow_block_body() {
         final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("async () => {}"));
@@ -335,7 +318,6 @@ public class ParserStatementSyntaxTest {
         assertFalse(arrow.isExpressionBody());
     }
 
-    // a constructor member is never async, a generator or an accessor, and never repeats
     @Test
     public void test_invalid_constructor_member_is_rejected() {
         assertThrows(SyntaxErrorException.class, () -> parse("class C { async constructor() {} }"));
@@ -348,7 +330,6 @@ public class ParserStatementSyntaxTest {
         assertEquals("method", method.getKind());
     }
 
-    // async not followed by function/arrow is an ordinary identifier reference
     @Test
     public void test_async_without_function_or_arrow_is_an_identifier() {
         assertEquals("async", assertInstanceOf(Identifier.class, firstExpression("async")).getName());
@@ -356,25 +337,21 @@ public class ParserStatementSyntaxTest {
         assertThrows(RuntimeException.class, () -> parse("async +"));
     }
 
-    // yield* requires an argument
     @Test
     public void test_yield_delegate_without_argument_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("function* g() { yield*; }"));
     }
 
-    // An async getter is invalid
     @Test
     public void test_async_getter_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("class C { async get x() {} }"));
     }
 
-    // A parameter after a rest parameter is invalid
     @Test
     public void test_param_after_rest_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("function f(...rest, a) {}"));
     }
 
-    // A spread with no argument is invalid
     @Test
     public void test_spread_without_argument_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("f(...)"));
@@ -384,7 +361,6 @@ public class ParserStatementSyntaxTest {
         return ((VariableDeclaration) firstStatement(source)).getDeclarations().getFirst();
     }
 
-    // An array pattern binds the declarator id
     @Test
     public void test_array_pattern_declaration() {
         final var pattern = assertInstanceOf(ArrayPattern.class, firstDeclarator("const [a, b] = arr").getId());
@@ -392,7 +368,6 @@ public class ParserStatementSyntaxTest {
         assertEquals("a", assertInstanceOf(Identifier.class, pattern.getElements().getFirst()).getName());
     }
 
-    // An object pattern binds two shorthand properties
     @Test
     public void test_object_pattern_declaration() {
         final var pattern = assertInstanceOf(ObjectPattern.class, firstDeclarator("const {a, b} = o").getId());
@@ -400,13 +375,11 @@ public class ParserStatementSyntaxTest {
         assertTrue(assertInstanceOf(Property.class, pattern.getProperties().getFirst()).isShorthand());
     }
 
-    // A non-target expression cannot be an assignment LHS
     @Test
     public void test_invalid_assignment_target_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("1 = a"));
     }
 
-    // A compound assignment cannot target a pattern
     @Test
     public void test_compound_assign_pattern_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("[a] += b"));

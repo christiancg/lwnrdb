@@ -58,8 +58,6 @@ public class StartupWarningsTest {
         }
     }
 
-    // '*' is the shipped default, so a node with fetch turned on reaches anything routable from it -
-    // the instance-metadata endpoint included. That is the warning an operator most needs to see.
     @Test
     public void test_a_wildcard_fetch_allowlist_is_warned_about() throws Exception {
         enableFetch("*");
@@ -96,8 +94,6 @@ public class StartupWarningsTest {
         }
     }
 
-    // maxMemory and the metadata caps are budgeted separately, so an operator sizing -Xmx from
-    // maxMemory alone undercounts; the warning names the sum.
     @Test
     public void test_budgets_totalling_more_than_the_heap_are_warned_about() throws Exception {
         TestUtils.setPrivateField(config, "maxMemory", "1024Gb");

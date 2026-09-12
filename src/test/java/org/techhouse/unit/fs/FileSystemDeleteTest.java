@@ -41,7 +41,6 @@ public class FileSystemDeleteTest {
         }
     }
 
-    // Successfully delete database folder and all its contents when database exists
     @Test
     public void test_delete_existing_database() throws NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
@@ -52,7 +51,6 @@ public class FileSystemDeleteTest {
         assertTrue(result);
     }
 
-    // Return false when database folder does not exist
     @Test
     public void test_delete_nonexistent_database() throws NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
@@ -63,7 +61,6 @@ public class FileSystemDeleteTest {
         assertFalse(result);
     }
 
-    // Successfully delete all files in existing collection folder and the folder itself
     @Test
     public void test_delete_collection_files_success() throws NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
@@ -74,7 +71,6 @@ public class FileSystemDeleteTest {
         assertTrue(result);
     }
 
-    // Return false when collection folder does not exist
     @Test
     public void test_delete_collection_files_nonexistent_folder() {
         FileSystem fileSystem = new FileSystem();
@@ -86,11 +82,9 @@ public class FileSystemDeleteTest {
         assertFalse(result);
     }
 
-    // Successfully deletes entry by shifting remaining entries and updating file length
     @Test
     public void test_delete_entry_shifts_remaining_entries()
             throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Setup
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
@@ -110,10 +104,8 @@ public class FileSystemDeleteTest {
 
         PkIndexEntry entryToDelete = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 25, 0);
 
-        // Execute
         fileSystem.deleteFromCollection(entryToDelete);
 
-        // Verify
         try (RandomAccessFile reader = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             byte[] content = new byte[(int) reader.length()];
             reader.readFully(content);

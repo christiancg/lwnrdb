@@ -9,12 +9,6 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.log.Logger;
 
-/**
- * The single cluster-wide admin epoch: one monotonic counter, bumped only by the admin coordinator on each
- * committed admin/DDL op, that decides which node's admin snapshot is authoritative. A node conforms to the
- * highest-epoch snapshot it can see, so a stale rejoining node (even if it briefly becomes coordinator) is
- * ignored until it has caught up. Persisted to {@code filePath/cluster/admin.epoch}; absent ⇒ 0.
- */
 public class AdminEpoch {
     private final Logger logger = Logger.logFor(AdminEpoch.class);
     // Guarded by this monitor for both reads and writes (see current()), so the read-modify-write in bump()

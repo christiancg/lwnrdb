@@ -22,7 +22,6 @@ public class ArrayBuiltinsTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // Array is callable as a constructor with a length or with elements
     @Test
     public void test_array_constructor() {
         assertEquals(3, num("Array(3).length"));
@@ -31,7 +30,6 @@ public class ArrayBuiltinsTest {
         assertFalse(bool("Array.isArray('x')"));
     }
 
-    // find/some/every/forEach iterate with a predicate
     @Test
     public void test_predicates_and_foreach() {
         assertEquals(3, num("[1, 2, 3, 4].find(x => x > 2)"));
@@ -40,7 +38,6 @@ public class ArrayBuiltinsTest {
         assertEquals(6, num("let s = 0; [1, 2, 3].forEach(x => { s += x; }); s"));
     }
 
-    // push/pop/shift/unshift mutate and return the expected values
     @Test
     public void test_mutators() {
         assertEquals(3, num("let a = [1, 2]; a.push(3)"));
@@ -49,13 +46,11 @@ public class ArrayBuiltinsTest {
         assertEquals(3, num("let a = [2, 3]; a.unshift(1)"));
     }
 
-    // calling a callback method without a function throws
     @Test
     public void test_missing_callback_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("[1].map()"));
     }
 
-    // keys/values/entries return iterators consumable by for-of
     @Test
     public void test_iterators() {
         assertEquals("0,1,2", str("let r = []; for (const k of ['a', 'b', 'c'].keys()) r.push(k); r.join(',')"));
@@ -64,7 +59,6 @@ public class ArrayBuiltinsTest {
                 str("let r = []; for (const e of ['a', 'b'].entries()) r.push(e[0] + ':' + e[1]); r.join(',')"));
     }
 
-    // Array.from and Array.of build arrays
     @Test
     public void test_from_of() {
         assertEquals("1,2,3", str("Array.of(1, 2, 3).join(',')"));
@@ -73,14 +67,12 @@ public class ArrayBuiltinsTest {
         assertEquals("1,2,3", str("Array.from(new Set([1, 2, 3])).join(',')"));
     }
 
-    // Array.from falls back to array-like semantics for a non-iterable source
     @Test
     public void test_array_from_array_like_object() {
         assertEquals("a,b,c", str("Array.from({length: 3, 0: 'a', 1: 'b', 2: 'c'}).join(',')"));
         assertEquals("", str("Array.from({length: 0}).join(',')"));
     }
 
-    // Array.from called with a custom constructor builds via that constructor instead of a plain array
     @Test
     public void test_array_from_call_custom_constructor() {
         final var source = """
@@ -91,7 +83,6 @@ public class ArrayBuiltinsTest {
         assertEquals("true,1,2", str(source));
     }
 
-    // A non-extensible custom-constructed target rejects the new indexed property with a TypeError
     @Test
     public void test_array_from_call_custom_constructor_rejects_definition() {
         final var source = """
@@ -101,7 +92,6 @@ public class ArrayBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // with returns a copy with one index replaced; negative indices count from the end
     @Test
     public void test_with() {
         assertEquals("1,9,3", str("[1, 2, 3].with(1, 9).join(',')"));
@@ -109,28 +99,24 @@ public class ArrayBuiltinsTest {
         assertEquals("1,2,3", str("let a = [1, 2, 3]; a.with(0, 9); a.join(',')"));
     }
 
-    // with throws a RangeError for an out-of-bounds index
     @Test
     public void test_with_out_of_range_throws() {
         assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
                 () -> Interpreter.run("[1, 2, 3].with(5, 9)"));
     }
 
-    // toLocaleString joins per-element toLocaleString results; null/undefined become empty
     @Test
     public void test_to_locale_string() {
         assertEquals("1,2,3", str("[1, 2, 3].toLocaleString()"));
         assertEquals("a,,b", str("['a', null, 'b'].toLocaleString()"));
     }
 
-    // toString joins with the default separator
     @Test
     public void test_to_string() {
         assertEquals("1,2", str("[1, 2].toString()"));
         assertEquals("", str("[].toString()"));
     }
 
-    // concat splats an object that opts in via Symbol.isConcatSpreadable, over its own length
     @Test
     public void test_is_concat_spreadable() {
         assertEquals(3, num(
@@ -141,7 +127,6 @@ public class ArrayBuiltinsTest {
         assertEquals(3, num("[1].concat([2, 3]).length"));
     }
 
-    // Array.fromAsync drains an async iterable and a sync iterable of promises
     @Test
     public void test_from_async() {
         assertEquals(2, asyncLength("async function* g() { yield 1; yield 2 } out.v = await Array.fromAsync(g())"));
@@ -149,14 +134,12 @@ public class ArrayBuiltinsTest {
         assertTrue(bool("typeof Array.fromAsync === 'function'"));
     }
 
-    // The result of an async body is observed after the event loop has drained
     private static double asyncLength(String body) {
         final var out = (org.techhouse.simplejs.values.JsObject) Interpreter
                 .run("const out = {}; (async () => { " + body + " })(); out");
         return ((org.techhouse.simplejs.values.JsArray) out.get("v")).length();
     }
 
-    // a raw primitive receiver is ToObject-boxed into an empty array-like rather than rejected
     @Test
     public void test_generic_methods_accept_primitive_receiver() {
         assertEquals(0, num("Array.prototype.map.call(5, x => x).length"));
@@ -165,7 +148,6 @@ public class ArrayBuiltinsTest {
         assertEquals("object", str("Array.prototype.map.call('ab', (v, i, o) => typeof o)[0]"));
     }
 
-    // the callback's third argument is the receiver itself, not a copy of it
     @Test
     public void test_callback_receives_original_receiver_not_snapshot() {
         assertTrue(bool("const o = {length: 1, 0: 'a'}; let seen; Array.prototype.forEach.call(o, (v, i, r) => "
@@ -175,7 +157,6 @@ public class ArrayBuiltinsTest {
                 + "{ seen = r; return acc; }, 0); seen === o"));
     }
 
-    // an exotic (non-JsObject) receiver is read through the member seam rather than rejected
     @Test
     public void test_accepts_exotic_array_like_receiver() {
         assertEquals("a-b", str("function f() {} Object.defineProperty(f, 'length', {value: 2});"
@@ -184,7 +165,6 @@ public class ArrayBuiltinsTest {
         assertEquals("a-b-c", str("Array.prototype.join.call(new String('abc'), '-')"));
     }
 
-    // a mutating method writes through to a generic receiver instead of a discarded snapshot
     @Test
     public void test_writes_through_to_generic_receiver() {
         assertEquals("x,1", str("const o = {length: 0}; Array.prototype.push.call(o, 'x'); o[0] + ',' + o.length"));
@@ -195,7 +175,6 @@ public class ArrayBuiltinsTest {
                         + " o[0] + ',' + o.length + ',' + o.hasOwnProperty('1')"));
     }
 
-    // a rejected [[Set]] on the receiver is a TypeError, not a silently dropped write
     @Test
     public void test_throws_on_frozen_receiver_write() {
         assertThrows(TypeErrorException.class,
@@ -205,7 +184,6 @@ public class ArrayBuiltinsTest {
                 () -> Interpreter.run("const o = {length: 0}; Object.freeze(o); Array.prototype.push.call(o, 1)"));
     }
 
-    // concat consults Symbol.isConcatSpreadable before falling back to IsArray
     @Test
     public void test_concat_honours_is_concat_spreadable() {
         assertEquals(3, num(
@@ -215,7 +193,6 @@ public class ArrayBuiltinsTest {
                 num("const o = {0: 'a', length: 1}; o[Symbol.isConcatSpreadable] = false; [].concat(o).length"));
     }
 
-    // a length past the int range is walked lazily rather than materialised
     @Test
     public void test_length_beyond_integer_max_does_not_throw() {
         assertEquals(9007199254740990D,
@@ -225,7 +202,6 @@ public class ArrayBuiltinsTest {
         assertFalse(bool("Array.prototype.includes.call({length: Infinity, 0: 'a'}, 'a', 9007199254740990)"));
     }
 
-    // copyWithin copies backwards when the ranges overlap, and deletes an absent source
     @Test
     public void test_copy_within_overlapping_and_holes() {
         assertEquals("1,1,2,3", str("[1, 2, 3, 4].copyWithin(1, 0).join(',')"));
@@ -233,7 +209,6 @@ public class ArrayBuiltinsTest {
         assertTrue(bool("const a = [, 2]; a.copyWithin(1, 0); !a.hasOwnProperty('1')"));
     }
 
-    // ArraySpeciesCreate honours a species constructor and rejects a non-constructor one
     @Test
     public void test_species_create_uses_the_constructor() {
         assertTrue(bool("class C { constructor(n) { this.tag = true; } static get [Symbol.species]() { return C; } }"
@@ -247,14 +222,12 @@ public class ArrayBuiltinsTest {
         assertEquals("1", str("const o = {0: 1, length: 1}; Array.prototype.slice.call(o).join(',')"));
     }
 
-    // toString falls back to Object.prototype.toString when `join` is not callable
     @Test
     public void test_to_string_falls_back_to_object_to_string() {
         assertEquals("J", str("const a = [1, 2]; a.join = () => 'J'; a.toString()"));
         assertEquals("[object Array]", str("const a = [1, 2]; a.join = 1; a.toString()"));
     }
 
-    // an out-of-range array length is a RangeError, from the constructor and from a by-copy method
     @Test
     public void test_invalid_array_length_throws() {
         assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class, () -> Interpreter.run("Array(-1)"));
@@ -265,14 +238,8 @@ public class ArrayBuiltinsTest {
                 () -> Interpreter.run("Array.prototype.sort.call({length: 9007199254740991})"));
     }
 
-    // IsArray sees through a proxy to its target, recognises the intrinsic Array.prototype and rejects
-    // a revoked proxy. Array.prototype carries a real own "length" (0, writable/non-enumerable/
-    // non-configurable per spec 22.1.3) - a prior attempt to add this shadowed a `class A extends
-    // Array` instance's own length, breaking six subclassing tests, because the prototype-chain walk
-    // in MemberEvaluator.getObjectMember found Array.prototype's own "length" before ever consulting
-    // the instance's wrapped primitive. Fixed by giving the wrapped-primitive delegation unconditional
-    // priority for "length" in both getObjectMember and setObjectMember (see the comments there and
-    // JsArrayLengthTest's subclassing coverage) rather than omitting the prototype's own length.
+    // Array.prototype carries a real own "length" (0, non-writable per spec 22.1.3); the wrapped-primitive
+    // delegation in MemberEvaluator must win over it or a `class A extends Array` instance's length is shadowed.
     @Test
     public void test_is_array_covers_proxies_and_the_intrinsic_prototype() {
         assertTrue(bool("Array.isArray(new Proxy([], {}))"));
@@ -283,12 +250,8 @@ public class ArrayBuiltinsTest {
                 () -> Interpreter.run("const h = Proxy.revocable([], {}); h.revoke(); Array.isArray(h.proxy)"));
     }
 
-    // %Array.prototype% is a genuine Array exotic object per spec (22.1.3): an index write on it
-    // bumps "length" the way a real array's [[DefineOwnProperty]] would, and its own brand is
-    // "Array" (test262 built-ins/Array/prototype/exotic-array.js). Regression test for the follow-up
-    // fix that closed this without converting %Array.prototype%'s Java type away from JsObject - the
-    // subclassing coverage above must stay green alongside this, since both share the same "length"
-    // choke point in MemberEvaluator.
+    // %Array.prototype% is a genuine Array exotic object (spec 22.1.3): an index write on it bumps "length"
+    // and its brand is "Array" (test262 built-ins/Array/prototype/exotic-array.js).
     @Test
     public void test_array_prototype_is_a_genuine_array_exotic_object() {
         assertEquals(3,
@@ -296,8 +259,6 @@ public class ArrayBuiltinsTest {
         assertTrue(bool("Object.prototype.toString.call(Array.prototype) === '[object Array]'"));
     }
 
-    // Array.of/from honour a constructor `this`: the iterator path constructs with no arguments and
-    // the array-like path with the length, and both finish by setting `length` on the result
     @Test
     public void test_of_and_from_honour_a_constructor_receiver() {
         assertEquals(2, num("function C(n) { this.n = n; } Array.of.call(C, 1, 2).n"));
@@ -309,7 +270,6 @@ public class ArrayBuiltinsTest {
                 + " Object.defineProperty(this, 'length', {set(v) { hits++; }}); }" + " Array.of.call(C, 'a'); hits"));
     }
 
-    // Array.from walks an iterable lazily and closes it when the map function throws
     @Test
     public void test_from_is_lazy_and_closes_the_iterator() {
         assertEquals("0,1",
@@ -322,7 +282,6 @@ public class ArrayBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Array.from([], null)"));
     }
 
-    // the array-like path fills every index, so a length with no indexes yields real undefined values
     @Test
     public void test_from_array_like_has_no_holes() {
         assertTrue(bool("Array.from({length: 3}).hasOwnProperty(0)"));
@@ -331,8 +290,6 @@ public class ArrayBuiltinsTest {
         assertEquals(0, num("Array.from(new ArrayBuffer(8)).length"));
     }
 
-    // Symbol.isConcatSpreadable overrides IsArray in both directions, on an array and on any other
-    // exotic object
     @Test
     public void test_concat_honours_is_concat_spreadable_on_exotic_objects() {
         assertEquals(1, num("const a = [1, 2]; a[Symbol.isConcatSpreadable] = false; [].concat(a).length"));
@@ -345,7 +302,6 @@ public class ArrayBuiltinsTest {
         assertEquals(3, num("[].concat([1, 2], 3).length"));
     }
 
-    // an array iterator that has run out stays done, so an element pushed afterwards is never seen
     @Test
     public void test_array_iterator_stays_done() {
         assertTrue(bool("const a = []; const it = a.values(); a.push('a');"
@@ -353,7 +309,6 @@ public class ArrayBuiltinsTest {
                 + " first.value === 'a' && it.next().done === true"));
     }
 
-    // toLocaleString invokes each element's toLocaleString, falling back to its toString
     @Test
     public void test_to_locale_string_invokes_the_element_methods() {
         assertEquals("A,B", str("[{toLocaleString: () => 'A'}, {toLocaleString: () => 'B'}].toLocaleString()"));
@@ -361,7 +316,6 @@ public class ArrayBuiltinsTest {
                 + " [true, false].toLocaleString()"));
     }
 
-    // push/pop/shift/unshift end in Set(O, "length", ...), which is a TypeError on a frozen length
     @Test
     public void test_length_write_rejection_throws_from_the_mutators() {
         assertThrows(TypeErrorException.class,

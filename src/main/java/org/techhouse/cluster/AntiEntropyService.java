@@ -20,13 +20,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ReplicatedApplyHelper;
 
-/**
- * Phase 4a anti-entropy: on a membership change this node reconciles each of its collections against the
- * live members, converging every document id to the highest last-write-wins version seen anywhere (pulling
- * newer documents, applying newer deletes). Because every node runs the same pull-newest reconciliation, the
- * cluster converges regardless of which node became a collection's owner after a failure. It also answers
- * peers' DIGEST and PULL requests. All of this is a no-op unless clustering is enabled.
- */
 public class AntiEntropyService implements MembershipListener {
     private final Logger logger = Logger.logFor(AntiEntropyService.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
@@ -37,9 +30,6 @@ public class AntiEntropyService implements MembershipListener {
     private final CoalescingSweep sweep = new CoalescingSweep(logger, "cluster-anti-entropy", "Anti-entropy",
             this::reconcileAllCollections);
 
-    // Starts the periodic background sweep that reconciles every collection against live peers on a fixed
-    // interval (in addition to the membership-triggered pass), catching replicas left behind by a
-    // replication timeout. No-op when clustering is disabled or the interval is not positive.
     public void start() {
         if (!clusterConfig.isEnabled()) {
             return;
@@ -59,8 +49,6 @@ public class AntiEntropyService implements MembershipListener {
         sweep.schedule();
     }
 
-    // Triggers a document reconciliation pass without waiting for a membership change or the periodic sweep,
-    // so the admin anti-entropy service can pull documents for collections it just materialized.
     public void reconcileNow() {
         if (!clusterConfig.isEnabled()) {
             return;
@@ -81,7 +69,6 @@ public class AntiEntropyService implements MembershipListener {
         }
     }
 
-    // Builds this node's digest (live document versions plus delete tombstones) for a collection.
     public AntiEntropyPayload buildDigest(String dbName, String collName) throws Exception {
         final var payload = new AntiEntropyPayload(dbName, collName);
         final var entries = new ArrayList<DigestEntry>();
@@ -95,7 +82,6 @@ public class AntiEntropyService implements MembershipListener {
         return payload;
     }
 
-    // Reads the requested documents and their versions so a reconciling peer can pull newer copies.
     public AntiEntropyPayload buildPull(String dbName, String collName, List<String> ids) throws Exception {
         final var payload = new AntiEntropyPayload(dbName, collName);
         final var documents = new ArrayList<JsonObject>();
@@ -170,8 +156,6 @@ public class AntiEntropyService implements MembershipListener {
         garbageCollectTombstones(dbName, collName);
     }
 
-    // Deduplicates the tombstone file and drops deletes older than the retention window (they have converged
-    // everywhere by now, so keeping them would only grow the file). A retention of <= 0 disables GC.
     private void garbageCollectTombstones(String dbName, String collName) throws IOException {
         final var retention = clusterConfig.tombstoneRetentionMs();
         if (retention <= 0) {

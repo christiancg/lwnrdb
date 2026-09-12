@@ -36,7 +36,6 @@ public class ParserModuleSyntaxTest {
         return parse(source).getBody().getFirst();
     }
 
-    // A bare import has no specifiers, only a source
     @Test
     public void test_import_bare() {
         final var decl = assertInstanceOf(ImportDeclaration.class, firstStatement("import \"mod\";"));
@@ -44,7 +43,6 @@ public class ParserModuleSyntaxTest {
         assertEquals("mod", decl.getSource().getValue());
     }
 
-    // A default import binds a single local name
     @Test
     public void test_import_default() {
         final var decl = assertInstanceOf(ImportDeclaration.class, firstStatement("import def from \"mod\";"));
@@ -54,7 +52,6 @@ public class ParserModuleSyntaxTest {
         assertEquals("mod", decl.getSource().getValue());
     }
 
-    // An import with attributes carries them; without a with clause the list is empty
     @Test
     public void test_import_with_attributes() {
         final var decl = assertInstanceOf(ImportDeclaration.class,
@@ -71,7 +68,6 @@ public class ParserModuleSyntaxTest {
         assertTrue(decl.getAttributes().isEmpty());
     }
 
-    // A bare side-effect import may also carry attributes
     @Test
     public void test_bare_import_with_attributes() {
         final var decl = assertInstanceOf(ImportDeclaration.class,
@@ -79,7 +75,6 @@ public class ParserModuleSyntaxTest {
         assertEquals(2, decl.getAttributes().size());
     }
 
-    // Wildcard and named re-exports carry attributes too
     @Test
     public void test_export_all_with_attributes() {
         final var decl = assertInstanceOf(ExportAllDeclaration.class,
@@ -94,22 +89,17 @@ public class ParserModuleSyntaxTest {
         assertEquals(1, decl.getAttributes().size());
     }
 
-    // A non-string attribute value is a parse error
     @Test
     public void test_import_attribute_non_string_value_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("import x from \"m\" with { type: json };"));
     }
 
-    // `with` is contextual in the sense that matters - it is not a lexer keyword, so an import
-    // clause can use it - but it is still a reserved word, so it cannot be a binding identifier
-    // (the engine is always strict).
     @Test
     public void test_with_is_contextual_in_an_import_clause_only() {
         assertInstanceOf(ImportDeclaration.class, firstStatement("import x from \"m\" with { type: \"json\" };"));
         assertThrows(SyntaxErrorException.class, () -> parse("let with = 1;"));
     }
 
-    // A namespace import binds `* as name`
     @Test
     public void test_import_namespace() {
         final var decl = assertInstanceOf(ImportDeclaration.class, firstStatement("import * as ns from \"mod\";"));
@@ -117,7 +107,6 @@ public class ParserModuleSyntaxTest {
         assertEquals("ns", spec.getLocal().getName());
     }
 
-    // Named imports carry imported and local names, aliased via `as`
     @Test
     public void test_import_named() {
         final var decl = assertInstanceOf(ImportDeclaration.class,
@@ -131,7 +120,6 @@ public class ParserModuleSyntaxTest {
         assertEquals("c", second.getLocal().getName());
     }
 
-    // A keyword may name an imported binding (`default as x`)
     @Test
     public void test_import_named_keyword_name() {
         final var decl = assertInstanceOf(ImportDeclaration.class,
@@ -141,7 +129,6 @@ public class ParserModuleSyntaxTest {
         assertEquals("x", spec.getLocal().getName());
     }
 
-    // A string may name an imported binding (`"a" as x`)
     @Test
     public void test_import_named_string_name() {
         final var decl = assertInstanceOf(ImportDeclaration.class,
@@ -151,7 +138,6 @@ public class ParserModuleSyntaxTest {
         assertEquals("x", spec.getLocal().getName());
     }
 
-    // A default import combines with a named group
     @Test
     public void test_import_default_plus_named() {
         final var decl = assertInstanceOf(ImportDeclaration.class, firstStatement("import def, { a } from \"mod\";"));
@@ -160,7 +146,6 @@ public class ParserModuleSyntaxTest {
         assertInstanceOf(ImportSpecifier.class, decl.getSpecifiers().get(1));
     }
 
-    // A default import combines with a namespace import
     @Test
     public void test_import_default_plus_namespace() {
         final var decl = assertInstanceOf(ImportDeclaration.class, firstStatement("import def, * as ns from \"mod\";"));
@@ -169,7 +154,6 @@ public class ParserModuleSyntaxTest {
         assertInstanceOf(ImportNamespaceSpecifier.class, decl.getSpecifiers().get(1));
     }
 
-    // Empty braces import nothing but still require a source
     @Test
     public void test_import_empty_braces() {
         final var decl = assertInstanceOf(ImportDeclaration.class, firstStatement("import {} from \"mod\";"));
@@ -177,14 +161,12 @@ public class ParserModuleSyntaxTest {
         assertEquals("mod", decl.getSource().getValue());
     }
 
-    // A trailing comma inside the named-import braces is allowed
     @Test
     public void test_import_named_trailing_comma() {
         final var decl = assertInstanceOf(ImportDeclaration.class, firstStatement("import { a, } from \"mod\";"));
         assertEquals(1, decl.getSpecifiers().size());
     }
 
-    // Named exports carry local and exported names, aliased via `as`
     @Test
     public void test_export_named() {
         final var decl = assertInstanceOf(ExportNamedDeclaration.class, firstStatement("export { a, b as c };"));
@@ -199,14 +181,12 @@ public class ParserModuleSyntaxTest {
         assertEquals("c", assertInstanceOf(Identifier.class, second.getExported()).getName());
     }
 
-    // A named export may re-export from another module
     @Test
     public void test_export_named_reexport() {
         final var decl = assertInstanceOf(ExportNamedDeclaration.class, firstStatement("export { a } from \"mod\";"));
         assertEquals("mod", decl.getSource().getValue());
     }
 
-    // A string may name an exported binding (`a as "x"`)
     @Test
     public void test_export_named_string_name() {
         final var decl = assertInstanceOf(ExportNamedDeclaration.class, firstStatement("export { a as \"x\" };"));
@@ -214,7 +194,6 @@ public class ParserModuleSyntaxTest {
         assertEquals("x", assertInstanceOf(StringLiteral.class, spec.getExported()).getValue());
     }
 
-    // export * re-exports everything with no local name
     @Test
     public void test_export_all() {
         final var decl = assertInstanceOf(ExportAllDeclaration.class, firstStatement("export * from \"mod\";"));
@@ -222,21 +201,18 @@ public class ParserModuleSyntaxTest {
         assertEquals("mod", decl.getSource().getValue());
     }
 
-    // export * as ns names the re-exported namespace
     @Test
     public void test_export_all_as() {
         final var decl = assertInstanceOf(ExportAllDeclaration.class, firstStatement("export * as ns from \"mod\";"));
         assertEquals("ns", decl.getExported().getName());
     }
 
-    // A default export wraps an arbitrary expression
     @Test
     public void test_export_default_expression() {
         final var decl = assertInstanceOf(ExportDefaultDeclaration.class, firstStatement("export default 1 + 2;"));
         assertInstanceOf(BinaryExpression.class, decl.getDeclaration());
     }
 
-    // A default export accepts a function value
     @Test
     public void test_export_default_function() {
         final var decl = assertInstanceOf(ExportDefaultDeclaration.class,
@@ -244,14 +220,12 @@ public class ParserModuleSyntaxTest {
         assertInstanceOf(FunctionExpression.class, decl.getDeclaration());
     }
 
-    // A default export accepts an anonymous class value
     @Test
     public void test_export_default_class() {
         final var decl = assertInstanceOf(ExportDefaultDeclaration.class, firstStatement("export default class {}"));
         assertInstanceOf(ClassExpression.class, decl.getDeclaration());
     }
 
-    // Exporting a var declaration keeps the declaration and no specifiers
     @Test
     public void test_export_var_declaration() {
         final var decl = assertInstanceOf(ExportNamedDeclaration.class, firstStatement("export const x = 1;"));
@@ -260,14 +234,12 @@ public class ParserModuleSyntaxTest {
         assertNull(decl.getSource());
     }
 
-    // Exporting a function declaration keeps the declaration
     @Test
     public void test_export_function_declaration() {
         final var decl = assertInstanceOf(ExportNamedDeclaration.class, firstStatement("export function f() {}"));
         assertInstanceOf(FunctionDeclaration.class, decl.getDeclaration());
     }
 
-    // Exporting an async function declaration preserves the async flag
     @Test
     public void test_export_async_function_declaration() {
         final var decl = assertInstanceOf(ExportNamedDeclaration.class, firstStatement("export async function f() {}"));
@@ -275,63 +247,53 @@ public class ParserModuleSyntaxTest {
         assertTrue(fn.isAsync());
     }
 
-    // Exporting a class declaration keeps the declaration
     @Test
     public void test_export_class_declaration() {
         final var decl = assertInstanceOf(ExportNamedDeclaration.class, firstStatement("export class C {}"));
         assertInstanceOf(ClassDeclaration.class, decl.getDeclaration());
     }
 
-    // Empty export braces are allowed
     @Test
     public void test_export_empty_braces() {
         final var decl = assertInstanceOf(ExportNamedDeclaration.class, firstStatement("export {};"));
         assertTrue(decl.getSpecifiers().isEmpty());
     }
 
-    // A named import without a `from` clause is a parse error
     @Test
     public void test_import_missing_from_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("import { a } 42;"));
     }
 
-    // A named import that ends before its source is an unexpected end of input
     @Test
     public void test_import_missing_source_eof_throws() {
         assertThrows(UnexpectedEndOfInputException.class, () -> parse("import { a }"));
     }
 
-    // A non-string import source is a parse error
     @Test
     public void test_import_non_string_source_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("import def from 123;"));
     }
 
-    // A namespace import without `as` is a parse error
     @Test
     public void test_import_namespace_missing_as_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("import * ns from \"mod\";"));
     }
 
-    // A dangling comma clause after a default import is a parse error
     @Test
     public void test_import_dangling_clause_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("import def, ;"));
     }
 
-    // export * without a source is a parse error
     @Test
     public void test_export_all_missing_from_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("export * ;"));
     }
 
-    // export followed by a non-declaration is a parse error
     @Test
     public void test_export_bad_declaration_throws() {
         assertThrows(UnexpectedTokenException.class, () -> parse("export 123;"));
     }
 
-    // export at end of input is an unexpected end of input
     @Test
     public void test_export_eof_throws() {
         assertThrows(UnexpectedEndOfInputException.class, () -> parse("export"));

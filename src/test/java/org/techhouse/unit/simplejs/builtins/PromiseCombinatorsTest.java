@@ -21,7 +21,6 @@ public class PromiseCombinatorsTest {
         return ((JsString) array.get(0)).getValue();
     }
 
-    // finally runs before the following then and passes the value through
     @Test
     public void test_finally() {
         final var out = arr(
@@ -30,7 +29,6 @@ public class PromiseCombinatorsTest {
         assertEquals(1, num(out, 1));
     }
 
-    // Promise.all resolves with all values, coercing non-promises
     @Test
     public void test_all_fulfils() {
         final var source = """
@@ -41,7 +39,6 @@ public class PromiseCombinatorsTest {
         assertEquals("1,2,3", string(arr(source)));
     }
 
-    // Promise.all rejects on the first rejection
     @Test
     public void test_all_rejects() {
         final var source = """
@@ -52,13 +49,11 @@ public class PromiseCombinatorsTest {
         assertEquals("bad", string(arr(source)));
     }
 
-    // Promise.all with an empty array resolves immediately with an empty array
     @Test
     public void test_all_empty() {
         assertEquals(0, num(arr("let out = []; Promise.all([]).then(a => out.push(a.length)); out"), 0));
     }
 
-    // Promise.race settles with the first settled promise
     @Test
     public void test_race() {
         final var source = """
@@ -69,7 +64,6 @@ public class PromiseCombinatorsTest {
         assertEquals("first", string(arr(source)));
     }
 
-    // Promise.allSettled reports per-element status, preserving input order
     @Test
     public void test_all_settled_mixed() {
         final var source = """
@@ -81,13 +75,11 @@ public class PromiseCombinatorsTest {
         assertEquals("fulfilled,1,rejected,e", string(arr(source)));
     }
 
-    // Promise.allSettled with an empty array resolves immediately with an empty array
     @Test
     public void test_all_settled_empty() {
         assertEquals(0, num(arr("let out = []; Promise.allSettled([]).then(a => out.push(a.length)); out"), 0));
     }
 
-    // Promise.any resolves with the first fulfilment even if an earlier element rejects
     @Test
     public void test_any_first_fulfilment() {
         final var source = """
@@ -98,7 +90,6 @@ public class PromiseCombinatorsTest {
         assertEquals("b", string(arr(source)));
     }
 
-    // Promise.any rejects with an AggregateError holding the reasons in input order when all reject
     @Test
     public void test_any_all_reject() {
         final var source = """
@@ -110,7 +101,6 @@ public class PromiseCombinatorsTest {
         assertEquals("AggregateError:a,b", string(arr(source)));
     }
 
-    // Promise.any with an empty array rejects immediately with an empty AggregateError
     @Test
     public void test_any_empty() {
         final var source = """
@@ -121,7 +111,6 @@ public class PromiseCombinatorsTest {
         assertEquals("AggregateError:0", string(arr(source)));
     }
 
-    // the combinators accept any iterable, not just arrays (Set here)
     @Test
     public void test_all_accepts_set() {
         final var source = """
@@ -132,7 +121,6 @@ public class PromiseCombinatorsTest {
         assertEquals("1,2", string(arr(source)));
     }
 
-    // Promise.all on a non-iterable settles rejected instead of throwing out of the native call
     @Test
     public void test_all_non_iterable_rejects() {
         final var source = """
@@ -143,7 +131,6 @@ public class PromiseCombinatorsTest {
         assertEquals("caught", string(arr(source)));
     }
 
-    // Promise.race on a non-iterable settles rejected instead of throwing out of the native call
     @Test
     public void test_race_non_iterable_rejects() {
         final var source = """
@@ -154,7 +141,6 @@ public class PromiseCombinatorsTest {
         assertEquals("caught", string(arr(source)));
     }
 
-    // Promise.allSettled on a non-iterable settles rejected instead of throwing out of the native call
     @Test
     public void test_all_settled_non_iterable_rejects() {
         final var source = """
@@ -165,7 +151,6 @@ public class PromiseCombinatorsTest {
         assertEquals("caught", string(arr(source)));
     }
 
-    // Promise.any on a non-iterable settles rejected instead of throwing out of the native call
     @Test
     public void test_any_non_iterable_rejects() {
         final var source = """
@@ -176,7 +161,6 @@ public class PromiseCombinatorsTest {
         assertEquals("caught", string(arr(source)));
     }
 
-    // Promise.all opens its argument through GetIterator rather than reading array storage directly
     @Test
     public void test_all_invokes_get_iterator_not_array_fast_path() {
         final var source = """
@@ -195,7 +179,6 @@ public class PromiseCombinatorsTest {
         assertEquals("1:0,1", string(arr(source)));
     }
 
-    // PerformPromiseAll reads `resolve` off the constructor once and calls it for every element
     @Test
     public void test_all_looks_up_resolve_per_iteration() {
         final var source = """
@@ -209,7 +192,6 @@ public class PromiseCombinatorsTest {
         assertEquals("resolved:3", string(arr(source)));
     }
 
-    // finally resolves the thenable its callback returns before passing the original value along
     @Test
     public void test_finally_awaits_thenable_returned_by_callback() {
         final var source = """
@@ -224,7 +206,6 @@ public class PromiseCombinatorsTest {
         assertEquals("v", ((JsString) out.get(1)).getValue());
     }
 
-    // a throwing finally callback rejects the derived promise instead of being swallowed
     @Test
     public void test_finally_callback_throw_rejects() {
         final var source = """
@@ -235,7 +216,6 @@ public class PromiseCombinatorsTest {
         assertEquals("boom", string(arr(source)));
     }
 
-    // Promise.allKeyed resolves with a null-prototype object keyed by the input's enumerable keys
     @Test
     public void test_all_keyed_resolves_to_keyed_object() {
         final var source = """
@@ -248,7 +228,6 @@ public class PromiseCombinatorsTest {
         assertEquals("a,b|1,2|true", string(arr(source)));
     }
 
-    // Promise.allSettledKeyed reports a per-key status object
     @Test
     public void test_all_settled_keyed_reports_status() {
         final var source = """
@@ -260,7 +239,6 @@ public class PromiseCombinatorsTest {
         assertEquals("fulfilled,1|rejected,e", string(arr(source)));
     }
 
-    // a thenable's `then` is called from a microtask, so it runs after the current script finishes
     @Test
     public void test_thenable_then_is_called_from_a_microtask() {
         final var source = """

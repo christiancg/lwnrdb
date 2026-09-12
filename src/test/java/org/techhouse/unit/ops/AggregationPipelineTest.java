@@ -50,10 +50,8 @@ public class AggregationPipelineTest {
         TestUtils.standardTearDown();
     }
 
-    // Process aggregation request with multiple steps in sequence (filter->map->group)
     @Test
     public void test_process_multiple_steps_sequence() throws IOException {
-        // Arrange
         var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         var steps = new ArrayList<BaseAggregationStep>();
 
@@ -66,10 +64,8 @@ public class AggregationPipelineTest {
         steps.add(new GroupByAggregationStep("newField2"));
         request.setAggregationSteps(steps);
 
-        // Act
         var result = AggregationOperationHelper.processAggregation(request);
 
-        // Assert
         assertNotNull(result);
         assertEquals(0, result.size());
     }
@@ -79,7 +75,6 @@ public class AggregationPipelineTest {
     // it exercises the dispatcher for all step types, not a request the validator would accept.
     @Test
     public void test_engine_processes_all_step_types_in_sequence() throws IOException {
-        // Arrange
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         List<BaseAggregationStep> steps = List.of(
                 new FilterAggregationStep(
@@ -91,30 +86,22 @@ public class AggregationPipelineTest {
                 new SkipAggregationStep(5), new SortAggregationStep("fieldName", true));
         request.setAggregationSteps(steps);
 
-        // Act
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
-        // Assert
         assertNotNull(result);
-        // Further assertions can be added based on expected behavior
     }
 
-    // Return empty list when no aggregation steps provided
     @Test
     public void test_process_aggregation_with_no_steps() throws IOException {
-        // Arrange
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(Collections.emptyList());
 
-        // Act
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
-        // Assert
         assertNotNull(result);
         assertTrue(result.isEmpty());
     }
 
-    // Handle invalid field names in sort/group/join operations
     @Test
     public void test_handle_invalid_field_names_in_operations() throws IOException {
 
@@ -128,26 +115,20 @@ public class AggregationPipelineTest {
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
         assertNotNull(result);
-        // Add assertions based on expected behavior when invalid fields are used
     }
 
-    // Process map operations with empty operator list
     @Test
     public void test_process_map_with_empty_operator_list() throws IOException {
-        // Arrange
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         MapAggregationStep mapStep = new MapAggregationStep(Collections.emptyList());
         request.setAggregationSteps(List.of(mapStep));
 
-        // Act
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
-        // Assert
         assertNotNull(result);
         assertEquals(0, result.size());
     }
 
-    // Helper to insert entries directly into cache and page metadata for the test collection
     private void insertEntry(Cache cache, String id, String fieldName, Object fieldValue) {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
@@ -161,7 +142,6 @@ public class AggregationPipelineTest {
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
     }
 
-    // SKIP skips the first N documents
     @Test
     public void test_skip_skips_n_documents() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -178,7 +158,6 @@ public class AggregationPipelineTest {
         assertEquals(3, result.getFirst().get("n").asJsonNumber().asInteger());
     }
 
-    // LIMIT limits the result to the first N documents
     @Test
     public void test_limit_limits_documents() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -194,7 +173,6 @@ public class AggregationPipelineTest {
         assertEquals(2, result.size());
     }
 
-    // MAP step with actual data exercises the lambda body (L61-62)
     @Test
     public void test_map_step_processes_actual_data() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -224,7 +202,6 @@ public class AggregationPipelineTest {
         return request;
     }
 
-    // Handle missing fields in json objects during operations
     @Test
     public void test_handle_missing_fields() throws IOException {
 

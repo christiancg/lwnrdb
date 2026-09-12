@@ -72,9 +72,6 @@ public class OperationProcessor {
 
     public OperationResponse processMessage(OperationRequest operationRequest, UUID clientId) {
         final var activeTransaction = clientTracker.getActiveTransaction(clientId);
-        // While a transaction is open, only its data operations, its own reads and the control
-        // operations are allowed; everything else (DDL/admin/listen) is rejected to keep atomicity
-        // reasoning simple (see TransactionOperationHelper.isAllowedDuringTransaction).
         if (activeTransaction != null
                 && !TransactionOperationHelper.isAllowedDuringTransaction(operationRequest.getType())) {
             return new OperationResponse(operationRequest.getType(), ErrorCode.OPERATION_NOT_ALLOWED_IN_TRANSACTION);
@@ -249,8 +246,6 @@ public class OperationProcessor {
     private OperationResponse processSaveTrigger(SaveTriggerRequest request, String actingUser) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        // The collection write lock serializes the trigger-file rewrite against a concurrent save to
-        // the same collection, mirroring processSaveSchema.
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_TRIGGER,
                 ErrorCode.ERROR_SAVING_TRIGGER, () -> TriggerOperationHelper.executeSave(request, actingUser));
     }
@@ -266,8 +261,7 @@ public class OperationProcessor {
         return TriggerOperationHelper.executeList(request);
     }
 
-    // No lock and no write: the hook is run against the caller's own document, so nothing on disk is
-    // touched and nothing needs serializing against a concurrent save.
+    // No lock: the hook runs against the caller's own document and touches nothing on disk.
     private OperationResponse processTestTrigger(TestTriggerRequest request, String actingUser) {
         return TriggerOperationHelper.executeTest(request, actingUser);
     }
@@ -352,8 +346,7 @@ public class OperationProcessor {
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE, ErrorCode.ERROR_DELETING,
                 () -> {
-                    // Read before the delete: afterWrite needs the document that is about to disappear, and this
-                    // is a no-op unless a DELETED trigger actually exists on the collection.
+                    // Read before the delete: afterWrite needs the document that is about to disappear.
                     final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),
                             deleteRequest.getTriggerDepth());
                     final var hookError = BeforeHookHelper.beforeDelete(deleteRequest, actingUser);
@@ -389,8 +382,6 @@ public class OperationProcessor {
     private OperationResponse processSaveSchema(SaveSchemaRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        // Hold the collection write lock so the schema file write, cache update and any concurrent
-        // save are serialized (mirrors processCreateIndex); the work itself lives in the helper.
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_SCHEMA,
                 ErrorCode.ERROR_SAVING_SCHEMA, () -> SchemaOperationHelper.executeSaveSchema(request));
     }

@@ -22,10 +22,6 @@ import org.techhouse.ops.ScriptRunKind;
 import org.techhouse.ops.ScriptRunRegistry;
 import org.techhouse.test.TestUtils;
 
-/**
- * The two new cluster messages over a real {@code ClusterServer}: what an operator's LIST_SCRIPTS and
- * CANCEL_SCRIPT actually put on the wire when the run they are after is executing on another node.
- */
 public class ScriptRunClusterIntegrationTest {
     private static final String SECRET = "s";
     private final Configuration config = Configuration.getInstance();
@@ -100,8 +96,6 @@ public class ScriptRunClusterIntegrationTest {
         assertTrue(run.isCancelled());
     }
 
-    // A node that is not running the named run answers false rather than failing: only the node that has
-    // it answers true, which is what makes the operator's fan-out safe.
     @Test
     public void test_cancel_script_over_the_wire_answers_false_for_an_unknown_run() throws Exception {
         final var message = message(ClusterMessageType.CANCEL_SCRIPT);

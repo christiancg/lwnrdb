@@ -140,7 +140,6 @@ public class MessageProcessor implements Runnable {
                 }
             }
         } catch (SSLException e) {
-            // A plaintext or otherwise incompatible client failed the TLS handshake; drop it quietly.
             if (clientId != null) {
                 TransactionOperationHelper.cleanupOnDisconnect(clientId);
                 clientTracker.removeById(clientId);
@@ -159,16 +158,9 @@ public class MessageProcessor implements Runnable {
     private record Handled(String response, boolean close) {
     }
 
-    // Runs an authenticated+authorized operation: forwards it to the collection's owner when clustering
-    // routes it elsewhere (relaying the owner's response JSON), otherwise executes it locally. The query
-    // timer brackets only local processing (parse/validate/authorize already done); only AGGREGATE with
-    // analyze=true is timed.
     private Handled handleAuthorized(OperationRequest parsedMessage, String rawMessage, UUID clientId) {
-        // A client never sets its own cascade depth: only EnforcingDatabaseAccess (i.e. a running trigger)
-        // may, so anything that arrived on the wire is discarded here rather than trusted.
+        // A cascade depth that arrived on the wire is never trusted: only a running trigger may set one.
         parsedMessage.setTriggerDepth(0);
-        // Enforce the collection schema before the write is committed or forwarded, so a non-compliant
-        // document never reaches any node's collection (schemas are replicated to every node).
         final var schemaError = org.techhouse.ops.SchemaValidationHelper.check(parsedMessage);
         if (schemaError != null) {
             return new Handled(eJson.toJson(schemaError), false);

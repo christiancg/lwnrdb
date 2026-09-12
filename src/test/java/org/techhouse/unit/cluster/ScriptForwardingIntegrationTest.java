@@ -56,7 +56,6 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
                 .apply(new ReplicationPayload(TestGlobals.DB, coll, ReplicationOp.UPSERT, List.of(doc(id)), null));
     }
 
-    // A non-transactional script read of a collection this node does not own is forwarded to the owner
     @Test
     public void test_non_transactional_read_of_foreign_collection_is_forwarded() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
@@ -69,9 +68,8 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         assertEquals("hello", found.get("value").asJsonString().getValue());
     }
 
-    // A non-transactional script write now takes the routing path: an unreachable owner yields
-    // 503-4 OWNER_UNREACHABLE, an error only ClusterRouter produces, where the unrouted path would
-    // have been rejected locally with 421-1 NOT_COLLECTION_OWNER.
+    // 503-4 OWNER_UNREACHABLE is an error only ClusterRouter produces; the unrouted path would have
+    // been rejected locally with 421-1 NOT_COLLECTION_OWNER.
     @Test
     public void test_non_transactional_write_takes_the_routing_path() throws Exception {
         configureMembership(2, node("self", 19990), node("other", 1));
@@ -85,7 +83,6 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
                 "expected an OWNER_UNREACHABLE message, got: " + JsCoercion.toStr(message));
     }
 
-    // A forwarded aggregate ships the caller's own pipeline JSON and returns the owner's results
     @Test
     public void test_aggregate_on_foreign_collection_is_forwarded() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
@@ -109,7 +106,6 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         assertEquals("agg-1", results.getFirst().get("_id").asJsonString().getValue());
     }
 
-    // A transactional write to a foreign collection registers its owner as a 2PC participant
     @Test
     public void test_transactional_write_to_foreign_collection_becomes_participant() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
@@ -127,7 +123,6 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         assertTrue(clientTracker.txSessionsSnapshot().isEmpty());
     }
 
-    // A read inside a transaction is forwarded only to an owner already holding a slice
     @Test
     public void test_read_inside_transaction_forwards_only_to_an_existing_participant() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
@@ -136,18 +131,16 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         final var db = new EnforcingDatabaseAccess(ADMIN, null);
         db.beginTransaction();
         try {
-            // No slice yet: the read runs locally and finds nothing.
             assertNull(db.findById(TestGlobals.DB, remote, "read-yw"));
             db.save(TestGlobals.DB, remote, doc("read-yw"));
-            // Now the owner is a participant, so the read is forwarded and sees the buffered write.
             assertNotNull(db.findById(TestGlobals.DB, remote, "read-yw"));
         } finally {
             db.rollbackTransaction();
         }
     }
 
-    // A forwarded aggregate ships the caller's own pipeline JSON verbatim, so a CUSTOM (geo) operator
-    // survives the round trip - re-serializing the parsed operator tree would mangle it.
+    // The caller's own pipeline JSON is shipped verbatim; re-serializing the parsed operator tree would
+    // mangle it.
     @Test
     public void test_forwarded_aggregate_preserves_a_custom_geo_operator() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
@@ -177,9 +170,8 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         assertEquals("geo-1", results.getFirst().get("_id").asJsonString().getValue());
     }
 
-    // A whole RUN_SCRIPT is placed on the less loaded node and the target's response JSON is relayed
-    // verbatim. The peer here is this same JVM's cluster server, which runs the script through
-    // handleForward -> OperationProcessor, bypassing the router, so no forwarding loop is possible.
+    // The peer here is this same JVM's cluster server, which runs the script through handleForward ->
+    // OperationProcessor, bypassing the router, so no forwarding loop is possible.
     @Test
     public void test_run_script_is_forwarded_to_the_chosen_node_and_the_response_relayed() throws Exception {
         enableScriptRouting();
@@ -192,13 +184,10 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         assertEquals(forwardedBefore + 1, scriptPlacement.getForwarded());
     }
 
-    // The acting user travels with the forward: a script running with no user could not read at all,
-    // since EnforcingDatabaseAccess resolves the caller's record on every operation.
     @Test
     public void test_forwarded_script_runs_as_the_acting_user() throws Exception {
         enableScriptRouting();
-        // A collection the receiving node owns, so the script's own read stays local on the target: in a
-        // single JVM both "nodes" share one connection pool, and a nested hop back would wait on the
+        // In a single JVM both "nodes" share one connection pool, so a nested hop back would wait on the
         // connection the outer forward is already using.
         final var coll = collectionOwnedBySelf();
         createCollection(coll);
@@ -212,8 +201,8 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         assertTrue(response.contains("hello"), response);
     }
 
-    // A 503-6 is a real response, so it is relayed rather than retried here. Falling back on a capacity
-    // rejection would let the cluster route around the very cap protecting the target node.
+    // Falling back on a capacity rejection would let the cluster route around the very cap protecting
+    // the target node.
     @Test
     public void test_forwarded_script_rejection_is_relayed_not_retried_locally() throws Exception {
         enableScriptRouting();
@@ -238,13 +227,11 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         assertEquals(fallbacksBefore, scriptPlacement.getForwardFallbacks());
     }
 
-    // An unreadable response from the owner becomes a script-visible error, not a raw exception
     @Test
     public void test_unreadable_owner_response_becomes_a_script_error() {
         assertThrows(RuntimeException.class, () -> ResponseParser.parseResponse("not json"));
     }
 
-    // The one failure that proves the target never saw the request, so running it here cannot duplicate it.
     @Test
     public void test_a_target_that_cannot_be_connected_to_runs_the_script_here() throws Exception {
         final int deadPort;
@@ -261,9 +248,8 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         assertEquals(unknownBefore, scriptPlacement.getOutcomeUnknown());
     }
 
-    // The target took the request and never answered, so it may be running the script right now. Running it
-    // here as well would apply its writes twice - an inventory decrement on both nodes, with nothing left
-    // afterwards to show it happened - so the caller is told the outcome is unknown instead.
+    // The target may be running the script right now; running it here as well would apply its writes
+    // twice, so the caller is told the outcome is unknown instead.
     @Test
     public void test_a_target_that_never_answers_is_not_retried_here() throws Exception {
         final var origScriptTimeout = config.getScriptTimeoutMs();
@@ -287,15 +273,9 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         }
     }
 
-    // Forwarded scripts used to serialise: a peer gets one connection and the handler answered one request
-    // at a time, so N concurrent forwards cost N x their duration however idle the target was. That defeats
-    // the point of placement - forwarding was slower than staying local - and pushed the later ones past the
-    // forward budget, where the coordinator gave up and ran them a second time here.
-    //
-    // Proven through the concurrency cap rather than by timing or polling: with room for exactly one script
-    // and no queue wait, a second one arriving while the first still holds the permit is refused outright.
-    // Handled one at a time the first would have finished and released before the second was even read, so
-    // both would succeed - the refusal only exists if the target had both in flight together.
+    // Regression: forwarded scripts used to serialise on the peer's single connection, so N concurrent
+    // forwards cost N x their duration. Proven through the concurrency cap rather than by timing: with
+    // room for exactly one script, a second one arriving while the first holds the permit is refused.
     @Test
     public void test_concurrent_forwarded_scripts_run_at_the_same_time_on_the_target() throws Exception {
         enableScriptRouting();

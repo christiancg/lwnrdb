@@ -4,9 +4,8 @@ import java.io.IOException;
 import java.io.Serial;
 
 /**
- * The peer could not be connected to, so the request was never put on the wire. That is the one failure a
- * caller can treat as "the other node definitely did not do this": every other failure - a timeout, a reset
- * mid-request - leaves the peer possibly still executing, and retrying elsewhere would run the work twice.
+ * The request was never put on the wire, so the peer definitely did not do it; every other failure leaves
+ * it possibly still executing, and retrying elsewhere would run the work twice.
  */
 public class PeerUnreachableException extends IOException {
     @Serial

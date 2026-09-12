@@ -131,7 +131,6 @@ public class TemporalPlainTimeBuiltinsTest {
         assertEquals("undefined", str("typeof new Temporal.PlainTime().nope"));
     }
 
-    // round() sweeps every rounding mode, positive side (via non-negative-only roundNonNegative)
     @Test
     public void test_round_all_modes() {
         final var setup = "new Temporal.PlainTime(0, 0, 0, 0, 0, %d)"
@@ -147,14 +146,12 @@ public class TemporalPlainTimeBuiltinsTest {
         assertEquals(20, num(String.format(setup, 25, "halfEven")));
     }
 
-    // round() carries over the day boundary (mod 86400e9) when rounding up past midnight
     @Test
     public void test_round_wraps_past_midnight() {
         assertEquals("00:00:00", str("new Temporal.PlainTime(23, 59, 59, 999, 999, 999)"
                 + ".round({smallestUnit: 'second', roundingMode: 'ceil'}).toString()"));
     }
 
-    // round() accepts every fixed time unit through hour
     @Test
     public void test_round_every_unit() {
         assertEquals(0, num("new Temporal.PlainTime(0, 0, 0, 0, 0, 1)"
@@ -173,14 +170,12 @@ public class TemporalPlainTimeBuiltinsTest {
                         + ".microsecond"));
     }
 
-    // round() rejects a day-or-larger smallestUnit
     @Test
     public void test_round_rejects_day_unit() {
         assertThrows(RangeErrorException.class,
                 () -> Interpreter.run("new Temporal.PlainTime(1).round({smallestUnit: 'day'})"));
     }
 
-    // roundingIncrement must be a positive integer, evenly divide the unit maximum, and not equal it
     @Test
     public void test_round_invalid_increment() {
         assertThrows(RangeErrorException.class,
@@ -193,7 +188,6 @@ public class TemporalPlainTimeBuiltinsTest {
                 .run("new Temporal.PlainTime(1).round({smallestUnit: 'second', roundingIncrement: 1_000_000_001})"));
     }
 
-    // until()/since() honour largestUnit/smallestUnit/roundingIncrement/roundingMode options
     @Test
     public void test_until_with_options() {
         assertTrue(bool("var d = new Temporal.PlainTime(10, 0, 0).until(new Temporal.PlainTime(11, 30, 0), "
@@ -202,7 +196,6 @@ public class TemporalPlainTimeBuiltinsTest {
                 + "{smallestUnit: 'second', roundingIncrement: 30, roundingMode: 'halfExpand'}).seconds"));
     }
 
-    // since() negates the rounding mode relative to until() (ceil/floor swap, halfCeil/halfFloor swap)
     @Test
     public void test_since_negates_rounding_mode_ceil_floor() {
         assertEquals(1, num("new Temporal.PlainTime(10, 0, 20).since(new Temporal.PlainTime(10, 0, 0), "
@@ -219,7 +212,6 @@ public class TemporalPlainTimeBuiltinsTest {
                 + "{smallestUnit: 'minute', roundingMode: 'halfFloor'}).minutes"), 0.0);
     }
 
-    // until()/since() reject a largestUnit/smallestUnit larger than hour
     @Test
     public void test_until_rejects_day_units() {
         assertThrows(RangeErrorException.class, () -> Interpreter
@@ -241,7 +233,6 @@ public class TemporalPlainTimeBuiltinsTest {
                 () -> Interpreter.run("new Temporal.PlainTime(1).until(new Temporal.PlainTime(2), 5)"));
     }
 
-    // readOverflowOption rejects an invalid overflow value and a non-object options argument
     @Test
     public void test_overflow_option_invalid() {
         assertThrows(RangeErrorException.class,
@@ -249,8 +240,6 @@ public class TemporalPlainTimeBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from({hour: 1}, 5)"));
     }
 
-    // Reflect.construct(Temporal.PlainTime, args, newTarget) links the new instance's prototype to
-    // newTarget.prototype instead of the intrinsic Temporal.PlainTime prototype
     @Test
     public void test_reflect_construct_links_new_target_prototype() {
         assertTrue(bool("""
@@ -266,7 +255,6 @@ public class TemporalPlainTimeBuiltinsTest {
         assertTrue(bool("Object.getPrototypeOf(new Temporal.PlainTime()) === Temporal.PlainTime.prototype"));
     }
 
-    // numberField (used by add/subtract) rejects a non-integer/NaN/infinite duration field
     @Test
     public void test_add_rejects_invalid_duration_fields() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).add({hours: 1.5})"));
@@ -280,8 +268,6 @@ public class TemporalPlainTimeBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).add(5)"));
     }
 
-    // add()/subtract() now also accept a real Temporal.Duration instance or an ISO 8601 duration
-    // string, not just a plain duration-like object
     @Test
     public void test_add_accepts_duration_instance_and_string() {
         assertEquals("03:00:00", str("new Temporal.PlainTime(1).add(Temporal.Duration.from({hours: 2})).toString()"));
@@ -289,14 +275,11 @@ public class TemporalPlainTimeBuiltinsTest {
         assertEquals("23:00:00", str("new Temporal.PlainTime(1).subtract('PT2H').toString()"));
     }
 
-    // A date-unit carry (days and above) from the duration argument is silently discarded, not
-    // rejected, since PlainTime wraps around 24 hours with no date component
     @Test
     public void test_add_discards_date_unit_carry() {
         assertEquals("01:00:00", str("new Temporal.PlainTime(1).add({days: 5}).toString()"));
     }
 
-    // A duration-like object with none of the ten recognized properties present is a TypeError
     @Test
     public void test_add_rejects_duration_like_with_no_recognized_fields() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).add({})"));
@@ -332,9 +315,6 @@ public class TemporalPlainTimeBuiltinsTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).round({})"));
     }
 
-    // compare() must use the subclass instance's internal slot directly, never the generic
-    // property-bag path (which would invoke overridable getters) - a subclass instance is a wrapper
-    // object once its prototype differs from the intrinsic one.
     @Test
     public void test_compare_uses_internal_slots_not_getters() {
         assertEquals(-1,

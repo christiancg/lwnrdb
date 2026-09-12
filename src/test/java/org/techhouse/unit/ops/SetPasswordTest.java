@@ -77,7 +77,6 @@ public class SetPasswordTest {
         final var resp = UserOperationHelper.processSetPassword(req, clientId);
         assertEquals(OperationStatus.OK, resp.getStatus());
 
-        // Restore original password for other tests
         final var restore = new SetPasswordRequest();
         restore.setUsername("Alice");
         restore.setCurrentPassword("new_password_456");
@@ -117,10 +116,8 @@ public class SetPasswordTest {
         final var resp = UserOperationHelper.processSetPassword(req, clientId);
         assertEquals(OperationStatus.OK, resp.getStatus());
 
-        // Verify new password works
         assertTrue(PasswordHasher.verify("admin_changed_1", cache.getAdminUserEntry("bob").getPasswordHash()));
 
-        // Restore
         final var restore = new SetPasswordRequest();
         restore.setUsername("bob");
         restore.setNewPassword("password123");
@@ -136,7 +133,6 @@ public class SetPasswordTest {
         final var resp = UserOperationHelper.processSetPassword(req, clientId);
         assertEquals(OperationStatus.OK, resp.getStatus());
 
-        // Restore
         final var restore = new SetPasswordRequest();
         restore.setUsername("admin_user");
         restore.setNewPassword("password123");
@@ -167,7 +163,6 @@ public class SetPasswordTest {
         final var authResp = UserOperationHelper.processAuthenticate(authReq, UUID.randomUUID());
         assertEquals(OperationStatus.ERROR, authResp.getStatus());
 
-        // Restore
         final var restore = new SetPasswordRequest();
         restore.setUsername("bob");
         restore.setNewPassword("password123");
@@ -188,7 +183,6 @@ public class SetPasswordTest {
         final var authResp = UserOperationHelper.processAuthenticate(authReq, UUID.randomUUID());
         assertEquals(OperationStatus.OK, authResp.getStatus());
 
-        // Restore
         final var restore = new SetPasswordRequest();
         restore.setUsername("bob");
         restore.setNewPassword("password123");

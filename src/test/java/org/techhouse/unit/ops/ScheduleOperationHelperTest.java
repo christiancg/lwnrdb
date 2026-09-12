@@ -114,7 +114,6 @@ public class ScheduleOperationHelperTest {
         assertEquals(2L, cache.getSchedule(TestGlobals.DB, "s").getVersion());
     }
 
-    // Re-execution on a peer must write a byte-identical file, so every derived field is stamped once.
     @Test
     public void test_save_stamps_derived_fields_onto_the_request() throws Exception {
         final var request = intervalRequest("s");
@@ -192,7 +191,6 @@ public class ScheduleOperationHelperTest {
         save(intervalRequest("one"));
         final var response = ScheduleOperationHelper.executeSave(intervalRequest("two"), ACTOR);
         assertEquals(ErrorCode.TOO_MANY_SCHEDULES.getCode(), response.getErrorCode());
-        // The cap bounds new schedules only; editing one that already exists still works.
         assertEquals(2L, save(intervalRequest("one")).getVersion());
     }
 

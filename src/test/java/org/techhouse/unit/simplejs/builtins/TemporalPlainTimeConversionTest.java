@@ -86,8 +86,6 @@ public class TemporalPlainTimeConversionTest {
                 + "a !== b && a.equals(b)"));
     }
 
-    // ToTemporalTime's fast paths for PlainDateTime/ZonedDateTime arguments bypass the generic
-    // property-bag path entirely
     @Test
     public void test_from_plain_date_time_and_zoned_date_time_fast_paths() {
         assertEquals("10:30:00",
@@ -112,7 +110,6 @@ public class TemporalPlainTimeConversionTest {
         assertEquals("12:35:00", str("new Temporal.PlainTime(12, 34, 56).round({smallestUnit: 'minute'}).toString()"));
     }
 
-    // toString() honours fractionalSecondDigits (numeric and "auto"), smallestUnit and roundingMode
     @Test
     public void test_to_string_fractional_second_digits() {
         assertEquals("00:00:00.500000000",
@@ -160,13 +157,11 @@ public class TemporalPlainTimeConversionTest {
                 + "{largestUnit: 'auto'}).hours"));
     }
 
-    // from() rejects a time-like object with no recognized fields
     @Test
     public void test_from_rejects_object_with_no_recognized_fields() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from({})"));
     }
 
-    // toPlainDateTime requires a date-like object, and requires each of year/month/day
     @Test
     public void test_to_plain_date_time_requires_object() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.PlainTime(1).toPlainDateTime(5)"));
@@ -200,8 +195,6 @@ public class TemporalPlainTimeConversionTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from('12-31')"));
     }
 
-    // Every ambiguous-with-a-date-form shape (extended/basic year-month, extended/basic month-day)
-    // requires a leading 'T' to be accepted as a bare time string
     @Test
     public void test_from_rejects_every_ambiguous_date_like_shape() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from('2020-06')"));
@@ -209,14 +202,11 @@ public class TemporalPlainTimeConversionTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from('1231')"));
     }
 
-    // A 'T'-prefixed ambiguous-looking string is unambiguous and parses as a time
     @Test
     public void test_from_accepts_t_prefixed_ambiguous_looking_string() {
         assertEquals("12:31:00", str("Temporal.PlainTime.from('T12:31').toString()"));
     }
 
-    // A shape that merely looks date-like but has an invalid month/day is not actually ambiguous -
-    // it just fails to parse as a time on its own merits
     @Test
     public void test_from_rejects_invalid_looking_date_shape_as_a_bad_time() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("Temporal.PlainTime.from('13-31')"));

@@ -63,7 +63,6 @@ public class CronExpressionTest {
         assertEquals(utc(2027, 1, 1, 0, 0), next("0 0 1 JAN *", utc(2026, 5, 4, 10, 30)));
     }
 
-    // The conventional cron rule: with both day fields restricted a day matching either one fires.
     @Test
     public void test_day_of_month_and_day_of_week_are_ored_when_both_restricted() {
         // 2026-05-04 is a Monday; the 15th is a Friday.
@@ -128,7 +127,6 @@ public class CronExpressionTest {
         assertEquals(utc(2026, 5, 5, 3, 0), next("0 3 * * *", utc(2026, 5, 4, 3, 0)));
     }
 
-    // Spring forward: 02:00 does not exist locally, so the run resolves once, just after the gap.
     @Test
     public void test_spring_forward_fires_once_and_does_not_hang() {
         final var newYork = ZoneId.of("America/New_York");
@@ -146,7 +144,6 @@ public class CronExpressionTest {
         assertEquals(2, second.getHour());
     }
 
-    // Fall back: 01:00 happens twice, and the schedule must still fire only once that day.
     @Test
     public void test_fall_back_does_not_fire_twice() {
         final var newYork = ZoneId.of("America/New_York");

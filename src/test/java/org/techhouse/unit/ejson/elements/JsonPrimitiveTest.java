@@ -10,7 +10,6 @@ import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 
 public class JsonPrimitiveTest {
-    // Set and get primitive values of different types (String, Number, Boolean)
     @Test
     public void test_set_get_primitive_values() {
         JsonString stringPrimitive = new JsonString("test");
@@ -30,7 +29,6 @@ public class JsonPrimitiveTest {
         assertEquals(false, booleanPrimitive.getValue());
     }
 
-    // Compare null values in equals method
     @Test
     public void test_equals_with_null_values() {
         JsonString primitive1 = new JsonString();
@@ -48,7 +46,6 @@ public class JsonPrimitiveTest {
         assertEquals(primitive1, primitive1);
     }
 
-    // Returns hashCode of the underlying value for non-null, non-numeric values
     @Test
     public void test_hashcode_returns_value_hashcode_for_string() {
         String testValue = "test";
@@ -60,7 +57,6 @@ public class JsonPrimitiveTest {
         assertEquals(expectedHashCode, actualHashCode);
     }
 
-    // Returns 31 when value is null
     @Test
     public void test_hashcode_returns_31_for_null_value() {
         JsonPrimitive<String> primitive = new JsonString(null);
@@ -70,7 +66,6 @@ public class JsonPrimitiveTest {
         assertEquals(31, hashCode);
     }
 
-    // Compare two JsonPrimitive objects with same non-null values returns true
     @Test
     public void test_equal_primitives_with_same_values_returns_true() {
         JsonPrimitive<String> primitive1 = new JsonString("test");
@@ -81,7 +76,6 @@ public class JsonPrimitiveTest {
         assertTrue(result);
     }
 
-    // Compare with null object returns false
     @Test
     public void test_equals_with_null_returns_false() {
         JsonPrimitive<String> primitive = new JsonString("test");
@@ -91,7 +85,6 @@ public class JsonPrimitiveTest {
         assertFalse(result);
     }
 
-    // Copying JsonNumber returns new JsonNumber instance with same numeric value
     @Test
     public void test_json_number_deep_copy_creates_new_instance_with_same_value() {
         JsonNumber original = new JsonNumber(42);
@@ -104,7 +97,6 @@ public class JsonPrimitiveTest {
         });
     }
 
-    // deepCopy on JsonBoolean returns new instance with same value (L49)
     @Test
     public void test_json_boolean_deep_copy() {
         JsonBoolean original = new JsonBoolean(true);

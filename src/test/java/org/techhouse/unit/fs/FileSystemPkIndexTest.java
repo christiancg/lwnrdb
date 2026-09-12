@@ -40,7 +40,6 @@ public class FileSystemPkIndexTest {
         }
     }
 
-    // deleteFromCollection returns the compaction (removed row's coordinates) when a survivor moves.
     @Test
     public void test_delete_returns_compaction() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
@@ -64,7 +63,6 @@ public class FileSystemPkIndexTest {
         assertEquals(pk1.getLength(), compaction.removedLength());
     }
 
-    // Deleting the last entry on a page moves no survivor, so the returned compaction is null.
     @Test
     public void test_delete_last_entry_returns_null_compaction()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -79,8 +77,7 @@ public class FileSystemPkIndexTest {
         assertNull(fileSystem.deleteFromCollection(pk));
     }
 
-    // Two sequential deletes on the same page do not crash when the caller applies the returned
-    // compaction to keep the surviving entries' positions consistent (the stale-position fix).
+    // The stale-position fix: the caller must apply the returned compaction to keep survivors consistent.
     @Test
     public void test_sequential_deletes_applying_compaction_no_crash() throws Exception {
         FileSystem fileSystem = new FileSystem();
@@ -95,7 +92,6 @@ public class FileSystemPkIndexTest {
         }
 
         applyCompaction(pks, fileSystem.deleteFromCollection(pks.get(0)));
-        // Without applying the position fix, this second delete would use a stale position and throw.
         assertDoesNotThrow(() -> applyCompaction(pks, fileSystem.deleteFromCollection(pks.get(1))));
 
         final var survivor = fileSystem.getById(pks.get(2));
@@ -114,7 +110,6 @@ public class FileSystemPkIndexTest {
         }
     }
 
-    // A stale position past the end of file no longer throws NegativeArraySizeException (over-EOF guard).
     @Test
     public void test_delete_with_over_eof_position_does_not_throw()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -133,18 +128,12 @@ public class FileSystemPkIndexTest {
         assertDoesNotThrow(() -> fileSystem.deleteFromCollection(stale));
     }
 
-    // ── PK-index per-page reindex correctness (regression for bulk/multi-page update corruption) ──
-
-    // Reads the entry back the way a cache-disabled / post-restart read does: from the persisted PK
-    // index file, not from any in-memory copy. Also asserts the stored position is not corrupt.
-
     @Test
     public void test_single_update_multi_page_preserves_other_positions() throws Exception {
         FileSystem fs = FileSystemPages.freshFs();
         final var idxA = FileSystemPages.insertOnPage(fs, "a", 0);
         FileSystemPages.insertOnPage(fs, "b", 1);
 
-        // Updating 'a' (page 0) must not disturb 'b' on page 1.
         fs.updateFromCollection(FileSystemPages.updateEntry(idxA, "a", "updated-longer-value-for-a").toDbEntry(), idxA);
 
         assertEquals("short", FileSystemPages.readValueFromDisk(fs, "b"));
@@ -155,7 +144,7 @@ public class FileSystemPkIndexTest {
     public void test_single_update_same_page_shifts_only_later_position() throws Exception {
         FileSystem fs = FileSystemPages.freshFs();
         final var idxA = FileSystemPages.insertOnPage(fs, "a", 0);
-        final var idxB = FileSystemPages.insertOnPage(fs, "b", 0); // positioned after 'a' on page 0
+        final var idxB = FileSystemPages.insertOnPage(fs, "b", 0);
         final long bPosBefore = idxB.getPosition();
         assertTrue(bPosBefore > 0, "second same-page entry should start past position 0");
 
@@ -176,7 +165,7 @@ public class FileSystemPkIndexTest {
         final var idxB = FileSystemPages.insertOnPage(fs, "b", 0);
         FileSystemPages.insertOnPage(fs, "c", 0);
 
-        fs.deleteFromCollection(idxB); // delete the middle entry
+        fs.deleteFromCollection(idxB);
 
         assertEquals("short", FileSystemPages.readValueFromDisk(fs, "a"));
         assertEquals("short", FileSystemPages.readValueFromDisk(fs, "c"));

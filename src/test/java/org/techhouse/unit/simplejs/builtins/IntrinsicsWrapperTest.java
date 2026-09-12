@@ -35,9 +35,8 @@ public class IntrinsicsWrapperTest {
                 new org.techhouse.simplejs.internal.EventLoop(), (_, _, _) -> JsUndefined.getInstance());
     }
 
-    // Invoking a delegating wrapper with the wrong receiver names the method. A raw number is no
-    // longer "wrong" for Array.prototype methods (ToObject boxes it into an empty array-like), so
-    // undefined - which ToObject rejects - stands in as a receiver that is genuinely incompatible.
+    // A raw number is no longer "wrong" for Array.prototype methods (ToObject boxes it into an empty
+    // array-like), so undefined - which ToObject rejects - stands in as a genuinely incompatible receiver.
     @Test
     public void test_wrong_receiver_throws_type_error() {
         final var realm = intrinsics();
@@ -51,7 +50,6 @@ public class IntrinsicsWrapperTest {
         assertThrows(TypeErrorException.class, () -> mapGet.invoke(new JsObject(), List.of()));
     }
 
-    // Boolean.prototype.valueOf/toString accept a real boolean receiver and reject anything else
     @Test
     public void test_boolean_prototype_valueof_and_incompatible_receiver() {
         assertTrue(bool("(true).valueOf() === true"));
@@ -60,22 +58,19 @@ public class IntrinsicsWrapperTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Boolean.prototype.toString.call(5)"));
     }
 
-    // a boxed Boolean wrapper (new Boolean(...)) unwraps through valueOf/toString
     @Test
     public void test_boolean_wrapper_unwraps() {
         assertTrue(bool("(new Boolean(true)).valueOf() === true"));
         assertEquals("true", run("(new Boolean(true)).toString()"));
     }
 
-    // a boxed Number wrapper (new Number(...)) unwraps through a Number.prototype method
     @Test
     public void test_number_wrapper_unwraps() {
         assertEquals("5.00", run("(new Number(5)).toFixed(2)"));
     }
 
-    // every prototype family reports the same incompatible-receiver TypeError for a plain number,
-    // except String.prototype methods which are spec-generic (ToString the receiver) and only
-    // reject null/undefined (RequireObjectCoercible)
+    // String.prototype methods are spec-generic (ToString the receiver) and only reject null/undefined
+    // (RequireObjectCoercible), unlike every other family here.
     @Test
     public void test_incompatible_receiver_throws_for_every_prototype_family() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("String.prototype.charAt.call(null, 0)"));
@@ -96,9 +91,8 @@ public class IntrinsicsWrapperTest {
                 () -> Interpreter.run("let g = (function*(){})(); Object.getPrototypeOf(g).next.call(5)"));
     }
 
-    // AsyncGenerator.prototype.{next,return,throw} build their PromiseCapability before the brand
-    // check (spec IfAbruptRejectPromise), so an incompatible receiver rejects the returned promise
-    // instead of throwing synchronously - unlike every synchronous prototype family above.
+    // AsyncGenerator.prototype.{next,return,throw} build their PromiseCapability before the brand check
+    // (spec IfAbruptRejectPromise), so an incompatible receiver rejects rather than throwing synchronously.
     @Test
     public void test_async_generator_incompatible_receiver_rejects_instead_of_throwing() {
         assertEquals("caught", firstLogEntry("""
@@ -115,8 +109,6 @@ public class IntrinsicsWrapperTest {
                 """));
     }
 
-    // AsyncDisposableStack.prototype.disposeAsync has the same create-capability-before-brand-check
-    // shape as AsyncGenerator's methods.
     @Test
     public void test_async_disposable_stack_dispose_async_incompatible_receiver_rejects() {
         assertEquals("caught", firstLogEntry("""
@@ -132,32 +124,25 @@ public class IntrinsicsWrapperTest {
                 """));
     }
 
-    // Runs a script that pushes onto a shared `log` array from inside an async function, then reads
-    // the array's first entry once Interpreter.run has drained the event loop to quiescence.
     private static String firstLogEntry(String source) {
         final var array = (JsArray) Interpreter.run("let log = [];\n" + source + "\nlog");
         return ((JsString) array.get(0)).getValue();
     }
 
-    // String.prototype methods are generic: a non-string receiver is coerced via ToString rather
-    // than rejected (RequireObjectCoercible only rejects null/undefined)
     @Test
     public void test_string_prototype_methods_coerce_non_string_receiver() {
         assertEquals("5", run("String.prototype.charAt.call(5, 0)"));
         assertEquals("[object Object]", run("String.prototype.trim.call({})"));
     }
 
-    // a subclass of Symbol wraps the produced primitive for Symbol.prototype methods
     @Test
     public void test_symbol_subclass_unwraps() {
-        // Unlike every other subclassable builtin exercised in this file, the Symbol constructor is
-        // explicitly spec'd to reject any invocation via `new` - including a subclass's super() call,
-        // which still carries the active new.target through to it.
+        // The Symbol constructor is spec'd to reject any invocation via `new` - including a subclass's
+        // super() call, which still carries the active new.target through to it.
         assertThrows(TypeErrorException.class,
                 () -> run("class S extends Symbol { constructor(d) { super(d); } } new S('x').toString()"));
     }
 
-    // Every prototype that the spec tags carries a non-enumerable, non-writable @@toStringTag
     @Test
     public void prototypesCarrySymbolToStringTag() {
         assertEquals("Map", run("Map.prototype[Symbol.toStringTag]"));
@@ -176,7 +161,6 @@ public class IntrinsicsWrapperTest {
         assertTrue(bool("Object.getPrototypeOf(Array.prototype[Symbol.unscopables]) === null"));
     }
 
-    // Number/String/Boolean.prototype are themselves wrappers, so their own methods accept them
     @Test
     public void numberStringBooleanPrototypesHavePrimitiveSlots() {
         assertEquals("0", run("Number.prototype.toString()"));
@@ -187,7 +171,6 @@ public class IntrinsicsWrapperTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("String.prototype.toString.call(1)"));
     }
 
-    // A frozen object rejects a symbol-keyed write exactly like a string-keyed one
     @Test
     public void frozenObjectsRejectSymbolKeyedWrites() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("""
@@ -206,8 +189,6 @@ public class IntrinsicsWrapperTest {
                 """));
     }
 
-    // A String wrapper carries the exotic own properties the spec gives it: one per code unit plus a
-    // non-writable, non-enumerable length
     @Test
     public void stringWrapperOwnsItsCodeUnits() {
         final var wrapper = (JsObject) intrinsics().toObject(new JsString("ab"));
@@ -218,8 +199,6 @@ public class IntrinsicsWrapperTest {
         assertEquals(new JsObject.PropertyFlags(false, false, false), wrapper.getFlags("length"));
     }
 
-    // A well-known-symbol delegate that exists but is not callable is a TypeError (spec GetMethod
-    // step 4), not a silent fall-through to the generic ToString(this)/ToString(searchValue) path.
     @Test
     public void stringGenericDelegationRejectsNonCallableWellKnownSymbolMethod() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("""

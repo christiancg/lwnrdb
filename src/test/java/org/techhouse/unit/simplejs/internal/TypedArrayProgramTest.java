@@ -22,26 +22,22 @@ public class TypedArrayProgramTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // Spread expands a typed array into an array literal
     @Test
     public void test_spread() {
         assertEquals("1,2,3", str("[...new Uint8Array([1, 2, 3])].join(',')"));
     }
 
-    // map returns a same-kind typed array; reduce folds over the elements
     @Test
     public void test_map_and_reduce() {
         assertEquals("2,4,6", str("new Uint8Array([1, 2, 3]).map(x => x * 2).join(',')"));
         assertEquals(10, num("new Int32Array([1, 2, 3, 4]).reduce((a, b) => a + b, 0)"));
     }
 
-    // filter keeps matching elements in a same-kind typed array
     @Test
     public void test_filter() {
         assertEquals(2, num("new Int8Array([1, 2, 3, 4]).filter(x => x % 2 === 0).length"));
     }
 
-    // indexOf/includes/at operate on numeric elements
     @Test
     public void test_search_and_at() {
         assertEquals(1, num("new Int16Array([10, 20, 30]).indexOf(20)"));
@@ -49,7 +45,6 @@ public class TypedArrayProgramTest {
         assertEquals(30, num("new Int16Array([10, 20, 30]).at(-1)"));
     }
 
-    // Geometry and static properties are exposed
     @Test
     public void test_geometry_and_statics() {
         assertEquals(16, num("new Float64Array(2).byteLength"));
@@ -58,9 +53,8 @@ public class TypedArrayProgramTest {
         assertEquals(2, num("Array.from(new Uint8Array([1, 2])).length"));
     }
 
-    // Every concrete typed array constructor's own [[Prototype]] is the shared abstract
-    // %TypedArray% intrinsic (Object.getPrototypeOf(Int8Array)), matching what test262's
-    // testTypedArray.js harness (`var TypedArray = Object.getPrototypeOf(Int8Array)`) relies on
+    // test262's testTypedArray.js harness relies on `Object.getPrototypeOf(Int8Array)` being the shared
+    // %TypedArray% intrinsic.
     @Test
     public void test_shared_typed_array_intrinsic() {
         final var source = """
@@ -77,8 +71,6 @@ public class TypedArrayProgramTest {
         assertEquals("[true,true,true,true]", str(source));
     }
 
-    // TypedArray.prototype's geometry accessors (length/byteLength/byteOffset/buffer) throw when
-    // invoked with a non-typed-array receiver instead of silently reading through as undefined
     @Test
     public void test_typed_array_geometry_accessor_rejects_wrong_receiver() {
         final var source = """
@@ -93,9 +85,6 @@ public class TypedArrayProgramTest {
         assertEquals("[true,true,true,true]", str(source));
     }
 
-    // A typed array's [[Get]] on a canonical-numeric-index-string key that isn't a valid index
-    // (non-integer, negative, out of range) returns undefined directly rather than falling through
-    // to a poisoned property on the shared TypedArray.prototype
     @Test
     public void test_typed_array_non_integer_numeric_key_bypasses_prototype() {
         final var source = """
@@ -107,21 +96,18 @@ public class TypedArrayProgramTest {
         assertEquals("undefined", str(source));
     }
 
-    // forEach visits every element with its index
     @Test
     public void test_for_each() {
         assertEquals("0:10,1:20",
                 str("let out = []; new Int8Array([10, 20]).forEach((v, i) => out.push(i + ':' + v)); out.join(',')"));
     }
 
-    // reduceRight folds from the right; reduce without an initial value seeds from the first element
     @Test
     public void test_reduce_variants() {
         assertEquals("4321", str("new Int8Array([1, 2, 3, 4]).reduceRight((a, b) => a + '' + b, '')"));
         assertEquals(10, num("new Int8Array([1, 2, 3, 4]).reduce((a, b) => a + b)"));
     }
 
-    // find/findIndex locate the first matching element
     @Test
     public void test_find() {
         assertEquals(20, num("new Int16Array([10, 20, 30]).find(x => x > 15)"));
@@ -129,7 +115,6 @@ public class TypedArrayProgramTest {
         assertEquals(-1, num("new Int16Array([10, 20, 30]).findIndex(x => x > 99)"));
     }
 
-    // some/every evaluate a predicate across the elements
     @Test
     public void test_some_every() {
         assertTrue(bool("new Int8Array([1, 2, 3]).some(x => x === 2)"));
@@ -137,7 +122,6 @@ public class TypedArrayProgramTest {
         assertFalse(bool("new Int8Array([2, 3, 6]).every(x => x % 2 === 0)"));
     }
 
-    // lastIndexOf scans from the end; includes reports absence
     @Test
     public void test_last_index_and_missing() {
         assertEquals(3, num("new Int8Array([1, 2, 1, 2]).lastIndexOf(2)"));
@@ -145,20 +129,17 @@ public class TypedArrayProgramTest {
         assertEquals(-1, num("new Int8Array([1, 2, 3]).indexOf(9)"));
     }
 
-    // join accepts a custom separator; toString comma-joins
     @Test
     public void test_join_and_to_string() {
         assertEquals("1-2-3", str("new Int8Array([1, 2, 3]).join('-')"));
         assertEquals("1,2,3", str("new Int8Array([1, 2, 3]).toString()"));
     }
 
-    // reverse mutates in place
     @Test
     public void test_reverse() {
         assertEquals("3,2,1", str("new Int8Array([1, 2, 3]).reverse().join(',')"));
     }
 
-    // keys/values/entries return iterator objects
     @Test
     public void test_iterators() {
         assertEquals("0,1,2", str("[...new Int8Array([9, 8, 7]).keys()].join(',')"));
@@ -166,20 +147,17 @@ public class TypedArrayProgramTest {
         assertEquals(12, num("let n = 0; for (const [i, v] of new Int8Array([5, 6]).entries()) n += i + v; n"));
     }
 
-    // A callback-less iteration method throws a catchable TypeError
     @Test
     public void test_missing_callback_throws() {
         assertEquals("TypeError", str("let n; try { new Int8Array([1]).map(); } catch (e) { n = e.name } n"));
     }
 
-    // A non-callable predicate throws immediately, even on an empty typed array
     @Test
     public void test_non_callable_callback_throws_even_on_empty_array() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Int8Array(0).find(null)"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Int8Array([1, 2]).find(null)"));
     }
 
-    // JSON.stringify emits a typed array as a JSON array of its elements
     @Test
     public void test_json_stringify() {
         assertEquals("[1,2,3]", str("JSON.stringify(new Uint8Array([1, 2, 3]))"));
@@ -187,21 +165,18 @@ public class TypedArrayProgramTest {
         assertEquals("{}", str("JSON.stringify(new DataView(new ArrayBuffer(4)))"));
     }
 
-    // slice and subarray accept negative indices
     @Test
     public void test_negative_indices() {
         assertEquals("3,4", str("new Uint8Array([1, 2, 3, 4]).slice(-2).join(',')"));
         assertEquals("2,3", str("new Uint8Array([1, 2, 3, 4]).subarray(-3, -1).join(',')"));
     }
 
-    // reduce over an empty typed array with no seed throws a catchable TypeError
     @Test
     public void test_reduce_empty_throws() {
         assertEquals("TypeError",
                 str("let n; try { new Int8Array(0).reduce((a, b) => a + b); } catch (e) { n = e.name } n"));
     }
 
-    // An unknown member on a typed array or DataView reads undefined
     @Test
     public void test_unknown_members() {
         assertTrue(bool("new Int8Array(1).nope === undefined"));
@@ -209,13 +184,11 @@ public class TypedArrayProgramTest {
         assertTrue(bool("new ArrayBuffer(4).nope === undefined"));
     }
 
-    // Math.f16round quantizes to half precision
     @Test
     public void test_math_f16round() {
         assertEquals(num("new Float16Array([1.337])[0]"), num("Math.f16round(1.337)"));
     }
 
-    // an auto-length view over a resizable buffer tracks the buffer's current length when it grows
     @Test
     public void test_auto_length_view_grows() {
         final var source = """
@@ -228,7 +201,6 @@ public class TypedArrayProgramTest {
         assertEquals(2 * 100 + 4, num(source));
     }
 
-    // an auto-length view shrinks with the buffer
     @Test
     public void test_auto_length_view_shrinks() {
         final var source = """
@@ -241,8 +213,6 @@ public class TypedArrayProgramTest {
         assertEquals(4 * 100 + 1, num(source));
     }
 
-    // an explicit-length view does not track buffer resizes: it stays its construction-time length
-    // while it still fits, and reports zero once the buffer has shrunk out from under it
     @Test
     public void test_explicit_length_view_fixed() {
         final var stillFits = """
@@ -261,7 +231,6 @@ public class TypedArrayProgramTest {
         assertEquals(0, num(outOfBounds));
     }
 
-    // a view over a non-resizable buffer keeps its construction-time length
     @Test
     public void test_non_resizable_view_fixed() {
         final var source = """
@@ -272,7 +241,6 @@ public class TypedArrayProgramTest {
         assertEquals(4, num(source));
     }
 
-    // an auto-length view's byteLength tracks the buffer too
     @Test
     public void test_auto_length_view_byte_length_tracks() {
         final var source = """
@@ -284,7 +252,6 @@ public class TypedArrayProgramTest {
         assertEquals(16, num(source));
     }
 
-    // sort orders numerically by default, not lexicographically
     @Test
     public void test_sort_is_numeric() {
         assertEquals("2,10,33", str("new Int32Array([10, 2, 33]).sort().join(',')"));
@@ -292,7 +259,6 @@ public class TypedArrayProgramTest {
         assertEquals("1,2", str("new BigInt64Array([2n, 1n]).sort().join(',')"));
     }
 
-    // with rejects an out-of-range index
     @Test
     public void test_with_range_error() {
         assertThrows(org.techhouse.simplejs.exceptions.RangeErrorException.class,
@@ -302,7 +268,6 @@ public class TypedArrayProgramTest {
         assertEquals("0,9", str("new Int8Array(2).with(-1, 9).join(',')"));
     }
 
-    // typed-array includes uses SameValueZero for NaN and signed zero
     @Test
     public void test_typed_array_includes_same_value_zero() {
         assertTrue(bool("new Float64Array([NaN]).includes(NaN)"));
@@ -311,9 +276,6 @@ public class TypedArrayProgramTest {
         assertFalse(bool("new Float64Array([NaN]).indexOf(NaN) >= 0"));
     }
 
-    // An own "length"/"byteLength"/"byteOffset"/"buffer"/"BYTES_PER_ELEMENT" property installed via
-    // Object.defineProperty shadows the exotic computed value, exactly like it would for any other
-    // ordinary key - these are only "exotic" in that nothing installs them by default.
     @Test
     public void test_own_length_property_shadows_computed_length() {
         assertEquals(4000, num("""
@@ -323,7 +285,6 @@ public class TypedArrayProgramTest {
                 """));
     }
 
-    // Without an own override the computed value still reports the real length.
     @Test
     public void test_length_without_own_override_is_computed() {
         assertEquals(3, num("new Uint8Array(3).length"));

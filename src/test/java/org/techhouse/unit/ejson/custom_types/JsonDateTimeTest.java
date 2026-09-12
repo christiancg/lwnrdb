@@ -8,7 +8,6 @@ import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
 public class JsonDateTimeTest {
-    // Create JsonDateTime with valid LocalDateTime object
     @Test
     public void test_create_with_valid_local_date_time() {
         LocalDateTime dateTime = LocalDateTime.of(2023, 12, 25, 10, 30);
@@ -19,7 +18,6 @@ public class JsonDateTimeTest {
         assertEquals("2023-12-25T10:30:00", jsonDateTime.stringDataValue());
     }
 
-    // Constructor successfully creates JsonDateTime instance with valid LocalDateTime
     @Test
     public void test_string_constructor_with_valid_local_date_time() {
         LocalDateTime now = LocalDateTime.now();
@@ -31,7 +29,6 @@ public class JsonDateTimeTest {
         assertTrue(jsonDateTime.getValue().endsWith(")"));
     }
 
-    // Constructor handles minimum allowed LocalDateTime value
     @Test
     public void test_string_constructor_with_min_local_date_time() {
         LocalDateTime minDateTime = LocalDateTime.MIN;
@@ -43,7 +40,6 @@ public class JsonDateTimeTest {
         assertTrue(jsonDateTime.getValue().endsWith(")"));
     }
 
-    // Constructor successfully creates JsonDateTime instance with valid LocalDateTime
     @Test
     public void test_constructor_with_valid_local_date_time() {
         LocalDateTime now = LocalDateTime.now();
@@ -53,7 +49,6 @@ public class JsonDateTimeTest {
         assertEquals(now, jsonDateTime.getCustomValue());
     }
 
-    // Constructor handles minimum allowed LocalDateTime value
     @Test
     public void test_constructor_with_min_local_date_time() {
         LocalDateTime minDateTime = LocalDateTime.MIN;
@@ -63,7 +58,6 @@ public class JsonDateTimeTest {
         assertEquals(minDateTime, jsonDateTime.getCustomValue());
     }
 
-    // Default constructor creates empty JsonDateTime instance
     @Test
     public void test_default_constructor_creates_empty_instance() {
         JsonDateTime dateTime = new JsonDateTime();
@@ -72,7 +66,6 @@ public class JsonDateTimeTest {
         assertEquals("", dateTime.getValue());
     }
 
-    // Default constructor creates instance with null customValue
     @Test
     public void test_default_constructor_creates_null_custom_value() {
         JsonDateTime dateTime = new JsonDateTime();
@@ -81,7 +74,6 @@ public class JsonDateTimeTest {
         assertNull(dateTime.getCustomValue());
     }
 
-    // Method returns string 'datetime' consistently
     @Test
     public void test_returns_datetime_string() {
         JsonDateTime dateTime = new JsonDateTime(LocalDateTime.now());
@@ -91,7 +83,6 @@ public class JsonDateTimeTest {
         assertEquals("datetime", result);
     }
 
-    // Compare two dates where first date is after second date returns positive number
     @Test
     public void test_compare_returns_positive_when_first_date_after_second() {
         LocalDateTime firstDate = LocalDateTime.of(2023, 12, 25, 10, 30);
@@ -103,7 +94,6 @@ public class JsonDateTimeTest {
         assertTrue(result > 0);
     }
 
-    // Compare with null LocalDateTime parameter throws NullPointerException
     @Test
     public void test_compare_throws_exception_when_parameter_is_null() {
         LocalDateTime date = LocalDateTime.of(2023, 12, 25, 10, 30);
@@ -112,13 +102,11 @@ public class JsonDateTimeTest {
         assertThrows(NullPointerException.class, () -> jsonDateTime.compare(null));
     }
 
-    // Invalid format string throws WrongFormatCustomTypeException
     @Test
     public void test_invalid_format_throws_wrong_format_exception() {
         assertThrows(WrongFormatCustomTypeException.class, () -> new JsonDateTime("#datetime(not_a_datetime)"));
     }
 
-    // datetime declares no custom operators and rejects any evaluation.
     @Test
     public void test_no_custom_operators() {
         JsonDateTime dateTime = new JsonDateTime(LocalDateTime.now());

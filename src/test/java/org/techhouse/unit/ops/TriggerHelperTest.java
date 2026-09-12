@@ -59,7 +59,6 @@ public class TriggerHelperTest {
         triggerExecutor.stop();
     }
 
-    // Collects the submitted events instead of running them, so the emit decision is what is under test
     private List<TriggerEvent> capture(Runnable emit) {
         final var captured = new CopyOnWriteArrayList<TriggerEvent>();
         final var sentinelSeen = new CountDownLatch(1);
@@ -166,7 +165,6 @@ public class TriggerHelperTest {
                 entry("a"), "alice", 0)).isEmpty());
     }
 
-    // allowCascade defaults to false, so the common configuration cannot cascade even once
     @Test
     public void test_does_not_fire_when_allow_cascade_false_and_depth_positive() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
@@ -183,7 +181,6 @@ public class TriggerHelperTest {
         assertEquals(2, events.getFirst().getDepth());
     }
 
-    // The writer, which is what the trigger's args report and what explains why it fired
     @Test
     public void test_event_carries_the_acting_user() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
@@ -219,8 +216,6 @@ public class TriggerHelperTest {
                 "alice", 0)).isEmpty());
     }
 
-    // afterBulkSave fires only for a BulkSaveResponse: a bulk save that failed has no inserts or updates
-    // to report, so nothing must be queued.
     @Test
     public void test_after_bulk_save_fires_nothing_for_a_failed_write() {
         assertTrue(capture(() -> TriggerHelper.afterBulkSave(TestGlobals.DB, TestGlobals.COLL,

@@ -7,7 +7,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.OperationRequest;
 
 public class OperationRequestTest {
-    // Create OperationRequest with valid type, database and collection names
     @Test
     public void test_create_operation_request_with_valid_params() {
         OperationType type = OperationType.SAVE;
@@ -21,7 +20,6 @@ public class OperationRequestTest {
         assertEquals(collName, request.getCollectionName());
     }
 
-    // test getters and setters provided by lombok
     @Test
     public void test_operation_request_getters_and_setters() {
         OperationType type = OperationType.FIND_BY_ID;

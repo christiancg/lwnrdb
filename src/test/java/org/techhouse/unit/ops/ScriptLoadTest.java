@@ -27,8 +27,6 @@ public class ScriptLoadTest {
         return registry.register(ScriptRunKind.RUN_SCRIPT, "db", null, "u", null).runId();
     }
 
-    // The gossiped signal is the registry's size, so the number placement acts on and the runs an operator
-    // sees can never disagree
     @Test
     public void test_reports_the_number_of_registered_runs() {
         assertEquals(0, load.current());

@@ -12,10 +12,8 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-// Per-file read/write locks guaranteeing physical-I/O atomicity: a file's bytes are never read
-// while they are being rewritten. This is the finer-grained tier below the collection-level
-// locks in ResourceLocking, and is what makes dirty reads safe (a dirty read skips the
-// collection lock but still serializes against the in-progress physical write of each file).
+// The finer tier below ResourceLocking's collection locks, and what makes dirty reads safe: a
+// dirty read skips the collection lock but still serializes against each file's physical write.
 final class FileLocks {
     private static final Map<String, ReentrantReadWriteLock> fileLocks = new ConcurrentHashMap<>();
 
@@ -43,8 +41,7 @@ final class FileLocks {
         try {
             Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
-            // ATOMIC_MOVE can fail across filesystems or on platforms that don't
-            // support it; fall back to a non-atomic move.
+            // ATOMIC_MOVE is not supported across filesystems or on every platform.
             Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
         }
     }

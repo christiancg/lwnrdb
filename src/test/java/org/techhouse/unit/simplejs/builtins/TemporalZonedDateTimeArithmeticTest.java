@@ -83,7 +83,6 @@ public class TemporalZonedDateTimeArithmeticTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').add(42)"));
     }
 
-    // A duration-like object with none of the ten recognized properties present is a TypeError
     @Test
     public void test_add_rejects_duration_like_with_no_recognized_fields() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').add({})"));
@@ -94,8 +93,6 @@ public class TemporalZonedDateTimeArithmeticTest {
         final var gap = findGapTransition();
         final var localDate = gap.getDateTimeBefore().toLocalDate();
         final var startOfDayNanos = localDate.atStartOfDay(NEW_YORK).toEpochSecond() * 1_000_000_000L;
-        // Adding 1 calendar day lands at the same local wall-clock time the next day (constrained by
-        // the zone's real rules), while adding 24 exact hours lands 1 hour later across the gap.
         final var script = "var z = new Temporal.ZonedDateTime(" + startOfDayNanos + "n, 'America/New_York');"
                 + "var byDay = z.add({days: 1});" + "var byHours = z.add({hours: 24});"
                 + "byDay.hour + ',' + byHours.hour";
@@ -112,8 +109,6 @@ public class TemporalZonedDateTimeArithmeticTest {
                 + ".until(new Temporal.ZonedDateTime(7200000000000n, 'UTC')) instanceof Temporal.Duration"));
     }
 
-    // until()/since() round a computed Duration, so a "day" increment greater than 1 is valid when
-    // largestUnit is not larger than "day" (unlike round(), which only ever accepts 1)
     @Test
     public void test_until_allows_day_increment_greater_than_one() {
         final var tenDaysNanos = 10L * 24 * 3_600_000_000_000L;
@@ -123,9 +118,6 @@ public class TemporalZonedDateTimeArithmeticTest {
                         + "roundingMode: 'floor'}).days"));
     }
 
-    // Calendar-unit differencing (largestUnit above "day") is implemented via RelativeDurationMath on
-    // the receiver's local wall-clock date+time - no RangeError, a real months/hours breakdown
-    // instead (the two instants are two hours apart on the same calendar day, so months stays 0).
     @Test
     public void test_until_since_calendar_units() {
         assertEquals("0,2",
@@ -183,7 +175,6 @@ public class TemporalZonedDateTimeArithmeticTest {
                 .run("new Temporal.ZonedDateTime(0n, 'UTC').round({smallestUnit: 'hour', roundingIncrement: 0})"));
     }
 
-    // "expand" rounds away from zero unconditionally, unlike "halfExpand"'s tie-breaking
     @Test
     public void test_rounding_mode_expand() {
         assertEquals("1970-01-01T01:00:00+00:00[UTC]",
@@ -191,16 +182,12 @@ public class TemporalZonedDateTimeArithmeticTest {
                         + "roundingMode: 'expand'}).toString()"));
     }
 
-    // 1250 is exactly halfway between 1000 and 1500 (increment 500); halfEven picks the even
-    // multiple (1000/500 = 2, even).
     @Test
     public void test_rounding_mode_half_even_at_an_exact_tie() {
         assertEquals("1000", str("new Temporal.ZonedDateTime(1250n, 'UTC').round({smallestUnit: 'nanosecond', "
                 + "roundingIncrement: 500, roundingMode: 'halfEven'}).epochNanoseconds.toString()"));
     }
 
-    // A negative-direction halfCeil/halfFloor tie: the tie-break can go toward the unchanged
-    // (non-away-from-zero) quotient depending on sign and direction.
     @Test
     public void test_rounding_mode_half_ceil_half_floor_negative_ties() {
         assertEquals("-1000", str("new Temporal.ZonedDateTime(-1250n, 'UTC').round({smallestUnit: 'nanosecond', "
@@ -304,7 +291,6 @@ public class TemporalZonedDateTimeArithmeticTest {
 
     @Test
     public void test_round_to_calendar_day_with_various_modes() {
-        // 12:00 UTC is exactly half of a 24h UTC day.
         assertEquals("1970-01-02T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(43200000000000n, 'UTC').round("
                 + "{smallestUnit: 'day', roundingMode: 'ceil'}).toString()"));
         assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(43200000000000n, 'UTC').round("
@@ -315,7 +301,6 @@ public class TemporalZonedDateTimeArithmeticTest {
                 + "{smallestUnit: 'day', roundingMode: 'halfFloor'}).toString()"));
         assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(43200000000000n, 'UTC').round("
                 + "{smallestUnit: 'day', roundingMode: 'halfEven'}).toString()"));
-        // A quarter into the day rounds down under every half-based mode (not a tie).
         assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(21600000000000n, 'UTC').round("
                 + "{smallestUnit: 'day', roundingMode: 'halfTrunc'}).toString()"));
         assertEquals("1970-01-01T00:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(21600000000000n, 'UTC').round("
@@ -326,11 +311,8 @@ public class TemporalZonedDateTimeArithmeticTest {
 
     @Test
     public void test_round_signed_nanoseconds_negative_epoch() {
-        // -30 minutes (half of an hour) before epoch, exercising the sign<0 branches. round()
-        // rounds the receiver's LOCAL wall-clock time (a UTC receiver's local time coincides with its
-        // epoch nanoseconds), so trunc/expand behave as floor/ceil unconditionally (there is no
-        // negative-number sign concept once the value is a nanosecond-of-day) - see
-        // round/negative-time.js and round/rounding-direction.js in the test262 corpus.
+        // round() rounds the receiver's LOCAL wall-clock time, so trunc/expand behave as floor/ceil
+        // unconditionally - see round/negative-time.js and round/rounding-direction.js in test262.
         final var halfHourNs = "-1800000000000n";
         assertEquals("1969-12-31T23:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(" + halfHourNs
                 + ", 'UTC').round(" + "{smallestUnit: 'hour', roundingMode: 'floor'}).toString()"));
@@ -390,8 +372,6 @@ public class TemporalZonedDateTimeArithmeticTest {
 
     @Test
     public void test_round_half_even_majority_remainder() {
-        // A 40-minute offset into the hour (doubled remainder 80 > increment 60) is a genuine
-        // majority, not a tie, so halfEven behaves like halfExpand here.
         assertEquals("1970-01-01T01:00:00+00:00[UTC]", str("new Temporal.ZonedDateTime(2400000000000n, 'UTC').round("
                 + "{smallestUnit: 'hour', roundingMode: 'halfEven'}).toString()"));
     }

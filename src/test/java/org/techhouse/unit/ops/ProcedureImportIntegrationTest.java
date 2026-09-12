@@ -244,7 +244,6 @@ public class ProcedureImportIntegrationTest {
         assertEquals("undefined", response.getResult().asJsonString().getValue(), response.getMessage());
     }
 
-    // The frame for imported code is labelled with the module it was written in, not the importer's
     @Test
     public void test_stack_names_both_the_importer_and_the_imported_module() throws Exception {
         save(TestGlobals.DB, "lib", """

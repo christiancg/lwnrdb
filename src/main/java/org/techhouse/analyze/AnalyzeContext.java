@@ -8,12 +8,7 @@ import java.util.concurrent.atomic.AtomicLong;
 import org.techhouse.config.Globals;
 
 /**
- * Thread-scoped collector for AGGREGATE "analyze" mode. It is created and registered by
- * {@code OperationProcessor} only when the request opts in ({@code analyze=true}); the deep
- * aggregation helpers consult {@link #current()} and record into it, so the steady-state read path
- * is untouched when analyze is off ({@code current() == null}). The aggregation pipeline runs
- * sequentially on the connection's virtual thread, but the counters use concurrent primitives as a
- * safe default.
+ * Safe as a ThreadLocal because an aggregation pipeline runs sequentially on the connection's virtual thread.
  */
 public final class AnalyzeContext {
     private static final ThreadLocal<AnalyzeContext> CURRENT = new ThreadLocal<>();
@@ -36,8 +31,6 @@ public final class AnalyzeContext {
         CURRENT.remove();
     }
 
-    // Builds the field-index lock identifier (db|coll|field) in the same format ResourceLocking
-    // uses, so a recorded lock matches the read lock actually taken to consult the field index.
     public static String fieldLockId(String dbName, String collName, String fieldName) {
         return dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + Globals.COLL_IDENTIFIER_SEPARATOR + fieldName;
     }

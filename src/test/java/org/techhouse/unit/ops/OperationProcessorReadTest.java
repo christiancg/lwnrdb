@@ -56,7 +56,6 @@ public class OperationProcessorReadTest {
         TestUtils.standardTearDown();
     }
 
-    // Process different operation types and return appropriate response objects
     @Test
     public void test_process_message_returns_correct_response_type() {
         SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -69,7 +68,6 @@ public class OperationProcessorReadTest {
         assertEquals(OperationType.SAVE, response.getType());
     }
 
-    // Handle non-existent database/collection operations
     @Test
     public void test_find_by_id_returns_not_found_for_nonexistent_entry() {
         FindByIdRequest request = new FindByIdRequest("nonexistentDb", "nonexistentColl");
@@ -82,10 +80,8 @@ public class OperationProcessorReadTest {
         assertEquals("404-2", response.getErrorCode());
     }
 
-    // Find entries by ID and return results with correct status
     @Test
     public void test_find_by_id_operation_success() {
-        // Arrange
         SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         var obj = new JsonObject();
         obj.add("_id", new JsonString("123"));
@@ -95,15 +91,12 @@ public class OperationProcessorReadTest {
         FindByIdRequest request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         request.set_id("123");
 
-        // Act
         FindByIdResponse response = (FindByIdResponse) processor.processMessage(request);
 
-        // Assert
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals(obj, response.getObject());
     }
 
-    // Process aggregation requests and return results
     @Test
     public void test_process_aggregation_request() {
         SaveRequest saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -125,7 +118,6 @@ public class OperationProcessorReadTest {
         assertEquals(1, aggregateResponse.getResults().size());
     }
 
-    // Without analyze, the response is a plain AggregateResponse (no analyzeResult).
     @Test
     public void test_aggregation_without_analyze_has_no_analyzeResult() {
         final var coll = "analyzeOffColl";
@@ -147,7 +139,6 @@ public class OperationProcessorReadTest {
         assertEquals(AggregateResponse.class, response.getClass());
     }
 
-    // With analyze, the response carries an analyzeResult with scan + lock metrics.
     @Test
     public void test_aggregation_with_analyze_returns_analyzeResult() {
         final var coll = "analyzeOnColl";
@@ -174,7 +165,6 @@ public class OperationProcessorReadTest {
         assertTrue(analyzeResult.getLocksAcquired().contains(Cache.getCollectionIdentifier(TestGlobals.DB, coll)));
     }
 
-    // FILTER as a non-first step → suggestion recommends moving it to the top.
     @Test
     public void test_aggregation_with_analyze_suggests_moving_filter() {
         final var coll = "analyzeMoveFilterColl";
@@ -197,7 +187,6 @@ public class OperationProcessorReadTest {
                 .anyMatch(s -> s.startsWith("FILTER step") && s.contains("step 2")));
     }
 
-    // Analyze mode returns the diagnostic even when there are no results (no NO_RESULTS error).
     @Test
     public void test_aggregation_with_analyze_empty_results_still_has_analyzeResult() {
         final var coll = "analyzeEmptyColl";
@@ -223,7 +212,6 @@ public class OperationProcessorReadTest {
         assertNotNull(analyzeResponse.getAnalyzeResult());
     }
 
-    // End-to-end: save docs with object/array fields, index them, then filter by element-match
     @Test
     public void test_aggregate_element_match_object_and_array() {
         final var coll = "elementMatchColl";
@@ -249,7 +237,6 @@ public class OperationProcessorReadTest {
 
         processor.processMessage(new CreateIndexRequest(TestGlobals.DB, coll, "payload"));
 
-        // Object element-match: {n:1} matches em1 and em2 only
         final var objQuery = new JsonObject();
         objQuery.addProperty("n", 1);
         final var objAgg = new AggregateRequest(TestGlobals.DB, coll);
@@ -259,7 +246,6 @@ public class OperationProcessorReadTest {
         assertEquals(OperationStatus.OK, objResp.getStatus());
         assertEquals(2, objResp.getResults().size());
 
-        // Array element-match: ["x"] matches em4 only
         final var arrQuery = new JsonArray();
         arrQuery.add(new JsonString("x"));
         final var arrAgg = new AggregateRequest(TestGlobals.DB, coll);
@@ -272,7 +258,6 @@ public class OperationProcessorReadTest {
         processor.processMessage(new DropCollectionRequest(TestGlobals.DB, coll));
     }
 
-    // CLOSE_CONNECTION returns a CloseConnectionResponse
     @Test
     public void test_close_connection_returns_correct_response() {
         CloseConnectionRequest request = new CloseConnectionRequest();
@@ -284,7 +269,6 @@ public class OperationProcessorReadTest {
         assertEquals(OperationType.CLOSE_CONNECTION, response.getType());
     }
 
-    // Aggregate returns NOT_FOUND when no documents match
     @Test
     public void test_aggregate_returns_not_found_when_no_results() {
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -297,7 +281,6 @@ public class OperationProcessorReadTest {
         assertEquals("404-3", response.getErrorCode());
     }
 
-    // A successful FIND_BY_ID releases its collection read lock (a writer can lock afterward).
     @Test
     public void test_find_by_id_releases_read_lock() {
         final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -317,7 +300,6 @@ public class OperationProcessorReadTest {
         locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
     }
 
-    // A normal (locking) read blocks while a writer holds the collection, then proceeds once released.
     @Test
     public void test_normal_read_blocks_until_write_released() throws Exception {
         final var locks = IocContainer.get(ResourceLocking.class);
@@ -384,7 +366,6 @@ public class OperationProcessorReadTest {
 
             final var pending = IocContainer.get(PendingIndexWrites.class);
 
-            // Trigger a relocation: grow "a" so page 0 overflows.
             final var growSave = new SaveRequest(TestGlobals.DB, collName);
             final var grown = new JsonObject();
             grown.add(Globals.PK_FIELD, new JsonString("a"));
@@ -393,9 +374,6 @@ public class OperationProcessorReadTest {
             growSave.set_id("a");
             processor.processMessage(growSave);
 
-            // Immediately after processMessage returns, "a" must be pending with count >= 2
-            // (one mark for DELETED, one for CREATED) so that the DELETED worker's clear()
-            // cannot drop the key before CREATED is processed.
             assertTrue(pending.idsFor(TestGlobals.DB, collName).contains("a"),
                     "id must remain pending after relocation so both events are covered");
         } finally {

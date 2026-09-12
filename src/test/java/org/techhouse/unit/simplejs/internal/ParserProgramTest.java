@@ -54,7 +54,6 @@ public class ParserProgramTest {
         return Parser.parse(Lexer.lex(source));
     }
 
-    // A function with a for loop and a return parses to the expected top-level shape
     @Test
     public void test_function_with_for_loop_and_return() {
         final var source = """
@@ -77,7 +76,6 @@ public class ParserProgramTest {
         assertInstanceOf(ReturnStatement.class, body.get(2));
     }
 
-    // An arrow used as a callback in a method call parses end-to-end
     @Test
     public void test_arrow_callback_in_call() {
         final var program = parse("const doubled = items.map(x => x * 2);");
@@ -87,7 +85,6 @@ public class ParserProgramTest {
         assertInstanceOf(ArrowFunctionExpression.class, call.getArguments().getFirst());
     }
 
-    // Nested objects and arrays parse into the expected containers
     @Test
     public void test_nested_objects_and_arrays() {
         final var program = parse("const data = { items: [1, 2, { k: [true, null] }], name: \"x\" };");
@@ -95,7 +92,6 @@ public class ParserProgramTest {
         assertInstanceOf(ObjectExpression.class, decl.getDeclarations().getFirst().getInit());
     }
 
-    // A template literal driving a member/call chain parses end-to-end
     @Test
     public void test_template_driving_chain() {
         final var program = parse("`Hello ${user.name}, you have ${count} messages`.toUpperCase();");
@@ -106,7 +102,6 @@ public class ParserProgramTest {
         assertEquals(2, tpl.getExpressions().size());
     }
 
-    // A multi-statement program with mixed constructs keeps the right statement count
     @Test
     public void test_mixed_program() {
         final var source = """
@@ -126,7 +121,6 @@ public class ParserProgramTest {
         assertInstanceOf(WhileStatement.class, program.getBody().get(2));
     }
 
-    // A for-of accumulation loop inside a function parses to the expected shape
     @Test
     public void test_function_with_for_of_loop() {
         final var source = """
@@ -145,7 +139,6 @@ public class ParserProgramTest {
         assertInstanceOf(ForOfStatement.class, body.get(1));
     }
 
-    // A try/catch/finally wrapping a throw parses end-to-end
     @Test
     public void test_try_catch_finally_with_throw() {
         final var source = """
@@ -167,7 +160,6 @@ public class ParserProgramTest {
         assertInstanceOf(BlockStatement.class, tryStatement.getFinalizer());
     }
 
-    // A switch with multiple cases and a default parses to the expected shape
     @Test
     public void test_switch_with_multiple_cases() {
         final var source = """
@@ -187,7 +179,6 @@ public class ParserProgramTest {
         assertNull(switchStatement.getCases().get(2).getTest());
     }
 
-    // A class with extends, a super-calling constructor, a static method, a getter and a field
     @Test
     public void test_full_class() {
         final var source = """
@@ -216,7 +207,6 @@ public class ParserProgramTest {
         assertEquals("get", ((MethodDefinition) members.get(3)).getKind());
     }
 
-    // An async function awaiting calls inside a try/catch parses end-to-end
     @Test
     public void test_async_function_with_await_in_try() {
         final var source = """
@@ -239,7 +229,6 @@ public class ParserProgramTest {
         assertInstanceOf(AwaitExpression.class, ret.getArgument());
     }
 
-    // A generator yielding in a loop with a trailing yield* delegation parses end-to-end
     @Test
     public void test_generator_with_yield_in_loop() {
         final var source = """
@@ -262,7 +251,6 @@ public class ParserProgramTest {
         assertTrue(assertInstanceOf(YieldExpression.class, delegateStmt.getExpression()).isDelegate());
     }
 
-    // A class mixing plain, async, generator, static async generator and getter members
     @Test
     public void test_class_with_async_and_generator_members() {
         final var source = """
@@ -297,7 +285,6 @@ public class ParserProgramTest {
         assertEquals("get", ((MethodDefinition) members.get(4)).getKind());
     }
 
-    // Spread and rest appear together across a realistic function
     @Test
     public void test_spread_and_rest_program() {
         final var source = """
@@ -321,7 +308,6 @@ public class ParserProgramTest {
         assertInstanceOf(SpreadElement.class, call.getArguments().getFirst());
     }
 
-    // Destructuring appears across a declaration, a defaulted pattern parameter, and an assignment
     @Test
     public void test_destructuring_program() {
         final var source = """
@@ -350,7 +336,6 @@ public class ParserProgramTest {
         assertInstanceOf(ArrayPattern.class, assign.getTarget());
     }
 
-    // Phase 5g: import attributes and using/await using declarations flow end-to-end
     @Test
     public void test_phase5g_attributes_and_using_program() {
         final var source = """
@@ -371,7 +356,6 @@ public class ParserProgramTest {
         assertEquals("await using", ((VariableDeclaration) fnBody.get(1)).getKind());
     }
 
-    // Phase 5e: a labeled outer loop with a nested do-while and a labeled break parses end-to-end
     @Test
     public void test_phase5e_labeled_do_while_program() {
         final var source = """
@@ -392,7 +376,6 @@ public class ParserProgramTest {
         assertInstanceOf(DoWhileStatement.class, forBody.get(1));
     }
 
-    // Phase 5d literals flow end-to-end: a leading hashbang is skipped, separators stripped, n makes a BigInt
     @Test
     public void test_phase5d_literals_program() {
         final var source = """
@@ -410,7 +393,6 @@ public class ParserProgramTest {
         assertEquals(new BigInteger("65535"), bigInit.getValue());
     }
 
-    // A tagged template attaches the template to its tag as a TaggedTemplateExpression
     @Test
     public void test_parse_tagged_template() {
         final var program = parse("tag`a${1}b`;");
@@ -421,7 +403,6 @@ public class ParserProgramTest {
         assertEquals(1, tagged.getQuasi().getExpressions().size());
     }
 
-    // A member expression can be the tag of a tagged template
     @Test
     public void test_parse_member_tagged_template() {
         final var program = parse("obj.tag`x`;");
@@ -430,7 +411,6 @@ public class ParserProgramTest {
         assertInstanceOf(MemberExpression.class, tagged.getTag());
     }
 
-    // Tagged templates chain with further member/tagged tails
     @Test
     public void test_parse_chained_tagged_template() {
         final var program = parse("tag`a`.length;");

@@ -25,13 +25,11 @@ public class TypedArrayExoticProgramTest {
         return ((JsBoolean) Interpreter.run("new Float64Array([NaN]).includes(NaN)")).getValue();
     }
 
-    // A view over a buffer honours the byte offset and length
     @Test
     public void test_construct_over_a_buffer() {
         assertEquals(2, num("new Int8Array(new ArrayBuffer(4), 1, 2).length"));
     }
 
-    // A detached buffer cannot back a new view
     @Test
     public void test_construct_rejects_a_detached_buffer() {
         final var source = """
@@ -42,13 +40,11 @@ public class TypedArrayExoticProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // A negative length is a RangeError
     @Test
     public void test_construct_rejects_a_negative_length() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Int8Array(-1)"));
     }
 
-    // subarray shares the buffer with the original view
     @Test
     public void test_subarray_shares_the_buffer() {
         final var source = """
@@ -60,14 +56,12 @@ public class TypedArrayExoticProgramTest {
         assertEquals(9, num(source));
     }
 
-    // subarray honours an explicit end and a negative start
     @Test
     public void test_subarray_bounds() {
         assertEquals("2,3", str("new Int8Array([1, 2, 3, 4]).subarray(1, 3).join(',')"));
         assertEquals("3,4", str("new Int8Array([1, 2, 3, 4]).subarray(-2).join(',')"));
     }
 
-    // slice copies instead of sharing
     @Test
     public void test_slice_copies() {
         final var source = """
@@ -79,7 +73,6 @@ public class TypedArrayExoticProgramTest {
         assertEquals("9,3:1,2,3,4", str(source));
     }
 
-    // The species constructor decides the kind of the result of map
     @Test
     public void test_map_uses_the_species_constructor() {
         final var source = """
@@ -91,7 +84,6 @@ public class TypedArrayExoticProgramTest {
         assertEquals("2,4:true", str(source));
     }
 
-    // filter and slice consult the species constructor too
     @Test
     public void test_filter_and_slice_use_the_species_constructor() {
         final var source = """
@@ -102,7 +94,6 @@ public class TypedArrayExoticProgramTest {
         assertEquals("true,true", str(source));
     }
 
-    // A null species falls back to the default constructor
     @Test
     public void test_null_species_falls_back_to_the_default() {
         final var source = """
@@ -113,7 +104,6 @@ public class TypedArrayExoticProgramTest {
         assertEquals("2,4", str(source));
     }
 
-    // An undefined constructor property falls back to the default constructor
     @Test
     public void test_undefined_constructor_falls_back_to_the_default() {
         final var source = """
@@ -124,7 +114,6 @@ public class TypedArrayExoticProgramTest {
         assertEquals("2,4", str(source));
     }
 
-    // A primitive constructor property is a TypeError
     @Test
     public void test_primitive_constructor_property_is_rejected() {
         final var source = """
@@ -135,7 +124,6 @@ public class TypedArrayExoticProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // A non-callable species is a TypeError
     @Test
     public void test_non_callable_species_is_rejected() {
         final var source = """
@@ -146,7 +134,6 @@ public class TypedArrayExoticProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // A species that does not return a typed array is a TypeError
     @Test
     public void test_species_must_return_a_typed_array() {
         final var source = """
@@ -158,7 +145,6 @@ public class TypedArrayExoticProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // A species returning a shorter typed array is a TypeError
     @Test
     public void test_species_must_return_a_long_enough_array() {
         final var source = """
@@ -170,7 +156,6 @@ public class TypedArrayExoticProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // A BigInt species for a number array is a TypeError
     @Test
     public void test_species_cannot_change_the_content_type() {
         final var source = """
@@ -181,25 +166,21 @@ public class TypedArrayExoticProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // toLocaleString joins the localized elements with commas
     @Test
     public void test_to_locale_string() {
         assertEquals("1,2,3", str("new Int8Array([1, 2, 3]).toLocaleString()"));
     }
 
-    // toLocaleString of an empty typed array is the empty string
     @Test
     public void test_to_locale_string_of_an_empty_array() {
         assertEquals("", str("new Int8Array(0).toLocaleString()"));
     }
 
-    // toLocaleString works over BigInt elements
     @Test
     public void test_to_locale_string_of_bigints() {
         assertEquals("1,2", str("new BigInt64Array([1n, 2n]).toLocaleString()"));
     }
 
-    // from applies its mapper and constructs the receiver's kind
     @Test
     public void test_from_with_a_mapper() {
         final var source = """
@@ -209,7 +190,6 @@ public class TypedArrayExoticProgramTest {
         assertEquals("2,4,6:true", str(source));
     }
 
-    // from called with a custom constructor passes it the source length
     @Test
     public void test_from_with_a_custom_constructor() {
         final var source = """
@@ -221,80 +201,67 @@ public class TypedArrayExoticProgramTest {
         assertEquals("2:1,2", str(source));
     }
 
-    // from called on a non-constructor is a TypeError
     @Test
     public void test_from_rejects_a_primitive_this() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Int8Array.from.call(5, [1])"));
     }
 
-    // of called on a non-constructor is a TypeError
     @Test
     public void test_of_rejects_a_primitive_this() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Int8Array.of.call(5, 1)"));
     }
 
-    // from iterates an iterable source
     @Test
     public void test_from_an_iterable() {
         assertEquals("1,2", str("Int8Array.from(new Set([1, 2])).join(',')"));
     }
 
-    // A comparator that is neither undefined nor callable is a TypeError
     @Test
     public void test_sort_rejects_a_non_callable_comparator() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Int8Array([2, 1]).sort(5)"));
     }
 
-    // A comparator returning NaN is treated as zero, leaving the order alone
     @Test
     public void test_sort_treats_nan_as_zero() {
         assertEquals("2,1", str("new Int8Array([2, 1]).sort(() => NaN).join(',')"));
     }
 
-    // includes uses SameValueZero, so it finds NaN
     @Test
     public void test_includes_finds_nan() {
         assertTrue(bool());
     }
 
-    // includes over an empty typed array is false
     @Test
     public void test_includes_on_an_empty_array() {
         assertEquals("false", str("String(new Int8Array(0).includes(1))"));
     }
 
-    // findLast and findLastIndex scan from the end
     @Test
     public void test_find_last() {
         assertEquals("2,1", str(
                 "String(new Int8Array([1, 2, 3]).findLast(x => x < 3)) + ',' + new Int8Array([1, 2, 3]).findLastIndex(x => x < 3)"));
     }
 
-    // reduceRight folds from the end
     @Test
     public void test_reduce_right() {
         assertEquals("321", str("new Int8Array([1, 2, 3]).reduceRight((a, b) => a + '' + b)"));
     }
 
-    // reduce over an empty typed array with no seed is a TypeError
     @Test
     public void test_reduce_rejects_an_empty_array() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Int8Array(0).reduce((a, b) => a + b)"));
     }
 
-    // copyWithin moves elements inside the same view
     @Test
     public void test_copy_within() {
         assertEquals("3,4,3,4", str("new Int8Array([1, 2, 3, 4]).copyWithin(0, 2).join(',')"));
     }
 
-    // with returns a copy carrying the replaced element
     @Test
     public void test_with_replaces_an_element() {
         assertEquals("9,2", str("new Int8Array([1, 2]).with(0, 9).join(',')"));
     }
 
-    // toSorted and toReversed leave the receiver untouched
     @Test
     public void test_by_copy_methods() {
         final var source = """
@@ -304,7 +271,6 @@ public class TypedArrayExoticProgramTest {
         assertEquals("1,3:1,3:3,1", str(source));
     }
 
-    // keys, values and entries iterate the view
     @Test
     public void test_iteration_helpers() {
         final var source = """
@@ -315,14 +281,12 @@ public class TypedArrayExoticProgramTest {
         assertEquals("01:56:0-5,1-6", str(source));
     }
 
-    // at accepts a negative index and reports undefined out of range
     @Test
     public void test_at() {
         assertEquals("2,undefined",
                 str("String(new Int8Array([1, 2]).at(-1)) + ',' + String(new Int8Array([1]).at(5))"));
     }
 
-    // Uint8ClampedArray clamps out-of-range writes
     @Test
     public void test_uint8_clamped_writes() {
         final var source = """
@@ -334,19 +298,16 @@ public class TypedArrayExoticProgramTest {
         assertEquals("255,0", str(source));
     }
 
-    // A BigUint64Array write wraps modulo 2^64
     @Test
     public void test_big_uint64_wraps() {
         assertEquals("18446744073709551615", str("const t = new BigUint64Array(1); t[0] = -1n; String(t[0])"));
     }
 
-    // A number written into a BigInt array is a TypeError
     @Test
     public void test_bigint_array_rejects_a_number() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("const t = new BigInt64Array(1); t[0] = 1;"));
     }
 
-    // A method call on a detached view is a TypeError
     @Test
     public void test_detached_method_call() {
         final var source = """
@@ -358,7 +319,6 @@ public class TypedArrayExoticProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // A length-tracking view follows a resizable buffer as it grows
     @Test
     public void test_length_tracking_view_follows_a_resize() {
         final var source = """
@@ -370,20 +330,17 @@ public class TypedArrayExoticProgramTest {
         assertEquals(4, num(source));
     }
 
-    // Resizing beyond maxByteLength is a RangeError
     @Test
     public void test_resize_beyond_the_maximum() {
         assertThrows(RangeErrorException.class,
                 () -> Interpreter.run("const b = new ArrayBuffer(2, { maxByteLength: 4 }); b.resize(8)"));
     }
 
-    // A fixed-length buffer cannot be resized
     @Test
     public void test_fixed_buffer_cannot_resize() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("const b = new ArrayBuffer(2); b.resize(4)"));
     }
 
-    // transferToFixedLength detaches the source and drops resizability
     @Test
     public void test_transfer_to_fixed_length() {
         final var source = """
@@ -394,14 +351,12 @@ public class TypedArrayExoticProgramTest {
         assertEquals("false:true", str(source));
     }
 
-    // slice on a detached buffer is a TypeError
     @Test
     public void test_detached_buffer_slice() {
         assertThrows(TypeErrorException.class,
                 () -> Interpreter.run("const b = new ArrayBuffer(2); b.transfer(); b.slice(0)"));
     }
 
-    // A view length beyond the buffer is a RangeError
     @Test
     public void test_view_length_beyond_the_buffer() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Int16Array(new ArrayBuffer(4), 0, 5)"));

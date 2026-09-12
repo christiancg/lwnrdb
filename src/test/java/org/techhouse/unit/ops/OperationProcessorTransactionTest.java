@@ -121,14 +121,12 @@ public class OperationProcessorTransactionTest {
         final var saveResponse = processor.processMessage(saveRequest("txn-buf-1", "name", "alice"), txnClient);
         assertInstanceOf(SaveResponse.class, saveResponse);
 
-        // Another connection (no transaction) must not see the uncommitted write.
         final var findOther = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         findOther.set_id("txn-buf-1");
         assertEquals(OperationStatus.NOT_FOUND, processor.processMessage(findOther, otherClient).getStatus());
 
         processor.processMessage(new CommitTransactionRequest(), txnClient);
 
-        // After commit it is visible to everyone.
         assertEquals(OperationStatus.OK, processor.processMessage(findOther, otherClient).getStatus());
     }
 
@@ -150,7 +148,6 @@ public class OperationProcessorTransactionTest {
     @Test
     public void test_buffered_delete_reads_as_not_found() {
         final var clientId = newClient();
-        // Commit an initial document, then in a new transaction delete it and read it back.
         processor.processMessage(new StartTransactionRequest(), clientId);
         processor.processMessage(saveRequest("txn-del-1", "name", "carol"), clientId);
         processor.processMessage(new CommitTransactionRequest(), clientId);
@@ -165,7 +162,6 @@ public class OperationProcessorTransactionTest {
         assertEquals(OperationStatus.NOT_FOUND, processor.processMessage(find, clientId).getStatus());
 
         processor.processMessage(new RollbackTransactionRequest(), clientId);
-        // Rolled back — the document is still there for a fresh reader.
         assertEquals(OperationStatus.OK, processor.processMessage(find, newClient()).getStatus());
     }
 
@@ -182,18 +178,17 @@ public class OperationProcessorTransactionTest {
     @Test
     public void test_aggregate_reflects_buffered_insert_update_and_delete() {
         final var clientId = newClient();
-        // Seed a committed document that the transaction will update.
         processor.processMessage(new StartTransactionRequest(), clientId);
         processor.processMessage(saveRequest("txn-agg-upd", "status", "old"), clientId);
         processor.processMessage(saveRequest("txn-agg-del", "status", "keep"), clientId);
         processor.processMessage(new CommitTransactionRequest(), clientId);
 
         processor.processMessage(new StartTransactionRequest(), clientId);
-        processor.processMessage(saveRequest("txn-agg-ins", "status", "new"), clientId); // insert
-        processor.processMessage(saveRequest("txn-agg-upd", "status", "updated"), clientId); // update
+        processor.processMessage(saveRequest("txn-agg-ins", "status", "new"), clientId);
+        processor.processMessage(saveRequest("txn-agg-upd", "status", "updated"), clientId);
         final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
         delete.set_id("txn-agg-del");
-        processor.processMessage(delete, clientId); // delete
+        processor.processMessage(delete, clientId);
 
         final var aggregate = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         aggregate.setAggregationSteps(new ArrayList<>());
@@ -281,7 +276,6 @@ public class OperationProcessorTransactionTest {
     @Test
     public void test_buffered_bulk_save_classifies_existing_id_as_updated() {
         final var clientId = newClient();
-        // Commit a document, then bulk-save it again (plus a new one) inside a transaction.
         processor.processMessage(new StartTransactionRequest(), clientId);
         processor.processMessage(saveRequest("txn-bulkupd-1", "v", "old"), clientId);
         processor.processMessage(new CommitTransactionRequest(), clientId);
@@ -326,7 +320,6 @@ public class OperationProcessorTransactionTest {
         save.setObject(obj);
         final var response = (SaveResponse) processor.processMessage(save, clientId);
         assertNotNull(response.get_id());
-        // Read-your-writes returns the generated document.
         final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         find.set_id(response.get_id());
         assertEquals(OperationStatus.OK, processor.processMessage(find, clientId).getStatus());
@@ -400,7 +393,6 @@ public class OperationProcessorTransactionTest {
     @Test
     public void test_operations_without_transaction_behave_normally() {
         final var clientId = newClient();
-        // No START_TRANSACTION: a plain SAVE writes straight through and is immediately visible.
         final var save = processor.processMessage(saveRequest("txn-none-1", "name", "frank"), clientId);
         assertEquals(OperationStatus.OK, save.getStatus());
         final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);

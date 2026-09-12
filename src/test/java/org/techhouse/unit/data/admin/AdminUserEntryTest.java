@@ -120,7 +120,6 @@ public class AdminUserEntryTest {
         assertTrue(entry.getScriptPermissions().isEmpty());
     }
 
-    // Records written before per-database script permissions existed must still load
     @Test
     public void test_from_json_object_without_script_permissions_field() {
         final var entry = new AdminUserEntry("test_user", "hash", false, new HashSet<>(), new HashMap<>(),

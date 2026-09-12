@@ -32,7 +32,6 @@ public class MapOperatorHelperTest {
         TestUtils.releaseAllLocks();
     }
 
-    // Handle null or missing fields in mathematical operations
     @Test
     public void test_handle_null_missing_fields() {
         JsonObject input = new JsonObject();
@@ -59,7 +58,6 @@ public class MapOperatorHelperTest {
         assertEquals(10.0, result.get("avg_result").asJsonNumber().getValue());
     }
 
-    // Process MapOperator with REMOVE_FIELD type to delete existing fields
     @Test
     public void test_remove_field_map_operator() {
         JsonObject jsonObject = new JsonObject();
@@ -74,7 +72,6 @@ public class MapOperatorHelperTest {
         assertTrue(result.has("anotherField"));
     }
 
-    // Concatenate strings and field values with proper prefix handling
     @Test
     public void test_concatenate_strings_and_fields() {
         JsonObject jsonObject = new JsonObject();
@@ -91,7 +88,6 @@ public class MapOperatorHelperTest {
         assertEquals("HelloWorld", result.get("result").asJsonString().getValue());
     }
 
-    // Process nested field paths that don't exist
     @Test
     public void test_non_existent_nested_field_paths() {
         JsonObject jsonObject = new JsonObject();
@@ -105,7 +101,6 @@ public class MapOperatorHelperTest {
         assertTrue(result.has("existingField"), "Field should not be removed as the condition path does not exist");
     }
 
-    // Handle string literals in concatenation
     @Test
     public void test_string_literals_in_concatenation() {
         JsonObject jsonObject = new JsonObject();
@@ -126,7 +121,6 @@ public class MapOperatorHelperTest {
                 "Concatenation should handle string literals correctly.");
     }
 
-    // Track number of valid steps in average calculation
     @Test
     public void test_average_calculation_valid_steps() {
         JsonObject jsonObject = new JsonObject();
@@ -147,7 +141,6 @@ public class MapOperatorHelperTest {
         assertEquals(15.0, result.get("average").asJsonNumber().getValue().doubleValue());
     }
 
-    // Remove existing field from JSON object
     @Test
     public void test_remove_existing_field() {
         JsonObject jsonObject = new JsonObject();
@@ -157,7 +150,6 @@ public class MapOperatorHelperTest {
         assertFalse(result.has("fieldToRemove"));
     }
 
-    // MIN operator picks the minimum of field references and constants
     @Test
     public void test_min_operation() {
         JsonObject input = new JsonObject();
@@ -172,7 +164,6 @@ public class MapOperatorHelperTest {
         assertEquals(5.0, result.get("min").asJsonNumber().getValue().doubleValue());
     }
 
-    // MAX operator picks the maximum of field references and constants
     @Test
     public void test_max_operation() {
         JsonObject input = new JsonObject();
@@ -187,7 +178,6 @@ public class MapOperatorHelperTest {
         assertEquals(15.0, result.get("max").asJsonNumber().getValue().doubleValue());
     }
 
-    // SUBS operator subtracts all values from the first operand
     @Test
     public void test_subs_operation() {
         JsonObject input = new JsonObject();
@@ -202,7 +192,6 @@ public class MapOperatorHelperTest {
         assertEquals(60.0, result.get("subs").asJsonNumber().getValue().doubleValue());
     }
 
-    // ROOT operator computes nth root
     @Test
     public void test_root_operation() {
         JsonObject input = new JsonObject();
@@ -215,7 +204,6 @@ public class MapOperatorHelperTest {
         assertEquals(3.0, result.get("root").asJsonNumber().getValue().doubleValue(), 0.0001);
     }
 
-    // Condition with OR conjunction where no sub-operators match (orConjunction returns false)
     @Test
     public void test_or_condition_all_false_skips_field() {
         JsonObject input = new JsonObject();
@@ -233,7 +221,6 @@ public class MapOperatorHelperTest {
         assertFalse(result.has("result"));
     }
 
-    // Condition with NOR returns false (not supported in MAP conditions)
     @Test
     public void test_nor_condition_returns_false_skips_field() {
         JsonObject input = new JsonObject();
@@ -250,7 +237,6 @@ public class MapOperatorHelperTest {
         assertFalse(result.has("result"));
     }
 
-    // CONCAT with a numeric field reference uses toJson for non-string element (L270)
     @Test
     public void test_concat_non_string_field_uses_to_json() {
         JsonObject input = new JsonObject();
@@ -263,7 +249,6 @@ public class MapOperatorHelperTest {
         assertTrue(result.get("out").asJsonString().getValue().contains("42"));
     }
 
-    // CONCAT with a JsonNumber operand directly uses toJson (L275)
     @Test
     public void test_concat_json_number_operand_uses_to_json() {
         JsonObject input = new JsonObject();
@@ -274,7 +259,6 @@ public class MapOperatorHelperTest {
         assertTrue(result.has("out"));
     }
 
-    // CONCAT with a JsonArray operand appends its primitive elements (L278-282)
     @Test
     public void test_concat_json_array_operand() {
         JsonObject input = new JsonObject();
@@ -288,7 +272,6 @@ public class MapOperatorHelperTest {
         assertTrue(result.get("out").asJsonString().getValue().contains("x"));
     }
 
-    // CONCAT with a JsonNull operand appends null string (L284)
     @Test
     public void test_concat_json_null_operand() {
         JsonObject input = new JsonObject();
@@ -299,7 +282,6 @@ public class MapOperatorHelperTest {
         assertTrue(result.has("out"));
     }
 
-    // CONCAT with a DateTime field reference uses stringDataValue
     @Test
     public void test_concat_datetime_field_uses_string_data_value() {
         JsonObject input = new JsonObject();
@@ -311,7 +293,6 @@ public class MapOperatorHelperTest {
         assertEquals("2024-01-15T10:30", result.get("out").asJsonString().getValue());
     }
 
-    // CONCAT with a Time field reference uses stringDataValue
     @Test
     public void test_concat_time_field_uses_string_data_value() {
         JsonObject input = new JsonObject();
@@ -323,7 +304,6 @@ public class MapOperatorHelperTest {
         assertEquals("10:30", result.get("out").asJsonString().getValue());
     }
 
-    // Attempt to remove non-existent field
     @Test
     public void test_remove_non_existent_field() {
         JsonObject jsonObject = new JsonObject();

@@ -19,10 +19,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The shutdown drains: queued work runs before the process exits, and work still outstanding when the budget
- * expires is abandoned deliberately rather than hanging the shutdown.
- */
 public class QueueDrainTest {
     private final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
@@ -59,8 +55,6 @@ public class QueueDrainTest {
         assertEquals(0, triggerExecutor.pending());
     }
 
-    // A drain must not wait forever on a trigger that will not finish: the budget expires, the remaining work
-    // is reported, and the shutdown continues.
     @Test
     public void test_drain_gives_up_when_the_budget_expires() throws Exception {
         final var blocked = new CountDownLatch(1);
@@ -84,7 +78,6 @@ public class QueueDrainTest {
         blocked.countDown();
     }
 
-    // Once draining, new work is refused so the queue can actually reach empty rather than being topped up.
     @Test
     public void test_draining_refuses_new_triggers() {
         final var ran = new AtomicInteger();

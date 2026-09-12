@@ -11,13 +11,11 @@ import org.techhouse.simplejs.host.SimpleHostBindings;
 public class FetchSecurityTest {
     private final SimpleJs engine = new SimpleJs();
 
-    // The default host exposes no network binding: fetch is secure-by-default
     @Test
     public void test_default_host_has_no_network() {
         assertNull(SimpleHostBindings.empty().network());
     }
 
-    // A script running under the default host cannot reach the network
     @Test
     public void test_default_host_fetch_rejects() {
         final var source = "try { await fetch('http://example.com/'); return 'reached'; }"

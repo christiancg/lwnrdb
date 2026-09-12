@@ -64,8 +64,6 @@ public class ShutdownCoordinatorTest {
         return new ShutdownCoordinator();
     }
 
-    // stopAccepting on a server that never began serving must be a no-op rather than a failure, so the hook
-    // still runs when startup did not get as far as listening.
     @Test
     public void test_shutdown_tolerates_a_server_that_never_served() {
         final var server = new SocketServer(0);
@@ -73,8 +71,6 @@ public class ShutdownCoordinatorTest {
         assertDoesNotThrow(() -> coordinator().shutdown(server, null));
     }
 
-    // A registered script run is not something shutdown waits on: the registry is in-memory bookkeeping,
-    // so the ordered stop must still finish within its budget.
     @Test
     public void test_shutdown_completes_with_a_run_registered() {
         final var registry = IocContainer.get(ScriptRunRegistry.class);
@@ -97,8 +93,6 @@ public class ShutdownCoordinatorTest {
         assertDoesNotThrow(() -> coordinator.shutdown(null, null));
     }
 
-    // An open transaction holds its collection write lock. Leaving it held would strand the lock for the
-    // startup sweep to find, so shutdown rolls it back.
     @Test
     public void test_shutdown_rolls_back_an_open_transaction_and_releases_its_lock() {
         final var clientId = clientTracker.registerForwardedClient("alice");
@@ -151,7 +145,6 @@ public class ShutdownCoordinatorTest {
         assertEquals(0, triggerExecutor.pending());
     }
 
-    // Shutdown stops workers; it must not tear down state the JVM may still touch on its way out.
     @Test
     public void test_cache_still_answers_after_shutdown() {
         coordinator().shutdown(null, null);

@@ -15,9 +15,8 @@ import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ReindexResponse;
 
-// CREATE_INDEX / DROP_INDEX / REINDEX. Index files are built and the field registered in admin
-// metadata under one held collection lock, which is what stops a save landing mid-build from being
-// skipped as "not a known index" and then cleared from the pending overlay.
+// Index files are built and the field registered in admin metadata under one held collection write lock,
+// which stops a save landing mid-build from being skipped as "not a known index".
 public final class IndexOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
 
@@ -28,11 +27,6 @@ public final class IndexOperationHelper {
         final var dbName = createIndexRequest.getDatabaseName();
         final var collName = createIndexRequest.getCollectionName();
         final var fieldName = createIndexRequest.getFieldName();
-        // Hold the collection write lock so no save can commit a document between the index build
-        // and its registration. Building the index files and registering the field as a known
-        // index happen atomically here (synchronously), so any concurrent save is serialized: it
-        // either commits before (and is captured by the whole-collection read) or after (and its
-        // background index update sees the field already registered and indexes it).
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_INDEX,
                 ErrorCode.ERROR_CREATING_INDEX, () -> {
                     IndexHelper.createIndex(dbName, collName, fieldName);
@@ -45,9 +39,8 @@ public final class IndexOperationHelper {
         final var dbName = dropIndexRequest.getDatabaseName();
         final var collName = dropIndexRequest.getCollectionName();
         final var fieldName = dropIndexRequest.getFieldName();
-        // Hold the collection write lock so the index files are deleted and the field is
-        // unregistered atomically with respect to saves and the background indexer. Unregister
-        // first so no read or background index update can use the field after this returns.
+        // The collection write lock makes the file deletion and the unregistration atomic with respect to
+        // saves and the background indexer.
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DROP_INDEX,
                 ErrorCode.ERROR_DROPPING_INDEX, () -> {
                     final var result = IndexHelper.dropIndex(dbName, collName, fieldName);
@@ -64,10 +57,6 @@ public final class IndexOperationHelper {
     public static OperationResponse processReindex(ReindexRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        // Hold the collection write lock for the entire rebuild so no concurrent save can commit
-        // between field rebuilds. Admin metadata is not changed — the indexes already exist.
-        // If createIndex throws mid-loop (e.g. disk full), the catch returns ERROR; the operator
-        // can retry once the underlying issue is resolved.
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.REINDEX, ErrorCode.ERROR_REINDEXING,
                 () -> {
                     final var registeredIndexes = cache.getIndexesForCollection(dbName, collName);

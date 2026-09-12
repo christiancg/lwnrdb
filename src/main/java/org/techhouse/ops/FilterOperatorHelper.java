@@ -105,8 +105,7 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined,
             Stream<JsonObject> resultStream, String dbName, String collName) {
         if (resultStream == null) {
-            // Blocking step (documented exception): NOR/NAND must diff against the full
-            // collection, so it loads the whole collection rather than streaming.
+            // Blocking step (documented exception): NOR/NAND must diff against the full collection.
             resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
         }
         return Stream.concat(resultStream, combined).collect(Collectors.groupingBy(jsonObject -> {
@@ -126,17 +125,13 @@ public class FilterOperatorHelper {
         return internalBaseFiltering(tester, operator, resultStream, dbName, collName);
     }
 
-    // A script predicate is opaque to every index, so there is nothing to pre-filter with: the stream is
-    // materialised (or the collection scanned) and each document is handed to the callable. Inside a
-    // conjunction the other operands still resolve via index, and the script then sees only their output.
     private static Stream<JsonObject> processScriptOperator(ScriptOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName, PipelineScriptContext context) throws IOException {
         final var stream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         return stream.filter(data -> testScript(operator, data, context));
     }
 
-    // JavaScript truthiness rather than a strict boolean: the operator's contract is a JS predicate, so
-    // 0/""/null/undefined exclude a document and any other value includes it.
+    // JS truthiness, not a strict boolean: 0/""/null/undefined exclude a document.
     static boolean testScript(ScriptOperator operator, JsonObject document, PipelineScriptContext context) {
         return isTruthy(callScript(operator.getSource(), document, context));
     }
@@ -179,13 +174,9 @@ public class FilterOperatorHelper {
         final var tester = getCustomTester(operator);
         final var fieldName = operator.getField();
         if (resultStream != null) {
-            // An upstream stream already exists, so no index scan is saved: apply the predicate to the
-            // actual documents directly.
             return resultStream.filter(data -> tester.test(data, fieldName));
         }
-        // Try the spatial index (geohash bounding-box pre-filter): a non-null result is a candidate id
-        // set that is fetched and re-tested exactly below (candidates are unconfirmed, like hash-index
-        // hits). Null means no usable index / not accelerable, so scan the collection page-by-page.
+        // Candidate ids from the geo pre-filter are unconfirmed; they are fetched and re-tested exactly below.
         final var candidateIds = GeoSpatialIndexHelper.candidateIds(operator, dbName, collName);
         if (candidateIds != null) {
             return cache.getEntriesByIds(dbName, collName, candidateIds).stream().map(DbEntry::getData)
@@ -195,10 +186,6 @@ public class FilterOperatorHelper {
                 .filter(data -> tester.test(data, fieldName));
     }
 
-    // Builds the predicate for a custom operator: it reads the field, requires the stored value to be a
-    // custom type that declares the operator, and delegates to JsonCustom.applyCustomOperator. A
-    // document whose field is absent, non-custom, or a custom type without this operator simply does
-    // not match (no exception), so mixed-type fields are safe.
     public static BiPredicate<JsonObject, String> getCustomTester(CustomOperator operator) {
         final var operatorName = operator.getCustomOperatorName();
         final var args = new HashMap<String, JsonBaseElement>();
@@ -221,8 +208,6 @@ public class FilterOperatorHelper {
         };
     }
 
-    // A ranking (top-K) custom operator (e.g. vector "nearest"): the candidate source is an upstream
-    // stream, the similarity index, or a full scan; topK does the scoring and limiting.
     private static Stream<JsonObject> processRankingOperator(CustomOperator operator, Stream<JsonObject> resultStream,
             String dbName, String collName) throws IOException {
         final var k = operator.getArgs().get("k").asJsonNumber().getValue().intValue();
@@ -240,8 +225,6 @@ public class FilterOperatorHelper {
         return topK(candidates, operator, fieldName, k);
     }
 
-    // Keeps the K highest-scoring documents via a bounded size-K min-heap (so the scan path never
-    // materializes the whole collection), emitted in descending score order.
     private static Stream<JsonObject> topK(Stream<JsonObject> candidates, CustomOperator operator, String fieldName,
             int k) {
         if (k <= 0) {
@@ -300,58 +283,40 @@ public class FilterOperatorHelper {
             throws IOException {
         final var fieldName = operator.getField();
         if (resultStream != null) {
-            // An upstream stream already exists, so the index saves no scan: apply the predicate to
-            // the actual documents directly (which also avoids trusting a possibly-stale index).
             return resultStream.filter(data -> test.test(data, fieldName));
         }
         final var matchingValues = indexMatchingIds(operator, dbName, collName);
         if (matchingValues != null) {
-            // Index hits are candidates. Scalar/custom index entries store the exact value, but an
-            // object/array element-match index stores only a SHA-256 fingerprint, so a hit must be
-            // confirmed against the document (it can be stale after a background-processing failure, or
-            // — vanishingly — a hash collision). The candidate documents are fetched here regardless, so
-            // re-testing them against the operator is free and makes the result exact for every index kind.
+            // Index hits are candidates only: an object/array element-match index stores just a SHA-256
+            // fingerprint, and an entry can be stale, so re-test every fetched document against the operator.
             return cache.getEntriesByIds(dbName, collName, matchingValues).stream().map(DbEntry::getData)
                     .filter(data -> test.test(data, fieldName));
         }
-        // No index: scan the collection page-by-page (memory-aware) rather than materializing it all.
         return cache.streamCollection(dbName, collName).map(DbEntry::getData)
                 .filter(data -> test.test(data, fieldName));
     }
 
-    // Resolves the matching document ids for a filter operator using ONLY indexes (and, for
-    // NOR/NAND, the PK index as the full id universe). Returns null if any leaf field operator is
-    // not index-resolvable, signaling the caller to fall back to the document-reading path. No
-    // documents are read, so a COUNT that immediately follows an index-resolvable FILTER can be
-    // answered from the size of this set.
     public static Set<String> resolveIdsViaIndex(BaseOperator operator, String dbName, String collName)
             throws IOException {
         return switch (operator.getType()) {
             case FIELD -> {
                 final var fieldOperator = (FieldOperator) operator;
-                // A hash (object/array) index hit is only a candidate; the index-only COUNT path counts
-                // ids without reading documents, so it cannot confirm the hit. Disqualify hash-resolved
-                // operators here so the caller falls back to the document-reading COUNT, which re-tests
-                // each candidate in internalBaseFiltering and is therefore exact.
+                // A hash index hit is only a candidate and the index-only COUNT cannot confirm it, so
+                // disqualify it and let the caller fall back to the document-reading COUNT.
                 if (usesHashIndex(fieldOperator)) {
                     yield null;
                 }
                 yield indexMatchingIds(fieldOperator, dbName, collName);
             }
             case CONJUNCTION -> resolveConjunctionIds((ConjunctionOperator) operator, dbName, collName);
-            // A custom (spatial) operator's index hits are unconfirmed candidates that must be re-tested
-            // against fetched documents, which the index-only COUNT path cannot do; disqualify it so
-            // COUNT falls back to the document-reading path (exact).
+            // A custom operator's hits are unconfirmed candidates too, so COUNT must fall back to documents.
             case CUSTOM -> null;
-            // A script predicate cannot be evaluated without the document, so it can never resolve ids.
             case SCRIPT -> null;
         };
     }
 
-    // True when this field operator resolves through an object/array element-match (hash) index, whose
-    // hits are unconfirmed candidates. Mirrors the dispatch in UserCache.doGetIdsFromIndex /
-    // getIdsFromInList: an object operand (EQUALS/NOT_EQUALS) and an array operand (EQUALS/NOT_EQUALS, or
-    // IN/NOT_IN over object/array elements) are hash-resolved; scalar/custom operands are not.
+    // Mirrors the dispatch in UserCache.doGetIdsFromIndex / getIdsFromInList: object operands and array
+    // operands (EQUALS/NOT_EQUALS, IN/NOT_IN over object/array elements) are hash-resolved, scalars are not.
     private static boolean usesHashIndex(FieldOperator operator) {
         final var value = operator.getValue();
         final var opType = operator.getFieldOperatorType();
@@ -369,20 +334,14 @@ public class FilterOperatorHelper {
         return false;
     }
 
-    // Resolves the ids matching a single field operator via the index, then reconciles documents that
-    // are committed but not yet indexed (the PendingIndexWrites overlay): their index membership is
-    // untrustworthy, so they are dropped and re-added by re-testing the operator against the current
-    // document. The result is therefore exact (no stale false positives, no missing not-yet-indexed
-    // matches). Returns null when the operator is not index-resolvable, so the caller falls back to a
-    // scan. Empty when there are no recent writes, so this is a no-op on the steady-state read path.
+    // Documents committed but not yet indexed have untrustworthy index membership, so they are dropped and
+    // re-added by re-testing the operator against the current document, keeping the result exact.
     private static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
         final var raw = rawIndexMatchingIds(operator, dbName, collName);
         if (raw == null) {
             return null;
         }
-        // The field index was consulted (and its read lock taken in getIdsFromIndex) to resolve this
-        // operator. Record it for analyze mode; covers both FILTER and the index-only COUNT fast path.
         final var analyzeContext = AnalyzeContext.current();
         if (analyzeContext != null) {
             analyzeContext.addIndexUsed(operator.getField());
@@ -420,7 +379,7 @@ public class FilterOperatorHelper {
         for (var child : operator.getOperators()) {
             final var ids = resolveIdsViaIndex(child, dbName, collName);
             if (ids == null) {
-                return null; // a leaf isn't index-resolvable -> caller falls back to reading documents
+                return null;
             }
             childSets.add(ids);
         }
@@ -441,9 +400,6 @@ public class FilterOperatorHelper {
         return result;
     }
 
-    // Tallies how many child sets each id appears in and keeps the ids whose count equals times.
-    // Models AND (times == number of operators) and XOR (times == 1) exactly like the stream-based
-    // andXorConjunction does.
     private static Set<String> occurringExactly(List<Set<String>> sets, int times) {
         final var counts = new HashMap<String, Integer>();
         for (var set : sets) {
@@ -455,9 +411,6 @@ public class FilterOperatorHelper {
                 .collect(Collectors.toSet());
     }
 
-    // The complement of matched relative to every id in the collection. The full id set comes from
-    // the PK index (metadata only, no documents read), matching the stream-based NOR/NAND path that
-    // diffs against the whole collection.
     private static Set<String> complement(Set<String> matched, String dbName, String collName) throws IOException {
         final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         final var result = new HashSet<String>();

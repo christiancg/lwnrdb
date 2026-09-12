@@ -47,8 +47,8 @@ public final class JsonStrings {
         }
     }
 
-    // An unpaired surrogate cannot be encoded as UTF-8, so emitting it raw would corrupt the output;
-    // the escaped form round-trips through the lexer unchanged.
+    // An unpaired surrogate has no UTF-8 encoding, so emitting it raw corrupts the stored line; the
+    // escaped form round-trips through the lexer unchanged.
     private static boolean isLoneSurrogate(final String value, final int index) {
         final var c = value.charAt(index);
         if (Character.isHighSurrogate(c)) {

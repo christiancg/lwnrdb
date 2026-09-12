@@ -97,7 +97,6 @@ public class OperationProcessorScheduleTest {
                 processor.processMessage(new ListSchedulesRequest(TestGlobals.DB)).getErrorCode());
     }
 
-    // Both mutations are coordinator-serialized DDL, replicated by re-execution like SAVE_PROCEDURE.
     @Test
     public void test_schedule_mutations_are_coordinated_admin_ops() {
         assertTrue(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.SAVE_SCHEDULE));
@@ -105,7 +104,6 @@ public class OperationProcessorScheduleTest {
         assertFalse(ClusterAdminHelper.isCoordinatedAdminOp(OperationType.LIST_SCHEDULES));
     }
 
-    // Dropping the database takes its .schedules folder with it, so no cascade code is needed.
     @Test
     public void test_drop_database_removes_schedules() {
         final var dbName = "scheddropdb";

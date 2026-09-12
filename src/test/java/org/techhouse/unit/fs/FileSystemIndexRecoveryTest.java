@@ -50,7 +50,6 @@ public class FileSystemIndexRecoveryTest {
         }
     }
 
-    // Empty index entry map
     @Test
     public void test_empty_index_entry_map() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
@@ -63,7 +62,6 @@ public class FileSystemIndexRecoveryTest {
         assertNull(index);
     }
 
-    // Return false when collection folder does not exist
     @Test
     public void test_drop_index_nonexistent_collection() throws NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
@@ -78,7 +76,6 @@ public class FileSystemIndexRecoveryTest {
         assertFalse(result);
     }
 
-    // Handle empty index files
     @Test
     public void test_empty_index_file_returns_empty_list()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -91,21 +88,17 @@ public class FileSystemIndexRecoveryTest {
         assertNull(entries);
     }
 
-    // Handle empty index file
     @Test
     public void test_empty_index_file_returns_empty_list_2()
             throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         File mockIndexFile = mock(File.class);
         when(mockIndexFile.exists()).thenReturn(false);
 
-        // Act
         List<PkIndexEntry> result = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
 
-        // Assert
         assertTrue(result.isEmpty());
     }
 
@@ -122,7 +115,6 @@ public class FileSystemIndexRecoveryTest {
         entry.setPage(0L);
         fs.insertIntoCollection(entry);
 
-        // Compose the PK index file path manually and append a garbage line.
         final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
                 + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
                 + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR
@@ -142,8 +134,6 @@ public class FileSystemIndexRecoveryTest {
         assertEquals(1, secondRead.size());
     }
 
-    // A non-atomic write interrupted mid-rewrite can leave two lines for the same id. The loader must keep
-    // the last occurrence (freshest position) and rewrite the survivors away, never failing the whole read.
     @Test
     public void test_readWholePkIndexFile_dedups_duplicate_keys_keeping_last() throws Exception {
         final var fs = new FileSystem();
@@ -161,7 +151,6 @@ public class FileSystemIndexRecoveryTest {
                 + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
                 + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR
                 + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
-        // Append a second line for the same id with a different (later) position.
         Files.writeString(indexFile.toPath(), "\ndup|172|172|0|0", StandardCharsets.UTF_8,
                 java.nio.file.StandardOpenOption.APPEND);
 
@@ -178,8 +167,6 @@ public class FileSystemIndexRecoveryTest {
         assertEquals(1, secondRead.size());
     }
 
-    // A torn final line in a field (scalar) index file is skipped, logged and rewritten away on read,
-    // mirroring the PK index self-heal — one bad line must not fail every index-backed read.
     @Test
     public void test_readWholeFieldIndexFiles_drops_and_rewrites_malformed_lines() throws Exception {
         final var fs = new FileSystem();
@@ -205,7 +192,6 @@ public class FileSystemIndexRecoveryTest {
         assertEquals(1, secondRead.size());
     }
 
-    // A torn final line in a hash (object/array element-match) index file self-heals the same way.
     @Test
     public void test_readWholeHashIndexFile_drops_and_rewrites_malformed_lines() throws Exception {
         final var fs = new FileSystem();
@@ -232,7 +218,6 @@ public class FileSystemIndexRecoveryTest {
         assertEquals(1, secondRead.size());
     }
 
-    // Locates the single .idx file in the test collection folder whose name carries the given field.
     private static File findIdxFile(String fieldName) throws IOException {
         final var collFolder = Path.of(TestGlobals.PATH, TestGlobals.DB, TestGlobals.COLL);
         try (var files = Files.list(collFolder)) {

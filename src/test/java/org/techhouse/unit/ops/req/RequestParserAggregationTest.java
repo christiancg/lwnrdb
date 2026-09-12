@@ -25,7 +25,6 @@ import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 
 public class RequestParserAggregationTest {
-    // Parse aggregation request with filter steps and field operators
     @Test
     public void test_parse_aggregation_request_with_filter_steps_and_field_operators() {
         String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"FILTER\", \"operator\": { \"fieldOperatorType\": \"EQUALS\", \"field\": \"age\", \"value\": {\"$numberInt\": 30} } }] }";
@@ -44,7 +43,6 @@ public class RequestParserAggregationTest {
         assertEquals(30, value);
     }
 
-    // Parse a FILTER step whose operator is a geo "distance" custom operator.
     @Test
     public void test_parse_aggregation_request_with_custom_distance_operator() {
         new org.techhouse.ejson.EJson(); // ensure the geo custom type is registered
@@ -60,7 +58,6 @@ public class RequestParserAggregationTest {
         assertEquals("SMALLER_THAN", customOperator.getArgs().get("comparator").asJsonString().getValue());
     }
 
-    // A custom operator nested inside a conjunction is parsed recursively.
     @Test
     public void test_parse_custom_operator_inside_conjunction() {
         new org.techhouse.ejson.EJson();
@@ -73,7 +70,6 @@ public class RequestParserAggregationTest {
         assertEquals("within", ((CustomOperator) conjunction.getOperators().getFirst()).getCustomOperatorName());
     }
 
-    // Parse aggregation request with analyze flag set to true
     @Test
     public void test_parse_aggregate_with_analyze_true() {
         String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"analyze\": true, \"aggregationSteps\": [] }";
@@ -82,7 +78,6 @@ public class RequestParserAggregationTest {
         assertTrue(((AggregateRequest) request).isAnalyze());
     }
 
-    // The analyze flag defaults to false when omitted
     @Test
     public void test_parse_aggregate_analyze_defaults_false() {
         String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [] }";
@@ -91,7 +86,6 @@ public class RequestParserAggregationTest {
         assertFalse(((AggregateRequest) request).isAnalyze());
     }
 
-    // Parse map operations with add field and remove field operators
     @Test
     public void test_parse_map_operations_with_add_and_remove_field_operators() {
         String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"MAP\", \"operators\": [{ \"fieldName\": \"newField\", \"operator\": { \"type\": \"SUM\", \"operands\": [\"a_field\", 30] }}] }] }";
@@ -112,7 +106,6 @@ public class RequestParserAggregationTest {
         assertEquals("a_field", addParamOperator.getOperands().asList().getFirst().asJsonString().getValue());
     }
 
-    // Parse conjunction operators with nested operators (AND, OR)
     @Test
     public void test_parse_conjunction_operators_with_nested_operators() {
         String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{ \"type\": \"FILTER\", \"operator\": { \"conjunctionType\": \"AND\", \"operators\": [{\"fieldOperatorType\": \"EQUALS\", \"field\": \"status\", \"value\": {\"$string\": \"active\"}}, {\"fieldOperatorType\": \"GREATER_THAN\", \"field\": \"age\", \"value\": {\"$numberInt\": 18}}] } }] }";
@@ -140,7 +133,6 @@ public class RequestParserAggregationTest {
         assertEquals(new JsonNumber(18), secondOp.getValue().asJsonObject().get("$numberInt").asJsonNumber());
     }
 
-    // Parse mid-operators with array parameters (AVG, SUM, etc.)
     @Test
     public void test_parse_mid_operators_with_array_parameters() {
         String jsonMessage = """
@@ -181,7 +173,6 @@ public class RequestParserAggregationTest {
         assertEquals(MidOperationType.SUM, midOperator.getType());
     }
 
-    // Process empty or invalid aggregation steps
     @Test
     public void test_empty_invalid_aggregation_steps() {
         String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [] }";
@@ -195,7 +186,6 @@ public class RequestParserAggregationTest {
         assertNotNull(exception);
     }
 
-    // MAP step with a conjunction condition covers the condition parsing path (L94, L137-138)
     @Test
     public void test_parse_map_step_with_conjunction_condition() {
         String msg = """
@@ -213,7 +203,6 @@ public class RequestParserAggregationTest {
         assertEquals(1, result.getAggregationSteps().size());
     }
 
-    // Parse aggregation with GROUP_BY, COUNT, DISTINCT, JOIN, LIMIT, SKIP, SORT steps
     @Test
     public void test_parse_aggregation_with_all_step_types() {
         String msg = """
@@ -231,7 +220,6 @@ public class RequestParserAggregationTest {
         assertEquals(7, result.getAggregationSteps().size());
     }
 
-    // Parse aggregation MAP step with ABS mid-operator
     @Test
     public void test_parse_map_with_abs_operator() {
         String msg = """
@@ -243,7 +231,6 @@ public class RequestParserAggregationTest {
         assertEquals(1, result.getAggregationSteps().size());
     }
 
-    // Parse aggregation MAP step with CAST mid-operator
     @Test
     public void test_parse_map_with_cast_operator() {
         String msg = """

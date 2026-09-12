@@ -86,10 +86,8 @@ public class Main {
         bootstrapDefaultAdmin();
         final var port = getPort(args);
         backgroundTaskManager.startBackgroundWorkers();
-        // Its own pool, not the background queue: see TriggerExecutor.
         triggerExecutor.start(TriggerDispatcher::dispatch);
-        // After cleanupOrphanedTransactions above, which finishes any run whose commit was in flight and so
-        // removes its record; whatever records remain are runs that genuinely never applied.
+        // Must run after cleanupOrphanedTransactions: the records left are runs that never applied.
         TriggerRunRecovery.garbageCollect();
         TriggerRunRecovery.warnAboutStrandedRuns();
         TriggerRunRecovery.recoverLocal();
@@ -103,16 +101,12 @@ public class Main {
         StartupWarnings.warnIfDefaultAdminPassword();
         StartupWarnings.warnIfScriptFetchEnabled();
         startClusterIfEnabled();
-        // Built eagerly so a self-signed keystore is generated (and its security warning logged) at startup,
-        // not lazily on the first client connection.
         final var sslServerSocketFactory = createTlsFactory();
         final var server = new SocketServer(port, sslServerSocketFactory);
         registerShutdownHook(server);
         server.serve();
     }
 
-    // The registry walks the filesystem, so it is only built when the feature is on: a node with schedules
-    // disabled must not pay a per-database directory listing at startup.
     private static void startSchedulerIfEnabled() {
         if (!config.isSchedulesEnabled()) {
             return;
@@ -121,8 +115,6 @@ public class Main {
         scheduleExecutor.start(ScheduleDispatcher::dispatch);
     }
 
-    // Registered before serve() blocks, so a SIGTERM (a container stop, a systemctl stop, a rolling restart)
-    // runs the ordered shutdown instead of killing the JVM with queues still full.
     private static void registerShutdownHook(SocketServer server) {
         Runtime.getRuntime()
                 .addShutdownHook(new Thread(() -> shutdownCoordinator.shutdown(server, clusterServer), "shutdown"));
@@ -138,11 +130,9 @@ public class Main {
             clusterServer.start();
             adminEpoch.load();
             membershipService.addListener(ownershipManager);
-            // Right after the ownership manager: listeners fire in registration order, so the ring this
-            // reads is already the rebuilt one.
+            // Listeners fire in registration order: this must follow the ownership manager to read the rebuilt ring.
             membershipService.addListener(metadataCachePruner);
-            // Register the admin listener before the document one so a rejoining node conforms its structure
-            // (databases/collections/indexes/users) before the document reconciliation repopulates them.
+            // Admin listener before the document one: structure must conform before documents repopulate it.
             membershipService.addListener(adminAntiEntropyService);
             membershipService.addListener(antiEntropyService);
             membershipService.addListener(transactionSessionReaper);
@@ -159,8 +149,6 @@ public class Main {
         }
     }
 
-    // A transaction only lives while its connection is open, so any operation records still in
-    // admin/transactions at startup were orphaned by a crash/restart and are discarded (never applied).
     private static void cleanupOrphanedTransactions() {
         try {
             TransactionOperationHelper.cleanupOrphansAtStartup();
@@ -183,9 +171,6 @@ public class Main {
             return;
         }
 
-        // defaultAdminUsername/defaultAdminPassword are validated at startup
-        // (non-blank username, password at least Globals.PASSWORD_MIN_LENGTH chars),
-        // so they are guaranteed to be usable here.
         final var defaultUsername = config.getDefaultAdminUsername();
         final var defaultPassword = config.getDefaultAdminPassword();
 

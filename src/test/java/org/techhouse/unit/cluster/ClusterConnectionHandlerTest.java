@@ -31,8 +31,6 @@ import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-// A peer sends every kind of request over one connection, so what a slow one does to the rest of that
-// connection's traffic is the behaviour under test.
 public class ClusterConnectionHandlerTest {
     private static final long ACK_TIMEOUT_MS = 30000L;
     private static final List<String> QUEUED_IDS = List.of("drain1", "drain2");
@@ -81,8 +79,7 @@ public class ClusterConnectionHandlerTest {
     }
 
     // The regression: the handler answered one request at a time, so a peer's gossip queued behind that
-    // peer's own slow write and timed out with it. A peer that stops gossiping stops counting towards
-    // aliveCount(), which is what write quorum is measured from - so one slow write cost the quorum.
+    // peer's own slow write and timed out with it - costing the cluster its write quorum.
     @Test
     public void test_gossip_is_answered_while_another_request_on_the_same_connection_is_blocked() throws Exception {
         final var address = cluster.serverAddress();
@@ -117,9 +114,8 @@ public class ClusterConnectionHandlerTest {
         blocked.join();
     }
 
-    // The peer going away must not cancel what it already sent. The handler drains its queue before it
-    // lets the socket go, and drains it while the socket is still open, so those answers are still
-    // delivered - a shutdownNow() in place of that drain would silently drop committed work.
+    // The handler drains its queue while the socket is still open; a shutdownNow() in place of that
+    // drain would silently drop committed work.
     @Test
     public void test_requests_already_queued_are_applied_after_the_peer_stops_sending() throws Exception {
         locks.lock(TestGlobals.DB, TestGlobals.COLL);
@@ -156,8 +152,7 @@ public class ClusterConnectionHandlerTest {
         return processor.processMessage(RequestParser.parseRequest(json));
     }
 
-    // Ordering still holds for everything else. Only gossip left the serial path, because replication
-    // correctness rests on a peer's writes being applied in the order it sent them.
+    // Only gossip left the serial path: a peer's writes must still apply in the order it sent them.
     @Test
     public void test_requests_other_than_gossip_are_still_answered_in_order() throws Exception {
         final var address = cluster.serverAddress();

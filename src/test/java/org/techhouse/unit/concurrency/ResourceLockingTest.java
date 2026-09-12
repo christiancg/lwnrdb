@@ -30,7 +30,6 @@ public class ResourceLockingTest {
         return TestUtils.getPrivateField(rl, "locks", type);
     }
 
-    // A write lock is held exclusively: a reader on another thread blocks until the writer releases.
     @Test
     public void test_write_lock_blocks_reader_until_released() throws Exception {
         final var rl = new ResourceLocking();
@@ -41,7 +40,6 @@ public class ResourceLockingTest {
                 rl.lockRead("db", "coll");
                 acquired.set(true);
             } catch (InterruptedException ignored) {
-                // test thread interrupted while blocked; acquired stays false
             }
         });
         reader.start();
@@ -52,7 +50,6 @@ public class ResourceLockingTest {
         assertTrue(acquired.get(), "reader must proceed once the writer releases");
     }
 
-    // Multiple readers share the lock: a second reader is not blocked by the first.
     @Test
     public void test_multiple_readers_proceed_concurrently() throws Exception {
         final var rl = new ResourceLocking();
@@ -64,7 +61,6 @@ public class ResourceLockingTest {
                 acquired.set(true);
                 rl.releaseRead("db", "coll");
             } catch (InterruptedException ignored) {
-                // test thread interrupted while blocked; acquired stays false
             }
         });
         reader.start();
@@ -73,7 +69,6 @@ public class ResourceLockingTest {
         rl.releaseRead("db", "coll");
     }
 
-    // A read lock held by another thread blocks a writer (tryLockWrite fails), then succeeds once free.
     @Test
     public void test_read_lock_excludes_writer() throws Exception {
         final var rl = new ResourceLocking();
@@ -86,7 +81,6 @@ public class ResourceLockingTest {
                 release.await();
                 rl.releaseRead("db", "coll");
             } catch (InterruptedException ignored) {
-                // test thread interrupted while awaiting release; nothing to clean up
             }
         });
         reader.start();

@@ -56,10 +56,8 @@ public class UserCacheEntryTest {
         TestUtils.standardTearDown();
     }
 
-    // Retrieves IDs for Double values using the appropriate index
     @Test
     public void test_retrieves_ids_for_double_values() throws IOException {
-        // Arrange
         var cache = mock(UserCache.class);
         injectRealLocking(cache);
         var dbName = "testDB";
@@ -73,19 +71,15 @@ public class UserCacheEntryTest {
 
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, value)).thenCallRealMethod();
 
-        // Act
         var result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, value);
 
-        // Assert
         assertNotNull(result);
         assertTrue(result.contains("id1"));
         assertTrue(result.contains("id2"));
     }
 
-    // Handles null values in JsonArray gracefully
     @Test
     public void test_handles_null_values_in_json_array() throws IOException {
-        // Arrange
         var cache = new UserCache();
         var dbName = "testDB";
         var collName = "testCollection";
@@ -94,61 +88,48 @@ public class UserCacheEntryTest {
         var jsonArray = new JsonArray();
         jsonArray.add((JsonBaseElement) null);
 
-        // Act
         var result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonArray);
 
-        // Assert
         assertNull(result);
     }
 
-    // Retrieves IDs for Boolean values using the appropriate index
     @Test
     public void test_retrieves_ids_for_boolean_values() throws IOException {
         var cache = mock(UserCache.class);
         injectRealLocking(cache);
-        // Setup
         String dbName = "testDB";
         String collName = "testCollection";
         String fieldName = "testField";
         FieldOperator operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, new JsonBoolean(true));
 
-        // Mocking
         List<FieldIndexEntry<Boolean>> booleanIndex = new ArrayList<>();
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class))
                 .thenReturn(booleanIndex);
 
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, true)).thenCallRealMethod();
 
-        // Execution
         Set<String> result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, true);
 
-        // Assertions
         assertTrue(result.isEmpty());
     }
 
-    // Retrieves IDs for String values using the appropriate index
     @Test
     public void test_retrieves_ids_for_string_values() throws IOException {
         var cache = mock(UserCache.class);
         injectRealLocking(cache);
-        // Setup
         String dbName = "testDB";
         String collName = "testCollection";
         String fieldName = "testField";
         FieldOperator operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, new JsonString("test"));
 
-        // Mocking
         List<FieldIndexEntry<String>> stringIndex = new ArrayList<>();
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, String.class)).thenReturn(stringIndex);
 
-        // Execution
         Set<String> result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, "test");
 
-        // Assertions
         assertTrue(result.isEmpty());
     }
 
-    // Adding a new entry to an empty cache
     @Test
     public void test_add_entry_to_empty_cache() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
@@ -169,7 +150,6 @@ public class UserCacheEntryTest {
         assertTrue(collectionMap.get(collId).containsKey("123"));
     }
 
-    // Adding an entry with a null ID
     @Test
     public void test_add_entry_with_null_id() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
@@ -191,7 +171,6 @@ public class UserCacheEntryTest {
         assertTrue(collectionMap.get(collId).containsKey(entry.get_id()));
     }
 
-    // Adding entries to an empty cache
     @Test
     public void test_adding_entries_to_empty_cache() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
@@ -216,7 +195,6 @@ public class UserCacheEntryTest {
         assertTrue(collectionMap.get(collId).containsKey("2"));
     }
 
-    // Adding entries with duplicate IDs (last one wins, matching upsert semantics)
     @Test
     public void test_adding_entries_with_duplicate_ids() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
@@ -242,10 +220,8 @@ public class UserCacheEntryTest {
         assertTrue(collectionMap.get(collId).containsKey("1"));
     }
 
-    // Retrieves an entry from the cache if it exists
     @Test
     public void retrieves_entry_from_cache_if_exists() throws Exception {
-        // Arrange
         String dbName = "testDb";
         String collName = "testColl";
         PkIndexEntry idxEntry = new PkIndexEntry(dbName, collName, "testValue", 0, 100, 0);
@@ -263,10 +239,8 @@ public class UserCacheEntryTest {
         collectionMap.putIfAbsent(collectionIdentifier, new ConcurrentHashMap<>());
         collectionMap.get(collectionIdentifier).put("testValue", expectedEntry);
 
-        // Act
         DbEntry result = cache.getById(dbName, collName, idxEntry);
 
-        // Assert
         assertEquals(expectedEntry, result);
     }
 
@@ -286,8 +260,6 @@ public class UserCacheEntryTest {
         assertTrue(resources.stream().anyMatch(r -> r.dbName().equals("userDb")));
         assertTrue(resources.stream().noneMatch(r -> r.dbName().equals(Globals.ADMIN_DB_NAME)));
     }
-
-    // ── getEntriesByIds / streamCollection (page-streaming read path) ─────────
 
     private static void injectPkIndex(UserCache cache, String collId, List<PkIndexEntry> entries)
             throws NoSuchFieldException, IllegalAccessException {
@@ -342,7 +314,6 @@ public class UserCacheEntryTest {
         final var pk1 = new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0);
         final var pk2 = new PkIndexEntry("userDb", "c1", "id2", 50, 50, 0);
         injectPkIndex(cache, collId, List.of(pk1, pk2));
-        // id1 already cached; id2 must be read from disk.
         final var cachedObj = new JsonObject();
         cachedObj.addProperty(Globals.PK_FIELD, "id1");
         injectCachedEntry(cache, collId, DbEntry.fromJsonObject("userDb", "c1", cachedObj));
@@ -355,7 +326,6 @@ public class UserCacheEntryTest {
         final var result = cache.getEntriesByIds("userDb", "c1", new HashSet<>(Set.of("id1", "id2")));
 
         assertEquals(2, result.size());
-        // Only the missing entry should have been targeted-read.
         final var captor = org.mockito.ArgumentCaptor.forClass(List.class);
         //noinspection unchecked
         verify(fsMock).getByIndexEntries(captor.capture());
@@ -364,7 +334,6 @@ public class UserCacheEntryTest {
         assertEquals(1, requested.size());
         assertEquals("id2", requested.getFirst().getValue());
 
-        // The freshly read entry should now be cached.
         final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
         };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);

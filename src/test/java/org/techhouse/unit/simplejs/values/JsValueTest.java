@@ -32,7 +32,6 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public class JsValueTest {
-    // Each concrete value reports its own type, driving the internalGetType switch
     @Test
     public void test_get_type_for_each_value() {
         assertEquals(JsValue.JsValueType.NUMBER, new JsNumber(1).getType());
@@ -77,7 +76,6 @@ public class JsValueTest {
                 new org.techhouse.simplejs.values.JsDbTime(java.time.LocalTime.of(3, 4, 5)).getType());
     }
 
-    // Arguments and global objects are typeof "object" and stringify as tagged objects
     @Test
     public void test_arguments_and_global_values() {
         final var arguments = new org.techhouse.simplejs.values.JsArguments(List.of(new JsNumber(1)), null, null);
@@ -91,7 +89,6 @@ public class JsValueTest {
         assertEquals("[object global]", JsCoercion.toStr(global));
     }
 
-    // A mapped arguments slot aliases the backing environment binding both ways
     @Test
     public void test_mapped_arguments_aliasing() {
         final var env = Environment.global();
@@ -105,7 +102,6 @@ public class JsValueTest {
         assertEquals(42, ((JsNumber) arguments.get(0)).getValue());
     }
 
-    // A proxy mirrors its target's typeof and string coercion, and reports callability
     @Test
     public void test_proxy_value() {
         final var objectProxy = new org.techhouse.simplejs.values.JsProxy(new JsObject(), new JsObject());
@@ -120,7 +116,6 @@ public class JsValueTest {
         assertInstanceOf(JsObject.class, fnProxy.getHandler());
     }
 
-    // Map/Set/Date are typeof "object" and stringify per spec
     @Test
     public void test_map_set_date_values() {
         final var map = new org.techhouse.simplejs.values.JsMap();
@@ -139,7 +134,6 @@ public class JsValueTest {
         assertEquals("Invalid Date", invalid.toDateString());
     }
 
-    // Promise and generator values are typeof "object" and stringify as tagged objects
     @Test
     public void test_promise_and_generator_values() {
         final var promise = new JsPromise(new EventLoop());
@@ -150,7 +144,6 @@ public class JsValueTest {
         assertEquals("[object Generator]", JsCoercion.toStr(generator));
     }
 
-    // A class value is typeof "function" and stringifies with its name
     @Test
     public void test_class_value() {
         final var cls = new JsClass("Widget", null, Environment.global());
@@ -159,7 +152,6 @@ public class JsValueTest {
         assertEquals("Widget", cls.getName());
     }
 
-    // A class instance links to its class and stores private fields
     @Test
     public void test_object_class_and_private_fields() {
         final var cls = new JsClass("A", null, Environment.global());
@@ -173,7 +165,6 @@ public class JsValueTest {
         assertEquals(7, ((JsNumber) Objects.requireNonNull(object.getPrivate(x))).getValue());
     }
 
-    // Function values expose their name and native functions invoke their implementation
     @Test
     public void test_function_values() {
         final var function = new JsFunction("f", List.of(), null, true, true, false, false, Environment.global());
@@ -186,14 +177,12 @@ public class JsValueTest {
         assertEquals(2, ((JsNumber) native1.invoke(JsUndefined.getInstance(), List.of(new JsNumber(1)))).getValue());
     }
 
-    // Singletons and boolean constants keep a single identity
     @Test
     public void test_singletons_identity() {
         assertSame(JsBoolean.TRUE, JsBoolean.of(true));
         assertSame(JsBoolean.FALSE, JsBoolean.of(false));
     }
 
-    // Primitive wrappers expose their raw values
     @Test
     public void test_primitive_getters() {
         assertEquals(3.5, new JsNumber(3.5).getValue());
@@ -203,7 +192,6 @@ public class JsValueTest {
         assertEquals(BigInteger.TEN, new JsBigInt(BigInteger.TEN).getValue());
     }
 
-    // Object get/set/has/delete behave like a property map, missing keys yield undefined
     @Test
     public void test_object_property_operations() {
         final var object = new JsObject();
@@ -216,7 +204,6 @@ public class JsValueTest {
         assertTrue(object.keys().isEmpty());
     }
 
-    // Array indexing returns undefined out of range, set extends with undefined holes
     @Test
     public void test_array_operations() {
         final var array = new JsArray(List.of(new JsNumber(1), new JsNumber(2)));
@@ -232,7 +219,6 @@ public class JsValueTest {
         assertEquals(9, ((JsNumber) array.get(5)).getValue());
     }
 
-    // Arrays carry named own properties alongside their elements
     @Test
     public void test_array_own_properties() {
         final var array = new JsArray();
@@ -243,7 +229,6 @@ public class JsValueTest {
         assertEquals("x", ((JsString) Objects.requireNonNull(array.getProperty("raw"))).getValue());
     }
 
-    // Freezing an array blocks element and property mutation, and each mutator reports the refusal
     @Test
     public void test_array_freeze() {
         final var array = new JsArray(List.of(new JsNumber(1)));
@@ -258,7 +243,6 @@ public class JsValueTest {
         assertFalse(array.hasProperty("raw"));
     }
 
-    // A sealed array keeps its elements writable but refuses to change its length
     @Test
     public void test_array_seal_and_prevent_extensions() {
         final var sealed = new JsArray(List.of(new JsNumber(1)));
@@ -277,7 +261,6 @@ public class JsValueTest {
         assertFalse(empty.push(new JsNumber(1)));
     }
 
-    // A non-writable property and a non-extensible object both refuse the write
     @Test
     public void test_object_set_reports_refusal() {
         final var object = new JsObject();
@@ -291,7 +274,6 @@ public class JsValueTest {
         assertFalse(object.setSymbol(new JsSymbol("s"), new JsNumber(1)));
     }
 
-    // Own keys report canonical array-index keys first, ascending
     @Test
     public void test_object_keys_ordering() {
         final var object = new JsObject();
@@ -316,8 +298,6 @@ public class JsValueTest {
         assertTrue(ctor.hasOwnKey(new JsString("prototype")));
     }
 
-    // An already-materialised ordinary own property (unrelated to the name/length/prototype
-    // metadata) still deletes normally.
     @Test
     public void test_delete_own_property_removes_an_ordinary_property() {
         final var fn = new JsNativeFunction("Sample", (_, _) -> JsUndefined.getInstance());

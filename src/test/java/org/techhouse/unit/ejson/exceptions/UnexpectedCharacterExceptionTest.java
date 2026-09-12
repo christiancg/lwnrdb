@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
 
 public class UnexpectedCharacterExceptionTest {
-    // Create exception with valid character and position
     @Test
     public void test_create_exception_with_valid_character_and_position() {
         char testChar = '$';
@@ -17,7 +16,6 @@ public class UnexpectedCharacterExceptionTest {
         assertEquals("Unexpected character $ at position: 5", exception.getMessage());
     }
 
-    // Create exception with null character
     @Test
     public void test_create_exception_with_null_character() {
         int position = 10;

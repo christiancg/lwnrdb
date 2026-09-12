@@ -73,8 +73,6 @@ public class ScriptOperationHelperAdmissionTest {
     // The singleton is the one ScriptOperationHelper captured in its static field, so the cap has to be
     // resized in place rather than by handing the helper a different instance.
 
-    // A poll, not a spin: the run holding the permit is on another thread and signals nothing, and a
-    // ten-second onSpinWait would burn a core waiting for a 100ms handover.
     private static void awaitAvailable() throws InterruptedException {
         final var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
         while (System.nanoTime() < deadline && admission.available() != 0) {
@@ -116,8 +114,6 @@ public class ScriptOperationHelperAdmissionTest {
         assertEquals(OperationStatus.OK, run("return 1;").getStatus());
     }
 
-    // A timeout unwinds through a ScriptAbortException that user code cannot catch, so the finally release
-    // is the only thing that returns the permit.
     @Test
     public void test_permit_released_after_a_timeout() throws Exception {
         admission.reconfigure(1, 0L);
@@ -129,8 +125,6 @@ public class ScriptOperationHelperAdmissionTest {
         assertEquals(OperationStatus.OK, run("return 1;").getStatus());
     }
 
-    // A doomed request must not spend a permit: the cheap checks answer first, so the pool stays available
-    // for a request that would actually run.
     @Test
     public void test_rejection_happens_after_the_cheaper_checks() throws Exception {
         admission.reconfigure(1, 0L);
@@ -174,9 +168,6 @@ public class ScriptOperationHelperAdmissionTest {
         assertEquals(OperationStatus.OK, second.get().getStatus(), second.get().getMessage());
     }
 
-    // The permit is held across the whole run, transaction included, but the permit and the collection
-    // locks are unrelated: a second caller queues on the permit and is refused cleanly rather than
-    // deadlocking against the transaction's locks.
     @Test
     public void test_a_transactional_run_holds_its_permit_without_deadlocking() throws Exception {
         admission.reconfigure(1, 0L);
@@ -188,8 +179,6 @@ public class ScriptOperationHelperAdmissionTest {
                     + " for (let i = 0; i < 3000000; i++) {} return 'ok'; });"));
             done.countDown();
         });
-        // Sampled rather than signalled: the script cannot reach back into the test, so the observable fact
-        // is that the permit is gone while the transactional run is still in flight.
         awaitAvailable();
         final var refused = run("return 1;");
         assertEquals(ErrorCode.SCRIPT_CONCURRENCY_LIMIT.getCode(), refused.getErrorCode());
@@ -198,8 +187,6 @@ public class ScriptOperationHelperAdmissionTest {
         assertEquals(1, admission.available(), "the transactional run leaked its permit");
     }
 
-    // An allocation abort unwinds the same way a timeout does, so the finally release is again the only
-    // thing that returns the permit.
     @Test
     public void test_permit_released_after_a_memory_abort() throws Exception {
         admission.reconfigure(1, 0L);
@@ -211,8 +198,6 @@ public class ScriptOperationHelperAdmissionTest {
         assertEquals(OperationStatus.OK, run("return 1;").getStatus());
     }
 
-    // The wait may legally exceed scriptTimeoutMs: a caller can wait longer than a run takes, and the
-    // queueing is what absorbs a burst instead of erroring on it.
     @Test
     public void test_wait_is_not_bounded_by_the_run_timeout() throws Exception {
         admission.reconfigure(1, 3_000L);

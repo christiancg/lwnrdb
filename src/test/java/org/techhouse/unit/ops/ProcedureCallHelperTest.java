@@ -139,7 +139,6 @@ public class ProcedureCallHelperTest {
                 .execute(new CallProcedureRequest("missingDb", "p", null), ADMIN, null).getErrorCode());
     }
 
-    // A disabled procedure answers not-found: the caller asked for it to run, and nothing ran
     @Test
     public void test_disabled_procedure_is_not_found() throws Exception {
         final var request = new SaveProcedureRequest(TestGlobals.DB, "off", "return 1;");
@@ -149,7 +148,6 @@ public class ProcedureCallHelperTest {
                 .execute(new CallProcedureRequest(TestGlobals.DB, "off", null), ADMIN, null).getErrorCode());
     }
 
-    // Invoker rights: the procedure can never do more than its caller could
     @Test
     public void test_runs_with_callers_authority() throws Exception {
         store("write",
@@ -230,7 +228,6 @@ public class ProcedureCallHelperTest {
         assertEquals(before + 1, compiledCache.size());
     }
 
-    // A new version must not serve the old compiled program
     @Test
     public void test_new_version_runs_the_new_body() throws Exception {
         store("answer", "return 1;");

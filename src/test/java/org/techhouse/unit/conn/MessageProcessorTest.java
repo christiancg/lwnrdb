@@ -55,7 +55,6 @@ public class MessageProcessorTest {
         return s;
     }
 
-    // Handles null or blank messages gracefully
     @Test
     public void test_handles_null_or_blank_messages() throws Exception {
         Socket mockSocket = mockSocket(new ByteArrayInputStream("".getBytes()), new ByteArrayOutputStream());
@@ -66,7 +65,6 @@ public class MessageProcessorTest {
         assertFalse(thread.isAlive());
     }
 
-    // A valid message is processed and a JSON response is written back
     @Test
     public void test_valid_message_is_processed_and_response_written() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -83,7 +81,6 @@ public class MessageProcessorTest {
         assertTrue(response.contains("OK"), "Response should indicate success");
     }
 
-    // A CLOSE_CONNECTION message causes the processing loop to exit cleanly
     @Test
     public void test_close_connection_message_exits_loop() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -99,7 +96,6 @@ public class MessageProcessorTest {
         assertTrue(out.toString().contains("CLOSE_CONNECTION"));
     }
 
-    // An invalid JSON message causes the InvalidCommandException message to be written
     @Test
     public void test_invalid_json_responds_with_exception_message() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -115,11 +111,9 @@ public class MessageProcessorTest {
         assertFalse(response.isEmpty(), "An error response should have been written");
     }
 
-    // When max connections is reached, clientId is null and an error response is sent (L63-67)
     @Test
     public void test_max_connections_sends_error_response() throws Exception {
-        // Set maxConnections to a value the client count can never be under so any
-        // new connection gets a null clientId (0 now means unlimited, so use -1).
+        // 0 means unlimited, so -1 is what makes every new connection get a null clientId.
         Configuration config = Configuration.getInstance();
         int originalMax = config.getMaxConnections();
         try {
@@ -141,7 +135,6 @@ public class MessageProcessorTest {
         }
     }
 
-    // A request that fails validation returns an ERROR response without reaching the processor
     @Test
     public void test_invalid_request_validation_fails_sends_error_response() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -159,7 +152,6 @@ public class MessageProcessorTest {
         assertTrue(response.contains("SAVE"), "Response type should echo the operation type");
     }
 
-    // Unauthenticated protected request returns UNAUTHENTICATED
     @Test
     public void test_unauthenticated_request_returns_unauthenticated() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
@@ -175,10 +167,8 @@ public class MessageProcessorTest {
         assertTrue(response.contains("UNAUTHENTICATED"), "Should return UNAUTHENTICATED for protected op");
     }
 
-    // Authenticate then send a protected request — should be allowed
     @Test
     public void test_authenticated_request_is_processed() throws Exception {
-        // Create an admin user first
         final var createReq = new CreateUserRequest();
         createReq.setUsername("msg_proce_admin");
         createReq.setPassword("password123");
@@ -189,7 +179,6 @@ public class MessageProcessorTest {
         UserOperationHelper.processCreateUser(createReq);
 
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        // Use a protected op (SAVE) to exercise the authenticated+authorized dispatch path
         String messages = """
                 {"type":"AUTHENTICATE","username":"msg_proce_admin","password":"password123"}
                 {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{"name":"test"}}
@@ -206,7 +195,6 @@ public class MessageProcessorTest {
         assertTrue(response.contains("SAVE"), "Should include SAVE response");
     }
 
-    // Authenticate then CLOSE_CONNECTION from the authenticated path
     @Test
     public void test_authenticated_close_connection() throws Exception {
         final var createReq = new CreateUserRequest();
@@ -233,10 +221,8 @@ public class MessageProcessorTest {
         assertFalse(t.isAlive(), "Thread should exit after CLOSE_CONNECTION");
     }
 
-    // Authenticated but forbidden request returns FORBIDDEN
     @Test
     public void test_authenticated_forbidden_request_returns_forbidden() throws Exception {
-        // Create a non-admin user with no permissions
         final var createReq = new CreateUserRequest();
         createReq.setUsername("noPermsUser");
         createReq.setPassword("password123");
@@ -283,7 +269,6 @@ public class MessageProcessorTest {
         return out.toString();
     }
 
-    // End-to-end over the wire: an AGGREGATE with analyze=true returns an analyzeResult with timing.
     @Test
     public void test_aggregate_analyze_returns_analyzeResult_over_wire() throws Exception {
         createAnalyzeAdmin("analyze_admin");
@@ -319,7 +304,6 @@ public class MessageProcessorTest {
         throw new IllegalStateException("no analyzeResult in: " + response);
     }
 
-    // Without analyze the over-the-wire response must not contain analyzeResult.
     @Test
     public void test_aggregate_without_analyze_omits_analyzeResult_over_wire() throws Exception {
         createAnalyzeAdmin("analyze_admin2");
@@ -335,7 +319,6 @@ public class MessageProcessorTest {
         assertFalse(response.contains("analyzeResult"), "Should NOT include analyzeResult when analyze is off");
     }
 
-    // Over the wire: a FILTER that is not the first step yields a "move FILTER" suggestion.
     @Test
     public void test_aggregate_analyze_suggests_moving_filter() throws Exception {
         createAnalyzeAdmin("analyze_admin3");
@@ -354,7 +337,6 @@ public class MessageProcessorTest {
         assertTrue(response.contains("FILTER step"), "Should suggest moving the FILTER step");
     }
 
-    // End-to-end transaction over the wire: buffered SAVE is read-your-writes visible, then committed.
     @Test
     public void test_transaction_happy_path_over_socket() throws Exception {
         createAnalyzeAdmin("txn_admin");
@@ -371,14 +353,12 @@ public class MessageProcessorTest {
         assertTrue(response.contains("COMMIT_TRANSACTION"), "Should include COMMIT_TRANSACTION response");
         assertTrue(response.contains("wired"), "Read-your-writes should return the buffered document");
 
-        // Committed: a fresh reader finds it.
         final var processor = IocContainer.get(OperationProcessor.class);
         final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         find.set_id("wire-txn-1");
         assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus());
     }
 
-    // End-to-end rollback over the wire: the buffered write is discarded.
     @Test
     public void test_transaction_rollback_over_socket() throws Exception {
         createAnalyzeAdmin("txn_admin_rb");
@@ -396,12 +376,9 @@ public class MessageProcessorTest {
         assertEquals(OperationStatus.NOT_FOUND, processor.processMessage(find).getStatus());
     }
 
-    // Closing the connection with an open transaction auto-rolls it back: nothing is committed, the
-    // buffered op records are removed, and the collection write lock is released.
     @Test
     public void test_disconnect_auto_rolls_back() throws Exception {
         createAnalyzeAdmin("txn_admin_disc");
-        // No COMMIT/ROLLBACK — the stream ends after the buffered SAVE.
         final var messages = "{\"type\":\"AUTHENTICATE\",\"username\":\"txn_admin_disc\",\"password\":\"password123\"}\n"
                 + "{\"type\":\"START_TRANSACTION\"}\n" + "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB
                 + "\",\"collectionName\":\"" + TestGlobals.COLL + "\",\"object\":{\"_id\":\"wire-disc-1\"}}\n";
@@ -422,7 +399,6 @@ public class MessageProcessorTest {
         locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
     }
 
-    // An IOException on the output stream is handled without crashing
     @Test
     public void test_ioexception_on_output_stream_is_handled() throws Exception {
         OutputStream throwingOut = mock(OutputStream.class);

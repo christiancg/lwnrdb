@@ -9,9 +9,6 @@ import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
 
-// Builds the in-memory predicate for one field operator. Dispatches on the operand type first,
-// then the stored value's type: a mismatched pair simply does not match rather than throwing, so a
-// field holding mixed types is safe to filter.
 public final class FieldPredicateFactory {
     private FieldPredicateFactory() {
     }
@@ -19,7 +16,6 @@ public final class FieldPredicateFactory {
     @SuppressWarnings("unchecked")
     private static Integer compareCustom(JsonCustom<?> operator, JsonCustom<?> toTestWith) {
         final var customClass = operator.getClass();
-        // The following line throws a warning but should be fine as we are checking that it is the same class
         return customClass.cast(operator).compare(customClass.cast(toTestWith).getCustomValue());
     }
 
@@ -46,8 +42,6 @@ public final class FieldPredicateFactory {
     private static boolean primitiveOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
             FieldOperatorType operation) {
         if (!toTestElement.isJsonPrimitive()) {
-            // CONTAINS on an array field: does the array contain the primitive query value?
-            // (e.g. ownedDatabases CONTAINS "mydb"). Uses element equality, like IN.
             return operation == FieldOperatorType.CONTAINS && toTestElement.isJsonArray()
                     && toTestElement.asJsonArray().contains(operatorElement);
         }
@@ -114,9 +108,8 @@ public final class FieldPredicateFactory {
         };
     }
 
-    // IN / NOT_IN: membership of the field value in the candidate list. JsonArray.contains uses element
-    // equality, so this also matches object/array field values against a list of candidate
-    // objects/arrays (mirroring the index path's element-match resolution).
+    // JsonArray.contains uses element equality, so IN/NOT_IN also matches object/array field values
+    // against candidate objects/arrays, mirroring the index path's element-match resolution.
     private static boolean arrayOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
             FieldOperatorType operation) {
         if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {

@@ -10,8 +10,6 @@ public abstract class JsonDocumentEntry extends CollectionScopedEntry {
     protected static final EJson eJson = IocContainer.get(EJson.class);
     protected String _id;
     protected JsonObject data;
-    // Pre-update byte size for the corresponding file entry. Only set for updates,
-    // so that page-size accounting can compute the size delta after an update.
     protected long previousByteSize;
 
     public String toFileEntry() {

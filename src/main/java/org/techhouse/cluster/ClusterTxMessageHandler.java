@@ -14,8 +14,6 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.RequestParser;
 
-// The transaction half of the cluster protocol: forwarding a session's writes to the owner, the
-// 2PC votes and decisions, and the status queries a stuck participant uses to terminate.
 final class ClusterTxMessageHandler {
     private static final EJson eJson = IocContainer.get(EJson.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
@@ -26,9 +24,6 @@ final class ClusterTxMessageHandler {
     private ClusterTxMessageHandler() {
     }
 
-    // Runs one operation of a forwarded transaction on this (owner) node, under a persistent synthetic client
-    // keyed by the edge's session id so the buffered transaction survives across the session's messages. The
-    // transaction is started lazily on the first data/read op; commit/rollback tears the session down.
     static ClusterMessage handleForwardTx(ClusterMessage request) {
         final var response = new ClusterMessage();
         final var sessionId = request.getTxSessionId();
@@ -79,8 +74,6 @@ final class ClusterTxMessageHandler {
         return response;
     }
 
-    // Phase 5b participant: votes on a PREPARE from the coordinator, running on the session's executor thread
-    // (the holder of its write locks). No session means nothing was buffered here, so it votes no.
     static ClusterMessage handlePrepareTx(ClusterMessage request) {
         final var response = new ClusterMessage();
         final var session = clientTracker.txSession(request.getTxSessionId());
@@ -115,9 +108,6 @@ final class ClusterTxMessageHandler {
         return resolveTx(request, false, ClusterMessageType.ABORT_TX_ACK);
     }
 
-    // Commits or aborts a prepared participant slice. If the in-memory session is still present the work runs
-    // on its executor thread; otherwise (e.g. after a participant restart during coordinator re-drive) it
-    // resolves the durable slice directly.
     private static ClusterMessage resolveTx(ClusterMessage request, boolean commit, ClusterMessageType ackType) {
         final var response = new ClusterMessage();
         final var sessionId = request.getTxSessionId();
@@ -143,16 +133,11 @@ final class ClusterTxMessageHandler {
         return response;
     }
 
-    // Phase 5b status query: reports this node's own knowledge of the transaction
-    // (COMMITTED/ABORTED/PREPARED/UNKNOWN) for the coordinator's presumed-abort check and for a peer's
-    // cooperative termination.
     static ClusterMessage handleTxStatus(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.TX_STATUS_ACK, "Failed to read transaction status",
                 response -> response.setTxStatus(Tx2pcLog.status(request.getTxId()).name()));
     }
 
-    // Reports this node's own in-doubt (PREPARED) distributed transactions for a cluster-wide
-    // LIST_TRANSACTIONS aggregation.
     static ClusterMessage handleListTx() {
         return ClusterMessages.reply(ClusterMessageType.LIST_TX_ACK, "Failed to list in-doubt transactions",
                 response -> response.setInDoubtTransactions(tx2pcDirectory.localInDoubt()));

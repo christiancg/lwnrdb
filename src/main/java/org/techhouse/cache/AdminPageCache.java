@@ -53,7 +53,6 @@ final class AdminPageCache {
         return list != null ? list : List.of();
     }
 
-    // insertAdminPages and updateTouchedPagesInFileSystem address these by the same key.
     private static String pagesCollectionKey(String pagesCollName) {
         return Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
     }

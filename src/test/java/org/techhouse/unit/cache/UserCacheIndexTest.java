@@ -59,11 +59,9 @@ public class UserCacheIndexTest {
         TestUtils.standardTearDown();
     }
 
-    // Retrieving field index loads data from the file system if not present in cache
     @Test
     public void test_retrieving_field_index_loads_data()
             throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Mocking FileSystem and setting up necessary data
         FileSystem fsMock = mock(FileSystem.class);
         UserCache cache = new UserCache();
         Field fsField = UserCache.class.getDeclaredField("fs");
@@ -79,11 +77,9 @@ public class UserCacheIndexTest {
 
         when(fsMock.readWholeFieldIndexFiles(dbName, collName, fieldName, Double.class)).thenReturn(fieldIndexEntries);
 
-        // Calling the method under test
         List<FieldIndexEntry<Double>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
                 Double.class);
 
-        // Assertions
         assertNotNull(result);
         assertEquals(1, result.size());
         assertEquals(1.5, result.getFirst().getValue());
@@ -92,7 +88,6 @@ public class UserCacheIndexTest {
     @Test
     public void test_returns_primary_key_index_from_cache()
             throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
         UserCache cache = new UserCache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -103,15 +98,11 @@ public class UserCacheIndexTest {
         final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", type);
         pkIndexMap.put(collectionIdentifier, expectedPkIndex);
 
-        // Act
         List<PkIndexEntry> actualPkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
 
-        // Assert
         assertEquals(expectedPkIndex, actualPkIndex);
     }
 
-    // shiftPkPositionsAfterCompaction decrements only same-page entries with a greater position, by
-    // the removed length, in place; other pages and earlier entries are untouched.
     @Test
     public void test_shift_pk_positions_after_compaction() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
@@ -134,17 +125,14 @@ public class UserCacheIndexTest {
         assertEquals(20, otherPage.getPosition(), "entry on a different page is untouched");
     }
 
-    // No-op when the collection's PK index is not cached (does not throw).
     @Test
     public void test_shift_pk_positions_after_compaction_uncached_is_noop() {
         UserCache cache = new UserCache();
         assertDoesNotThrow(() -> cache.shiftPkPositionsAfterCompaction("noDb", "noColl", 0, 0, 10));
     }
 
-    // Returns list of FieldIndexEntry when index is already loaded
     @Test
     public void test_returns_list_when_index_loaded() throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
         UserCache cache = new UserCache();
         String dbName = "testDB";
         String collName = "testCollection";
@@ -162,24 +150,19 @@ public class UserCacheIndexTest {
         final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
         fieldIndexMap.put(collectionIdentifier, indexMap);
 
-        // Act
         List<FieldIndexEntry<String>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
                 indexType);
 
-        // Assert
         assertNotNull(result);
         assertEquals(1, result.size());
         assertEquals("value", result.getFirst().getValue());
     }
 
-    // Handles empty or null field index map
     @Test
     public void test_handles_empty_or_null_field_index_map()
             throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
         UserCache cache = new UserCache();
         FileSystem fsMock = mock(FileSystem.class);
-        // Changing the accessibility of fs for testing
         Field fsField = cache.getClass().getDeclaredField("fs");
         fsField.setAccessible(true);
         fsField.set(cache, fsMock);
@@ -191,15 +174,12 @@ public class UserCacheIndexTest {
 
         when(fsMock.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType)).thenReturn(null);
 
-        // Act
         List<FieldIndexEntry<String>> result = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
                 indexType);
 
-        // Assert
         assertNull(result);
     }
 
-    // A cached key for field "ba" (ba|String) must not prevent loading field "a" (a|String)
     @Test
     public void test_getFieldIndex_suffix_collision_loads_from_disk()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -213,7 +193,6 @@ public class UserCacheIndexTest {
         String collName = "testCollection";
         String collId = Cache.getCollectionIdentifier(dbName, collName);
 
-        // Pre-populate the cache with field "ba" so its key "ba|String" is present
         Map<String, List<FieldIndexEntry<?>>> innerMap = new ConcurrentHashMap<>();
         innerMap.put(Cache.getIndexIdentifier("ba", String.class),
                 List.of(new FieldIndexEntry<>(dbName, collName, "x", Set.of("id99"))));
@@ -234,7 +213,6 @@ public class UserCacheIndexTest {
         assertEquals("hello", result.getFirst().getValue());
     }
 
-    // A cached key for field "ba" (ba|Object) must not prevent loading field "a" (a|Object)
     @Test
     public void test_getHashIndex_suffix_collision_loads_from_disk()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -248,7 +226,6 @@ public class UserCacheIndexTest {
         String collName = "testCollection";
         String collId = Cache.getCollectionIdentifier(dbName, collName);
 
-        // Pre-populate the cache with field "ba" so its key "ba|Object" is present
         Map<String, List<FieldIndexEntry<?>>> innerMap = new ConcurrentHashMap<>();
         innerMap.put(Cache.getIndexIdentifier("ba", IndexKind.OBJECT.label()),
                 List.of(new FieldIndexEntry<>(dbName, collName, "deadbeef", Set.of("id99"))));
@@ -269,7 +246,6 @@ public class UserCacheIndexTest {
         assertEquals("cafebabe", result.getFirst().getValue());
     }
 
-    // Returns true when the field index is present in the fieldIndexMap
     @Test
     public void test_returns_true_when_field_index_present() throws NoSuchFieldException, IllegalAccessException {
         UserCache cache = new UserCache();
@@ -292,7 +268,6 @@ public class UserCacheIndexTest {
         assertTrue(result);
     }
 
-    // Returns false when fieldIndexMap is empty
     @Test
     public void test_returns_false_when_field_index_map_empty() {
         UserCache cache = new UserCache();
@@ -305,7 +280,6 @@ public class UserCacheIndexTest {
         assertFalse(result);
     }
 
-    // getIdsFromIndex with a JsonCustom value returns results from custom index
     @Test
     public void test_get_ids_from_index_with_custom_type() throws IOException {
         var cache = mock(UserCache.class);
@@ -325,7 +299,6 @@ public class UserCacheIndexTest {
         assertTrue(result.contains("id1"));
     }
 
-    // getIdsFromIndex with JsonArray containing JsonString elements
     @Test
     public void test_get_ids_from_index_with_json_array_of_strings() throws IOException {
         var cache = mock(UserCache.class);
@@ -349,7 +322,6 @@ public class UserCacheIndexTest {
         assertFalse(result.contains("id2"));
     }
 
-    // getIdsFromIndex with JsonArray containing JsonNumber elements
     @Test
     public void test_get_ids_from_index_with_json_array_of_numbers() throws IOException {
         var cache = mock(UserCache.class);
@@ -373,7 +345,6 @@ public class UserCacheIndexTest {
         assertFalse(result.contains("id2"));
     }
 
-    // getIdsFromIndex with JsonArray containing JsonBoolean elements
     @Test
     public void test_get_ids_from_index_with_json_array_of_booleans() throws IOException {
         var cache = mock(UserCache.class);
@@ -396,7 +367,6 @@ public class UserCacheIndexTest {
         assertFalse(result.contains("id2"));
     }
 
-    // getIdsFromIndex with JsonArray containing a non-primitive first element returns null
     @Test
     public void test_get_ids_from_index_with_json_array_non_primitive_returns_null() throws IOException {
         var cache = new UserCache();
@@ -430,8 +400,6 @@ public class UserCacheIndexTest {
         assertTrue(resources.stream().anyMatch(r -> r.kind() == org.techhouse.cache.AccessKind.FIELD_INDEX));
     }
 
-    // ── getEntriesByIds / streamCollection (page-streaming read path) ─────────
-
     private static void injectPkIndex(UserCache cache, String collId, List<PkIndexEntry> entries)
             throws NoSuchFieldException, IllegalAccessException {
         final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
@@ -451,7 +419,6 @@ public class UserCacheIndexTest {
 
         final var result = cache.getEntriesByIds("userDb", "c1", Set.of("missing"));
 
-        // An id absent from the PK index resolves to nothing, so no targeted read happens.
         assertTrue(result.isEmpty());
         verify(fsMock, never()).getByIndexEntries(anyList());
     }
@@ -472,7 +439,6 @@ public class UserCacheIndexTest {
         readObj.addProperty(Globals.PK_FIELD, "id1");
         when(fsMock.getByIndexEntries(anyList())).thenReturn(List.of(DbEntry.fromJsonObject("userDb", "c1", readObj)));
 
-        // Simulate a compaction shifting the live entry's position after getEntriesByIds resolves it.
         final var captor = org.mockito.ArgumentCaptor.forClass(List.class);
 
         cache.getEntriesByIds("userDb", "c1", Set.of("id1"));
@@ -482,14 +448,10 @@ public class UserCacheIndexTest {
         //noinspection unchecked
         final List<PkIndexEntry> requested = captor.getValue();
         assertEquals(1, requested.size());
-        // The entry passed to FileSystem must be a different object than the live cached entry.
         assertNotSame(livePk, requested.getFirst());
-        // And it must carry the original position (100), not any post-compaction value.
         assertEquals(100L, requested.getFirst().getPosition());
 
-        // Now simulate a compaction that moves the live entry.
         livePk.setPosition(50L);
-        // The copy already passed to FileSystem is unaffected.
         assertEquals(100L, requested.getFirst().getPosition());
     }
 }

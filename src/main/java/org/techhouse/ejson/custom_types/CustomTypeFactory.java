@@ -32,8 +32,7 @@ public final class CustomTypeFactory {
                 || instance.customRankingOperatorNames().contains(operatorName));
     }
 
-    // The FILTER step routes a ranking operator to its score-and-keep-top-K path instead of the
-    // predicate path, so the two operator families have to be distinguishable by name alone.
+    // FILTER picks the top-K path off the name alone, so no type may reuse a predicate operator's name.
     public static boolean isRankingOperator(String operatorName) {
         return anyRegisteredType(instance -> instance.customRankingOperatorNames().contains(operatorName));
     }

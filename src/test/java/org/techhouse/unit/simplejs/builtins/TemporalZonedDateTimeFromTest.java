@@ -46,7 +46,6 @@ public class TemporalZonedDateTimeFromTest {
                 () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC', 'hebrew')"));
     }
 
-    // A non-string timeZone/calendar argument is a TypeError, not a RangeError
     @Test
     public void test_constructor_non_string_arguments_are_type_errors() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 5)"));
@@ -57,8 +56,6 @@ public class TemporalZonedDateTimeFromTest {
                 () -> Interpreter.run("new Temporal.ZonedDateTime(0n, 'UTC').withTimeZone(5)"));
     }
 
-    // A calendar annotation on an ISO string parsed by from() is validated the same way a bare
-    // identifier is
     @Test
     public void test_from_string_validates_calendar_annotation() {
         assertEquals("iso8601",
@@ -67,8 +64,6 @@ public class TemporalZonedDateTimeFromTest {
                 () -> Interpreter.run("Temporal.ZonedDateTime.from('1970-01-01T00:00:00+00:00[UTC][u-ca=hebrew]')"));
     }
 
-    // The property-bag `timeZone` field accepts a full ISO date-time string carrying a bracketed
-    // time zone (ToTemporalTimeZoneIdentifier's flexible form), not just a bare identifier
     @Test
     public void test_from_fields_time_zone_field_flexible() {
         assertEquals("America/New_York", str("Temporal.ZonedDateTime.from({year: 2020, month: 6, day: 15, "
@@ -77,8 +72,6 @@ public class TemporalZonedDateTimeFromTest {
                 () -> Interpreter.run("Temporal.ZonedDateTime.from({year: 2020, month: 6, day: 15, timeZone: 5})"));
     }
 
-    // The property-bag `calendar` field accepts a bare identifier, a full ISO string carrying (or
-    // defaulting) a u-ca annotation, or a Temporal object (fast path)
     @Test
     public void test_from_fields_calendar_field_flexible() {
         assertEquals("iso8601",
@@ -155,9 +148,6 @@ public class TemporalZonedDateTimeFromTest {
 
     @Test
     public void test_from_offset_option_use_trusts_explicit_offset() {
-        // "use" trusts the explicit +05:00 offset to compute the exact instant directly (2020-01-01
-        // 00:00 minus +05:00 = 2019-12-31T19:00:00 UTC), rather than resolving 00:00 against what the
-        // UTC zone itself observes (which would give the wall time unchanged, per "ignore").
         assertEquals("2019-12-31T19:00:00+00:00[UTC]",
                 str("Temporal.ZonedDateTime.from({year:2020,month:1,day:1,hour:0,offset:'+05:00',timeZone:'UTC'}, "
                         + "{offset:'use'}).toString()"));
@@ -165,7 +155,6 @@ public class TemporalZonedDateTimeFromTest {
 
     @Test
     public void test_from_offset_option_ignore_uses_wall_time() {
-        // "ignore" discards the (mismatched) explicit offset, falling back to disambiguation with UTC.
         assertEquals("2020-01-01T00:00:00+00:00[UTC]",
                 str("Temporal.ZonedDateTime.from({year:2020,month:1,day:1,hour:0,offset:'+05:00',timeZone:'UTC'}, "
                         + "{offset:'ignore'}).toString()"));

@@ -10,9 +10,6 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBaseElement.JsonType;
 import org.techhouse.ejson.elements.JsonString;
 
-// Validates that a JSON value is itself a well-formed JSON Schema (draft 2020-12) for the subset this
-// engine supports: every keyword must carry a value of the correct shape, nested schemas are checked
-// recursively, and any known-but-unimplemented keyword is rejected (see SchemaKeywords.UNSUPPORTED).
 public class MetaSchemaValidator {
 
     public SchemaValidationResult validate(JsonBaseElement schema) {

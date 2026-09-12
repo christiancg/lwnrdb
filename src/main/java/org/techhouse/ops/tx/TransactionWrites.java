@@ -27,7 +27,6 @@ public final class TransactionWrites {
     private TransactionWrites() {
     }
 
-    // Ensures the object carries an _id (assigning a UUID when absent), returning the effective id.
     public static String ensureId(JsonObject object, String requestId) {
         var id = requestId;
         if (id == null) {
@@ -39,14 +38,8 @@ public final class TransactionWrites {
         return id;
     }
 
-    // Whether the id is currently visible to the transaction: present (non-tombstone) in the overlay,
-    // or — absent from the overlay — present in the committed PK index.
-    // The document the buffered delete will remove, captured now because the commit that fires the trigger
-    // can no longer read it. Null when no DELETED trigger would fire, so an untriggered collection neither
-    // pays for the read nor stores a second copy of the document. A document this transaction saved earlier
-    // wins over the committed one: the buffered ops replay in order, so that is the version being removed.
-    // The hook runs once the session holds the collection lock, so it sees the same serialization a
-    // non-transactional write does, and the buffered document is the one it produced.
+    // Hooks run once the session holds the collection lock, so they see the same serialization a
+    // non-transactional write does.
     public static BeforeHookOutcome runBeforeHooks(String dbName, String collName, EventType event, String actingUser,
             JsonObject object, String id, OperationType type) {
         if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
@@ -57,8 +50,7 @@ public final class TransactionWrites {
         }
     }
 
-    // Only re-checked when a hook actually replaced the document: the caller's own document was already
-    // size-checked, and a hook can inflate one past maxEntrySize.
+    // Only re-checked when a hook replaced the document: a hook can inflate one past maxEntrySize.
     public static OperationResponse checkEntrySize(String dbName, String collName, JsonObject effective,
             JsonObject original, OperationType type) {
         if (effective == original) {

@@ -20,7 +20,6 @@ public class CustomTypeFactoryTest {
         CustomTypeFactory.getCustomTypes().clear();
     }
 
-    // Register a valid custom type class with proper implementation
     @Test
     public void test_register_valid_custom_type() {
         CustomTypeFactory.registerCustomType(ValidCustomType.class);
@@ -77,7 +76,6 @@ public class CustomTypeFactoryTest {
         }
     }
 
-    // Register custom type class without default constructor
     @Test
     public void test_register_invalid_custom_type_without_default_constructor() {
         assertThrows(BadImplementationCustomTypeException.class,
@@ -125,7 +123,6 @@ public class CustomTypeFactoryTest {
         }
     }
 
-    // Return empty map when no custom types are registered
     @Test
     public void test_empty_map_when_no_types_registered() {
         Map<String, Class<? extends JsonCustom<?>>> customTypes = CustomTypeFactory.getCustomTypes();
@@ -133,7 +130,6 @@ public class CustomTypeFactoryTest {
         assertTrue(customTypes.isEmpty());
     }
 
-    // Successfully converts JsonString to JsonCustom by delegating to String-based method
     @Test
     public void test_converts_json_string_to_custom_type() {
         CustomTypeFactory.registerCustomType(ValidCustomType.class);
@@ -147,14 +143,12 @@ public class CustomTypeFactoryTest {
         assertEquals("#valid(123)", result.getValue());
     }
 
-    // Handles JsonString with null value
     @Test
     public void test_handles_null_value_json_string() {
         CustomTypeFactory.registerCustomType(ValidCustomType.class);
         assertThrows(WrongFormatCustomTypeException.class, () -> new ValidCustomType(""));
     }
 
-    // Create test custom type class
     public static class TestCustomType extends JsonCustom<Locale> {
         public TestCustomType() {
             super();
@@ -200,41 +194,31 @@ public class CustomTypeFactoryTest {
         }
     }
 
-    // Successfully creates instance of registered custom type from valid string input
     @Test
     public void test_creates_custom_type_instance_from_valid_input() {
-        // Register the test custom type
         CustomTypeFactory.registerCustomType(TestCustomType.class);
 
-        // Test valid input string
         String validInput = "#test(value)";
 
-        // Execute
         JsonCustom<?> result = CustomTypeFactory.getCustomTypeInstance(validInput);
 
-        // Verify
         assertNotNull(result);
         assertInstanceOf(TestCustomType.class, result);
         assertEquals("#test(value)", result.getValue());
     }
 
-    // Throws NonRegisteredCustomTypeException when type name not found in _customTypes map
     @Test
     public void test_throws_exception_for_unregistered_type() {
-        // Clear any registered types
         CustomTypeFactory.getCustomTypes().clear();
 
-        // Test input with unregistered type
         String invalidInput = "#unknown(value)";
 
-        // Execute and verify exception
         NonRegisteredCustomTypeException exception = assertThrows(NonRegisteredCustomTypeException.class,
                 () -> CustomTypeFactory.getCustomTypeInstance(invalidInput));
 
         assertEquals("The custom type unknown has not been registered", exception.getMessage());
     }
 
-    // getCustomTypeInstance with invalid format string throws BadImplementationCustomTypeException (L42)
     @Test
     public void test_get_instance_with_invalid_format_throws_bad_implementation() {
         new org.techhouse.ejson.EJson(); // registers custom types including time

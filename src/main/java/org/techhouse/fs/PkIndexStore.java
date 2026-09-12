@@ -65,10 +65,8 @@ final class PkIndexStore {
         lock.lock();
         try {
             final List<String> existingLines = indexFile.exists() ? Files.readAllLines(indexFile.toPath()) : List.of();
-            // Parse every entry, pulling out the one being updated/deleted. The remaining entries
-            // ("others") have their on-disk positions corrected per page (see reindexPks); the file is
-            // rewritten in full because the entries needing a shift are not contiguous in the
-            // id-sorted file (a same-page, later-positioned row can sort before the updated id).
+            // Rewritten in full because the entries needing a position shift are not contiguous in the
+            // id-sorted file: a same-page, later-positioned row can sort before the updated id.
             final var others = new ArrayList<PkIndexEntry>(existingLines.size());
             PkIndexEntry oldEntry = null;
             for (final var line : existingLines) {
@@ -91,15 +89,9 @@ final class PkIndexStore {
     }
 
     /**
-     * Recomputes the on-disk PK index after the entry identified by {@code oldEntry} is relocated
-     * (update) or removed (delete). Removing/relocating that row compacts its page, so every other
-     * entry <em>on the same page</em> whose position is past the removed slot shifts toward the start
-     * of the page by the old row's length — the same per-page rule the in-memory PK index uses
-     * ({@code UserCache.shiftPkPositionsAfterCompaction}). Entries on other pages are untouched. For
-     * an update, {@code newPkIndexEntry} carries the relocated row's page-file length as its position;
-     * subtracting the old length yields the row's new start (where {@link FileSystem#updateFromCollection} wrote
-     * it). {@code newPkIndexEntry} is {@code null} for a delete. {@code oldEntry} may be {@code null}
-     * if the value was not present (defensive), in which case no shift is applied.
+     * Only entries on the removed row's own page shift; a file-order shift would corrupt every other
+     * page. {@code newPkIndexEntry} arrives carrying the page-file length as its position, so
+     * subtracting the old row's length yields where the relocated row actually starts.
      */
     List<PkIndexEntry> reindexPks(PkIndexEntry oldEntry, PkIndexEntry newPkIndexEntry, List<PkIndexEntry> others) {
         if (oldEntry != null) {
@@ -124,10 +116,8 @@ final class PkIndexStore {
         if (!indexFile.exists()) {
             return new ArrayList<>();
         }
-        // Keyed by PK value, preserving first-seen order. A non-atomic write interrupted mid-rewrite can leave
-        // a torn line (handled by skip-and-log) or a duplicate line for the same id (handled by keeping the
-        // last occurrence — the freshest position). Either way we self-heal by rewriting the survivors, so a
-        // single bad/duplicate line never fails every PK-index-backed read.
+        // A non-atomic write interrupted mid-rewrite leaves a torn line or a duplicate id; both self-heal
+        // here (last occurrence wins, survivors rewritten) so one bad line never fails every PK read.
         final var byValue = new LinkedHashMap<String, PkIndexEntry>();
         final var lineByValue = new LinkedHashMap<String, String>();
         boolean dropped = false;

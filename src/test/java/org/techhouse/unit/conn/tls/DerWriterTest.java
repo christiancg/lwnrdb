@@ -32,7 +32,7 @@ public class DerWriterTest {
         // length 200 = 0xC8; BigInteger.toByteArray() prepends a 0x00 because the high bit is set.
         final var content = new byte[200];
         final var encoded = DerWriter.tlv(0x04, content);
-        assertEquals(0x81, encoded[1] & 0xFF); // one length byte
+        assertEquals(0x81, encoded[1] & 0xFF);
         assertEquals(0xC8, encoded[2] & 0xFF);
         assertEquals(200 + 3, encoded.length);
     }

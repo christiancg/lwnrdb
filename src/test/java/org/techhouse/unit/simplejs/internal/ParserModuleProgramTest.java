@@ -28,7 +28,6 @@ public class ParserModuleProgramTest {
         return Parser.parse(Lexer.lex(source));
     }
 
-    // A module head of imports followed by declarations and a trailing named export
     @Test
     public void test_module_imports_and_exports() {
         final var source = """
@@ -52,7 +51,6 @@ public class ParserModuleProgramTest {
         assertNull(export.getSource());
     }
 
-    // A re-export module mixes named re-export, wildcard re-export and default export
     @Test
     public void test_module_reexports_and_default() {
         final var source = """
@@ -69,7 +67,6 @@ public class ParserModuleProgramTest {
         assertInstanceOf(ExportDefaultDeclaration.class, body.get(2));
     }
 
-    // Phase 5f: a class with private members (field, static field, this.#x access) and a static block parses
     @Test
     public void test_phase5f_private_and_static_block_program() {
         final var source = """
@@ -94,9 +91,8 @@ public class ParserModuleProgramTest {
         assertInstanceOf(MethodDefinition.class, members.get(3));
     }
 
-    // A class static block must not leave the parser in "inside a static block" state: the flag rejects
-    // `return` and `arguments`, so leaking it made both an early error for the rest of the enclosing
-    // scope. Only reachable under the relaxed script goal (a top-level return), so test262 cannot see it.
+    // The static-block flag rejects `return` and `arguments`, so leaking it made both an early error for the
+    // rest of the enclosing scope. Only reachable under the relaxed script goal, so test262 cannot see it.
     @Test
     public void test_static_block_does_not_leak_return_restriction() {
         final var source = """
@@ -128,7 +124,6 @@ public class ParserModuleProgramTest {
         assertInstanceOf(ReturnStatement.class, body.get(2));
     }
 
-    // The restriction still applies *inside* the static block
     @Test
     public void test_return_inside_a_static_block_is_still_an_early_error() {
         assertThrows(SyntaxErrorException.class, () -> parse("class A { static { return 1; } }"));

@@ -16,7 +16,6 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 
-// The admin metadata surface, passed straight through by Cache.
 interface AdminCacheDelegate {
     AdminCache adminCache();
 

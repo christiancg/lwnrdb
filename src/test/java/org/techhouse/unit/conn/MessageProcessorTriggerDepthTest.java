@@ -32,10 +32,6 @@ import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * A client must not be able to claim a cascade depth: only EnforcingDatabaseAccess (a running trigger) sets
- * one, so whatever arrives on the wire is discarded at the edge.
- */
 public class MessageProcessorTriggerDepthTest {
     private static final String ADMIN = "depthadmin";
     private static final String PASSWORD = "password123";

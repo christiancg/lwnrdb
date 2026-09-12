@@ -32,7 +32,6 @@ public class DbModuleTest {
         return fn.invoke(JsUndefined.getInstance(), List.of(args));
     }
 
-    // findById passes the coerced db/coll/id through and converts the result to a JsValue
     @Test
     public void test_find_by_id() {
         final var fake = new FakeDatabaseAccess();
@@ -46,7 +45,6 @@ public class DbModuleTest {
         assertEquals("findById:mydb/users/x1", fake.calls.getFirst());
     }
 
-    // A null document from findById converts to JsNull
     @Test
     public void test_find_by_id_missing() {
         final var fake = new FakeDatabaseAccess();
@@ -55,7 +53,6 @@ public class DbModuleTest {
         assertInstanceOf(JsNull.class, result);
     }
 
-    // aggregate forwards the pipeline array and returns an array of results
     @Test
     public void test_aggregate() {
         final var fake = new FakeDatabaseAccess();
@@ -68,7 +65,6 @@ public class DbModuleTest {
         assertEquals("aggregate:d/c/1", fake.calls.getFirst());
     }
 
-    // save forwards the document and returns the stored document
     @Test
     public void test_save() {
         final var fake = new FakeDatabaseAccess();
@@ -80,7 +76,6 @@ public class DbModuleTest {
         assertEquals("save:d/c", fake.calls.getFirst());
     }
 
-    // delete returns undefined and records the call
     @Test
     public void test_delete() {
         final var fake = new FakeDatabaseAccess();
@@ -90,7 +85,6 @@ public class DbModuleTest {
         assertEquals("delete:d/c/s1", fake.calls.getFirst());
     }
 
-    // listCollections and listDatabases return string arrays
     @Test
     public void test_list_operations() {
         final var fake = new FakeDatabaseAccess();
@@ -103,7 +97,6 @@ public class DbModuleTest {
         assertTrue(fake.calls.contains("listDatabases"));
     }
 
-    // A round-trip through EJsonInterop keeps a stored id intact
     @Test
     public void test_interop_roundtrip() {
         final var object = new JsObject();
@@ -112,7 +105,6 @@ public class DbModuleTest {
         assertEquals("r1", ((JsString) restored.get("_id")).getValue());
     }
 
-    // bulkSave forwards the whole batch and reports both id lists
     @Test
     public void test_bulk_save() {
         final var fake = new FakeDatabaseAccess();
@@ -126,7 +118,6 @@ public class DbModuleTest {
         assertEquals(1, ((JsArray) result.get("updated")).length());
     }
 
-    // bulkSave rejects anything that is not an array of documents
     @Test
     public void test_bulk_save_requires_documents() {
         final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
@@ -134,7 +125,6 @@ public class DbModuleTest {
                 () -> call(db, "bulkSave", new JsString("d"), new JsString("c"), new JsString("nope")));
     }
 
-    // Both new members appear on the module object, so `import * as db` picks them up automatically
     @Test
     public void test_module_exposes_new_members() {
         final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
@@ -147,7 +137,6 @@ public class DbModuleTest {
                 new SimpleHostBindings(new JsonObject(), fake, null, ResourceLimits.unlimited()));
     }
 
-    // A synchronous callback runs between begin and commit
     @Test
     public void test_transaction_commits() {
         final var fake = new FakeDatabaseAccess();
@@ -160,7 +149,6 @@ public class DbModuleTest {
         assertEquals(List.of("beginTransaction", "delete:d/c/x", "commitTransaction"), fake.calls);
     }
 
-    // A throwing callback rolls back and the error keeps propagating
     @Test
     public void test_transaction_rolls_back_on_throw() {
         final var fake = new FakeDatabaseAccess();
@@ -172,7 +160,6 @@ public class DbModuleTest {
         assertEquals(List.of("beginTransaction", "rollbackTransaction"), fake.calls);
     }
 
-    // A non-callable, an async callback and a generator callback are all rejected before begin
     @Test
     public void test_transaction_rejects_suspendable_callbacks() {
         for (final var callback : List.of("42", "async function () {}", "function* () {}")) {
@@ -184,7 +171,6 @@ public class DbModuleTest {
         }
     }
 
-    // A callback that returns a promise cannot be awaited here, so it throws and rolls back
     @Test
     public void test_transaction_rejects_a_returned_promise() {
         final var fake = new FakeDatabaseAccess();
@@ -196,7 +182,6 @@ public class DbModuleTest {
         assertEquals(List.of("beginTransaction", "rollbackTransaction"), fake.calls);
     }
 
-    // A nested db.transaction is rejected by the session guard rather than reaching a second START
     @Test
     public void test_nested_transaction_is_rejected() {
         final var fake = new FakeDatabaseAccess();

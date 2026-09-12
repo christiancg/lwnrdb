@@ -28,17 +28,7 @@ import org.techhouse.ops.resp.StartTransactionResponse;
 import org.techhouse.ops.tx.TransactionBuffer;
 import org.techhouse.ops.tx.TransactionRecovery;
 
-/**
- * Client-scoped transactions. A transaction buffers its data mutations (SAVE / BULK_SAVE / DELETE)
- * instead of applying them: each is persisted as an operation record in {@code admin/transactions}
- * (the durable source of truth replayed at commit) and mirrored into the {@link Transaction}
- * overlay that serves the transaction's own read-your-writes reads. The first write to each
- * collection lazily acquires that collection's exclusive write lock (with a bounded timeout so
- * concurrent transactions cannot deadlock) and holds it — on the connection's own virtual thread —
- * until commit or rollback. Commit replays the buffered operations against the real collections
- * through the shared core write helpers; rollback discards them. Both then delete the buffered
- * operation records and release the held locks.
- */
+// A transaction holds its collection write locks on the connection's own virtual thread until commit or rollback.
 public final class TransactionOperationHelper {
     private TransactionOperationHelper() {
     }
@@ -52,9 +42,7 @@ public final class TransactionOperationHelper {
     private static final String OBJECTS_FIELD = "objects";
     private static final String DELETED_DOCUMENT_FIELD = "deletedDocument";
 
-    // Operations a client may issue while a transaction is open. Everything else (DDL, admin, LISTEN,
-    // ...) is rejected so transactional atomicity reasoning stays simple. START_TRANSACTION is allowed
-    // through so start() can report the "already active" conflict rather than a generic rejection.
+    // START_TRANSACTION is allowed through so start() reports the "already active" conflict, not a generic one.
     public static boolean isAllowedDuringTransaction(OperationType type) {
         return switch (type) {
             case START_TRANSACTION, COMMIT_TRANSACTION, ROLLBACK_TRANSACTION, SAVE, BULK_SAVE, DELETE, FIND_BY_ID,
@@ -72,8 +60,7 @@ public final class TransactionOperationHelper {
         return start(clientId, transactionId, 0);
     }
 
-    // Starts a transaction with a caller-supplied id. A forwarded 2PC participant uses the coordinator's
-    // distributed-tx id so its buffered slice and recovery markers key on the same id everywhere.
+    // A forwarded 2PC participant passes the coordinator's tx id, so slice and recovery markers key on the same id.
     public static OperationResponse start(UUID clientId, UUID transactionId, int triggerDepth) {
         if (clientTracker.getActiveTransaction(clientId) != null) {
             return new OperationResponse(OperationType.START_TRANSACTION, ErrorCode.TRANSACTION_ALREADY_ACTIVE);
@@ -84,9 +71,6 @@ public final class TransactionOperationHelper {
         return new StartTransactionResponse("Transaction started", transactionId.toString());
     }
 
-    // Phase 5b participant vote: durably records this node's PREPARED marker (with the collections whose
-    // write locks it holds, for recovery) and votes yes, unless the write quorum has been lost. The locks
-    // stay held until commit/abort. Returns true for a yes vote.
     public static boolean prepare(UUID clientId, String coordinatorAddress, List<String> participants) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null || coordinator.hasNotTransactionQuorum()) {
@@ -102,8 +86,6 @@ public final class TransactionOperationHelper {
         }
     }
 
-    // Phase 5b participant commit of a prepared slice held in memory: replays the buffered ops, replicates
-    // the batch, then removes the slice + PREPARED marker and releases the locks.
     public static OperationResponse commitPrepared(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
@@ -116,12 +98,10 @@ public final class TransactionOperationHelper {
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             // After the durable commit, so a trigger never observes a transaction that later rolled back.
-            // A rollback fires nothing.
             fireTriggersForCommittedOps(ops, clientTracker.getAuthenticatedUsername(clientId),
                     transaction.getTriggerDepth(), transaction);
             TransactionRecovery.resolveMarkers(transaction.getTransactionId().toString(), true);
-            // A replication timeout does not fail the commit — the decision is made and the local commit is
-            // durable; anti-entropy reconciles the lagging replicas.
+            // A replication timeout does not fail the commit; anti-entropy reconciles the lagging replicas.
             coordinator.replicateTransaction(transaction);
             return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
         } catch (Exception e) {
@@ -134,8 +114,6 @@ public final class TransactionOperationHelper {
         }
     }
 
-    // Phase 5b participant abort of an in-memory slice: discards the buffered ops + PREPARED marker and
-    // releases the locks.
     public static OperationResponse abort(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
@@ -182,8 +160,7 @@ public final class TransactionOperationHelper {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
         }
         try {
-            // A clustered commit must still hold a write quorum (split-brain protection); abort before
-            // applying if it was lost between the first write and commit.
+            // A clustered commit must still hold a write quorum: abort before applying if it was lost.
             if (coordinator.hasNotTransactionQuorum()) {
                 AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_QUORUM);
@@ -200,12 +177,10 @@ public final class TransactionOperationHelper {
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             TxCommitLog.clearLocalCommit(txId);
             // After the durable commit, so a trigger never observes a transaction that later rolled back. The
-            // transaction's own depth is used, not zero: a trigger's writes commit through here, and starting
-            // the chain over would let allowCascade=true cascade forever.
+            // transaction's own depth is used, not zero, or allowCascade=true would cascade forever.
             fireTriggersForCommittedOps(ops, clientTracker.getAuthenticatedUsername(clientId),
                     transaction.getTriggerDepth(), transaction);
-            // Replicate the whole transaction to the quorum as one atomic batch. The local commit stands even
-            // on a replication timeout; Phase 4 anti-entropy reconciles the lagging replicas.
+            // The local commit stands even on a replication timeout; anti-entropy reconciles the replicas.
             if (coordinator.replicateTransaction(transaction) == ReplicationOutcome.TIMEOUT) {
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT);
             }
@@ -239,16 +214,12 @@ public final class TransactionOperationHelper {
         }
     }
 
-    // Best-effort teardown when a connection closes with a transaction still open. Runs on the
-    // connection's own thread (the only thread allowed to release its write locks). When the transaction was
-    // forwarded to a remote owner, tells that owner to roll it back too (releasing the owner's held locks).
+    // Runs on the connection's own thread - the only thread allowed to release its write locks.
     public static void cleanupOnDisconnect(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
             return;
         }
-        // A cross-owner transaction is torn down through the coordinator (aborts remote participants + the
-        // local slice, and clears state); only a purely-local transaction falls through to the local cleanup.
         if (clusterRouter.teardownTransaction(clientId)) {
             return;
         }
@@ -263,17 +234,8 @@ public final class TransactionOperationHelper {
         }
     }
 
-    // Owner-side safety net: rolls back and releases forwarded transactions whose originating edge node has
-    // left the cluster (absent or DEAD), so an edge-node crash cannot strand the owner's write locks. The
-    // rollback runs on each session's own executor thread (the holder of its locks). A session that has
-    // already voted yes (has a PREPARED marker) is in-doubt and is left for 2PC recovery to resolve against
-    // the coordinator's decision — aborting it here could break atomicity if the coordinator committed.
-    /**
-     * Rolls back every transaction still open when the node stops, so their collection write locks are
-     * released and their buffered slices are discarded rather than left for the startup orphan sweep. A
-     * PREPARED 2PC slice is deliberately left alone: its coordinator may already have decided to commit, and
-     * only recovery may resolve it.
-     */
+    // The rollback runs on each session's own executor thread - the holder of its locks.
+    // A PREPARED 2PC slice is left alone: its coordinator may already have committed; only recovery resolves it.
     public static void rollbackOpenTransactionsAtShutdown() {
         var rolledBack = 0;
         for (final var clientId : clientTracker.clientIdsSnapshot()) {
@@ -331,9 +293,6 @@ public final class TransactionOperationHelper {
         }
     }
 
-    // Applies the transaction's buffered mutations to a materialized read of the committed documents,
-    // producing the effective document set the transaction sees (read-your-writes) for an AGGREGATE.
-    // Buffered updates replace the committed document, deletes drop it, and pure inserts are appended.
     public static void bufferTriggerRunConsume(Transaction transaction, String runId) throws Exception {
         TransactionBuffer.bufferTriggerRunConsume(transaction, runId);
     }
@@ -383,8 +342,8 @@ public final class TransactionOperationHelper {
         for (final var op : ops) {
             final var dbName = op.getTargetDb();
             final var collName = op.getTargetColl();
-            // Which of the op's ids it created rather than updated was decided when the write was buffered:
-            // the documents all exist by now, so a save can no longer be told apart from an insert here.
+            // Which ids the op created rather than updated was decided when the write was buffered; by now all
+            // documents exist, so an insert can no longer be told apart from an update here.
             final var inserted = transaction.insertedIdsFor(op.getSeq());
             switch (op.getOpType()) {
                 case AdminTransactionEntry.OP_TYPE_SAVE -> {
@@ -408,9 +367,8 @@ public final class TransactionOperationHelper {
                     TriggerHelper.afterWriteIds(dbName, collName, EventType.UPDATED, updatedIds, actingUser,
                             triggerDepth);
                 }
-                // The document was captured when the delete was buffered: by the time the commit finishes it
-                // is gone, so re-reading it by id the way the arms above do would find nothing and the
-                // DELETED trigger would never fire. Absent when no DELETED trigger existed at buffer time.
+                // The deleted document was captured when the delete was buffered; re-reading it by id here
+                // would find nothing. Absent when no DELETED trigger existed at buffer time.
                 case AdminTransactionEntry.OP_TYPE_DELETE -> {
                     final var payload = op.getPayload();
                     if (payload.has(DELETED_DOCUMENT_FIELD)) {
@@ -422,8 +380,7 @@ public final class TransactionOperationHelper {
                     }
                 }
                 default -> {
-                    // Markers (PREPARED/COMMIT/OUTCOME/LOCAL_COMMIT) and the trigger-run consume op are not
-                    // writes and fire nothing.
+                    // Markers and the trigger-run consume op are not writes and fire nothing.
                 }
             }
         }

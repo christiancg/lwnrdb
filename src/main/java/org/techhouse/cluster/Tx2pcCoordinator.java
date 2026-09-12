@@ -16,11 +16,8 @@ import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.resp.OperationResponse;
 
 /**
- * Edge-side two-phase-commit coordinator for a transaction spanning more than one owner (Phase 5b). Runs
- * PREPARE across all participants (the local node if it holds a slice, plus each remote owner), and on a
- * unanimous yes durably records the commit decision ({@link Tx2pcLog}) before driving COMMIT; any no vote or
- * unreachable participant aborts them all. The single-owner case is handled by the 5a fast path in
- * {@link ClusterRouter} and never reaches here.
+ * The commit decision is recorded durably ({@link Tx2pcLog}) before COMMIT is driven, which is what
+ * recovery relies on; any no vote or unreachable participant aborts them all.
  */
 public class Tx2pcCoordinator {
     private final Logger logger = Logger.logFor(Tx2pcCoordinator.class);
@@ -67,9 +64,6 @@ public class Tx2pcCoordinator {
         return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
     }
 
-    // Operator escape hatch: force an in-doubt distributed transaction to a decision. Records the decision
-    // (commit only) so it is durable and consistent with recovery, resolves any local slice, and broadcasts
-    // COMMIT_TX/ABORT_TX to every alive member (a no-op on nodes that hold no slice for it).
     public OperationResponse forceResolve(String dtxId, boolean commit) {
         try {
             if (commit && !Tx2pcLog.isCommitted(dtxId)) {
@@ -127,9 +121,6 @@ public class Tx2pcCoordinator {
         }
     }
 
-    // Clears the edge coordinator's own transaction state once 2PC has finished. For a local participant the
-    // commitPrepared/abort call already cleared it; this covers the remote-only case whose in-memory marker
-    // transaction would otherwise linger.
     private void finishEdge(UUID clientId, boolean local) {
         if (!local) {
             clientTracker.clearActiveTransaction(clientId);

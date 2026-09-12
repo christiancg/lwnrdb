@@ -6,11 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * Two surfaces that are easy to get subtly wrong: the escapes a template literal accepts (the cooked text has
- * to decode them while the raw text keeps them), and the intrinsic accessors and integrity levels an exotic
- * object exposes - a typed array reports its geometry through prototype getters, not own properties.
- */
 public class ObjectAndLexerSurfaceTest {
     private static String str(String source) {
         return ((JsString) Interpreter.run(source)).getValue();
@@ -29,13 +24,11 @@ public class ObjectAndLexerSurfaceTest {
                 """));
     }
 
-    // A backslash before the newline continues the line rather than embedding it
     @Test
     public void test_a_template_line_continuation_joins_the_lines() {
         assertEquals("linejoined", str("`line\\\njoined`"));
     }
 
-    // The raw text keeps what the cooked text decoded
     @Test
     public void test_the_raw_text_keeps_the_escapes() {
         assertEquals("a\\nb:a\nb", str("String.raw`a\\nb` + ':' + `a\\nb`"));
@@ -46,7 +39,6 @@ public class ObjectAndLexerSurfaceTest {
         assertEquals("[object Uint8Array]", str("Object.prototype.toString.call(new Uint8Array(1))"));
     }
 
-    // The geometry lives on the shared %TypedArray% prototype as accessors, so a view answers them by receiver
     @Test
     public void test_the_typed_array_geometry_accessors_read_their_receiver() {
         assertEquals("buffer,4,2,4", str("""
@@ -66,7 +58,6 @@ public class ObjectAndLexerSurfaceTest {
         assertEquals("{\"1\":[1],\"2\":[2]}", str("JSON.stringify(Object.groupBy([1, 2], n => n))"));
     }
 
-    // Map.groupBy keeps the key as it was returned, so the buckets are keyed by number here
     @Test
     public void test_map_group_by_keeps_the_callback_key() {
         assertEquals("1,0", str("[...Map.groupBy([1, 2, 3], n => n % 2).keys()].join(',')"));

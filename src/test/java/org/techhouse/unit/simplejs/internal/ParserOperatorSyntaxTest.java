@@ -49,7 +49,6 @@ public class ParserOperatorSyntaxTest {
         return ((ExpressionStatement) firstStatement(source)).getExpression();
     }
 
-    // Literals parse to their matching nodes
     @Test
     public void test_number_literal() {
         final var num = assertInstanceOf(NumberLiteral.class, firstExpression("42"));
@@ -163,8 +162,6 @@ public class ParserOperatorSyntaxTest {
         assertInstanceOf(NumberLiteral.class, assertInstanceOf(Property.class, obj.getProperties().get(2)).getKey());
     }
 
-    // The same cover grammar IS legal - and reinterpreted into an ObjectPattern - when the whole
-    // object literal sits on the left of a plain `=`.
     @Test
     public void test_object_cover_initialized_shorthand_as_assignment_target_parses() {
         assertInstanceOf(AssignmentExpression.class, firstExpression("({ a = 1 } = {})"));
@@ -182,7 +179,6 @@ public class ParserOperatorSyntaxTest {
         assertEquals(2, parse("let x = 1;\nx + 1;").getBody().size());
     }
 
-    // yield appears at the assignment right-hand side
     @Test
     public void test_yield_as_assignment_rhs() {
         final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function* g() { x = yield 2; }"));
@@ -191,7 +187,6 @@ public class ParserOperatorSyntaxTest {
         assertInstanceOf(YieldExpression.class, assign.getValue());
     }
 
-    // A spread element in an array literal wraps its argument
     @Test
     public void test_array_spread() {
         final var array = assertInstanceOf(ArrayExpression.class, firstExpression("[1, ...rest]"));
@@ -200,7 +195,6 @@ public class ParserOperatorSyntaxTest {
         assertEquals("rest", assertInstanceOf(Identifier.class, spread.getArgument()).getName());
     }
 
-    // A spread argument in a call wraps its argument
     @Test
     public void test_call_spread_argument() {
         final var call = assertInstanceOf(CallExpression.class, firstExpression("f(a, ...xs)"));
@@ -209,7 +203,6 @@ public class ParserOperatorSyntaxTest {
         assertEquals("xs", assertInstanceOf(Identifier.class, spread.getArgument()).getName());
     }
 
-    // A spread element in an object literal is kept alongside properties
     @Test
     public void test_object_spread() {
         final var obj = assertInstanceOf(ObjectExpression.class, firstExpression("({ ...o, a: 1 })"));
@@ -219,7 +212,6 @@ public class ParserOperatorSyntaxTest {
         assertInstanceOf(Property.class, obj.getProperties().get(1));
     }
 
-    // An array destructuring assignment reinterprets the LHS into a pattern
     @Test
     public void test_array_assignment_pattern() {
         final var assign = assertInstanceOf(AssignmentExpression.class, firstExpression("[a, b] = arr"));
@@ -227,7 +219,6 @@ public class ParserOperatorSyntaxTest {
         assertEquals(2, pattern.getElements().size());
     }
 
-    // A member expression is a valid leaf inside an assignment pattern
     @Test
     public void test_assignment_pattern_member_leaf() {
         final var assign = assertInstanceOf(AssignmentExpression.class, firstExpression("[obj.x] = arr"));
@@ -235,14 +226,12 @@ public class ParserOperatorSyntaxTest {
         assertInstanceOf(MemberExpression.class, pattern.getElements().getFirst());
     }
 
-    // An object destructuring assignment reinterprets the LHS into a pattern
     @Test
     public void test_object_assignment_pattern() {
         final var assign = assertInstanceOf(AssignmentExpression.class, firstExpression("({a, b} = o)"));
         assertInstanceOf(ObjectPattern.class, assign.getTarget());
     }
 
-    // A cover-initialized name in a destructuring assignment becomes an assignment pattern
     @Test
     public void test_assignment_pattern_with_default() {
         final var assign = assertInstanceOf(AssignmentExpression.class, firstExpression("({a = 1} = o)"));

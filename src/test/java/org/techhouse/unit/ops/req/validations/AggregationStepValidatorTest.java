@@ -41,7 +41,6 @@ public class AggregationStepValidatorTest {
         assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
     }
 
-    // MAP
     @Test
     public void validate_mapStep_validAddField_returnsOk() {
         final var operands = new JsonArray();
@@ -95,7 +94,6 @@ public class AggregationStepValidatorTest {
         assertFalse(AggregationStepValidator.validate(new MapAggregationStep(List.of(mapOp))).isValid());
     }
 
-    // GROUP_BY
     @Test
     public void validate_groupByStep_validFieldName_returnsOk() {
         assertTrue(AggregationStepValidator.validate(new GroupByAggregationStep("category")).isValid());
@@ -111,7 +109,6 @@ public class AggregationStepValidatorTest {
         assertFalse(AggregationStepValidator.validate(new GroupByAggregationStep(null)).isValid());
     }
 
-    // JOIN
     @Test
     public void validate_joinStep_allFieldsPresent_returnsOk() {
         assertTrue(AggregationStepValidator
@@ -126,7 +123,6 @@ public class AggregationStepValidatorTest {
 
     @Test
     public void validate_joinStep_invalidCollectionName_returnsFail() {
-        // too short to match NAME_PATTERN
         assertFalse(AggregationStepValidator.validate(new JoinAggregationStep("ab", "localId", "remoteId", "joined"))
                 .isValid());
     }
@@ -149,13 +145,11 @@ public class AggregationStepValidatorTest {
                 .validate(new JoinAggregationStep("other_coll", "localId", "remoteId", null)).isValid());
     }
 
-    // COUNT
     @Test
     public void validate_countStep_returnsOk() {
         assertTrue(AggregationStepValidator.validate(new CountAggregationStep()).isValid());
     }
 
-    // DISTINCT
     @Test
     public void validate_distinctStep_withFieldName_returnsOk() {
         assertTrue(AggregationStepValidator.validate(new DistinctAggregationStep("name")).isValid());
@@ -171,7 +165,6 @@ public class AggregationStepValidatorTest {
         assertTrue(AggregationStepValidator.validate(new DistinctAggregationStep("  ")).isValid());
     }
 
-    // LIMIT
     @Test
     public void validate_limitStep_positiveLimit_returnsOk() {
         assertTrue(AggregationStepValidator.validate(new LimitAggregationStep(10)).isValid());
@@ -199,7 +192,6 @@ public class AggregationStepValidatorTest {
         assertFalse(AggregationStepValidator.validate(step).isValid());
     }
 
-    // SKIP
     @Test
     public void validate_skipStep_zeroSkip_returnsOk() {
         assertTrue(AggregationStepValidator.validate(new SkipAggregationStep(0)).isValid());
@@ -222,7 +214,6 @@ public class AggregationStepValidatorTest {
         assertFalse(AggregationStepValidator.validate(step).isValid());
     }
 
-    // SORT
     @Test
     public void validate_sortStep_valid_returnsOk() {
         assertTrue(AggregationStepValidator.validate(new SortAggregationStep("score", true)).isValid());

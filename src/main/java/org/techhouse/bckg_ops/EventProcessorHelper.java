@@ -37,8 +37,6 @@ public class EventProcessorHelper {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
         if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
-            // The collection was dropped while this event was queued; there is nothing to maintain.
-            // Clear the pending overlay and skip so we never touch the removed collection's files.
             clearPending(dbName, collName, event.getInsertedEntries());
             clearPending(dbName, collName, event.getUpdatedEntries());
             return;
@@ -49,8 +47,6 @@ public class EventProcessorHelper {
             AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.CREATED, event.getInsertedEntries());
             AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdatedEntries());
         } finally {
-            // Indexing is done (or failed): the documents are no longer pending. Cleared in a finally
-            // so a failure cannot leak ids into the pending overlay.
             clearPending(dbName, collName, event.getInsertedEntries());
             clearPending(dbName, collName, event.getUpdatedEntries());
         }
@@ -79,19 +75,15 @@ public class EventProcessorHelper {
         final var dbEntry = event.getDbEntry();
         final var type = event.getType();
         if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
-            // The collection was dropped while this event was queued; there is nothing to maintain.
-            // Clear the pending overlay and skip so we never touch the removed collection's files.
             pendingIndexWrites.clear(dbName, collName, dbEntry.get_id());
             return;
         }
         try {
-            // Index maintenance re-reads the current document by id (order-independent); the event
-            // type/snapshot is still authoritative for the admin entry-count delta.
+            // Index maintenance re-reads the current document by id, so events may run out of order;
+            // the event snapshot stays authoritative only for the admin entry-count delta.
             IndexHelper.updateIndexes(dbName, collName, dbEntry.get_id());
             AdminOperationHelper.updateEntryCount(dbName, collName, type, dbEntry);
         } finally {
-            // Indexing is done (or failed): the document is no longer pending. Cleared in a finally so
-            // a failure cannot leak the id into the pending overlay (no-op for DELETE, never marked).
             pendingIndexWrites.clear(dbName, collName, dbEntry.get_id());
         }
     }

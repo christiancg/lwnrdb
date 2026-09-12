@@ -18,7 +18,6 @@ public class InterpreterYieldStarTest {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
-    // a throw completion at the delegating yield is forwarded to the inner iterator's throw method
     @Test
     public void delegationForwardsThrowToInnerIterator() {
         final var source = """
@@ -39,7 +38,6 @@ public class InterpreterYieldStarTest {
         assertEquals("throw:boom|resumed:9", str(source));
     }
 
-    // a return completion is forwarded to the inner iterator's return method
     @Test
     public void delegationForwardsReturnToInnerIterator() {
         final var source = """
@@ -60,7 +58,6 @@ public class InterpreterYieldStarTest {
         assertEquals("return:42#7,true", str(source));
     }
 
-    // the value passed to the outer next() reaches the inner iterator's next method
     @Test
     public void delegationPropagatesSentValue() {
         final var source = """
@@ -79,7 +76,6 @@ public class InterpreterYieldStarTest {
         assertEquals("undefined,b,c", str(source));
     }
 
-    // the delegating expression evaluates to the inner iterator's return value
     @Test
     public void delegationReturnsInnerReturnValue() {
         final var source = """
@@ -92,13 +88,11 @@ public class InterpreterYieldStarTest {
         assertEquals("inner-done", str(source));
     }
 
-    // the next method is read off the iterator object, once, when the iterator is opened
     @Test
     public void delegationLooksUpNextOnTheIteratorObject() {
         assertEquals(1, num());
     }
 
-    // a synchronous generator hands its consumer the inner iterator's result object untouched
     @Test
     public void delegationPassesTheInnerResultObjectThrough() {
         final var source = """
@@ -114,7 +108,6 @@ public class InterpreterYieldStarTest {
         assertEquals("true,undefined", str(source));
     }
 
-    // an inner iterator without a throw method is closed and the protocol violation is a TypeError
     @Test
     public void delegationWithoutThrowMethodClosesAndThrowsTypeError() {
         final var source = """
@@ -135,8 +128,6 @@ public class InterpreterYieldStarTest {
         assertEquals("return|true", str(source));
     }
 
-    // AsyncFromSyncIteratorContinuation: when the awaited `value` of a not-done step rejects, the
-    // wrapped synchronous iterator is closed exactly once before the rejection propagates.
     @Test
     @org.junit.jupiter.api.Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
     public void asyncDelegationClosesTheSyncIteratorWhenAValueRejects() {
@@ -160,7 +151,6 @@ public class InterpreterYieldStarTest {
         assertEquals("return|rejected:boom", joinedLog(source));
     }
 
-    // A done step's value rejecting is the delegation's own completion, so the iterator is not closed
     @Test
     @org.junit.jupiter.api.Timeout(value = 30, unit = java.util.concurrent.TimeUnit.SECONDS)
     public void asyncDelegationDoesNotCloseOnADoneStep() {

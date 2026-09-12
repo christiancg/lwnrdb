@@ -20,19 +20,12 @@ import org.techhouse.config.Globals;
 import org.techhouse.ex.TlsConfigurationException;
 
 /**
- * Generates a self-signed RSA certificate and stores it in a PKCS12 keystore, using only public JDK
- * APIs. The X.509 structure is hand-encoded with {@link DerWriter} because the JDK exposes no public
- * builder for {@code X509Certificate}, and the project forbids third-party libraries. The result is a
- * development-only certificate; production deployments should supply a CA-issued keystore.
+ * The X.509 structure is hand-encoded because the JDK exposes no public {@code X509Certificate} builder.
  */
 public final class SelfSignedCertificateGenerator {
-    // sha256WithRSAEncryption: 1.2.840.113549.1.1.11
     private static final int[] OID_SHA256_WITH_RSA = {1, 2, 840, 113549, 1, 1, 11};
-    // commonName: 2.5.4.3
     private static final int[] OID_COMMON_NAME = {2, 5, 4, 3};
-    // basicConstraints: 2.5.29.19
     private static final int[] OID_BASIC_CONSTRAINTS = {2, 5, 29, 19};
-    // subjectAltName: 2.5.29.17
     private static final int[] OID_SUBJECT_ALT_NAME = {2, 5, 29, 17};
     private static final int SAN_DNS_NAME = 2;
     private static final int SAN_IP_ADDRESS = 7;
@@ -42,10 +35,6 @@ public final class SelfSignedCertificateGenerator {
     private SelfSignedCertificateGenerator() {
     }
 
-    /**
-     * Generates a self-signed certificate, stores it under {@code alias} in a new PKCS12 keystore,
-     * persists that keystore to {@code keystorePath}, and returns the in-memory keystore.
-     */
     public static KeyStore generate(Path keystorePath, char[] password, String alias) {
         try {
             final var keyPair = generateKeyPair();

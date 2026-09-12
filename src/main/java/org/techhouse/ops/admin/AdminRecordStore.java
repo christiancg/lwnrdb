@@ -15,8 +15,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
-// An append-and-remove admin collection addressed purely by primary key: transaction slice ops and
-// pending trigger runs. Both only ever insert and delete whole records, so they share one shape.
 public final class AdminRecordStore<T> {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);

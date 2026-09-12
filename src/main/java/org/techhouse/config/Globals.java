@@ -16,20 +16,12 @@ public final class Globals {
     public static final String DB_FILE_EXTENSION = ".dat";
     public static final String JSON_FILE_EXTENSION = ".json";
     public static final String INDEX_FILE_EXTENSION = ".idx";
-    // Per-collection JSON Schema file: {coll}-schema.json holds the single validation schema for the
-    // collection (user data, stored in the collection folder). Absent = the collection is unconstrained.
     public static final String SCHEMA_FILE_NAME = "schema";
     public static final String SCHEMA_FILE_EXTENSION = JSON_FILE_EXTENSION;
-    // Per-database stored procedures live in a folder beside the database's collection folders. The
-    // leading '.' cannot appear in a collection name, so the folder can never collide with one.
     public static final String PROCEDURES_FOLDER = ".procedures";
     public static final String PROCEDURE_FILE_EXTENSION = JSON_FILE_EXTENSION;
-    // Per-database schedules live beside the procedures folder, and cannot collide with a collection name
-    // for the same reason: a leading '.' is unrepresentable in one.
     public static final String SCHEDULES_FOLDER = ".schedules";
     public static final String SCHEDULE_FILE_EXTENSION = JSON_FILE_EXTENSION;
-    // Per-collection trigger file infix: {coll}-triggers.json holds every trigger on the collection,
-    // stored in the collection folder beside its schema so a DROP_COLLECTION removes it with the data.
     public static final String TRIGGERS_FILE_NAME = "triggers";
     public static final String TRIGGERS_FILE_EXTENSION = JSON_FILE_EXTENSION;
     public static final String RW_PERMISSIONS = "rwd";
@@ -38,8 +30,6 @@ public final class Globals {
     public static final String COLL_IDENTIFIER_SEPARATOR_REGEX = "\\|";
     public static final char INDEX_FILE_NAME_SEPARATOR = '-';
     public static final String INDEX_ENTRY_SEPARATOR = "|";
-    // Per-collection tombstone file infix: {coll}-tombstones.idx holds id|version records of deleted
-    // documents, so cluster anti-entropy can converge deletes (last-write-wins) without resurrecting them.
     public static final String TOMBSTONE_FILE_NAME = "tombstones";
     public static final String ID_SEPARATOR = "";
     public static final String STRING_LITERAL_PREFIX = "-";
@@ -54,8 +44,6 @@ public final class Globals {
     public static final String ADMIN_COLLECTION_USAGE_NAME = "collection_usage";
     public static final String ADMIN_TRANSACTIONS_COLLECTION_NAME = "transactions";
     public static final String ADMIN_TRIGGER_RUNS_COLLECTION_NAME = "trigger_runs";
-    // A reserved collection in every user database, holding the history of the script runs that
-    // touched it. Reserved so a client cannot write one by hand and a trigger cannot fire on it.
     public static final String SCRIPT_RUNS_COLLECTION_NAME = "script_runs";
     public static final long CACHE_DISABLED = -1L;
     public static final long CACHE_UNLIMITED = 0L;
@@ -69,9 +57,6 @@ public final class Globals {
     public static final String CLOSE_CONNECTION_MESSAGE = "Bye!";
     public static final String CUSTOM_JSON_REGEX = "^#[a-zA-Z0-9]{3,20}\\(.*\\)$";
     public static final double EARTH_RADIUS_METERS = 6371000.0;
-    // Geohash-backed spatial acceleration: the finest precision considered when covering a query
-    // bounding box, and the cap on how many geohash cells a covering may use before a coarser
-    // precision is chosen (fewer, larger cells) to keep the range scan bounded.
     public static final int GEO_HASH_MAX_PRECISION = 9;
     public static final int GEO_HASH_MAX_COVERING_CELLS = 32;
     public static final String TLS_KEY_ALIAS = "lwnrdb";
@@ -88,6 +73,5 @@ public final class Globals {
     public static final String CLUSTER_ADMIN_EPOCH_FILE = "admin.epoch";
     public static final String CLUSTER_SEED_SEPARATOR = ",";
     public static final String CLUSTER_ADDRESS_SEPARATOR = ":";
-    // Reserved ring key whose owner is the cluster's admin coordinator (serializes admin/DDL mutations).
     public static final String CLUSTER_ADMIN_COORDINATOR_KEY = "__admin_coordinator__";
 }

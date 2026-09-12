@@ -24,9 +24,6 @@ import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The durable pending-run log on its own: what it writes, how it chunks, and when it declines to write.
- */
 public class TriggerRunLogTest {
     private static final Configuration configuration = Configuration.getInstance();
 
@@ -74,8 +71,6 @@ public class TriggerRunLogTest {
         assertEquals(List.of("a"), pending.getFirst().getIds());
     }
 
-    // A run whose id list would not fit in one record is split across chunks that share the run id, so a
-    // bulk write of many documents is still recoverable.
     @Test
     public void test_large_id_list_is_chunked() throws Exception {
         final var entries = new ArrayList<DbEntry>();
@@ -97,8 +92,6 @@ public class TriggerRunLogTest {
         assertEquals(entries.size(), total, "chunking must not drop ids");
     }
 
-    // A single deleted document too large to store cannot be logged. The write has already committed, so the
-    // run proceeds without a record rather than failing.
     @Test
     public void test_oversized_deleted_document_falls_back_to_non_durable() {
         final var huge = entry("huge", (int) configuration.getMaxEntrySize());
@@ -158,7 +151,6 @@ public class TriggerRunLogTest {
         assertEquals(1, TriggerRunLog.pending().size(), "a disabled log must not collect anything");
     }
 
-    // A standalone node has no cluster identity, so it uses a fixed id that is stable across restarts.
     @Test
     public void test_standalone_node_id_is_stable() {
         assertEquals(TriggerRunLog.currentNodeId(), TriggerRunLog.currentNodeId());

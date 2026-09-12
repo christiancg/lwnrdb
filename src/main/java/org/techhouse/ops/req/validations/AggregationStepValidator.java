@@ -56,8 +56,6 @@ public class AggregationStepValidator {
         return validateScriptSource(step.getScript(), "REDUCE step");
     }
 
-    // The gate for every script inside a pipeline: the same master switch RUN_SCRIPT sits behind, then
-    // the source itself. Who may run one is decided separately, by AuthorizationChecker.
     static ValidationResult validateScriptSource(String source, String what) {
         if (!Configuration.getInstance().isScriptsEnabled()) {
             return ValidationResult.fail(ErrorCode.SCRIPTS_DISABLED, ErrorCode.SCRIPTS_DISABLED.getDefaultMessage());
@@ -72,9 +70,6 @@ public class AggregationStepValidator {
         return ValidationResult.ok();
     }
 
-    // True when any step (or any operator nested in one) carries a script, so a caller that has to treat
-    // a scripted pipeline differently - LISTEN refusing one, AuthorizationChecker demanding the script
-    // grant for one - can ask once rather than re-walking the tree itself.
     public static boolean containsScript(java.util.List<BaseAggregationStep> steps) {
         if (steps == null) {
             return false;
@@ -327,7 +322,6 @@ public class AggregationStepValidator {
                 || !JsonGeo.CUSTOM_TYPE_NAME.equals(element.asJsonCustom().getCustomTypeName());
     }
 
-    // Parses a comparator element to a GeoDistanceComparator, or null when it is not a valid comparator.
     private static GeoDistanceComparator parseComparator(JsonBaseElement comparator) {
         try {
             return GeoDistanceComparator.valueOf(comparator.asJsonString().getValue());

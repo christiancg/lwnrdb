@@ -56,9 +56,6 @@ public class ScriptPlacement {
         forwardFallbacks.increment();
     }
 
-    // A forward whose outcome could not be established, so the script was deliberately not re-run here.
-    // Counted apart from forwardFallbacks: a fallback ran the work somewhere, this one may have run it
-    // on the target and told the caller nothing, which is the case an operator needs to see.
     public void recordOutcomeUnknown() {
         outcomeUnknown.increment();
     }
@@ -127,12 +124,8 @@ public class ScriptPlacement {
         if (winner != null && (loadOnly == null || !winner.getNodeId().equals(loadOnly.getNodeId()))) {
             localityPreferred.increment();
         }
-        // Nothing separates the pair, so the run goes to the first sample rather than to a node-id order.
-        // betterOfTwoSamples draws an ordered pair, which makes the first element uniform over the eligible
-        // set. That matters because gossip refreshes scriptLoad once per interval and a short script is long
-        // over by then: on an idle cluster every pair ties, and a stable node-id order would send every run
-        // to the lowest id and never once to the highest. Two nodes sampling the same pair no longer agree,
-        // which nothing relies on - each node places only its own runs.
+        // A tie goes to the first sample, which betterOfTwoSamples draws uniformly: a stable node-id order
+        // would send every run on an idle cluster to the lowest id and never once to the highest.
         return winner != null ? winner : a;
     }
 

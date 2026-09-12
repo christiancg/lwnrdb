@@ -79,7 +79,6 @@ public class DbTransactionProgramTest {
                 + body;
     }
 
-    // A read-modify-write across two documents commits as one unit
     @Test
     public void test_read_modify_write_commits() {
         seed("prog-a", "one");
@@ -100,7 +99,6 @@ public class DbTransactionProgramTest {
         assertCollectionLockFree();
     }
 
-    // A callback that throws after a write leaves no partial write behind
     @Test
     public void test_throwing_callback_leaves_no_partial_write() {
         final var result = run(script("""
@@ -114,8 +112,8 @@ public class DbTransactionProgramTest {
         assertCollectionLockFree();
     }
 
-    // The single most important case: a sandbox abort is not catchable by user code and skips
-    // `finally`, but the Java-level rollback in DbModule still runs, so the locks are released.
+    // A sandbox abort is not catchable by user code and skips `finally`, but DbModule's Java-level
+    // rollback still runs, so the locks are released.
     @Test
     public void test_instruction_budget_exceeded_inside_the_callback_rolls_back() {
         final var result = run(script("""
@@ -130,7 +128,6 @@ public class DbTransactionProgramTest {
         assertCollectionLockFree();
     }
 
-    // bulkSave inside a transaction commits the whole batch
     @Test
     public void test_bulk_save_inside_a_transaction() {
         final var result = run(script("""
@@ -146,7 +143,6 @@ public class DbTransactionProgramTest {
         assertCollectionLockFree();
     }
 
-    // A geo/vector field read back from the database keeps its type on disk after a script rewrite
     @Test
     public void test_custom_type_round_trips_through_a_script() {
         final var result = run(script("""
@@ -162,7 +158,6 @@ public class DbTransactionProgramTest {
         assertEquals("#vector(1.0,2.0,3.0)", stored.get("v").asJsonString().getValue());
     }
 
-    // A Geo nested inside an array inside an object keeps its type all the way to disk
     @Test
     public void test_nested_custom_type_in_a_saved_document() {
         final var result = run(script("""
@@ -175,8 +170,6 @@ public class DbTransactionProgramTest {
                 .asJsonString().getValue());
     }
 
-    // Two script transactions contending for the same collection do not deadlock: the second waits
-    // out transactionLockTimeoutMs and rolls back rather than blocking forever.
     @Test
     public void test_concurrent_transactions_on_one_collection_do_not_deadlock() throws Exception {
         final var second = new java.util.concurrent.atomic.AtomicReference<ScriptResult>();
@@ -207,10 +200,8 @@ public class DbTransactionProgramTest {
         assertCollectionLockFree();
     }
 
-    // The checklist's regression guard: the geo/vector aggregation operators must work against
-    // documents written *through a script* rather than the wire. This is what would break if
-    // EJsonInterop emitted a plain string instead of a real JsonGeo/JsonVector — the documents would
-    // still read back fine, but the type-specific operators would no longer match them.
+    // Regression guard: this is what would break if EJsonInterop emitted a plain string instead of a
+    // real JsonGeo/JsonVector - the documents would still read back, but the operators would not match.
     @Test
     public void test_geo_and_vector_operators_match_script_written_documents() {
         final var result = run(script("""

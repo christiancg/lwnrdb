@@ -27,9 +27,6 @@ import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveResponse;
 
-// Appends a transaction's writes to its durable slice and mirrors them into the session overlay,
-// so the transaction reads its own writes while nothing is visible to anyone else until commit
-// replays them. Ending the transaction on a lock timeout is the caller's to supply.
 public final class TransactionBuffer {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
@@ -42,7 +39,6 @@ public final class TransactionBuffer {
     private TransactionBuffer() {
     }
 
-    // Buffers the op that consumes a pending trigger run, so it commits with the run's effects.
     public static void bufferTriggerRunConsume(Transaction transaction, String runId) throws Exception {
         final var payload = new JsonObject();
         payload.addProperty(TRIGGER_RUN_ID_FIELD, runId);
@@ -182,8 +178,6 @@ public final class TransactionBuffer {
         });
     }
 
-    // Persists one buffered operation to admin/transactions and records its id on the transaction so it
-    // can be replayed (commit) and removed (commit/rollback).
     private static long bufferOperation(Transaction transaction, String opType, String dbName, String collName,
             JsonObject payload) throws Exception {
         final var seq = transaction.nextSeq();
@@ -194,11 +188,8 @@ public final class TransactionBuffer {
         return seq;
     }
 
-    // Acquires the collection's write lock for the transaction on first touch (holding it until
-    // commit/rollback). Returns null on success, or a lock-timeout response after auto-rolling back the
-    // transaction when the lock cannot be taken within the bound.
-    // A lock timeout ends the transaction, but ending it belongs to the lifecycle rather than to the
-    // buffering path, so the caller passes in what to do rather than this reaching back for it.
+    // The collection write lock is taken on first touch and held until commit/rollback. Ending the
+    // transaction on timeout belongs to the lifecycle, so the caller supplies onTimeout.
     public static OperationResponse ensureLock(Transaction transaction, OperationType type, String dbName,
             String collName, Runnable onTimeout) throws InterruptedException {
         final var collId = Cache.getCollectionIdentifier(dbName, collName);

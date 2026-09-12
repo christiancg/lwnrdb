@@ -16,13 +16,11 @@ public class ReflectionUtils {
                 } else {
                     return (Class<T>) ((ParameterizedType) type).getRawType();
                 }
-            } // Check for raw TypeToken as superclass
-            else if (superclass == TypeToken.class) {
+            } else if (superclass == TypeToken.class) {
                 throw new IllegalStateException(
                         "TypeToken must be created with a type argument: new TypeToken<...>() {}; When using code"
                                 + " shrinkers (ProGuard, R8, ...) make sure that generic signatures are preserved.");
             }
-            // User created sub subclass of TypeToken
             throw new IllegalStateException("Must only create direct subclasses of TypeToken");
         }
     }

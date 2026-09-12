@@ -30,8 +30,6 @@ import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-// The scaffolding both script-routing suites drive: a cluster harness with scripts enabled, an admin
-// user to run them as, and collections owned by this node or a peer.
 abstract class ScriptClusterTestBase {
     static final String ADMIN = "scriptrouteadmin";
     private static final int SCRIPT_CAPACITY = 10;
@@ -58,8 +56,7 @@ abstract class ScriptClusterTestBase {
         return node;
     }
 
-    // A node reporting a cap, so placement compares load ratios against it rather than absolute load. The
-    // cap itself is arbitrary and shared by both sides of the pair; only the ratio between them decides.
+    // The cap is arbitrary and shared by both sides of the pair; only the ratio between them decides.
     static NodeInfo cappedNode(String id, int port, int scriptLoad) {
         final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, SCRIPT_CAPACITY);
         node.setAdminEpoch(IocContainer.get(AdminEpoch.class).current());
@@ -106,8 +103,6 @@ abstract class ScriptClusterTestBase {
         return object;
     }
 
-    // Clustering stays off in setUp so the single-node paths can be exercised too; configuring a
-    // membership is what switches it on.
     void configureMembership(int expectedSize, NodeInfo self, NodeInfo... others) throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         cluster.configureMembership(expectedSize, self, others);
@@ -143,9 +138,8 @@ abstract class ScriptClusterTestBase {
         TestUtils.setPrivateField(config, "scriptLocalityWeight", 0);
     }
 
-    // The peer carries the higher load, so load alone decides the pair and keeps the run here - no tie, and
-    // so no dependence on how an undecided pair is resolved. Whatever moves the run to the peer can only be
-    // the ownership share: at weight 100 the peer's 1.0 share outweighs its PEER_LOAD/SCRIPT_CAPACITY ratio.
+    // The peer carries the higher load, so load alone keeps the run here - no tie, and so no dependence
+    // on how an undecided pair is resolved.
     void configureMembershipWithAPeerOwningTheWholeDatabase() throws Exception {
         final var collections = IocContainer.get(Cache.class).getCollectionNamesForDatabase(TestGlobals.DB);
         assertFalse(collections.isEmpty(), "the fixture database must have at least one collection");

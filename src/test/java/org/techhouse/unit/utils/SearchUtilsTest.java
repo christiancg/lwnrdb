@@ -18,7 +18,6 @@ import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.utils.SearchUtils;
 
 public class SearchUtilsTest {
-    // Binary search correctly finds exact matches for EQUALS operator
     @Test
     public void test_binary_search_finds_exact_match() {
         List<FieldIndexEntry<Integer>> entries = new ArrayList<>();
@@ -31,7 +30,6 @@ public class SearchUtilsTest {
         assertEquals(Set.of("id2"), result);
     }
 
-    // Empty list of entries returns empty result set
     @Test
     public void test_empty_entries_returns_empty_set() {
         List<FieldIndexEntry<Integer>> entries = new ArrayList<>();
@@ -41,7 +39,6 @@ public class SearchUtilsTest {
         assertTrue(result.isEmpty());
     }
 
-    // Returns matching IDs when using EQUALS operator with existing value
     @Test
     public void test_equals_operator_returns_matching_ids() {
         Set<String> ids1 = Set.of("id1", "id2");
@@ -55,7 +52,6 @@ public class SearchUtilsTest {
         assertEquals(ids1, result);
     }
 
-    // Empty entries list returns empty set for all operators
     @Test
     public void test_empty_entries_returns_empty_set2() {
         List<FieldIndexEntry<String>> emptyEntries = Collections.emptyList();
@@ -70,7 +66,6 @@ public class SearchUtilsTest {
         assertTrue(containsResult.isEmpty());
     }
 
-    // Returns all non-matching IDs when using NOT_EQUALS operator
     @Test
     public void test_not_equals_operator() {
         List<FieldIndexEntry<String>> entries = Stream
@@ -82,7 +77,6 @@ public class SearchUtilsTest {
         assertEquals(Set.of("id1", "id2", "id4"), result);
     }
 
-    // Returns IDs of string entries containing substring using CONTAINS operator
     @Test
     public void test_finding_by_operator_contains() {
         List<FieldIndexEntry<String>> entries = List.of(
@@ -93,7 +87,6 @@ public class SearchUtilsTest {
         assertEquals(Set.of("id1", "id2"), result);
     }
 
-    // Throws UnsupportedOperationException for IN operator
     @Test
     public void test_unsupported_operation_in_operator() {
         List<FieldIndexEntry<String>> entries = List.of(
@@ -103,7 +96,6 @@ public class SearchUtilsTest {
                 () -> SearchUtils.findingByOperator(entries, FieldOperatorType.IN, "value"));
     }
 
-    // Create a happy path test of the finding by operator method using the operator types IN and NOT_IN
     @Test
     public void test_in_and_not_in_operators_throw_exception() {
         Set<String> ids1 = Set.of("id1", "id2");
@@ -119,7 +111,6 @@ public class SearchUtilsTest {
                 () -> SearchUtils.findingByOperator(entries, FieldOperatorType.NOT_IN, "value2"));
     }
 
-    // IN operator returns matching IDs when values exist in entries
     @Test
     public void test_in_operator_returns_matching_ids() {
         Set<String> ids1 = new HashSet<>(Arrays.asList("1", "2"));
@@ -136,7 +127,6 @@ public class SearchUtilsTest {
         assertTrue(result.containsAll(Arrays.asList("1", "2", "3", "4")));
     }
 
-    // Null entries list throws NullPointerException
     @Test
     public void test_null_entries_throws_npe() {
         List<String> searchValues = List.of("value1");
@@ -145,7 +135,6 @@ public class SearchUtilsTest {
                 () -> SearchUtils.findingInNotIn(null, FieldOperatorType.IN, searchValues));
     }
 
-    // NOT_IN operator returns IDs for entries not in the value list
     @Test
     public void test_not_in_operator_returns_ids_not_in_value_list() {
         List<FieldIndexEntry<String>> entries = List.of(
@@ -157,7 +146,6 @@ public class SearchUtilsTest {
         assertEquals(Set.of("id3"), result);
     }
 
-    // Empty value list with IN operator returns empty set
     @Test
     public void test_empty_value_list_with_in_operator_returns_empty_set() {
         List<FieldIndexEntry<String>> entries = List.of(new FieldIndexEntry<>("db1", "col1", "value1", Set.of("id1")),
@@ -167,7 +155,6 @@ public class SearchUtilsTest {
         assertTrue(result.isEmpty());
     }
 
-    // Empty value list with NOT_IN operator returns all IDs
     @Test
     public void test_empty_value_list_with_not_in_operator_returns_all_ids() {
         List<FieldIndexEntry<String>> entries = List.of(new FieldIndexEntry<>("db1", "col1", "value1", Set.of("id1")),
@@ -177,7 +164,6 @@ public class SearchUtilsTest {
         assertEquals(Set.of("id1", "id2"), result);
     }
 
-    // Test the findingByOperator method using JsonDateTime entries and JsonTime entries
     @Test
     public void test_finding_in_not_in_with_json_datetime_and_json_time() {
         Set<String> ids1 = new HashSet<>(Arrays.asList("1", "2"));
@@ -201,7 +187,6 @@ public class SearchUtilsTest {
         assertEquals(2, resultNotIn.size());
     }
 
-    // CONTAINS with a non-String value returns empty set
     @Test
     public void test_contains_non_string_value_returns_empty() {
         List<FieldIndexEntry<Number>> entries = List.of(new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1")),
@@ -210,7 +195,6 @@ public class SearchUtilsTest {
         assertTrue(result.isEmpty());
     }
 
-    // findingInNotIn throws UnsupportedOperationException for non-IN/NOT_IN operators
     @Test
     public void test_finding_in_not_in_throws_for_non_in_operators() {
         List<FieldIndexEntry<String>> entries = List.of(new FieldIndexEntry<>("db1", "col1", "value1", Set.of("id1")));
@@ -222,7 +206,6 @@ public class SearchUtilsTest {
                 () -> SearchUtils.findingInNotIn(entries, FieldOperatorType.GREATER_THAN, List.of("value1")));
     }
 
-    // Test the method using JsonDateTime and JsonTime entries
     @Test
     public void test_json_datetime_and_json_time_operators() {
         Set<String> ids1 = Set.of("1", "2");
@@ -252,7 +235,6 @@ public class SearchUtilsTest {
         assertEquals(allIdSet, resultTime);
     }
 
-    // NOT_EQUALS where value is NOT in entries → else branch returns all (L43)
     @Test
     public void test_not_equals_value_not_in_entries_returns_all() {
         List<FieldIndexEntry<String>> entries = List.of(new FieldIndexEntry<>("db", "col", "a", Set.of("id1")),

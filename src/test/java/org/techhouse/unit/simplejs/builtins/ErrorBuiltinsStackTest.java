@@ -18,7 +18,6 @@ public class ErrorBuiltinsStackTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // An error built with no interpreter running keeps the single synthetic frame it always had
     @Test
     public void test_stack_without_an_interpreter_keeps_the_synthetic_frame() {
         final var error = ErrorBuiltins.makeError("TypeError", "boom");
@@ -32,7 +31,6 @@ public class ErrorBuiltinsStackTest {
     }
 
     // The header reads the own `name` property, which a constructed error inherits rather than owns - that
-    // predates the frames and is left alone here; what is asserted is the frame list below it
     @Test
     public void test_stack_lists_the_enclosing_frames() {
         final var stack = text("""
@@ -45,7 +43,6 @@ public class ErrorBuiltinsStackTest {
         assertTrue(stack.endsWith("\n    at main:4:1"), stack);
     }
 
-    // The setter still installs an own property on the receiver rather than writing through the prototype
     @Test
     public void test_stack_setter_installs_an_own_property() {
         assertEquals("replaced", text("const e = new Error('x'); e.stack = 'replaced'; e.stack"));
@@ -64,7 +61,6 @@ public class ErrorBuiltinsStackTest {
                 """));
     }
 
-    // The [[ErrorData]] brand check is unchanged: a plain object reading the accessor gets undefined
     @Test
     public void test_non_error_receiver_returns_undefined() {
         assertTrue(bool("""

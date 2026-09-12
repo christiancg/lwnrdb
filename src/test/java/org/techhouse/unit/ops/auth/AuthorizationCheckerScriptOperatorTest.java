@@ -26,10 +26,6 @@ import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * A pipeline script executes code, so it needs the same per-database grant RUN_SCRIPT does - READ on the
- * collection is not enough.
- */
 public class AuthorizationCheckerScriptOperatorTest {
     private static final String OWNER = "dbowner";
     private static final String SOURCE = "export default (doc) => true;";

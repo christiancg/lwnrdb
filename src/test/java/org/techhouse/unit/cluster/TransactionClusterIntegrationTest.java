@@ -71,8 +71,6 @@ public class TransactionClusterIntegrationTest {
         TestUtils.standardTearDown();
     }
 
-    // Clustering stays off in setUp so the single-node paths can be exercised too; configuring a
-    // membership is what switches it on.
     private void configureMembership(int expectedSize, NodeInfo self, NodeInfo... others) throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         cluster.configureMembership(expectedSize, self, others);
@@ -137,8 +135,6 @@ public class TransactionClusterIntegrationTest {
         return clientTracker.addClient(socket);
     }
 
-    // ---------- owner-side FORWARD_TX handler ----------
-
     @Test
     public void test_forward_tx_save_then_commit_persists_and_clears_session() throws Exception {
         final var save = pool.request(cluster.serverAddress(),
@@ -171,8 +167,6 @@ public class TransactionClusterIntegrationTest {
         assertEquals(ClusterMessageType.ERROR, response.getType());
     }
 
-    // ---------- replica-side REPLICATE_TX handler ----------
-
     @Test
     public void test_replicate_tx_applies_batch() throws Exception {
         final var entry = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
@@ -191,8 +185,6 @@ public class TransactionClusterIntegrationTest {
         final var response = pool.request(cluster.serverAddress(), message, 2000);
         assertEquals(ClusterMessageType.ERROR, response.getType());
     }
-
-    // ---------- owner-side 2PC handlers ----------
 
     @Test
     public void test_prepare_then_commit_tx_over_wire() throws Exception {
@@ -237,8 +229,6 @@ public class TransactionClusterIntegrationTest {
         assertEquals("COMMITTED", committed.getTxStatus());
     }
 
-    // ---------- edge routing ----------
-
     @Test
     public void test_transaction_write_binds_and_forwards_to_owner() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
@@ -249,12 +239,10 @@ public class TransactionClusterIntegrationTest {
         final var request = saveRequest(coll, "routed");
         final var relayed = router.forward(request, eJson.toJson(request), true, "admin", clientId);
 
-        // The write is forwarded to (and buffered on) the owner, which is now registered as a participant.
         assertNotNull(relayed);
         assertTrue(relayed.contains("routed"), "expected the forwarded write to be buffered, got: " + relayed);
         assertTrue(clientTracker.transactionParticipants(clientId).contains(cluster.serverAddress().toString()));
 
-        // Teardown aborts the participant, releasing its session.
         router.teardownTransaction(clientId);
     }
 
@@ -275,9 +263,7 @@ public class TransactionClusterIntegrationTest {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
-        // START is not forwarded.
         assertNull(router.forward(new StartTransactionRequest(), "{}", true, "admin", clientId));
-        // A read before the first write runs locally (no binding yet).
         final var read = new FindByIdRequest(TestGlobals.DB, collectionOwnedByOther());
         read.set_id("x");
         assertNull(router.forward(read, eJson.toJson(read), true, "admin", clientId));
@@ -289,7 +275,6 @@ public class TransactionClusterIntegrationTest {
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
         final var request = saveRequest(TestGlobals.COLL, "local-slice");
-        // Self owns everything in a single-node ring: the write runs locally (null) and records a local slice.
         assertNull(router.forward(request, eJson.toJson(request), true, "admin", clientId));
         assertTrue(clientTracker.hasLocalSlice(clientId));
         assertTrue(clientTracker.transactionParticipants(clientId).isEmpty());
@@ -300,7 +285,6 @@ public class TransactionClusterIntegrationTest {
         configureMembership(1, node("self", cluster.serverPort()));
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
-        // No remote participants: teardown is a no-op returning false (caller does local cleanup).
         assertFalse(router.teardownTransaction(clientId));
     }
 
@@ -354,8 +338,6 @@ public class TransactionClusterIntegrationTest {
         assertNull(clientTracker.getActiveTransaction(clientId));
     }
 
-    // ---------- LIST_TX in-doubt discovery ----------
-
     @Test
     public void test_list_tx_returns_local_in_doubt() throws Exception {
         final var dtxId = UUID.randomUUID().toString();
@@ -383,8 +365,6 @@ public class TransactionClusterIntegrationTest {
         assertEquals(ClusterMessageType.LIST_TX_ACK, response.getType());
         assertTrue(response.getInDoubtTransactions().isEmpty());
     }
-
-    // ---------- owner-side durable resolution & no-session paths ----------
 
     @Test
     public void test_prepare_tx_for_unknown_session_votes_no() throws Exception {

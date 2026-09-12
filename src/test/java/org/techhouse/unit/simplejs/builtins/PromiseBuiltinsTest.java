@@ -23,7 +23,6 @@ public class PromiseBuiltinsTest {
         return ((JsString) array.get(0)).getValue();
     }
 
-    // the AggregateError global constructor stores the message and an errors array
     @Test
     public void test_aggregate_error_constructor() {
         final var source = "let e = new AggregateError(['x', 'y'], 'oops');"
@@ -31,25 +30,21 @@ public class PromiseBuiltinsTest {
         assertEquals("AggregateError|oops|x,y", ((JsString) Interpreter.run(source)).getValue());
     }
 
-    // Promise.resolve settles fulfilled
     @Test
     public void test_resolve() {
         assertEquals(5, num(arr("let out = []; Promise.resolve(5).then(v => out.push(v)); out")));
     }
 
-    // Promise.reject is caught by catch
     @Test
     public void test_reject_and_catch() {
         assertEquals("c:e", string(arr("let out = []; Promise.reject('e').catch(v => out.push('c:' + v)); out")));
     }
 
-    // then handlers chain, each transforming the resolved value
     @Test
     public void test_then_chaining() {
         assertEquals(2, num(arr("let out = []; Promise.resolve(1).then(v => v + 1).then(v => out.push(v)); out")));
     }
 
-    // a throwing then handler rejects the derived promise
     @Test
     public void test_then_handler_throw_rejects() {
         final var source = """
@@ -60,20 +55,17 @@ public class PromiseBuiltinsTest {
         assertEquals("c:oops", string(arr(source)));
     }
 
-    // new Promise runs the executor and resolves via its resolve callback
     @Test
     public void test_new_promise_resolve() {
         assertEquals(9, num(arr("let out = []; new Promise((res, rej) => res(9)).then(v => out.push(v)); out")));
     }
 
-    // new Promise rejects via its reject callback
     @Test
     public void test_new_promise_reject() {
         assertEquals("x",
                 string(arr("let out = []; new Promise((res, rej) => rej('x')).catch(v => out.push(v)); out")));
     }
 
-    // a throwing executor rejects the promise
     @Test
     public void test_new_promise_executor_throw_rejects() {
         final var source = """
@@ -84,13 +76,11 @@ public class PromiseBuiltinsTest {
         assertEquals("bad", string(arr(source)));
     }
 
-    // a non-function resolver throws a TypeError
     @Test
     public void test_new_promise_bad_resolver_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Promise(5)"));
     }
 
-    // Promise.withResolvers exposes the promise and its resolve function; resolving settles it
     @Test
     public void test_with_resolvers_resolve() {
         final var source = """
@@ -103,7 +93,6 @@ public class PromiseBuiltinsTest {
         assertEquals(7, num(arr(source)));
     }
 
-    // Promise.withResolvers exposes a reject function that rejects the promise
     @Test
     public void test_with_resolvers_reject() {
         final var source = """
@@ -116,7 +105,6 @@ public class PromiseBuiltinsTest {
         assertEquals("boom", string(arr(source)));
     }
 
-    // Promise.try runs the callback and fulfils with its return value, passing extra args
     @Test
     public void test_try_fulfils() {
         final var source = """
@@ -127,7 +115,6 @@ public class PromiseBuiltinsTest {
         assertEquals(5, num(arr(source)));
     }
 
-    // Promise.try turns a synchronous throw into a rejection
     @Test
     public void test_try_rejects_on_throw() {
         final var source = """
@@ -138,7 +125,6 @@ public class PromiseBuiltinsTest {
         assertEquals("nope", string(arr(source)));
     }
 
-    // Promise.try adopts a promise returned by the callback
     @Test
     public void test_try_adopts_promise() {
         final var source = """
@@ -149,7 +135,6 @@ public class PromiseBuiltinsTest {
         assertEquals(11, num(arr(source)));
     }
 
-    // Promise.resolve assimilates a user thenable instead of fulfilling with the thenable itself
     @Test
     public void test_resolve_assimilates_thenable() {
         final var source = """
@@ -160,7 +145,6 @@ public class PromiseBuiltinsTest {
         assertEquals(42, num(arr(source)));
     }
 
-    // a thenable whose then throws synchronously rejects the derived promise
     @Test
     public void test_thenable_sync_throw_rejects() {
         final var source = """
@@ -171,7 +155,6 @@ public class PromiseBuiltinsTest {
         assertEquals("boom", string(arr(source)));
     }
 
-    // a thenable that never invokes its resolve/reject callback leaves the promise pending forever
     @Test
     public void test_thenable_never_settling_stays_pending() {
         final var source = """
@@ -182,8 +165,6 @@ public class PromiseBuiltinsTest {
         assertEquals(0, arr(source).length());
     }
 
-    // `new` on a Promise subclass runs the subclass constructor with the base executor; then() then
-    // builds its result through the same constructor, so it runs a second time
     @Test
     public void test_subclass_constructor_is_honoured() {
         final var source = """
@@ -198,7 +179,6 @@ public class PromiseBuiltinsTest {
         assertEquals("2:7", string(arr(source)));
     }
 
-    // then() builds its result through SpeciesConstructor, so a subclass receiver yields a subclass
     @Test
     public void test_then_uses_species_constructor() {
         final var source = """
@@ -213,7 +193,6 @@ public class PromiseBuiltinsTest {
         assertEquals("true:2", string(arr(source)));
     }
 
-    // a combinator called on a foreign constructor settles through that constructor's own executor
     @Test
     public void test_combinators_use_receiver_capability() {
         final var source = """
@@ -227,7 +206,6 @@ public class PromiseBuiltinsTest {
         assertEquals("r:1", string(arr(source)));
     }
 
-    // resolving a promise with itself rejects it with a TypeError instead of hanging
     @Test
     public void test_self_resolution_rejects() {
         final var source = """
@@ -241,7 +219,6 @@ public class PromiseBuiltinsTest {
         assertEquals("TypeError", string(arr(source)));
     }
 
-    // resolving with a promise queues the spec's thenable job, so the value arrives two ticks later
     @Test
     public void test_resolving_with_a_promise_queues_a_thenable_job() {
         final var source = """
@@ -253,8 +230,6 @@ public class PromiseBuiltinsTest {
         assertEquals("b", string(arr(source)));
     }
 
-    // a subclass constructor's super(executor) initialises the wrapped promise exactly once, and the
-    // instance behaves as a promise
     @Test
     public void test_subclass_super_initialises_the_wrapped_promise() {
         final var source = """
@@ -268,7 +243,6 @@ public class PromiseBuiltinsTest {
         assertEquals("1|v|true,true", string(arr(source)));
     }
 
-    // a subclass inherits the statics of its native superclass, and they build instances of it
     @Test
     public void test_subclass_inherits_native_statics() {
         final var source = """
@@ -281,7 +255,6 @@ public class PromiseBuiltinsTest {
         assertEquals("v|true", string(arr(source)));
     }
 
-    // a subclass with no explicit Symbol.species inherits %Promise%'s, which selects the subclass
     @Test
     public void test_then_uses_the_inherited_species_constructor() {
         final var source = """
@@ -294,14 +267,12 @@ public class PromiseBuiltinsTest {
         assertEquals("true", string(arr(source)));
     }
 
-    // NewPromiseCapability rejects a `this` that is not a constructor
     @Test
     public void test_combinator_on_a_non_constructor_this_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Promise.all.call(Math.max, [])"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Promise.resolve.call(Math.max, 1)"));
     }
 
-    // PerformPromiseAll reads Get(C, "resolve") once, then calls it per element
     @Test
     public void test_combinator_reads_resolve_once() {
         final var source = """
@@ -323,7 +294,6 @@ public class PromiseBuiltinsTest {
         assertEquals("1|3", string(arr(source)));
     }
 
-    // the per-element resolve functions are ordinary extensible functions of length 1, called once
     @Test
     public void test_resolve_element_functions_are_single_shot() {
         final var source = """
@@ -341,7 +311,6 @@ public class PromiseBuiltinsTest {
         assertEquals("true|1|undefined", string(arr(source)));
     }
 
-    // an assignment to a promise's own `then` is what PerformPromiseThen invokes
     @Test
     public void test_own_then_overrides_the_builtin() {
         final var source = """
@@ -356,7 +325,6 @@ public class PromiseBuiltinsTest {
         assertEquals("function,1|true", string(arr(source)));
     }
 
-    // Promise.try hands back the callback's own promise rather than wrapping it again
     @Test
     public void test_try_avoids_wrapping_a_matching_promise() {
         final var source = """
@@ -368,7 +336,6 @@ public class PromiseBuiltinsTest {
         assertEquals("true", string(arr(source)));
     }
 
-    // a throwing callback settles a fresh capability built from the receiver
     @Test
     public void test_try_rejects_through_the_receiver_capability() {
         final var source = """
@@ -381,7 +348,6 @@ public class PromiseBuiltinsTest {
         assertEquals("boom|true", string(arr(source)));
     }
 
-    // Promise is constructor-only: no new.target means a TypeError, whatever `this` is
     @Test
     public void test_constructor_requires_new() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Promise(function() {})"));
@@ -390,7 +356,6 @@ public class PromiseBuiltinsTest {
                 () -> Interpreter.run("let p = new Promise(function() {}); Promise.call(p, function() {})"));
     }
 
-    // ...while a subclass's super() call still reaches it
     @Test
     public void test_subclass_construction_still_works() {
         final var source = """

@@ -45,7 +45,6 @@ public class TemporalPlainDateTimeConversionTest {
                 () -> Interpreter.run("new Temporal.PlainDateTime(2020, 6, 15, 0, 0, 0, 0, 0, 0, 'gregory')"));
     }
 
-    // A non-string calendar argument is a TypeError, not a RangeError
     @Test
     public void test_constructor_calendar_non_string_is_type_error() {
         assertThrows(TypeErrorException.class,
@@ -54,8 +53,6 @@ public class TemporalPlainDateTimeConversionTest {
                 () -> Interpreter.run("new Temporal.PlainDateTime(2020, 6, 15).withCalendar(5)"));
     }
 
-    // The property-bag `calendar` field accepts a bare identifier, a full ISO string carrying (or
-    // defaulting) a u-ca annotation, or a Temporal object (fast path)
     @Test
     public void test_from_fields_calendar_field_flexible() {
         assertEquals("iso8601",
@@ -71,8 +68,6 @@ public class TemporalPlainDateTimeConversionTest {
                 () -> Interpreter.run("Temporal.PlainDateTime.from({year: 2020, month: 6, day: 15, calendar: 5})"));
     }
 
-    // ToTemporalDateTime's fast paths for PlainDate/ZonedDateTime arguments bypass the generic
-    // property-bag path entirely - a PlainDate's time defaults to midnight
     @Test
     public void test_from_plain_date_and_zoned_date_time_fast_paths() {
         assertEquals("2020-06-15T00:00:00",
@@ -81,7 +76,6 @@ public class TemporalPlainDateTimeConversionTest {
                 + "Temporal.ZonedDateTime.from('2020-06-15T10:00:00-04:00[America/New_York]')).toString()"));
     }
 
-    // add/subtract carry a time overflow into the date, exercising the day-borrow logic
     @Test
     public void test_add_and_subtract_carry_into_date() {
         assertEquals("2020,1,16,1", str("var d = new Temporal.PlainDateTime(2020, 1, 15, 23);"

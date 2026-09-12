@@ -36,7 +36,6 @@ public class FilterOperatorCustomTypeTest {
         TestUtils.standardTearDown();
     }
 
-    // getTester: custom type IN returns false (L141 branch)
     @Test
     public void test_custom_in_returns_false() {
         JsonObject obj = new JsonObject();
@@ -45,7 +44,6 @@ public class FilterOperatorCustomTypeTest {
         assertFalse(FilterOperatorHelper.getTester(op, FieldOperatorType.IN).test(obj, "t"));
     }
 
-    // processOperator with a JsonCustom field value exercises the JsonCustom index path
     @Test
     public void test_process_operator_with_custom_type_value() throws IOException {
         JsonObject obj = new JsonObject();
@@ -70,7 +68,6 @@ public class FilterOperatorCustomTypeTest {
         assertFalse(result.isEmpty());
     }
 
-    // Compare custom objects using compareCustom method
     @Test
     public void test_compare_custom_objects() {
         JsonCustom<?> customValue1 = new JsonTime("#time(10:00:00)");
@@ -85,7 +82,6 @@ public class FilterOperatorCustomTypeTest {
         assertTrue(tester.test(jsonObject, "customField"));
     }
 
-    // getTester: custom type NOT_EQUALS returns false when values are equal
     @Test
     public void test_custom_not_equals_returns_false_when_equal() {
         JsonObject obj = new JsonObject();
@@ -94,7 +90,6 @@ public class FilterOperatorCustomTypeTest {
         assertFalse(FilterOperatorHelper.getTester(op, FieldOperatorType.NOT_EQUALS).test(obj, "t"));
     }
 
-    // getTester: custom type GREATER_THAN returns true when field is after operator value
     @Test
     public void test_custom_greater_than_returns_true() {
         JsonObject obj = new JsonObject();
@@ -103,7 +98,6 @@ public class FilterOperatorCustomTypeTest {
         assertTrue(FilterOperatorHelper.getTester(op, FieldOperatorType.GREATER_THAN).test(obj, "t"));
     }
 
-    // getTester: custom type SMALLER_THAN returns true when field is before operator value
     @Test
     public void test_custom_smaller_than_returns_true() {
         JsonObject obj = new JsonObject();
@@ -112,7 +106,6 @@ public class FilterOperatorCustomTypeTest {
         assertTrue(FilterOperatorHelper.getTester(op, FieldOperatorType.SMALLER_THAN).test(obj, "t"));
     }
 
-    // getTester: custom type GREATER_THAN_EQUALS returns true when field equals operator value
     @Test
     public void test_custom_greater_than_equals_at_boundary() {
         JsonObject obj = new JsonObject();
@@ -122,7 +115,6 @@ public class FilterOperatorCustomTypeTest {
         assertTrue(FilterOperatorHelper.getTester(op, FieldOperatorType.GREATER_THAN_EQUALS).test(obj, "t"));
     }
 
-    // getTester: custom type SMALLER_THAN_EQUALS returns true when field equals operator value
     @Test
     public void test_custom_smaller_than_equals_at_boundary() {
         JsonObject obj = new JsonObject();
@@ -132,7 +124,6 @@ public class FilterOperatorCustomTypeTest {
         assertTrue(FilterOperatorHelper.getTester(op, FieldOperatorType.SMALLER_THAN_EQUALS).test(obj, "t"));
     }
 
-    // getTester: field value type mismatch with custom type returns false
     @Test
     public void test_custom_type_vs_string_field_returns_false() {
         JsonObject obj = new JsonObject();

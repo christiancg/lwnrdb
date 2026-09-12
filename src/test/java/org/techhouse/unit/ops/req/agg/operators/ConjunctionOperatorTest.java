@@ -12,7 +12,6 @@ import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 
 public class ConjunctionOperatorTest {
-    // Create ConjunctionOperator with valid conjunctionType "AND" and non-empty operators list
     @Test
     public void test_create_conjunction_operator_with_valid_type_and_operators() {
         List<BaseOperator> operators = Arrays.asList(new BaseOperator(OperatorType.FIELD),
@@ -25,7 +24,6 @@ public class ConjunctionOperatorTest {
         assertEquals(OperatorType.CONJUNCTION, conjunctionOperator.getType());
     }
 
-    // Create ConjunctionOperator with null conjunctionType
     @Test
     public void test_create_conjunction_operator_with_null_type() {
         List<BaseOperator> operators = List.of(new BaseOperator(OperatorType.FIELD));
@@ -37,7 +35,6 @@ public class ConjunctionOperatorTest {
         assertEquals(OperatorType.CONJUNCTION, conjunctionOperator.getType());
     }
 
-    // Test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         List<BaseOperator> operators = Arrays.asList(new BaseOperator(OperatorType.FIELD),
@@ -45,11 +42,9 @@ public class ConjunctionOperatorTest {
 
         ConjunctionOperator conjunctionOperator = new ConjunctionOperator(ConjunctionOperatorType.OR, operators);
 
-        // Test getters
         assertEquals(ConjunctionOperatorType.OR, conjunctionOperator.getConjunctionType());
         assertEquals(operators, conjunctionOperator.getOperators());
 
-        // Test setters
         conjunctionOperator.setConjunctionType(ConjunctionOperatorType.AND);
         assertEquals(ConjunctionOperatorType.AND, conjunctionOperator.getConjunctionType());
 

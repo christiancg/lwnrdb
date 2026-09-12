@@ -94,7 +94,6 @@ public final class ScriptRequestValidator {
         return ValidationResult.ok();
     }
 
-    // The collection is optional: omitting it lists every trigger in the database.
     static ValidationResult validateListTriggers(ListTriggersRequest request) {
         final var dbResult = NameValidations.validateDbName(request.getDatabaseName(), true);
         if (!dbResult.isValid()) {

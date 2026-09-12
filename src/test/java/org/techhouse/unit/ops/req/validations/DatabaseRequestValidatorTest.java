@@ -28,7 +28,6 @@ public class DatabaseRequestValidatorTest {
         assertTrue(RequestValidator.validate(new ListDatabasesRequest()).isValid());
     }
 
-    // CREATE_DATABASE
     @Test
     public void validate_createDatabase_validName_returnsOk() {
         assertTrue(RequestValidator.validate(new CreateDatabaseRequest("myDatabase")).isValid());
@@ -84,7 +83,6 @@ public class DatabaseRequestValidatorTest {
         assertTrue(RequestValidator.validate(new CreateDatabaseRequest("a".repeat(64))).isValid());
     }
 
-    // DROP_DATABASE
     @Test
     public void validate_dropDatabase_validName_returnsOk() {
         assertTrue(RequestValidator.validate(new DropDatabaseRequest("myDatabase")).isValid());
@@ -95,7 +93,6 @@ public class DatabaseRequestValidatorTest {
         assertFalse(RequestValidator.validate(new DropDatabaseRequest("admin")).isValid());
     }
 
-    // LIST_COLLECTIONS
     @Test
     public void validate_listCollections_validDbName_returnsOk() {
         assertTrue(RequestValidator.validate(new ListCollectionsRequest("myDb")).isValid());
@@ -108,11 +105,9 @@ public class DatabaseRequestValidatorTest {
 
     @Test
     public void validate_listCollections_adminAllowed_returnsOk() {
-        // LIST_COLLECTIONS does not reject admin
         assertTrue(RequestValidator.validate(new ListCollectionsRequest("myDb")).isValid());
     }
 
-    // CREATE_COLLECTION
     @Test
     public void validate_createCollection_validNames_returnsOk() {
         assertTrue(RequestValidator.validate(new CreateCollectionRequest("myDb", "myColl")).isValid());
@@ -133,13 +128,11 @@ public class DatabaseRequestValidatorTest {
         assertFalse(RequestValidator.validate(new CreateCollectionRequest("myDb", "ab")).isValid());
     }
 
-    // DROP_COLLECTION
     @Test
     public void validate_dropCollection_validNames_returnsOk() {
         assertTrue(RequestValidator.validate(new DropCollectionRequest("myDb", "myColl")).isValid());
     }
 
-    // CREATE_INDEX
     @Test
     public void validate_createIndex_validFieldName_returnsOk() {
         assertTrue(RequestValidator.validate(new CreateIndexRequest("myDb", "myColl", "myField")).isValid());
@@ -155,7 +148,6 @@ public class DatabaseRequestValidatorTest {
         assertFalse(RequestValidator.validate(new CreateIndexRequest("myDb", "myColl", null)).isValid());
     }
 
-    // DROP_INDEX
     @Test
     public void validate_dropIndex_validFieldName_returnsOk() {
         assertTrue(RequestValidator.validate(new DropIndexRequest("myDb", "myColl", "myField")).isValid());
@@ -166,7 +158,6 @@ public class DatabaseRequestValidatorTest {
         assertFalse(RequestValidator.validate(new DropIndexRequest("myDb", "myColl", null)).isValid());
     }
 
-    // REINDEX
     @Test
     public void validate_reindex_noFieldNames_returnsOk() {
         assertTrue(RequestValidator.validate(new ReindexRequest("myDb", "myColl", null)).isValid());

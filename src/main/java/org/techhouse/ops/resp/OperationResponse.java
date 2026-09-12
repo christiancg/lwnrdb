@@ -17,22 +17,18 @@ public class OperationResponse {
         this.errorCode = errorCode;
     }
 
-    // Success / no-error-code responses (status supplied by caller)
     public OperationResponse(OperationType type, OperationStatus status, String message) {
         this(type, status, message, null);
     }
 
-    // Error: status and default message come from the ErrorCode
     public OperationResponse(OperationType type, ErrorCode errorCode) {
         this(type, errorCode.getStatus(), errorCode.getDefaultMessage(), errorCode.getCode());
     }
 
-    // Error: status from ErrorCode, custom message supplied by caller
     public OperationResponse(OperationType type, String message, ErrorCode errorCode) {
         this(type, errorCode.getStatus(), message, errorCode.getCode());
     }
 
-    // Error: status and default message from ErrorCode, with an appended detail
     public OperationResponse(OperationType type, ErrorCode errorCode, String detail) {
         this(type, errorCode.getStatus(), errorCode.getDefaultMessage() + ": " + detail, errorCode.getCode());
     }

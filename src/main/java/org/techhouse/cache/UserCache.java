@@ -23,13 +23,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
-/**
- * Cache for user document and index entries: the PK index map, field index map
- * and full document map. Unlike {@link AdminCache}, these caches are
- * memory-managed — admission is gated by {@link MemoryManagement} and entries
- * are evicted by the LFU sweep. The {@link Cache} facade coordinates this cache
- * with the admin page metadata for the cross-cutting read/stream methods.
- */
 public class UserCache {
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
@@ -51,13 +44,6 @@ public class UserCache {
         return primaryKeyIndex;
     }
 
-    /**
-     * Keeps the cached PK index positions consistent after a single-entry page compaction: every
-     * cached entry on {@code page} whose position is greater than {@code removedPosition} shifted
-     * toward the start of the file by {@code removedLength}. Mutates the cached entries in place so
-     * any in-flight operation holding a reference observes the corrected position. No-op when the
-     * collection's PK index is not cached.
-     */
     public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,
             long removedLength) {
         final var primaryKeyIndex = pkIndexMap.get(Cache.getCollectionIdentifier(dbName, collName));
@@ -99,10 +85,8 @@ public class UserCache {
         return total;
     }
 
-    // Contract: callers must hold the field's index lock (read lock for queries via
-    // ResourceLocking#lockIndexRead, write lock for the background index writer). The returned
-    // entries alias the cached id sets, so a caller that lets them escape lock scope (e.g. into a
-    // lazily-consumed stream) must take its own snapshot of the ids it needs before releasing.
+    // Callers must hold the field's index lock (read for queries, write for the background index
+    // writer): the returned entries alias the cached id sets and must be copied before releasing it.
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
         return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType),
@@ -115,8 +99,6 @@ public class UserCache {
                 () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind), value -> (String) value);
     }
 
-    // The caller must hold the field's index read lock: the cached id sets are mutated by the background
-    // index writer, and the entries returned here alias them until the caller copies them.
     private <T> List<FieldIndexEntry<T>> loadIndex(String dbName, String collName, String indexIdentifier,
             IndexLoader<T> loader, Function<Object, T> cast) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
@@ -147,10 +129,6 @@ public class UserCache {
         List<FieldIndexEntry<T>> load() throws IOException;
     }
 
-    // Resolves the matching ids for a single field operator under the field's index read lock and
-    // returns a detached snapshot. The read lock serializes against the background index writer (the
-    // searched id sets are mutated by it), and the copy keeps the result safe once the lock is
-    // released and the ids flow into a lazily-consumed stream.
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,
             T value) throws IOException {
         try {
@@ -184,9 +162,8 @@ public class UserCache {
     public void addEntryToCache(String dbName, String collName, DbEntry entry) {
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
         final var existing = collectionMap.get(collId);
-        // Refreshing an already-resident document must be unconditional: it replaces a document already
-        // counted against the budget, so the admission check (which only governs admitting NEW residents)
-        // must not drop it and leave a stale copy behind.
+        // Refreshing a resident document must be unconditional: the admission check governs only new
+        // residents, and skipping the refresh would leave a stale copy behind.
         if (existing != null && existing.containsKey(entry.get_id())) {
             existing.put(entry.get_id(), entry);
             return;
@@ -200,8 +177,6 @@ public class UserCache {
     public void addEntriesToCache(String dbName, String collName, List<DbEntry> entries) {
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
         final var existing = collectionMap.get(collId);
-        // Already-resident documents are refreshed unconditionally (see addEntryToCache); only genuinely
-        // new documents are subject to the admission check.
         final var newEntries = new ArrayList<DbEntry>();
         for (var e : entries) {
             if (existing != null && existing.containsKey(e.get_id())) {
@@ -241,18 +216,10 @@ public class UserCache {
         return entry;
     }
 
-    /**
-     * Returns the cached document map for the collection, or {@code null} if none is cached. Used by the
-     * {@link Cache} facade, which combines it with the admin page metadata to decide completeness.
-     */
     public Map<String, DbEntry> getCachedCollection(String dbName, String collName) {
         return collectionMap.get(Cache.getCollectionIdentifier(dbName, collName));
     }
 
-    /**
-     * Admits a freshly loaded whole-collection map into the cache when caching is enabled and the
-     * admission check passes, returning the resident map; otherwise returns the loaded map unchanged.
-     */
     public Map<String, DbEntry> admitWholeCollection(String dbName, String collName, Map<String, DbEntry> loaded) {
         if (!isCachingDisabled(dbName)) {
             final var asMap = new ConcurrentHashMap<>(loaded);
@@ -272,8 +239,6 @@ public class UserCache {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var cachingDisabled = isCachingDisabled(dbName);
         final var cached = cachingDisabled ? null : collectionMap.get(collectionIdentifier);
-        // Serve cache hits directly by id; only ids that are not cached need to be
-        // resolved through the PK index and targeted-read from disk.
         final var missingIds = new ArrayList<String>();
         for (var id : ids) {
             final var hit = cached != null ? cached.get(id) : null;
@@ -287,8 +252,8 @@ public class UserCache {
             return result;
         }
         final var pkIndex = getPkIndexAndLoadIfNecessary(dbName, collName);
-        // toRead holds detached copies so a concurrent shiftPkPositionsAfterCompaction
-        // (which mutates position in place) cannot move the offset between here and the read.
+        // Detached copies: shiftPkPositionsAfterCompaction mutates position in place and could
+        // otherwise move the offset between here and the read.
         final var toRead = new ArrayList<PkIndexEntry>();
         for (var id : missingIds) {
             final var pos = Collections.binarySearch(pkIndex, id);
@@ -327,7 +292,6 @@ public class UserCache {
     }
 
     public void evictDatabase(String dbName) {
-        // Keys are "db|coll"; append the separator so "foo" does not match "foobar|...".
         final var toRemove = collectionMap.keySet().stream()
                 .filter(s -> s.startsWith(dbName + Globals.COLL_IDENTIFIER_SEPARATOR)).toList();
         for (var entryKeyToRemove : toRemove) {
@@ -374,10 +338,8 @@ public class UserCache {
         }
     }
 
-    // Evicts every per-type list cached for a field (field|Number, field|String, field|Object, ...).
-    // Called by the background index writer after rewriting a field's .idx files so the next read
-    // reloads the up-to-date index from disk. Index keys are field|TypeLabel and field names cannot
-    // contain the separator, so the prefix match is unambiguous.
+    // The background index writer calls this after rewriting a field's .idx files, so the next read
+    // reloads from disk instead of answering from the now-stale cached lists.
     public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
         if (Globals.ADMIN_DB_NAME.equals(dbName)) {
             return;

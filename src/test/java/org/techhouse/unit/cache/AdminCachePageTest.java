@@ -28,8 +28,6 @@ public class AdminCachePageTest {
         TestUtils.standardTearDown();
     }
 
-    // shiftPkPositionsAfterCompaction dispatches to the collections PK map and shifts only same-page
-    // entries after the removed position, in place.
     @Test
     public void test_shift_pk_positions_for_collections_map() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -49,7 +47,6 @@ public class AdminCachePageTest {
         assertEquals(0, after.getPosition(), "entry after removed position shifts left by removed length");
     }
 
-    // shiftPkPositionsAfterCompaction dispatches to the per-collection pages PK list for a page-metadata name.
     @Test
     public void test_shift_pk_positions_for_pages_collection() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
@@ -66,7 +63,6 @@ public class AdminCachePageTest {
         assertEquals(20, entry.getPosition());
     }
 
-    // An unknown page-metadata collection that is not cached is a no-op (does not throw).
     @Test
     public void test_shift_pk_positions_for_unknown_pages_collection_is_noop() {
         AdminCache cache = new AdminCache();
@@ -86,13 +82,13 @@ public class AdminCachePageTest {
             throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
         final var p0 = new AdminPageEntry("myDb", "myColl", 0L);
-        p0.setPageSize(Long.parseLong(System.getProperty("maxPageBytesOverride", "2097150"))); // near-full
+        p0.setPageSize(Long.parseLong(System.getProperty("maxPageBytesOverride", "2097150")));
         p0.setEntryCount(10);
         final var p1 = new AdminPageEntry("myDb", "myColl", 1L);
         p1.setPageSize(200L);
         p1.setEntryCount(1);
         final var p2 = new AdminPageEntry("myDb", "myColl", 2L);
-        p2.setPageSize(Long.parseLong(System.getProperty("maxPageBytesOverride", "2097100"))); // also near-full
+        p2.setPageSize(Long.parseLong(System.getProperty("maxPageBytesOverride", "2097100")));
         p2.setEntryCount(5);
 
         final var list = new ArrayList<AdminPageEntry>();
@@ -113,7 +109,7 @@ public class AdminCachePageTest {
             throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
         final var p0 = new AdminPageEntry("myDb", "myColl", 0L);
-        p0.setPageSize(2_097_150L); // 2MB-2 bytes, very near max default of 2MB
+        p0.setPageSize(2_097_150L);
         p0.setEntryCount(10);
         final var p1 = new AdminPageEntry("myDb", "myColl", 1L);
         p1.setPageSize(2_097_150L);
@@ -127,7 +123,7 @@ public class AdminCachePageTest {
         final var pagesMap = TestUtils.getPrivateField(TestUtils.pageCacheOf(cache), "pages", type);
         pagesMap.put(Cache.getCollectionIdentifier("myDb", "myColl"), list);
 
-        long target = cache.selectPageForInsert("myDb", "myColl", 100_000); // 100KB, doesn't fit anywhere
+        long target = cache.selectPageForInsert("myDb", "myColl", 100_000);
         assertEquals(2L, target, "Should allocate new page when no existing page has room");
     }
 
@@ -166,7 +162,6 @@ public class AdminCachePageTest {
         assertNull(cache.getAdminPageEntries("myDb", "myColl"));
     }
 
-    // getAdminPageEntry returns the correct page entry
     @Test
     public void test_get_admin_page_entry_returns_correct_entry() {
         AdminCache cache = new AdminCache();
@@ -176,7 +171,6 @@ public class AdminCachePageTest {
         assertEquals(0L, entry.getPage());
     }
 
-    // getAdminPageEntry returns null for a page number that does not exist
     @Test
     public void test_get_admin_page_entry_returns_null_for_missing_page() {
         AdminCache cache = new AdminCache();
@@ -185,7 +179,6 @@ public class AdminCachePageTest {
         assertNull(entry);
     }
 
-    // getAdminPageEntry returns null when no pages exist for the collection
     @Test
     public void test_get_admin_page_entry_returns_null_when_no_pages() {
         AdminCache cache = new AdminCache();
@@ -195,8 +188,6 @@ public class AdminCachePageTest {
 
     @Test
     public void test_select_page_for_insert_packs_into_pending_only_page() {
-        // Fresh collection: no committed page metadata yet. The first entry allocates page 0; the
-        // second must reuse that pending page 0 (it fits) instead of scattering onto page 1.
         AdminCache cache = new AdminCache();
         long first = cache.selectPageForInsert("myDb", "myColl", 100);
         assertEquals(0L, first, "First insert allocates page 0");
@@ -206,8 +197,6 @@ public class AdminCachePageTest {
 
     @Test
     public void test_select_page_for_insert_allocates_new_when_pending_only_page_full() {
-        // The pending page 0 is nearly full, so a new entry that won't fit must go to page 1 even
-        // though page 0 exists only in the in-flight batch (not committed to pageEntries).
         AdminCache cache = new AdminCache();
         long target = cache.selectPageForInsert("myDb", "myColl", 100_000, Map.of(0L, 2_097_100L));
         assertEquals(1L, target, "Full pending-only page forces a new page allocation");
@@ -215,7 +204,6 @@ public class AdminCachePageTest {
 
     @Test
     public void test_select_page_for_insert_prefers_lowest_pending_only_page() {
-        // Two pending-only pages: page 0 is full, page 1 has room -> ascending first-fit picks page 1.
         AdminCache cache = new AdminCache();
         long target = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 2_097_150L, 1L, 100L));
         assertEquals(1L, target, "First pending page with room is chosen in ascending order");

@@ -33,7 +33,6 @@ public class ProcedureDefinitionTest {
         assertEquals(JsonUtils.sha256("return 1;"), sample().getSourceHash());
     }
 
-    // A record written before a field existed must still load
     @Test
     public void test_reads_record_missing_optional_fields() {
         final var minimal = new JsonObject();

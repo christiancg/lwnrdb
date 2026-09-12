@@ -63,7 +63,6 @@ public class SimpleJsResultCapTest {
         assertEquals("ScriptResultTooLargeError", result.getErrorName());
     }
 
-    // A result exactly at the cap passes and one byte over fails, so the boundary is not off by one
     @Test
     public void test_result_exactly_at_the_cap_passes() {
         final var size = run("return 'abcdef';", ResourceLimits.unlimited()).getValue();
@@ -72,7 +71,6 @@ public class SimpleJsResultCapTest {
         assertTrue(run("return 'abcdef';", capped(exact - 1)).isError());
     }
 
-    // An undefined result is JSON null: a few bytes, so no realistic cap rejects it
     @Test
     public void test_undefined_result_is_never_rejected() {
         final var result = run("const x = 1;", capped(64));

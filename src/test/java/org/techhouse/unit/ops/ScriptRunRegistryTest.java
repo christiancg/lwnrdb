@@ -48,7 +48,6 @@ public class ScriptRunRegistryTest {
         assertFalse(listed.isCancelled());
     }
 
-    // An ad-hoc RUN_SCRIPT has no name, which must not stop it from being listed
     @Test
     public void test_registers_a_run_with_no_name() {
         final var registry = new ScriptRunRegistry();
@@ -86,7 +85,6 @@ public class ScriptRunRegistryTest {
         final var run = registry.register(ScriptRunKind.RUN_SCRIPT, "db", null, "alice", null);
         assertTrue(registry.cancel(run.runId()));
         assertTrue(run.isCancelled());
-        // The run stays listed until it notices and unregisters itself
         assertEquals(1, registry.size());
     }
 
@@ -106,7 +104,6 @@ public class ScriptRunRegistryTest {
         final var run = registry.register(ScriptRunKind.RUN_SCRIPT, "db", null, "alice", null);
         registry.cancel(run.runId());
         assertEquals(1L, registry.getCancelled());
-        // Two operators racing on the same id: one true, one false, no exception
         assertTrue(registry.cancel(run.runId()));
         assertEquals(2L, registry.getCancelled());
         registry.unregister(run.runId());
@@ -114,7 +111,6 @@ public class ScriptRunRegistryTest {
         assertEquals(2L, registry.getCancelled());
     }
 
-    // A run parked in the event loop must wake at once rather than waiting out its poll interval
     @Test
     public void test_cancel_unparks_waiting_thread() throws Exception {
         final var registry = new ScriptRunRegistry();

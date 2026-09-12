@@ -19,7 +19,6 @@ import org.techhouse.ops.req.ListCollectionsRequest;
 import org.techhouse.ops.resp.ListCollectionsResponse;
 import org.techhouse.ops.resp.OperationResponse;
 
-// The collection-level DDL handlers.
 public final class CollectionOperationHelper {
     private static final Logger logger = Logger.logFor(CollectionOperationHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -35,23 +34,15 @@ public final class CollectionOperationHelper {
                 () -> {
                     final var dbName = createCollectionRequest.getDatabaseName();
                     final var collName = createCollectionRequest.getCollectionName();
-                    // A node can hold the database's admin entry without its folder - a replicated CREATE_DATABASE
-                    // returns early on an entry it already has, so the folder never lands. createCollectionFile
-                    // only mkdirs one level, so it would fail here and leave the collection unwritable while the
-                    // write quorum, met by the other nodes, still answered OK. Absent an entry there is no such
-                    // database and the missing parent must keep failing the create.
+                    // A node can hold the database's admin entry without its folder (a replicated
+                    // CREATE_DATABASE returns early), and createCollectionFile only mkdirs one level.
                     if (cache.getAdminDbEntry(dbName) != null) {
                         fs.createDatabaseFolder(dbName);
                     }
                     final var result = fs.createCollectionFile(dbName, collName);
                     if (result) {
-                        // Register the collection's admin metadata (page collections + admin entry with its PK
-                        // index entry) synchronously, so a subsequent CREATE_INDEX/SAVE observes it immediately.
-                        // Doing it here rather than in a background task closes a race where the registration
-                        // lagged, letting CREATE_INDEX run first, find no admin PK entry
-                        // (getPkIndexAdminCollEntry == null) and silently skip registering the index while still
-                        // returning OK, leaving the index built but unregistered. Collection creation and
-                        // deletion are both fully synchronous.
+                        // Registration must be synchronous: a lagging background task lets CREATE_INDEX run
+                        // first, find no admin PK entry and silently skip registering the index.
                         if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
                             AdminOperationHelper.createPageCollections(dbName, collName);
                             AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
@@ -71,10 +62,8 @@ public final class CollectionOperationHelper {
             final var result = fs.deleteCollectionFiles(dbName, collName);
             if (result) {
                 cache.evictCollection(dbName, collName);
-                // Remove the collection's admin metadata synchronously (mirroring synchronous creation).
-                // Doing this in the background previously left the admin entry briefly present after the
-                // drop returned OK, so an immediate CREATE_COLLECTION of the same name saw the stale entry,
-                // skipped registration, and was then unregistered when the queued delete event ran.
+                // Synchronous, mirroring creation: a background delete leaves the admin entry briefly
+                // present, so an immediate re-CREATE sees it stale and skips registration.
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
                 listenManager.unregisterAllForCollection(dbName, collName);

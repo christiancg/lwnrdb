@@ -196,11 +196,7 @@ public class TemporalZonedDateTimeBuiltinsTest {
         final var before = gap.getOffsetBefore().getTotalSeconds();
         final var after = gap.getOffsetAfter().getTotalSeconds();
         // A gap's two candidate instants both land on the "wrong" side of the real transition once
-        // rendered back: applying the pre-transition offset lands past the transition (observed
-        // offsetAfter - "compatible"/"later", the forward-shift every engine uses for a nonexistent
-        // local time), applying the post-transition offset lands before it (observed offsetBefore -
-        // "earlier"). Verified via the actually-observed offset rather than a hardcoded hour, so this
-        // stays correct across tzdb updates.
+        // rendered back, so "compatible"/"later" observe offsetAfter and "earlier" observes offsetBefore.
         assertEquals(after, (int) num("Temporal.ZonedDateTime.from(" + fields
                 + ", {disambiguation: 'compatible'}).offsetNanoseconds / 1000000000"));
         assertEquals(after, (int) num("Temporal.ZonedDateTime.from(" + fields
@@ -217,9 +213,6 @@ public class TemporalZonedDateTimeBuiltinsTest {
         final var fields = "{" + midpointArgs(fold) + ", timeZone: 'America/New_York'}";
         final var before = fold.getOffsetBefore().getTotalSeconds();
         final var after = fold.getOffsetAfter().getTotalSeconds();
-        // A fold's two candidate instants are both real (one before, one after the transition), so
-        // the applied offset matches the observed one directly: "compatible"/"earlier" pick the first
-        // (offsetBefore) occurrence, "later" picks the second (offsetAfter).
         assertEquals(before, (int) num("Temporal.ZonedDateTime.from(" + fields
                 + ", {disambiguation: 'compatible'}).offsetNanoseconds / 1000000000"));
         assertEquals(before, (int) num("Temporal.ZonedDateTime.from(" + fields

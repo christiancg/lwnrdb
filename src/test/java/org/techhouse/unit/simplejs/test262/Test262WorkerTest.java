@@ -20,8 +20,6 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
-// Protocol-level tests for the test262 worker, driven against test_utils/test262/fixtures/ so they
-// exercise the same job/result shape the Python driver uses.
 public class Test262WorkerTest {
     private static final Path FIXTURES = Path.of("test_utils", "test262", "fixtures");
     private static final Path SHIMS = Path.of("test_utils", "test262", "shims");
@@ -80,7 +78,6 @@ public class Test262WorkerTest {
                 StandardCharsets.UTF_8);
     }
 
-    // A trivially-true fixture running against the real prelude passes
     @Test
     public void test_positive_test_passes() {
         final var result = result("pass-simple.js", List.of(), List.of(), "");
@@ -88,7 +85,6 @@ public class Test262WorkerTest {
         assertEquals("pass-simple.js", result.get("id").asJsonString().getValue());
     }
 
-    // A thrown Test262Error is a FAIL whose message names the failed assertion
     @Test
     public void test_assertion_failure_reports_test262error() {
         final var result = result("fail-assertion.js", List.of(), List.of(), "");
@@ -96,19 +92,16 @@ public class Test262WorkerTest {
         assertTrue(message(result).contains("deliberate fixture failure"), message(result));
     }
 
-    // A negative runtime test passes when the thrown error type matches the declaration
     @Test
     public void test_negative_runtime_type_match() {
         assertEquals("PASS", status(result("negative-runtime.js", List.of(), List.of(), "TypeError")));
     }
 
-    // A malformed program satisfies a SyntaxError expectation, whatever the declared phase
     @Test
     public void test_negative_parse_reports_syntaxerror() {
         assertEquals("PASS", status(result("negative-parse.js", List.of(), List.of(), "SyntaxError")));
     }
 
-    // The wrong error type is a FAIL that reports what was actually thrown
     @Test
     public void test_negative_type_mismatch_fails() {
         final var result = result("negative-mismatch.js", List.of(), List.of(), "RangeError");
@@ -116,7 +109,6 @@ public class Test262WorkerTest {
         assertTrue(message(result).contains("expected RangeError but got TypeError"), message(result));
     }
 
-    // A negative test that completes without throwing is a FAIL
     @Test
     public void test_negative_without_error_fails() {
         final var result = result("pass-simple.js", List.of(), List.of(), "TypeError");
@@ -124,13 +116,11 @@ public class Test262WorkerTest {
         assertTrue(message(result).contains("but the test completed"), message(result));
     }
 
-    // An async test passes on the $DONE sentinel captured from the console sink
     @Test
     public void test_async_done_sentinel_passes() {
         assertEquals("PASS", status(result("async-done.js", List.of(), List.of("async"), "")));
     }
 
-    // $DONE with an argument is a FAIL carrying that message
     @Test
     public void test_async_done_with_message_fails() {
         final var result = result("async-done-message.js", List.of(), List.of("async"), "");
@@ -138,7 +128,6 @@ public class Test262WorkerTest {
         assertTrue(message(result).contains("deliberate async failure"), message(result));
     }
 
-    // An async test that never calls $DONE is a FAIL, not a pass
     @Test
     public void test_async_without_done_fails() {
         final var result = result("pass-simple.js", List.of(), List.of("async"), "");
@@ -146,26 +135,22 @@ public class Test262WorkerTest {
         assertTrue(message(result).contains("$DONE"), message(result));
     }
 
-    // Includes are prepended in their declared order, so a later include sees the earlier one
     @Test
     public void test_includes_are_prepended_in_order() {
         assertEquals("PASS",
                 status(result("includes-inline.js", List.of("fixtureFirst.js", "fixtureSecond.js"), List.of(), "")));
     }
 
-    // The strict directive is prepended, so strict-only semantics hold
     @Test
     public void test_strict_directive_prepended() {
         assertEquals("PASS", status(result("only-strict.js", List.of(), List.of("onlyStrict"), "")));
     }
 
-    // A raw test runs with no prelude at all
     @Test
     public void test_raw_test_runs_without_prelude() {
         assertEquals("PASS", status(result("raw-no-prelude.js", List.of(), List.of("raw"), "")));
     }
 
-    // An error message containing a newline and a quote survives the Base64 round trip
     @Test
     public void test_message_base64_round_trip() {
         final var message = message(result("message-round-trip.js", List.of(), List.of(), ""));
@@ -173,14 +158,11 @@ public class Test262WorkerTest {
         assertTrue(message.contains("\"two\""), message);
     }
 
-    // A missing test file is reported as a FAIL rather than killing the worker
     @Test
     public void test_missing_file_is_a_failure() {
         assertEquals("FAIL", status(result("does-not-exist.js", List.of(), List.of(), "")));
     }
 
-    // The worker runs with the strict Script goal, so the forms the host contract relaxes are the
-    // parse-phase SyntaxErrors the corpus expects
     @Test
     public void test_worker_uses_the_strict_script_goal(@TempDir Path dir) throws IOException {
         for (final var source : List.of("return;", "export default null;", "import.meta;", "using x = null;")) {
@@ -191,7 +173,6 @@ public class Test262WorkerTest {
         }
     }
 
-    // One worker answers a whole batch, one result line per job, in order
     @Test
     public void test_batch_of_jobs_answered_in_order() {
         final var results = drive(List.of(job("pass-simple.js", List.of(), List.of(), ""),

@@ -65,8 +65,7 @@ public final class AdminOperationHelper {
         locks.release(Globals.ADMIN_DB_NAME, collName);
     }
 
-    // Insert-or-update by primary key. The caller owns the lock, because saveCollectionEntry must hold
-    // the databases lock as well and lock policy differs per collection.
+    // The caller owns the lock: policy differs per collection (saveCollectionEntry also holds databases).
     private static PkIndexEntry writeAdminEntry(String collName, DbEntry entry, PkIndexEntry existingPk)
             throws IOException, InterruptedException {
         if (existingPk != null) {
@@ -81,8 +80,7 @@ public final class AdminOperationHelper {
         return pk;
     }
 
-    // Removes an admin entry's row and fixes the surviving in-memory PK positions. The caller owns the
-    // lock and the cache eviction, which differ per collection.
+    // The caller owns the lock and the cache eviction, which differ per collection.
     private static void eraseAdminEntry(String collName, DbEntry entry, PkIndexEntry pk)
             throws IOException, InterruptedException {
         entry.setPreviousByteSize(pk.getLength());
@@ -131,10 +129,8 @@ public final class AdminOperationHelper {
     }
 
     public static void saveCollectionEntry(AdminCollEntry dbEntry) throws IOException, InterruptedException {
-        // This method also mutates the parent AdminDbEntry (the database's collection list) in the
-        // admin/databases collection, so it must hold the databases lock too — otherwise it races a
-        // concurrent saveDatabaseEntry/deleteDatabaseEntry that owns only that lock. Acquire databases
-        // before collections to match deleteDatabaseEntry's lock order (reentrant, deadlock-safe).
+        // Also mutates the parent AdminDbEntry in admin/databases, so hold the databases lock too,
+        // acquired before collections to match deleteDatabaseEntry's order (deadlock-safe).
         lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         try {
@@ -165,8 +161,7 @@ public final class AdminOperationHelper {
         var adminIndexPkCollEntry = cache.getPkIndexAdminCollEntry(collIdentifier);
         if (adminIndexPkCollEntry != null) {
             // Also mutates the parent AdminDbEntry in admin/databases; hold the databases lock too,
-            // acquired before collections to match deleteDatabaseEntry's order (reentrant when this
-            // is called from deleteDatabaseEntry, which already holds the databases lock).
+            // acquired before collections to match deleteDatabaseEntry's order.
             lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
             lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             try {
@@ -257,8 +252,6 @@ public final class AdminOperationHelper {
         }
     }
 
-    // Appends one buffered transaction operation to admin/transactions. Op records are always new
-    // inserts (their _id is transactionId|seq, unique per transaction), so this only ever inserts.
     public static void saveTransactionOp(AdminTransactionEntry entry) throws IOException, InterruptedException {
         lockAdmin(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         try {
@@ -278,14 +271,10 @@ public final class AdminOperationHelper {
         return TRANSACTION_OPS.read(opIds);
     }
 
-    // Used at both commit and rollback, and - with every op id - for startup cleanup of transactions
-    // orphaned by a crash.
     public static void deleteTransactionOps(List<String> opIds) throws IOException, InterruptedException {
         TRANSACTION_OPS.delete(opIds);
     }
 
-    // Appends one pending trigger run record. Records are always new inserts (their _id is runId|chunkSeq,
-    // unique per run), so this only ever inserts.
     public static void saveTriggerRun(AdminTriggerRunEntry entry) throws IOException, InterruptedException {
         lockAdmin(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
         try {

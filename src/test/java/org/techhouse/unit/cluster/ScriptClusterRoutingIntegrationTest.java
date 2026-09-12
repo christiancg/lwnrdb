@@ -17,7 +17,6 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
-    // A cross-owner script transaction (local slice + a remote participant) commits through 2PC
     @Test
     public void test_cross_owner_transaction_commits_via_two_phase_commit() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
@@ -32,7 +31,6 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         assertEquals(OperationStatus.OK, findStatus(remote, "remote-part"));
     }
 
-    // A script transaction that rolls back aborts the remote participant's slice too
     @Test
     public void test_script_transaction_rollback_aborts_remote_participant() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
@@ -46,7 +44,6 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         assertTrue(clientTracker.txSessionsSnapshot().isEmpty());
     }
 
-    // An unreachable owner surfaces into the script rather than reading as a silent no-op
     @Test
     public void test_owner_unreachable_surfaces_as_script_error() throws Exception {
         configureMembership(2, node("self", 19990), node("other", 1));
@@ -58,7 +55,6 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         assertThrows(JsThrowException.class, () -> db.delete(TestGlobals.DB, coll, "unreachable"));
     }
 
-    // With clustering disabled every dispatch runs locally, exactly as before
     @Test
     public void test_cluster_disabled_runs_everything_locally() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", false);
@@ -68,7 +64,6 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         assertNotNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "standalone"));
     }
 
-    // A collection this node owns is still written locally, with no forwarding
     @Test
     public void test_owned_collection_write_stays_local() throws Exception {
         configureMembership(1, node("self", cluster.serverPort()));
@@ -77,8 +72,6 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         assertEquals(OperationStatus.OK, findStatus(TestGlobals.COLL, "owned"));
     }
 
-    // Session teardown clears the cluster transaction state, so a later transaction on the same
-    // caller-supplied client never 2PCs against stale participants.
     @Test
     public void test_session_teardown_clears_cluster_transaction_state() throws Exception {
         configureMembership(1, node("self", cluster.serverPort()));
@@ -99,7 +92,6 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         }
     }
 
-    // Routing off keeps the pre-existing behaviour: the script runs on the node that received it.
     @Test
     public void test_run_script_stays_local_when_routing_is_disabled() throws Exception {
         enableScriptRouting();
@@ -109,8 +101,6 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         assertNull(router.forward(RequestParser.parseRequest(raw), raw, false, ADMIN, null));
     }
 
-    // Placement blends how much of the scoped database a node owns with its load, so a run whose loads tie
-    // goes to the owner - which is what makes the operations it issues resolve without a round trip.
     @Test
     public void test_run_script_is_placed_on_the_owner_of_the_scoped_database() throws Exception {
         TestUtils.setPrivateField(config, "scriptsEnabled", true);
@@ -128,8 +118,6 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         assertTrue(scriptPlacement.getLocalityPreferred() > preferredBefore);
     }
 
-    // The equivalence claim: the same fixture at weight 0 is decided by load alone, which keeps the run here,
-    // and locality is recorded as having changed nothing.
     @Test
     public void test_locality_weight_zero_leaves_placement_load_only() throws Exception {
         TestUtils.setPrivateField(config, "scriptsEnabled", true);

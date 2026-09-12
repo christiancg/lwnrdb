@@ -58,8 +58,6 @@ public class TestUtils {
         TestUtils.setPrivateField(adminCache, "collectionUsagePkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "transactionsPkIndex", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(adminCache, "triggerRunsPkIndex", new ConcurrentHashMap<>());
-        // The metadata caches are final BoundedLruCache fields, so they are cleared in place rather than
-        // replaced the way the plain maps above are.
         clearBoundedCache(adminCache, "collectionSchemas");
         clearBoundedCache(adminCache, "procedures");
         clearBoundedCache(adminCache, "triggers");
@@ -125,8 +123,6 @@ public class TestUtils {
         return fieldType.cast(field.get(object));
     }
 
-    // Configuration keeps its values in one ConfigKey map rather than a field per key, so a test
-    // naming a key still reads and writes it the way it always did.
     public static <U, T> void setPrivateField(U object, String fieldName, T fieldValue)
             throws NoSuchFieldException, IllegalAccessException {
         if (object instanceof Configuration configuration) {
@@ -220,9 +216,8 @@ public class TestUtils {
         assertTrue(folder.delete());
     }
 
-    // Clears the shared ClientTracker's client map. Tests that register clients via addClient (which is
-    // subject to the maxConnections limit) call this before each test so leaked clients from other
-    // tests/classes in the same JVM can't fill the limit and make addClient return null.
+    // Leaked clients from other tests in the same JVM would fill maxConnections and make addClient
+    // return null.
     public static void resetClients() throws NoSuchFieldException, IllegalAccessException {
         final var clientTracker = IocContainer.get(ClientTracker.class);
         setPrivateField(clientTracker, "clients", new ConcurrentHashMap<>());

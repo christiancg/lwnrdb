@@ -14,19 +14,12 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.Tx2pcLog;
 
-/**
- * Cluster-wide discovery of in-doubt (PREPARED) distributed transactions for the admin LIST_TRANSACTIONS
- * operation. The node handling the request collects its own prepared markers and fans out a LIST_TX request
- * to every other live member, then aggregates the responses by distributed-transaction id so an operator can
- * see which transactions are stuck and, if needed, force a resolution with RESOLVE_TRANSACTION.
- */
 public class Tx2pcDirectory {
     private final Logger logger = Logger.logFor(Tx2pcDirectory.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
 
-    // This node's own in-doubt transactions (its PREPARED markers), as reported over LIST_TX.
     public List<InDoubtTx> localInDoubt() throws Exception {
         final var result = new ArrayList<InDoubtTx>();
         for (final var dtxId : Tx2pcLog.preparedDtxIds()) {
@@ -40,7 +33,6 @@ public class Tx2pcDirectory {
         return result;
     }
 
-    // Aggregated in-doubt transactions across this node and every live peer, one JSON row per transaction.
     public List<JsonObject> listInDoubtClusterWide() throws Exception {
         final var now = System.currentTimeMillis();
         final var byDtx = new LinkedHashMap<String, Aggregate>();

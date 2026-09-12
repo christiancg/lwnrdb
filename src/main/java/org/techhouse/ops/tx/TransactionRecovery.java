@@ -24,9 +24,6 @@ import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 
-// Resolves transaction slices that outlived the session that created them: a 2PC participant whose
-// coordinator has since decided, and slices left durable by a crash. Everything here runs without a
-// live client, so it reconstructs the transaction from the durable record rather than the session.
 public final class TransactionRecovery {
     private static final Logger logger = Logger.logFor(TransactionRecovery.class);
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -38,14 +35,10 @@ public final class TransactionRecovery {
     private TransactionRecovery() {
     }
 
-    // Recovery commit of a prepared slice with no in-memory transaction (after a restart): re-acquires the
-    // collection write locks (sorted, deadlock-safe), replays the durable slice, replicates, then removes the
-    // slice + PREPARED marker.
     public static void commitPreparedFromDurable(String dtxId, List<String> collections) throws Exception {
         replayDurableSlice(dtxId, collections, () -> resolveMarkers(dtxId, true));
     }
 
-    // Replays a durably-recorded slice under every collection's write lock.
     private static void replayDurableSlice(String txId, List<String> collections, ThrowingRunnable markerCleanup)
             throws Exception {
         locks.withWriteLocks(collections, () -> {
@@ -68,15 +61,11 @@ public final class TransactionRecovery {
         void run() throws Exception;
     }
 
-    // Recovery abort of a prepared slice with no in-memory transaction: discards the durable slice + marker.
     public static void abortFromDurable(String dtxId) throws Exception {
         AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
         resolveMarkers(dtxId, false);
     }
 
-    // Resolves a prepared slice from the durable log (no in-memory transaction), used by session-less
-    // COMMIT_TX/ABORT_TX and by force-resolve. A no-op when this node holds no prepared slice for the id, so
-    // a broadcast force-resolve is safely ignored by non-participants and re-drives are idempotent.
     public static void resolveFromDurable(String dtxId, boolean commit) throws Exception {
         if (!Tx2pcLog.isPrepared(dtxId)) {
             return;
@@ -89,8 +78,8 @@ public final class TransactionRecovery {
         }
     }
 
-    // Replaces a resolved transaction's PREPARED marker with a retained OUTCOME marker, so a peer can still
-    // report the decision during another participant's cooperative termination.
+    // The OUTCOME marker is retained so a peer can still report the decision during another
+    // participant's cooperative termination.
     public static void resolveMarkers(String dtxId, boolean committed) throws Exception {
         Tx2pcLog.deleteParticipantMarker(dtxId);
         Tx2pcLog.recordOutcome(dtxId, committed);
@@ -115,9 +104,7 @@ public final class TransactionRecovery {
         }
     }
 
-    // Removes operation records left in admin/transactions by transactions that were open when the server
-    // stopped (their owning connections are gone). Records belonging to an in-doubt 2PC transaction (one
-    // with a PREPARED or COMMITTED marker) are preserved for recovery to resolve.
+    // Records of an in-doubt 2PC transaction (PREPARED or COMMITTED marker) are preserved for recovery.
     public static void cleanupOrphansAtStartup() throws Exception {
         finishLocalCommitsAtStartup();
         final var inDoubt = new HashSet<String>();
@@ -125,8 +112,8 @@ public final class TransactionRecovery {
         inDoubt.addAll(Tx2pcLog.committedDtxIds());
         // Retained outcome markers (for cooperative termination) must also survive restart cleanup.
         inDoubt.addAll(Tx2pcLog.outcomeDtxIds());
-        // A local commit whose replay just failed keeps its marker and slice, so the next restart can retry it
-        // instead of the sweep discarding a commit that was already decided.
+        // A failed local-commit replay keeps its marker and slice so the next restart can retry a commit
+        // that was already decided.
         inDoubt.addAll(TxCommitLog.localCommitTxIds());
         final var orphans = cache.getTransactionPkIndexes().keySet().stream()
                 .filter(id -> !inDoubt.contains(dtxIdOf(id))).toList();
@@ -137,8 +124,8 @@ public final class TransactionRecovery {
         logger.info("Removed " + orphans.size() + " orphaned transaction operation(s) at startup");
     }
 
-    // Finishes every single-node commit that had reached its commit point before the process died. Runs before
-    // the orphan sweep so a decided commit is completed rather than discarded with the undecided ones.
+    // Runs before the orphan sweep so a decided commit is completed rather than discarded with the
+    // undecided ones.
     private static void finishLocalCommitsAtStartup() {
         for (final var txId : TxCommitLog.localCommitTxIds()) {
             try {
@@ -151,9 +138,8 @@ public final class TransactionRecovery {
         }
     }
 
-    // Replays a decided single-node commit from the durable log. Idempotent: buffered ops carry whole values
-    // (a SAVE's full document, a DELETE's id), so re-applying the prefix a crash already applied converges to
-    // the same state rather than compounding.
+    // Idempotent: buffered ops carry whole values, so re-applying the prefix a crash already applied
+    // converges to the same state rather than compounding.
     public static void commitLocalFromDurable(String txId, List<String> collections) throws Exception {
         replayDurableSlice(txId, collections, () -> TxCommitLog.clearLocalCommit(txId));
     }

@@ -53,13 +53,11 @@ public class ParserExpressionSyntaxTest {
         return ((ExpressionStatement) firstStatement(source)).getExpression();
     }
 
-    // An empty program has an empty body
     @Test
     public void test_empty_program() {
         assertTrue(parse("").getBody().isEmpty());
     }
 
-    // 1 + 2 * 3 nests the multiplication under the addition
     @Test
     public void test_binary_precedence() {
         final var add = assertInstanceOf(BinaryExpression.class, firstExpression("1 + 2 * 3"));
@@ -69,7 +67,6 @@ public class ParserExpressionSyntaxTest {
         assertEquals("*", mul.getOperator());
     }
 
-    // Exponentiation is right-associative: 2 ** 3 ** 2 == 2 ** (3 ** 2)
     @Test
     public void test_exponent_right_associative() {
         final var outer = assertInstanceOf(BinaryExpression.class, firstExpression("2 ** 3 ** 2"));
@@ -194,7 +191,6 @@ public class ParserExpressionSyntaxTest {
         assertEquals(2, assertInstanceOf(CallExpression.class, firstExpression("f(1, 2,)")).getArguments().size());
     }
 
-    // Parsing from a LexResult reports the offending token's line and column
     @Test
     public void test_parse_with_positions_reports_line_and_column() {
         final var ex = assertThrows(UnexpectedTokenException.class,
@@ -202,7 +198,6 @@ public class ParserExpressionSyntaxTest {
         assertTrue(ex.getMessage().contains("line: 1, column: 9"), ex.getMessage());
     }
 
-    // A syntax error on a later line reports that line, not line 1
     @Test
     public void test_parse_with_positions_reports_later_line() {
         final var ex = assertThrows(UnexpectedTokenException.class,
@@ -210,7 +205,6 @@ public class ParserExpressionSyntaxTest {
         assertTrue(ex.getMessage().contains("line: 2"), ex.getMessage());
     }
 
-    // End-of-input errors also carry a line and column when positions are present
     @Test
     public void test_parse_with_positions_reports_end_of_input_location() {
         final var ex = assertThrows(UnexpectedEndOfInputException.class,
@@ -218,21 +212,18 @@ public class ParserExpressionSyntaxTest {
         assertTrue(ex.getMessage().contains("Unexpected end of input at line: 1, column: 4"), ex.getMessage());
     }
 
-    // Without positions the parser falls back to the token-index message
     @Test
     public void test_parse_without_positions_uses_index_message() {
         final var ex = assertThrows(UnexpectedTokenException.class, () -> Parser.parse(Lexer.lex("let x = ;")));
         assertTrue(ex.getMessage().contains("at index:"), ex.getMessage());
     }
 
-    // Without positions an end-of-input error carries the plain message
     @Test
     public void test_parse_without_positions_end_of_input_plain_message() {
         final var ex = assertThrows(UnexpectedEndOfInputException.class, () -> Parser.parse(Lexer.lex("1 +")));
         assertEquals("Unexpected end of input", ex.getMessage());
     }
 
-    // Getters and setters resolve to get/set kinds
     @Test
     public void test_getter_setter() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { get x() {} set x(v) {} }"));
@@ -241,7 +232,6 @@ public class ParserExpressionSyntaxTest {
         assertEquals("set", ((MethodDefinition) members.get(1)).getKind());
     }
 
-    // A member literally named "get" is a plain method, not an accessor
     @Test
     public void test_member_named_get() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { get() {} }"));
@@ -250,16 +240,12 @@ public class ParserExpressionSyntaxTest {
         assertEquals("get", ((Identifier) method.getKey()).getName());
     }
 
-    // Stray semicolons between members are skipped
     @Test
     public void test_stray_semicolons_in_body() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { ; m() {}; }"));
         assertEquals(1, decl.getBody().getMembers().size());
     }
 
-    // Phase 4 — async & generators
-
-    // await parses to an AwaitExpression inside an async function
     @Test
     public void test_await_unary() {
         final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("async function f() { await g(); }"));
@@ -268,7 +254,6 @@ public class ParserExpressionSyntaxTest {
         assertInstanceOf(AwaitExpression.class, stmt.getExpression());
     }
 
-    // await binds tighter than binary: await a + b is (await a) + b
     @Test
     public void test_await_binds_tighter_than_binary() {
         final var fn = assertInstanceOf(FunctionDeclaration.class,
@@ -278,7 +263,6 @@ public class ParserExpressionSyntaxTest {
         assertInstanceOf(AwaitExpression.class, add.getLeft());
     }
 
-    // yield with an argument in a generator
     @Test
     public void test_yield_with_argument() {
         final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function* g() { yield 1; }"));
@@ -289,7 +273,6 @@ public class ParserExpressionSyntaxTest {
         assertFalse(yieldExpr.isDelegate());
     }
 
-    // yield* delegates to another iterable
     @Test
     public void test_yield_delegate() {
         final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function* g() { yield* xs; }"));
@@ -299,7 +282,6 @@ public class ParserExpressionSyntaxTest {
         assertInstanceOf(Identifier.class, yieldExpr.getArgument());
     }
 
-    // A bare yield has no argument
     @Test
     public void test_yield_no_argument() {
         final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function* g() { yield; }"));
@@ -309,7 +291,6 @@ public class ParserExpressionSyntaxTest {
         assertFalse(yieldExpr.isDelegate());
     }
 
-    // async function expression carries the async flag
     @Test
     public void test_async_function_expression() {
         final var expr = assertInstanceOf(FunctionExpression.class, firstExpression("(async function () {})"));
@@ -317,7 +298,6 @@ public class ParserExpressionSyntaxTest {
         assertFalse(expr.isGenerator());
     }
 
-    // generator function expression carries the generator flag
     @Test
     public void test_generator_function_expression() {
         final var decl = assertInstanceOf(VariableDeclaration.class, firstStatement("const g = function*() {};"));
@@ -325,7 +305,6 @@ public class ParserExpressionSyntaxTest {
         assertTrue(expr.isGenerator());
     }
 
-    // async generator function carries both flags
     @Test
     public void test_async_generator_function() {
         final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("async function* f() {}"));
@@ -333,7 +312,6 @@ public class ParserExpressionSyntaxTest {
         assertTrue(fn.isGenerator());
     }
 
-    // async single-parameter arrow
     @Test
     public void test_async_arrow_single_param() {
         final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("async x => x"));
@@ -342,7 +320,6 @@ public class ParserExpressionSyntaxTest {
         assertTrue(arrow.isExpressionBody());
     }
 
-    // async parenthesized arrow
     @Test
     public void test_async_arrow_paren_params() {
         final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("async (a, b) => a"));
@@ -350,7 +327,6 @@ public class ParserExpressionSyntaxTest {
         assertEquals(2, arrow.getParams().size());
     }
 
-    // A member literally named "async" is a method, not a modifier
     @Test
     public void test_member_named_async() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { async() {} }"));
@@ -359,7 +335,6 @@ public class ParserExpressionSyntaxTest {
         assertEquals("async", ((Identifier) method.getKey()).getName());
     }
 
-    // Array elisions produce null elements, but a trailing comma does not
     @Test
     public void test_array_holes_and_trailing_comma() {
         final var holed = assertInstanceOf(ArrayExpression.class, firstExpression("[a, , b]"));
@@ -371,7 +346,6 @@ public class ParserExpressionSyntaxTest {
         assertNull(leading.getElements().getFirst());
     }
 
-    // A rest parameter is the last parameter of a function declaration
     @Test
     public void test_rest_param_function() {
         final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function f(a, ...rest) {}"));
@@ -380,7 +354,6 @@ public class ParserExpressionSyntaxTest {
         assertEquals("rest", assertInstanceOf(Identifier.class, rest.getArgument()).getName());
     }
 
-    // A rest parameter works in an arrow function
     @Test
     public void test_rest_param_arrow() {
         final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("(a, ...rest) => a"));
@@ -392,7 +365,6 @@ public class ParserExpressionSyntaxTest {
         return ((VariableDeclaration) firstStatement(source)).getDeclarations().getFirst();
     }
 
-    // An array pattern keeps holes and a trailing rest element
     @Test
     public void test_array_pattern_hole_and_rest() {
         final var pattern = assertInstanceOf(ArrayPattern.class, firstDeclarator("const [a, , ...r] = arr").getId());
@@ -402,7 +374,6 @@ public class ParserExpressionSyntaxTest {
         assertEquals("r", assertInstanceOf(Identifier.class, rest.getArgument()).getName());
     }
 
-    // An object pattern supports renamed keys and defaults
     @Test
     public void test_object_pattern_renamed_and_default() {
         final var pattern = assertInstanceOf(ObjectPattern.class, firstDeclarator("const {a: x, b = 2} = o").getId());
@@ -413,7 +384,6 @@ public class ParserExpressionSyntaxTest {
         assertEquals(2.0, assertInstanceOf(NumberLiteral.class, assignment.getRight()).getValue());
     }
 
-    // An object pattern keeps a trailing rest element
     @Test
     public void test_object_pattern_rest() {
         final var pattern = assertInstanceOf(ObjectPattern.class, firstDeclarator("const {a, ...r} = o").getId());
@@ -421,7 +391,6 @@ public class ParserExpressionSyntaxTest {
         assertEquals("r", assertInstanceOf(Identifier.class, rest.getArgument()).getName());
     }
 
-    // Patterns nest inside each other
     @Test
     public void test_nested_pattern() {
         final var pattern = assertInstanceOf(ObjectPattern.class, firstDeclarator("const {a: [b, {c}]} = o").getId());
@@ -431,7 +400,6 @@ public class ParserExpressionSyntaxTest {
         assertInstanceOf(ObjectPattern.class, inner.getElements().get(1));
     }
 
-    // Function parameters accept defaults and patterns
     @Test
     public void test_pattern_and_default_params() {
         final var fn = assertInstanceOf(FunctionDeclaration.class, firstStatement("function f(a = 1, {b}, [c]) {}"));
@@ -442,7 +410,6 @@ public class ParserExpressionSyntaxTest {
         assertInstanceOf(ArrayPattern.class, fn.getParams().get(2));
     }
 
-    // Arrow parameters accept patterns
     @Test
     public void test_arrow_pattern_params() {
         final var arrow = assertInstanceOf(ArrowFunctionExpression.class, firstExpression("({a}, [b]) => a"));
@@ -450,7 +417,6 @@ public class ParserExpressionSyntaxTest {
         assertInstanceOf(ArrayPattern.class, arrow.getParams().get(1));
     }
 
-    // A catch clause binds a pattern
     @Test
     public void test_catch_pattern() {
         final var tryStatement = assertInstanceOf(TryStatement.class, firstStatement("try {} catch ({message}) {}"));
@@ -458,14 +424,12 @@ public class ParserExpressionSyntaxTest {
         assertInstanceOf(ObjectPattern.class, handler.getParam());
     }
 
-    // Empty patterns parse
     @Test
     public void test_empty_patterns() {
         assertInstanceOf(ObjectPattern.class, firstDeclarator("const {} = o").getId());
         assertInstanceOf(ArrayPattern.class, firstDeclarator("const [] = a").getId());
     }
 
-    // `from` and `as` remain ordinary identifiers outside module syntax
     @Test
     public void test_from_as_are_contextual() {
         assertInstanceOf(VariableDeclaration.class, firstStatement("let from = 1;"));

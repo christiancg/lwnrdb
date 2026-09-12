@@ -124,8 +124,6 @@ public class ScriptPlacementTest {
         assertEquals("c", chosen.getNodeId());
     }
 
-    // A tie goes to the first of the two samples, so the same pair drawn in the other order picks the other
-    // node. That is what keeps an idle cluster - where every score ties - spread evenly.
     @Test
     public void test_ties_break_on_the_first_sample() throws Exception {
         membership(node("a-self", 1, 9, NodeState.ALIVE), node("c", 2, 4, NodeState.ALIVE),
@@ -143,8 +141,6 @@ public class ScriptPlacementTest {
         assertNull(placement.choose(DB));
     }
 
-    // A second sample equal to the first is shifted past it, so the two samples are never the same node -
-    // without the shift the pair below would compare b against itself and answer b.
     @Test
     public void test_never_samples_the_same_node_twice() throws Exception {
         membership(node("a-self", 1, 0, NodeState.ALIVE), node("b", 2, 8, NodeState.ALIVE),
@@ -153,8 +149,6 @@ public class ScriptPlacementTest {
         assertEquals("c", placement.choose(DB).getNodeId());
     }
 
-    // A node that has not finished catching up on admin metadata may not know the database the script is
-    // scoped to, so it is not a candidate even though it is ALIVE and idle.
     @Test
     public void test_skips_a_peer_that_is_still_admin_syncing() throws Exception {
         final var syncing = caughtUpPeer("b", 0);
@@ -163,7 +157,6 @@ public class ScriptPlacementTest {
         assertNull(placement.choose(DB));
     }
 
-    // A peer that missed a majority-replicated DDL reports a lower epoch until anti-entropy catches it up.
     @Test
     public void test_skips_a_peer_whose_admin_epoch_is_behind() throws Exception {
         final var behind = caughtUpPeer("b", 0);
@@ -181,7 +174,6 @@ public class ScriptPlacementTest {
         assertEquals("b", placement.choose(DB).getNodeId());
     }
 
-    // Self is never filtered by its own catch-up state: it is where the script runs anyway.
     @Test
     public void test_self_stays_a_candidate_while_it_is_admin_syncing() throws Exception {
         final var self = node("a-self", 1, 0, NodeState.ALIVE);
@@ -191,7 +183,6 @@ public class ScriptPlacementTest {
         assertNull(placement.choose(DB));
     }
 
-    // One caught-up peer among two ineligible ones still leaves only that peer plus self to sample.
     @Test
     public void test_picks_the_only_caught_up_peer() throws Exception {
         final var syncing = caughtUpPeer("b", 0);
@@ -214,7 +205,6 @@ public class ScriptPlacementTest {
         assertEquals(2L, placement.getForwardFallbacks());
     }
 
-    // Hands out the sample indexes a test asked for, so a placement decision is reproducible.
     private static final class ScriptedRandom implements RandomGenerator {
         private int[] values = new int[0];
         private int index;

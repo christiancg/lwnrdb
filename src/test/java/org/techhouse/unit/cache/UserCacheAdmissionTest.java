@@ -97,7 +97,6 @@ public class UserCacheAdmissionTest {
     public void test_addEntryToCache_refuses_when_over_cap() throws Exception {
         final var config = Configuration.getInstance();
         final long original = config.getMaxMemoryBytes();
-        // Tight cap that an entry's byteSize will exceed.
         TestUtils.setPrivateField(config, "maxMemoryBytes", 1L);
         try {
             UserCache cache = IocContainer.get(UserCache.class);
@@ -233,7 +232,6 @@ public class UserCacheAdmissionTest {
     public void test_shouldCache_refuses_new_entry_when_over_cap() throws Exception {
         final var config = Configuration.getInstance();
         final long original = config.getMaxMemoryBytes();
-        // Cap smaller than the seeded "old" collection — adding "new" should be refused.
         TestUtils.setPrivateField(config, "maxMemoryBytes", 100L);
         try {
             UserCache cache = IocContainer.get(UserCache.class);
@@ -259,8 +257,6 @@ public class UserCacheAdmissionTest {
             TestUtils.setPrivateField(config, "maxMemoryBytes", original);
         }
     }
-
-    // ── getEntriesByIds / streamCollection (page-streaming read path) ─────────
 
     private static void injectPkIndex(UserCache cache, String collId, List<PkIndexEntry> entries)
             throws NoSuchFieldException, IllegalAccessException {
@@ -336,8 +332,6 @@ public class UserCacheAdmissionTest {
         return DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
     }
 
-    // A resident document must be refreshed even when the cache is full (admission would reject a new
-    // resident): otherwise an in-place update would leave a stale copy in the cache.
     @Test
     public void test_addEntryToCache_refreshes_resident_document_despite_admission_reject() throws Exception {
         final var cache = IocContainer.get(UserCache.class);
@@ -353,7 +347,6 @@ public class UserCacheAdmissionTest {
             cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, cacheEntry("a", 2));
             final var refreshed = cache.getCachedCollection(TestGlobals.DB, TestGlobals.COLL).get("a");
             assertEquals(2, refreshed.getData().get("v").asJsonNumber().asInteger());
-            // A brand-new id is still admission-gated under a full cache.
             cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, cacheEntry("b", 9));
             assertNull(cache.getCachedCollection(TestGlobals.DB, TestGlobals.COLL).get("b"));
         } finally {

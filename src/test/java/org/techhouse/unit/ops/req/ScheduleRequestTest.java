@@ -21,7 +21,6 @@ public class ScheduleRequestTest {
     public void test_save_schedule_request_accessors() {
         final var request = new SaveScheduleRequest();
         assertEquals(OperationType.SAVE_SCHEDULE, request.getType());
-        // Absent args read as an empty object rather than null
         assertTrue(request.getArgs().entrySet().isEmpty());
         request.setName("s");
         request.setProcedureName("p");
@@ -49,7 +48,6 @@ public class ScheduleRequestTest {
         assertEquals("alice", request.getStampedUpdatedBy());
         assertEquals("owner", request.getStampedDefiner());
         assertEquals("v", request.getArgs().get("k").asJsonString().getValue());
-        // Absent enabled reads as enabled
         assertTrue(request.isEnabled());
         request.setEnabled(false);
         assertFalse(request.isEnabled());

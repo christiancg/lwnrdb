@@ -25,8 +25,6 @@ public class RegexSymbolProtocolTest {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
-    // RegExp.prototype[Symbol.match]/[Symbol.search]/[Symbol.replace]/[Symbol.split] are real,
-    // directly-callable methods
     @Test
     public void test_symbol_methods_are_functions() {
         assertTrue(bool("typeof RegExp.prototype[Symbol.match] === 'function'"));
@@ -100,7 +98,6 @@ public class RegexSymbolProtocolTest {
         assertTrue(bool("/(,)/[Symbol.split]('a,b').includes(',')"));
     }
 
-    // Symbol.match/replace/search/split dispatch through a user-overridden "exec" (RegExpExec)
     @Test
     public void test_symbol_methods_dispatch_through_custom_exec() {
         assertEquals(1, num("""
@@ -113,8 +110,6 @@ public class RegexSymbolProtocolTest {
                 """));
     }
 
-    // The flag accessors are real accessor properties on RegExp.prototype, not just a receiver-keyed
-    // special case, so getOwnPropertyDescriptor finds a getter for each
     @Test
     public void test_prototype_flag_accessors_are_real_properties() {
         assertEquals("true", str(
@@ -123,14 +118,12 @@ public class RegexSymbolProtocolTest {
         assertEquals("gi", str("/a/gi.flags"));
     }
 
-    // Reading a flag off %RegExp.prototype% itself yields the spec placeholders rather than throwing
     @Test
     public void test_prototype_accessor_on_bare_prototype() {
         assertEquals("(?:)", str("RegExp.prototype.source"));
         assertEquals("undefined", str("String(RegExp.prototype.global)"));
     }
 
-    // Any other non-RegExp receiver is an incompatible-receiver TypeError
     @Test
     public void test_prototype_accessor_on_foreign_receiver_throws() {
         assertEquals("TypeError",
@@ -139,14 +132,11 @@ public class RegexSymbolProtocolTest {
                         + " catch (e) { caught = e.constructor.name; } caught"));
     }
 
-    // RegExp.prototype.toString renders the literal form
     @Test
     public void test_prototype_to_string() {
         assertEquals("/ab+c/gi", str("/ab+c/gi.toString()"));
     }
 
-    // String.prototype.match/replace/search/split have their own implementations, so the
-    // RegExpExec-based abstract operations are driven through the @@ methods directly.
     private static final String RP = "RegExp.prototype";
 
     @Test
@@ -174,7 +164,6 @@ public class RegexSymbolProtocolTest {
         assertEquals("$<x>", str(RP + "[Symbol.replace].call(/ab/, 'ab', '$<x>')"));
     }
 
-    // a functional replacer receives the named-groups object as one extra trailing argument
     @Test
     public void symbolReplacePassesNamedGroupsToAFunctionReplacer() {
         assertEquals("5", str(RP + "[Symbol.replace].call(/(?<x>a)b/, 'ab', (...args) => String(args.length))"));
@@ -214,8 +203,6 @@ public class RegexSymbolProtocolTest {
         assertEquals("abc", str(RP + "[Symbol.split].call(/z/, 'abc').join(',')"));
     }
 
-    // Symbol.split is generic: a plain object goes through SpeciesConstructor, so its undefined
-    // "flags" is what fails, not a receiver brand check.
     @Test
     public void symbolSplitOnAPlainObjectFailsOnItsFlags() {
         assertEquals("SyntaxError", str("let caught = 'none';" + " try { " + RP + "[Symbol.split].call({}, 'abc'); }"
@@ -224,7 +211,6 @@ public class RegexSymbolProtocolTest {
                 + " catch (e) { caught = e.constructor.name; } caught"));
     }
 
-    // Symbol.matchAll returns a %RegExpStringIteratorPrototype% iterator, not an array.
     @Test
     public void symbolMatchAllReturnsAnIterator() {
         assertEquals("function", str("typeof RegExp.prototype[Symbol.matchAll]"));
@@ -234,7 +220,6 @@ public class RegexSymbolProtocolTest {
         assertEquals("1", str("String([...'aa'.matchAll(/a/g)].length - 1)"));
     }
 
-    // Spec: the well-known symbol is read off an object argument, never off a primitive one.
     @Test
     public void aPrimitiveArgumentNeverExposesItsWellKnownSymbol() {
         assertEquals("1", str("Object.defineProperty(Number.prototype, Symbol.match,"

@@ -93,8 +93,6 @@ public class ScriptRunHistoryTest {
         assertFalse(ScriptRunHistory.recordsKind(ScriptRunKind.SCHEDULE));
     }
 
-    // A database only grows the collection once a row lands in it, which is why CREATE_DATABASE does not
-    // create it: a database that never runs a script keeps the collection list it always had.
     @Test
     public void test_the_collection_is_created_lazily_by_the_first_row() throws Exception {
         final var freshDb = "lazyHistoryDb";
@@ -129,7 +127,6 @@ public class ScriptRunHistoryTest {
         assertEquals(1, document.get("stack").asJsonArray().size());
     }
 
-    // Logs are off by default: a chatty procedure would otherwise make each row as large as its output.
     @Test
     public void test_logs_are_omitted_unless_configured() throws Exception {
         ScriptRunHistory.write(
@@ -161,7 +158,6 @@ public class ScriptRunHistoryTest {
         assertEquals(0L, ScriptRunHistory.getRecorded());
     }
 
-    // History is diagnostics: a row that cannot be written is counted and dropped, never thrown.
     @Test
     public void test_an_unknown_database_is_dropped_rather_than_thrown() {
         ScriptRunHistory.write(new ScriptRunRecord("run-nodb", ScriptRunKind.TRIGGER, "noSuchDatabase", "job", "proc",
@@ -218,7 +214,6 @@ public class ScriptRunHistoryTest {
         assertEquals(0L, ScriptRunHistory.getRecorded());
     }
 
-    // A second row for the same database reuses the memo rather than re-checking admin metadata.
     @Test
     public void test_two_rows_share_one_collection_creation() {
         ScriptRunHistory
@@ -238,8 +233,6 @@ public class ScriptRunHistoryTest {
         assertEquals(1L, ScriptRunHistory.getRecorded());
     }
 
-    // A database that never ran a script has no collection to prune, which the sweep must skip rather
-    // than treat as an empty one.
     @Test
     public void test_the_sweep_skips_a_database_with_no_history_collection() throws Exception {
         final var freshDb = "unsweptHistoryDb";
@@ -253,8 +246,6 @@ public class ScriptRunHistoryTest {
         assertEquals(0L, ScriptRunHistory.getDropped());
     }
 
-    // The sweep thread is started once at boot and stopped in the ordered shutdown, before the background
-    // queue drains so queued rows still land.
     @Test
     public void test_the_sweep_thread_starts_and_stops() throws Exception {
         final var history = IocContainer.get(ScriptRunHistory.class);
@@ -277,8 +268,6 @@ public class ScriptRunHistoryTest {
         assertNull(TestUtils.getPrivateField(history, "sweeper", java.util.concurrent.ScheduledExecutorService.class));
     }
 
-    // Under clustering the sweep runs only where this node owns the collection, so N nodes do not each
-    // issue the same deletes.
     @Test
     public void test_the_sweep_skips_a_collection_this_node_does_not_own() throws Exception {
         final var config = Configuration.getInstance();
@@ -294,8 +283,6 @@ public class ScriptRunHistoryTest {
         }
     }
 
-    // A row that the write path refuses is counted and dropped, never thrown: the run it describes has
-    // already committed its effects and must not fail for want of a record.
     @Test
     public void test_a_refused_write_is_counted_and_dropped() throws Exception {
         final var config = Configuration.getInstance();
@@ -311,9 +298,6 @@ public class ScriptRunHistoryTest {
         }
     }
 
-    // With clustering on the write consults the router, and then takes the same ownership guard every
-    // other write takes. A node that owns nothing refuses it and drops the row rather than writing a
-    // copy the owner will never see.
     @Test
     public void test_a_write_routes_and_respects_the_ownership_guard() throws Exception {
         final var config = Configuration.getInstance();
@@ -334,7 +318,6 @@ public class ScriptRunHistoryTest {
         ScriptRunHistory.sweepQuietly();
     }
 
-    // A database whose history collection cannot be created drops the row rather than failing the run.
     @Test
     public void test_a_collection_that_cannot_be_created_drops_the_row() throws Exception {
         final var config = Configuration.getInstance();
@@ -354,7 +337,6 @@ public class ScriptRunHistoryTest {
         }
     }
 
-    // The row names the node that ran the script, which is what makes a cluster-wide history readable.
     @Test
     public void test_a_row_names_the_node_that_ran_it() throws Exception {
         final var membership = IocContainer.get(org.techhouse.cluster.membership.MembershipService.class);

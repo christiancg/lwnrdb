@@ -5,10 +5,8 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * The full shipped configuration as a raw key/value map, shared by the parsing and validation tests.
- * It is spelled out literally rather than derived from {@code ConfigKey}: these tests exist to pin
- * the shipped value of every key, so reading the expectations out of the registry under test would
- * make them tautological.
+ * Spelled out literally rather than derived from {@code ConfigKey}: reading the expectations out of
+ * the registry under test would make these tests tautological.
  */
 public final class ConfigFixture {
 
@@ -90,7 +88,6 @@ public final class ConfigFixture {
         return map;
     }
 
-    // Validation actually reads and writes the configured paths, so both point at a writable temp dir.
     public static Map<String, String> fullValid(Path writablePath) {
         final var map = fullValid();
         map.put("filePath", writablePath.toString());
@@ -98,8 +95,6 @@ public final class ConfigFixture {
         return map;
     }
 
-    // A three-node cluster with seeds and a shared secret: what the cluster cross-key rules need to
-    // have anything to check.
     public static Map<String, String> clusterEnabled(Path writablePath) {
         final var map = fullValid(writablePath);
         map.put("clusterEnabled", "true");

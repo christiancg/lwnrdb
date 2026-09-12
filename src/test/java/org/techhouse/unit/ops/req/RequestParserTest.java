@@ -29,7 +29,6 @@ import org.techhouse.ops.req.agg.step.map.MapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 
 public class RequestParserTest {
-    // Successfully parse basic operation requests like SAVE, DELETE, CREATE_DATABASE
     @Test
     public void test_parse_basic_operation_requests() {
         String saveRequest = """
@@ -72,7 +71,6 @@ public class RequestParserTest {
         assertEquals("newDb", createDbResult.getDatabaseName());
     }
 
-    // Successfully parse LIST_DATABASES request
     @Test
     public void test_parse_list_databases_request() {
         String listDatabasesRequest = """
@@ -88,7 +86,6 @@ public class RequestParserTest {
         assertNull(result.getCollectionName());
     }
 
-    // Handle null values in JSON fields
     @Test
     public void test_handle_null_json_fields() {
         String requestWithNulls = """
@@ -114,7 +111,6 @@ public class RequestParserTest {
         assertTrue(obj.get("address").isJsonNull());
     }
 
-    // Process requests with primary key field correctly
     @Test
     public void test_process_requests_with_primary_key_field() {
         String jsonMessage = """
@@ -137,7 +133,6 @@ public class RequestParserTest {
         assertEquals("12345", object.get("_id").asJsonString().getValue());
     }
 
-    // Handle casting operations between different types
     @Test
     public void test_casting_operations() {
         String message = "{ \"type\": \"AGGREGATE\", \"databaseName\": \"testDB\", \"collectionName\": \"testCollection\", \"aggregationSteps\": [{\"type\": \"MAP\", \"operators\": [{ \"type\": \"CAST\", \"fieldName\": \"age\", \"toType\": \"STRING\" }]}] }";
@@ -153,7 +148,6 @@ public class RequestParserTest {
         assertEquals("age", addFieldOperator.getFieldName());
     }
 
-    // Successfully parse LIST_COLLECTIONS request
     @Test
     public void test_parse_list_collections_request() {
         String listCollectionsRequest = """
@@ -170,7 +164,6 @@ public class RequestParserTest {
         assertNull(result.getCollectionName());
     }
 
-    // Parse BULK_SAVE request
     @Test
     public void test_parse_bulk_save_request() {
         String msg = """
@@ -180,7 +173,6 @@ public class RequestParserTest {
         assertEquals(OperationType.BULK_SAVE, result.getType());
     }
 
-    // Parse FIND_BY_ID request
     @Test
     public void test_parse_find_by_id_request() {
         String msg = """
@@ -190,7 +182,6 @@ public class RequestParserTest {
         assertEquals(OperationType.FIND_BY_ID, result.getType());
     }
 
-    // Parse DROP_DATABASE request
     @Test
     public void test_parse_drop_database_request() {
         String msg = """
@@ -201,7 +192,6 @@ public class RequestParserTest {
         assertEquals("myDb", result.getDatabaseName());
     }
 
-    // Parse DROP_COLLECTION request
     @Test
     public void test_parse_drop_collection_request() {
         String msg = """
@@ -211,7 +201,6 @@ public class RequestParserTest {
         assertEquals(OperationType.DROP_COLLECTION, result.getType());
     }
 
-    // Parse CREATE_INDEX request
     @Test
     public void test_parse_create_index_request() {
         String msg = """
@@ -221,7 +210,6 @@ public class RequestParserTest {
         assertEquals(OperationType.CREATE_INDEX, result.getType());
     }
 
-    // Parse DROP_INDEX request
     @Test
     public void test_parse_drop_index_request() {
         String msg = """
@@ -231,7 +219,6 @@ public class RequestParserTest {
         assertEquals(OperationType.DROP_INDEX, result.getType());
     }
 
-    // Parse REINDEX request with explicit fieldNames
     @Test
     public void test_parse_reindex_request_with_field_names() {
         String msg = """
@@ -242,7 +229,6 @@ public class RequestParserTest {
         assertEquals(List.of("email", "status"), ((ReindexRequest) result).getFieldNames());
     }
 
-    // Parse REINDEX request with no fieldNames (rebuild all)
     @Test
     public void test_parse_reindex_request_without_field_names() {
         String msg = """
@@ -252,7 +238,6 @@ public class RequestParserTest {
         assertTrue(((ReindexRequest) result).getFieldNames().isEmpty());
     }
 
-    // Parse CLOSE_CONNECTION request
     @Test
     public void test_parse_close_connection_request() {
         String msg = """
@@ -262,7 +247,6 @@ public class RequestParserTest {
         assertEquals(OperationType.CLOSE_CONNECTION, result.getType());
     }
 
-    // Parse CREATE_COLLECTION request (covers L41)
     @Test
     public void test_parse_create_collection_request() {
         String msg = """

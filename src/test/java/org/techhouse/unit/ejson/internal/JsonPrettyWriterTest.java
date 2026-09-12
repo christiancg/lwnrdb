@@ -27,7 +27,6 @@ public class JsonPrettyWriterTest {
         return object;
     }
 
-    // Two-space indentation nests objects and arrays
     @Test
     public void test_two_space_indent() {
         assertEquals("""
@@ -42,7 +41,6 @@ public class JsonPrettyWriterTest {
                 }""", JsonPrettyWriter.toJson(sample(), "  "));
     }
 
-    // The indent string is used verbatim
     @Test
     public void test_tab_indent() {
         final var object = new JsonObject();
@@ -50,7 +48,6 @@ public class JsonPrettyWriterTest {
         assertEquals("{\n\t\"a\": 1\n}", JsonPrettyWriter.toJson(object, "\t"));
     }
 
-    // Empty containers render compactly
     @Test
     public void test_empty_containers() {
         final var object = new JsonObject();
@@ -61,7 +58,6 @@ public class JsonPrettyWriterTest {
         assertEquals("[]", JsonPrettyWriter.toJson(new JsonArray(), "  "));
     }
 
-    // Keys are escaped and leaves delegate to the adapters
     @Test
     public void test_escaping_and_leaf_delegation() {
         final var object = new JsonObject();
@@ -69,7 +65,6 @@ public class JsonPrettyWriterTest {
         assertEquals("{\n  \"quo\\\"te\": \"a\\nb\"\n}", JsonPrettyWriter.toJson(object, "  "));
     }
 
-    // Custom EJson types stay leaves
     @Test
     public void test_custom_types_are_leaves() {
         final var object = new JsonObject();
@@ -77,13 +72,11 @@ public class JsonPrettyWriterTest {
         assertEquals("{\n  \"g\": \"#geo(1.0,2.0)\"\n}", JsonPrettyWriter.toJson(object, "  "));
     }
 
-    // A null element renders as JSON null
     @Test
     public void test_null_element() {
         assertEquals("null", JsonPrettyWriter.toJson(null, "  "));
     }
 
-    // A null or empty indent delegates to the compact writer, and stripping whitespace matches it
     @Test
     public void test_indent_absent_matches_compact() {
         final var ejson = EJSON;

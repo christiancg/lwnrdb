@@ -44,8 +44,6 @@ public class ParserClassSyntaxTest {
         return ((ExpressionStatement) firstStatement(source)).getExpression();
     }
 
-    // The expression in the body of a class declaration's last method: a private name only parses
-    // inside the class that declares it.
     private static Expression privateBodyExpression(String source) {
         final var klass = (ClassDeclaration) firstStatement(source);
         final var method = (MethodDefinition) klass.getBody().getMembers().getLast();
@@ -91,7 +89,6 @@ public class ParserClassSyntaxTest {
         assertEquals("true", ((Identifier) setTrue.getKey()).getName());
     }
 
-    // a classic for head takes an ordinary using declaration list, initializers and all
     @Test
     public void test_using_in_classic_for_head() {
         final var statement = assertInstanceOf(ForStatement.class, firstStatement("for (using i = a, j = b;;) {}"));
@@ -100,7 +97,6 @@ public class ParserClassSyntaxTest {
         assertEquals(2, declaration.getDeclarations().size());
     }
 
-    // An empty class declaration has a name, no superclass and no members
     @Test
     public void test_empty_class() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C {}"));
@@ -109,7 +105,6 @@ public class ParserClassSyntaxTest {
         assertTrue(decl.getBody().getMembers().isEmpty());
     }
 
-    // extends with a plain identifier heritage
     @Test
     public void test_class_extends() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C extends B {}"));
@@ -117,14 +112,12 @@ public class ParserClassSyntaxTest {
         assertEquals("B", superClass.getName());
     }
 
-    // extends accepts a member expression heritage
     @Test
     public void test_class_extends_member() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C extends a.B {}"));
         assertInstanceOf(MemberExpression.class, decl.getSuperClass());
     }
 
-    // A plain method is a non-static method with a function value
     @Test
     public void test_class_method() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { m() {} }"));
@@ -135,7 +128,6 @@ public class ParserClassSyntaxTest {
         assertInstanceOf(FunctionExpression.class, method.getValue());
     }
 
-    // A constructor member resolves to the constructor kind
     @Test
     public void test_class_constructor() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { constructor(x) {} }"));
@@ -144,7 +136,6 @@ public class ParserClassSyntaxTest {
         assertEquals(1, method.getValue().getParams().size());
     }
 
-    // A static method carries the static flag
     @Test
     public void test_static_method() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static m() {} }"));
@@ -153,7 +144,6 @@ public class ParserClassSyntaxTest {
         assertEquals("method", method.getKind());
     }
 
-    // A computed method key sets the computed flag
     @Test
     public void test_computed_method() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { [a + b]() {} }"));
@@ -162,7 +152,6 @@ public class ParserClassSyntaxTest {
         assertInstanceOf(BinaryExpression.class, method.getKey());
     }
 
-    // A class field with an initializer
     @Test
     public void test_class_field() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { x = 1; }"));
@@ -172,7 +161,6 @@ public class ParserClassSyntaxTest {
         assertFalse(field.isStatic());
     }
 
-    // A class field without an initializer has a null value
     @Test
     public void test_class_field_no_init() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { x }"));
@@ -180,7 +168,6 @@ public class ParserClassSyntaxTest {
         assertNull(field.getValue());
     }
 
-    // A static field carries the static flag
     @Test
     public void test_static_field() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static x = 1; }"));
@@ -189,7 +176,6 @@ public class ParserClassSyntaxTest {
         assertInstanceOf(NumberLiteral.class, field.getValue());
     }
 
-    // A private field carries a PrivateIdentifier key
     @Test
     public void test_class_private_field() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { #x = 1; }"));
@@ -198,7 +184,6 @@ public class ParserClassSyntaxTest {
         assertInstanceOf(NumberLiteral.class, field.getValue());
     }
 
-    // A private method carries a PrivateIdentifier key
     @Test
     public void test_class_private_method() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { #m() {} }"));
@@ -206,7 +191,6 @@ public class ParserClassSyntaxTest {
         assertEquals("m", ((PrivateIdentifier) method.getKey()).getName());
     }
 
-    // A static initialization block parses to a StaticBlock member
     @Test
     public void test_static_block() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static { x = 1; } }"));
@@ -214,7 +198,6 @@ public class ParserClassSyntaxTest {
         assertEquals(1, block.getBody().size());
     }
 
-    // An empty static block is valid
     @Test
     public void test_static_block_empty() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static {} }"));
@@ -222,7 +205,6 @@ public class ParserClassSyntaxTest {
         assertTrue(block.getBody().isEmpty());
     }
 
-    // Private member access via this.#x resolves the property to a PrivateIdentifier
     @Test
     public void test_private_member_access() {
         final var member = assertInstanceOf(MemberExpression.class,
@@ -231,7 +213,6 @@ public class ParserClassSyntaxTest {
         assertEquals("x", ((PrivateIdentifier) member.getProperty()).getName());
     }
 
-    // A #x in obj brand check parses to a BinaryExpression with a PrivateIdentifier left side
     @Test
     public void test_private_in_expression() {
         final var binary = assertInstanceOf(BinaryExpression.class,
@@ -240,7 +221,6 @@ public class ParserClassSyntaxTest {
         assertEquals("x", ((PrivateIdentifier) binary.getLeft()).getName());
     }
 
-    // A member literally named "static" is a method, not a static modifier
     @Test
     public void test_member_named_static() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static() {} }"));
@@ -249,7 +229,6 @@ public class ParserClassSyntaxTest {
         assertEquals("static", ((Identifier) method.getKey()).getName());
     }
 
-    // An anonymous class expression has a null id
     @Test
     public void test_class_expression_anonymous() {
         final var decl = assertInstanceOf(VariableDeclaration.class, firstStatement("const C = class {};"));
@@ -257,7 +236,6 @@ public class ParserClassSyntaxTest {
         assertNull(expr.getId());
     }
 
-    // A named class expression carries its name
     @Test
     public void test_class_expression_named() {
         final var decl = assertInstanceOf(VariableDeclaration.class, firstStatement("const C = class Named {};"));
@@ -265,7 +243,6 @@ public class ParserClassSyntaxTest {
         assertEquals("Named", expr.getId().getName());
     }
 
-    // super(...) parses to a call over a super expression, inside a derived constructor
     @Test
     public void test_super_call() {
         final var declaration = assertInstanceOf(ClassDeclaration.class,
@@ -276,7 +253,6 @@ public class ParserClassSyntaxTest {
         assertInstanceOf(SuperExpression.class, call.getCallee());
     }
 
-    // a super call outside a derived constructor is an early error
     @Test
     public void test_super_call_outside_derived_constructor() {
         assertThrows(SyntaxErrorException.class, () -> parse("super(x);"));
@@ -284,7 +260,6 @@ public class ParserClassSyntaxTest {
         assertThrows(SyntaxErrorException.class, () -> parse("class C { constructor() { super(); } }"));
     }
 
-    // super.m() parses to a call over a member access on super; a super property only reaches a method
     @Test
     public void test_super_member() {
         final var call = assertInstanceOf(CallExpression.class,
@@ -294,25 +269,21 @@ public class ParserClassSyntaxTest {
         assertThrows(SyntaxErrorException.class, () -> parse("super.m()"));
     }
 
-    // A class declaration requires a name
     @Test
     public void test_class_declaration_requires_name() {
         assertThrows(UnexpectedTokenException.class, () -> parse("class {}"));
     }
 
-    // An unterminated class body reports end of input
     @Test
     public void test_unterminated_class_body() {
         assertThrows(UnexpectedEndOfInputException.class, () -> parse("class C {"));
     }
 
-    // A getter cannot be a field
     @Test
     public void test_getter_cannot_be_field() {
         assertThrows(UnexpectedTokenException.class, () -> parse("class C { get x = 1 }"));
     }
 
-    // async class method sets async on its function value
     @Test
     public void test_async_class_method() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { async m() {} }"));
@@ -322,7 +293,6 @@ public class ParserClassSyntaxTest {
         assertEquals("method", method.getKind());
     }
 
-    // generator class method sets generator on its function value
     @Test
     public void test_generator_class_method() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { *m() {} }"));
@@ -330,7 +300,6 @@ public class ParserClassSyntaxTest {
         assertTrue(method.getValue().isGenerator());
     }
 
-    // async generator class method sets both flags
     @Test
     public void test_async_generator_class_method() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { async *m() {} }"));
@@ -339,7 +308,6 @@ public class ParserClassSyntaxTest {
         assertTrue(method.getValue().isGenerator());
     }
 
-    // static async method carries the static flag and async on its value
     @Test
     public void test_static_async_method() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { static async m() {} }"));
@@ -348,7 +316,6 @@ public class ParserClassSyntaxTest {
         assertTrue(method.getValue().isAsync());
     }
 
-    // A field literally named "async" is a field, not a modifier
     @Test
     public void test_field_named_async() {
         final var decl = assertInstanceOf(ClassDeclaration.class, firstStatement("class C { async = 1 }"));

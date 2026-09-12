@@ -25,47 +25,39 @@ public class TemporalInstantBuiltinsTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // valueOf always throws, per spec - Instant arithmetic must go through compare()/equals()
     @Test
     public void test_value_of_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).valueOf()"));
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n) + 1"));
     }
 
-    // add()/subtract() accept a plain Duration-like object exposing time fields
     @Test
     public void test_add_and_subtract() {
         assertEquals(1000, num("new Temporal.Instant(0n).add({hours: 0, seconds: 1}).epochMilliseconds"));
         assertEquals(-1000, num("new Temporal.Instant(0n).subtract({seconds: 1}).epochMilliseconds"));
     }
 
-    // add()/subtract() reject a non-zero calendar field (days/weeks/months/years)
     @Test
     public void test_add_rejects_calendar_fields() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).add({days: 1})"));
     }
 
-    // add()/subtract() also accept a real Temporal.Duration instance or an ISO 8601 duration string
     @Test
     public void test_add_accepts_duration_instance_and_string() {
         assertEquals(1000, num("new Temporal.Instant(0n).add(Temporal.Duration.from({seconds: 1})).epochMilliseconds"));
         assertEquals(1000, num("new Temporal.Instant(0n).add('PT1S').epochMilliseconds"));
     }
 
-    // add()/subtract() reject an argument that is neither a Temporal.Duration, an ISO duration
-    // string, nor a duration-like object
     @Test
     public void test_add_rejects_non_duration_argument() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).add(42)"));
     }
 
-    // add()/subtract() reject a duration-like object with none of the ten recognized properties
     @Test
     public void test_add_rejects_duration_like_with_no_recognized_fields() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).add({})"));
     }
 
-    // equals() compares two instants for exact equality
     @Test
     public void test_equals() {
         assertTrue(bool("new Temporal.Instant(0n).equals(new Temporal.Instant(0n))"));
@@ -73,7 +65,6 @@ public class TemporalInstantBuiltinsTest {
         assertTrue(bool("new Temporal.Instant(0n).equals('1970-01-01T00:00:00Z')"));
     }
 
-    // Temporal.Instant.compare orders two instants
     @Test
     public void test_compare() {
         assertEquals(-1, num("Temporal.Instant.compare(new Temporal.Instant(0n), new Temporal.Instant(1n))"));
@@ -81,14 +72,12 @@ public class TemporalInstantBuiltinsTest {
         assertEquals(0, num("Temporal.Instant.compare(new Temporal.Instant(1n), new Temporal.Instant(1n))"));
     }
 
-    // until()/since() report a time-unit-only duration between two instants
     @Test
     public void test_until_and_since() {
         assertEquals(1, num("new Temporal.Instant(0n).until(Temporal.Instant.fromEpochMilliseconds(1000)).seconds"));
         assertEquals(-1, num("new Temporal.Instant(0n).since(Temporal.Instant.fromEpochMilliseconds(1000)).seconds"));
     }
 
-    // round() rounds to the nearest smallestUnit boundary
     @Test
     public void test_round() {
         assertEquals(2000,
@@ -97,13 +86,11 @@ public class TemporalInstantBuiltinsTest {
                 num("Temporal.Instant.fromEpochMilliseconds(1400).round({smallestUnit: 'second'}).epochMilliseconds"));
     }
 
-    // round() requires a smallestUnit option
     @Test
     public void test_round_requires_smallest_unit() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).round({})"));
     }
 
-    // Every prototype method brand-checks its receiver
     @Test
     public void test_brand_check() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("Temporal.Instant.prototype.toString.call({})"));
@@ -111,7 +98,6 @@ public class TemporalInstantBuiltinsTest {
                 "Object.getOwnPropertyDescriptor(Temporal.Instant.prototype," + " 'epochMilliseconds').get.call({})"));
     }
 
-    // round() sweeps every rounding mode on the positive side of a tie/non-tie remainder
     @Test
     public void test_round_all_modes_positive() {
         final var setup = "new Temporal.Instant(%dn).round({smallestUnit: 'nanosecond', roundingIncrement: 10, "
@@ -127,9 +113,6 @@ public class TemporalInstantBuiltinsTest {
         assertEquals("20", str(String.format(setup, 25, "halfEven")));
     }
 
-    // The halfCeil/halfFloor/halfEven modes' non-tie branches: a remainder clearly above half rounds
-    // away from zero regardless of mode, and a remainder clearly below half keeps the truncated
-    // quotient regardless of mode - only an exact tie (already covered elsewhere) distinguishes them
     @Test
     public void test_round_half_modes_non_tie_remainder() {
         final var setup = "new Temporal.Instant(%dn).round({smallestUnit: 'nanosecond', roundingIncrement: 10, "
@@ -142,10 +125,8 @@ public class TemporalInstantBuiltinsTest {
         assertEquals("10", str(String.format(setup, 12, "halfEven")));
     }
 
-    // round() computes every mode via RoundNumberToIncrementAsIfPositive: the raw (possibly negative)
-    // epochNanoseconds value is bracketed by its true floor/ceiling multiples of the increment, and
-    // "trunc"/"expand" resolve to those brackets directly (same as "floor"/"ceil") rather than
-    // shrinking/growing the value's magnitude the way they would for a signed Duration.
+    // round() computes every mode via RoundNumberToIncrementAsIfPositive, so "trunc"/"expand" resolve
+    // to the floor/ceiling brackets rather than shrinking/growing the magnitude as a Duration would.
     @Test
     public void test_round_all_modes_negative() {
         final var setup = "new Temporal.Instant(%dn).round({smallestUnit: 'nanosecond', roundingIncrement: 10, "
@@ -156,8 +137,6 @@ public class TemporalInstantBuiltinsTest {
         assertEquals("-10", str(String.format(setup, -15, "halfExpand")));
     }
 
-    // "expand" rounds toward the ceiling bracket unconditionally, for both a positive and a negative
-    // instant (not "away from zero", which is Duration's own, sign-aware convention)
     @Test
     public void test_round_expand() {
         assertEquals("3600000000000",
@@ -167,8 +146,6 @@ public class TemporalInstantBuiltinsTest {
                 + ".epochNanoseconds.toString()"));
     }
 
-    // round() accepts every fixed-length time unit through hour (day and coarser are rejected - a
-    // "day" has no fixed length without a calendar/time zone attached)
     @Test
     public void test_round_every_unit() {
         assertEquals("0", str("new Temporal.Instant(1n).round({smallestUnit: 'hour', roundingIncrement: 12, "
@@ -185,8 +162,6 @@ public class TemporalInstantBuiltinsTest {
                 str("new Temporal.Instant(1n).round({smallestUnit: 'nanosecond'}).epochNanoseconds.toString()"));
     }
 
-    // round() rejects a smallestUnit larger than hour (a bare string is a shorthand for
-    // {smallestUnit: string}, so only a genuinely non-object/non-string argument is a TypeError)
     @Test
     public void test_round_rejects_invalid_options() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).round(5)"));
@@ -196,8 +171,6 @@ public class TemporalInstantBuiltinsTest {
                 () -> Interpreter.run("new Temporal.Instant(0n).round({smallestUnit: 'day'})"));
     }
 
-    // roundingIncrement must truncate to a positive integer that evenly divides the unit's
-    // fit-into-a-day maximum (e.g. up to 24 for "hour", not just the immediately-larger unit)
     @Test
     public void test_round_invalid_increment() {
         assertThrows(RangeErrorException.class,
@@ -210,8 +183,6 @@ public class TemporalInstantBuiltinsTest {
                 .run("new Temporal.Instant(0n).round({smallestUnit: 'second', roundingIncrement: NaN})"));
     }
 
-    // A method receiving a wrapped subclass instance (produced via Reflect.construct with a foreign
-    // newTarget) unwraps it back to the real Temporal.Instant through its wrapped primitive
     @Test
     public void test_wrapped_instant_argument_is_unwrapped() {
         assertTrue(bool("""
@@ -221,8 +192,6 @@ public class TemporalInstantBuiltinsTest {
                 """));
     }
 
-    // until()/since() reject a smallestUnit/largestUnit larger than hour, and a smallestUnit larger
-    // than largestUnit
     @Test
     public void test_until_rejects_day_units() {
         assertThrows(RangeErrorException.class, () -> Interpreter
@@ -238,7 +207,6 @@ public class TemporalInstantBuiltinsTest {
                         + "{smallestUnit: 'hour', largestUnit: 'second'})"));
     }
 
-    // until() honours largestUnit/smallestUnit/roundingIncrement/roundingMode together
     @Test
     public void test_until_with_largest_unit() {
         assertTrue(bool("var d = Temporal.Instant.fromEpochMilliseconds(0)"
@@ -246,7 +214,6 @@ public class TemporalInstantBuiltinsTest {
                 + "d.minutes === 1 && d.seconds === 30"));
     }
 
-    // A largestUnit of "hour" decomposes an hour-and-larger difference into an hours field
     @Test
     public void test_until_with_hour_largest_unit() {
         assertTrue(bool("var d = Temporal.Instant.fromEpochMilliseconds(0)"
@@ -262,7 +229,6 @@ public class TemporalInstantBuiltinsTest {
                         + "{smallestUnit: 'second', roundingIncrement: 30, roundingMode: 'halfExpand'}).seconds"));
     }
 
-    // durationTimeNanos/numField reject non-integer, NaN and infinite duration fields
     @Test
     public void test_add_rejects_invalid_duration_fields() {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new Temporal.Instant(0n).add({hours: 1.5})"));
@@ -271,9 +237,6 @@ public class TemporalInstantBuiltinsTest {
                 () -> Interpreter.run("new Temporal.Instant(0n).add({hours: Infinity})"));
     }
 
-    // Reflect.construct(Temporal.Instant, args, newTarget) links the new instance's prototype to
-    // newTarget.prototype (OrdinaryCreateFromConstructor) instead of the intrinsic Temporal.Instant
-    // prototype.
     @Test
     public void test_reflect_construct_links_new_target_prototype() {
         assertTrue(bool("""
@@ -285,7 +248,6 @@ public class TemporalInstantBuiltinsTest {
                 """));
     }
 
-    // A plain `new Temporal.Instant(...)` (no custom newTarget) keeps the ordinary prototype
     @Test
     public void test_plain_new_keeps_instant_prototype() {
         assertTrue(bool("Object.getPrototypeOf(new Temporal.Instant(0n)) === Temporal.Instant.prototype"));
@@ -309,21 +271,14 @@ public class TemporalInstantBuiltinsTest {
 
     @Test
     public void test_round_half_ceil_half_floor_half_even() {
-        // 1500 is exactly halfway between 1000 and 2000; halfCeil breaks the tie toward +infinity.
         assertEquals("2000", str("new Temporal.Instant(1500n).round({smallestUnit: 'nanosecond', "
                 + "roundingIncrement: 1000, roundingMode: 'halfCeil'}).epochNanoseconds.toString()"));
-        // -1500 is exactly halfway between -2000 and -1000; halfFloor breaks the tie toward -infinity.
         assertEquals("-2000", str("new Temporal.Instant(-1500n).round({smallestUnit: 'nanosecond', "
                 + "roundingIncrement: 1000, roundingMode: 'halfFloor'}).epochNanoseconds.toString()"));
-        // 2500 is exactly halfway between 2000 and 3000; halfEven picks the even multiple (2).
         assertEquals("2000", str("new Temporal.Instant(2500n).round({smallestUnit: 'nanosecond', "
                 + "roundingIncrement: 1000, roundingMode: 'halfEven'}).epochNanoseconds.toString()"));
-        // -1500 is exactly halfway between -2000 and -1000; halfCeil breaks the tie toward
-        // +infinity, i.e. the less-negative side this time (the mirror image of the positive case).
         assertEquals("-1000", str("new Temporal.Instant(-1500n).round({smallestUnit: 'nanosecond', "
                 + "roundingIncrement: 1000, roundingMode: 'halfCeil'}).epochNanoseconds.toString()"));
-        // 1500 is exactly halfway between 1000 and 2000; halfFloor breaks the tie toward -infinity,
-        // i.e. the smaller side this time.
         assertEquals("1000", str("new Temporal.Instant(1500n).round({smallestUnit: 'nanosecond', "
                 + "roundingIncrement: 1000, roundingMode: 'halfFloor'}).epochNanoseconds.toString()"));
     }

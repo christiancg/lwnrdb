@@ -27,7 +27,6 @@ public class TypedArrayAccessBuiltinsTest {
         return str("let caught = 'none'; try { " + expression + "; } catch (e) { caught = e.name; } caught");
     }
 
-    // ToIndex rejects a length no Data Block could hold instead of attempting the allocation
     @Test
     public void test_excessive_length_throws_range_error_without_allocating() {
         assertEquals("RangeError", caught("new ArrayBuffer(9007199254740992)"));
@@ -40,7 +39,6 @@ public class TypedArrayAccessBuiltinsTest {
 
     private static final String DETACHED = "const b = new ArrayBuffer(8); const ta = new Int8Array(b); b.transfer(0); ";
 
-    // a fixed-length view over a shrunk resizable buffer is out of bounds, not merely shorter
     @Test
     public void test_out_of_bounds_view_throws_type_error() {
         final var shrink = "const b = new ArrayBuffer(8, { maxByteLength: 8 }); const ta = new Int8Array(b, 0, 8);"
@@ -53,7 +51,6 @@ public class TypedArrayAccessBuiltinsTest {
                         + "b.resize(2); v.getInt8(0)"));
     }
 
-    // set() reads an array-like source through [[Get]] and refuses to mix content types
     @Test
     public void test_set_reads_array_like_and_checks_content_type() {
         assertEquals("1,2,0", str("const ta = new Int8Array(3); ta.set({ length: 2, 0: 1, 1: 2 }); ta.join(',')"));
@@ -63,8 +60,6 @@ public class TypedArrayAccessBuiltinsTest {
         assertEquals("TypeError", caught("new Int8Array(2).set(new BigInt64Array(1))"));
     }
 
-    // a non-index write lands as an ordinary own property, while a canonical numeric index that is
-    // not a valid index is discarded rather than stored
     @Test
     public void test_non_index_writes_land_as_own_properties() {
         assertEquals("7", str("const ta = new Int8Array(1); ta.tag = 7; String(ta.tag)"));
@@ -74,8 +69,6 @@ public class TypedArrayAccessBuiltinsTest {
                 + "Object.defineProperty(ta, 'v', { get() { return 5; } }); String(ta.v)"));
     }
 
-    // every canonical index inside the view is an own data property, and the spec made them
-    // writable, enumerable and configurable so a shrinking buffer can drop them
     @Test
     public void test_canonical_indices_are_own_data_properties() {
         final var base = "const ta = new Int8Array(2); ";
@@ -88,8 +81,6 @@ public class TypedArrayAccessBuiltinsTest {
         assertEquals("false", str(base + "String(Object.prototype.hasOwnProperty.call(ta, '2'))"));
     }
 
-    // [[Delete]] of a live index fails, while anything absent - out of range, non-canonical, gone
-    // with a detached buffer - deletes vacuously
     @Test
     public void test_delete_of_a_valid_index_is_refused() {
         final var base = "const ta = new Int8Array(2); ";
@@ -100,7 +91,6 @@ public class TypedArrayAccessBuiltinsTest {
         assertEquals("true", str(DETACHED + "String(Reflect.deleteProperty(ta, '0'))"));
     }
 
-    // an out-of-bounds element write is dropped without reporting failure
     @Test
     public void test_out_of_bounds_write_is_a_silent_no_op() {
         final var base = "const ta = new Int8Array(1); ";
@@ -111,16 +101,11 @@ public class TypedArrayAccessBuiltinsTest {
         assertEquals("undefined", str(DETACHED + "ta[0] = 1; String(ta[0])"));
     }
 
-    // DataView has only one required parameter (buffer); byteOffset/byteLength are optional and
-    // don't count toward the builtin's length.
     @Test
     public void test_data_view_length_is_one() {
         assertEquals("1", str("String(DataView.length)"));
     }
 
-    // OrdinaryCreateFromConstructor: Reflect.construct(DataView, args, newTarget) links the new
-    // instance's prototype to newTarget.prototype instead of %DataView.prototype%, wrapping the view
-    // in a plain object the way the other builtins with internal state already do.
     @Test
     public void test_data_view_honours_new_target_prototype() {
         assertEquals("true:true", str("""
@@ -132,14 +117,11 @@ public class TypedArrayAccessBuiltinsTest {
                 """));
     }
 
-    // A plain `new DataView(...)` still links to the ordinary %DataView.prototype%.
     @Test
     public void test_data_view_default_prototype_unaffected() {
         assertTrue(bool("Object.getPrototypeOf(new DataView(new ArrayBuffer(8))) === DataView.prototype"));
     }
 
-    // indexOf/lastIndexOf compare strictly, and an explicitly passed undefined fromIndex is still
-    // a supplied argument that ToIntegerOrInfinity turns into 0
     @Test
     public void test_index_searches_are_strict() {
         final var base = "const ta = new Int8Array([1, 2, 3]); ";
@@ -150,7 +132,6 @@ public class TypedArrayAccessBuiltinsTest {
         assertEquals("2", str(base + "String(ta.lastIndexOf(3))"));
     }
 
-    // FromHex rejects an odd length before decoding anything, and setFromHex writes the valid prefix
     @Test
     public void test_from_hex_and_set_from_hex() {
         assertEquals("102,111,111", str("Uint8Array.fromHex('666f6f').join(',')"));
@@ -163,7 +144,6 @@ public class TypedArrayAccessBuiltinsTest {
                 + "[r.read, r.written].join(',')"));
     }
 
-    // setFromBase64 decodes only as much as the target holds and reports what it consumed
     @Test
     public void test_set_from_base64_reports_read_and_written() {
         assertEquals("4,3,102,111,111,255,255", str("const ta = new Uint8Array([255, 255, 255, 255, 255]);"
@@ -175,9 +155,6 @@ public class TypedArrayAccessBuiltinsTest {
         assertEquals("TypeError", caught(DETACHED + "new Uint8Array(new ArrayBuffer(0)).setFromBase64(1)"));
     }
 
-    // The receiver's buffer can be detached mid-call by an options getter (`alphabet`); the detached
-    // check has to be re-run right before writing bytes, not just once up front, else the write loop
-    // would silently no-op instead of throwing.
     @Test
     public void test_set_from_base64_rechecks_detach_after_options_getter() {
         assertEquals("TypeError,1", str("""
@@ -197,7 +174,6 @@ public class TypedArrayAccessBuiltinsTest {
                 """));
     }
 
-    // `with` captures the length up front but validates the index against the live one
     @Test
     public void test_with_validates_the_index_after_coercion() {
         assertEquals("11,22", str("const b = new ArrayBuffer(2, { maxByteLength: 5 }); const ta = new Int8Array(b);"
@@ -209,9 +185,8 @@ public class TypedArrayAccessBuiltinsTest {
                         + "let name = 'none'; try { ta.with(-1, shrink); } catch (e) { name = e.name; } name"));
     }
 
-    // ArrayBuffer.prototype.slice runs SpeciesConstructor. The rejection of a non-object
-    // `constructor` is not asserted here because a property write on an ArrayBuffer is still dropped
-    // by the member seam, so there is no way to install one - see the report's blocked list.
+    // The rejection of a non-object `constructor` is not asserted here: a property write on an
+    // ArrayBuffer is still dropped by the member seam, so there is no way to install one.
     @Test
     public void test_buffer_slice_consults_the_species_constructor() {
         final var base = "const b = new ArrayBuffer(8); ";
@@ -220,7 +195,6 @@ public class TypedArrayAccessBuiltinsTest {
         assertEquals("0", str(base + "String(b.slice(4, 2).byteLength)"));
     }
 
-    // a DataView geometry read rejects a view whose window the buffer no longer covers
     @Test
     public void test_data_view_geometry_rejects_an_out_of_bounds_view() {
         final var base = "const b = new ArrayBuffer(4, { maxByteLength: 5 }); const v = new DataView(b, 1); ";
@@ -231,7 +205,6 @@ public class TypedArrayAccessBuiltinsTest {
                 caught("const b = new ArrayBuffer(4); const v = new DataView(b); b.transfer(0); v.byteOffset"));
     }
 
-    // CanonicalNumericIndexString is the gate every exotic decision goes through
     @Test
     public void test_canonical_numeric_index_string() {
         assertEquals(-0.0, JsTypedArray.canonicalNumericIndex("-0"));
@@ -246,8 +219,6 @@ public class TypedArrayAccessBuiltinsTest {
         assertNull(JsTypedArray.canonicalNumericIndex(""));
     }
 
-    // the integer-indexed [[Set]] arm: written through the array itself, answered without touching a
-    // foreign receiver when the index is absent, declined only for an ordinary key
     @Test
     public void test_set_exotic_index_never_reaches_a_foreign_receiver() {
         final var typed = new JsTypedArray(JsTypedArray.Kind.INT8, new JsArrayBuffer(2), 0, 2);
@@ -266,8 +237,6 @@ public class TypedArrayAccessBuiltinsTest {
         assertFalse(typed.isValidIntegerIndex(-0.0));
     }
 
-    // IntegerIndexedElementSet coerces the value before it decides which slot, if any, receives it:
-    // an index the view cannot hold still runs the valueOf that names it.
     @Test
     public void test_index_write_coerces_before_validating_the_index() {
         final var thrower = "const t = { valueOf: function () { throw new RangeError('coerced'); } }; "
@@ -278,8 +247,6 @@ public class TypedArrayAccessBuiltinsTest {
         assertEquals("RangeError", caught(thrower + "s['0'] = t"));
     }
 
-    // ...and a CanonicalNumericIndexString naming no slot is discarded rather than stored, while an
-    // ordinary key keeps running its accessor.
     @Test
     public void test_index_write_never_becomes_an_ordinary_property() {
         assertEquals("2undefined",
@@ -290,8 +257,6 @@ public class TypedArrayAccessBuiltinsTest {
                         + "s.tag = 1"));
     }
 
-    // A valueOf that grows a resizable buffer makes the index it was called for valid, and the
-    // write then lands.
     @Test
     public void test_index_write_sees_a_buffer_resized_by_the_coercion() {
         assertEquals("1|100",
@@ -300,8 +265,6 @@ public class TypedArrayAccessBuiltinsTest {
                         + "String(ta.length) + '|' + String(ta[0])"));
     }
 
-    // [[Set]] with an explicit receiver: the view answers a write addressed to itself (coercing,
-    // then dropping an index it cannot hold) and declines a valid index meant for a foreign one.
     @Test
     public void test_receiver_aware_index_write() {
         assertEquals("true", str("const s = new Int8Array([1]); String(Reflect.set(s, '5', 9, s))"));
@@ -312,7 +275,6 @@ public class TypedArrayAccessBuiltinsTest {
                 + "Reflect.set(s, '0', 9, r); String(s[0]) + '|' + String(r[0])"));
     }
 
-    // setBigInt64 coerces the value through ToBigInt before the range is checked
     @Test
     public void test_set_big_int_coerces_the_value_first() {
         assertEquals("Test262Error", caught("const v = new DataView(new ArrayBuffer(8));"
@@ -321,9 +283,8 @@ public class TypedArrayAccessBuiltinsTest {
                 + "v.setBigInt64(0, { valueOf: function () { return 7n; } }); String(v.getBigInt64(0))"));
     }
 
-    // A typed array's [[Prototype]] is now a real settable slot, so Object.setPrototypeOf actually
-    // takes effect and [[HasProperty]] on a non-canonical, non-own key walks up to it (previously the
-    // link was silently dropped and the lookup fell back to the intrinsic %TypedArray%.prototype).
+    // The [[Prototype]] link used to be silently dropped, leaving the lookup on the intrinsic
+    // %TypedArray%.prototype.
     @Test
     public void test_set_prototype_of_is_observable_and_walks_to_it() {
         assertTrue(bool("""

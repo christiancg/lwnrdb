@@ -38,7 +38,6 @@ public class ResponseParserTest {
         return object;
     }
 
-    // A FIND_BY_ID response round-trips with its document intact
     @Test
     public void test_parses_find_by_id_response() {
         final var parsed = roundTrip(new FindByIdResponse("ok", document("a")));
@@ -48,7 +47,6 @@ public class ResponseParserTest {
         assertEquals("a", response.getObject().get("_id").asJsonString().getValue());
     }
 
-    // A SAVE response round-trips with its generated id
     @Test
     public void test_parses_save_response() {
         final var response = assertInstanceOf(SaveResponse.class, roundTrip(new SaveResponse("saved", "id-1")));
@@ -56,7 +54,6 @@ public class ResponseParserTest {
         assertEquals("saved", response.getMessage());
     }
 
-    // A BULK_SAVE response round-trips both id lists
     @Test
     public void test_parses_bulk_save_response() {
         final var parsed = roundTrip(new BulkSaveResponse("ok", List.of("a", "b"), List.of("c")));
@@ -65,7 +62,6 @@ public class ResponseParserTest {
         assertEquals(List.of("c"), response.getUpdated());
     }
 
-    // An AGGREGATE response round-trips its result documents
     @Test
     public void test_parses_aggregate_response() {
         final var parsed = roundTrip(new AggregateResponse("ok", List.of(document("a"), document("b"))));
@@ -74,21 +70,18 @@ public class ResponseParserTest {
         assertEquals("b", response.getResults().get(1).get("_id").asJsonString().getValue());
     }
 
-    // A DELETE response round-trips as its own type
     @Test
     public void test_parses_delete_response() {
         final var response = assertInstanceOf(DeleteResponse.class, roundTrip(new DeleteResponse("deleted")));
         assertEquals(OperationType.DELETE, response.getType());
     }
 
-    // A LIST_COLLECTIONS response round-trips its collection names
     @Test
     public void test_parses_list_collections_response() {
         final var parsed = roundTrip(new ListCollectionsResponse("ok", List.of("one", "two")));
         assertEquals(List.of("one", "two"), assertInstanceOf(ListCollectionsResponse.class, parsed).getCollections());
     }
 
-    // A LIST_DATABASES response round-trips its database names
     @Test
     public void test_parses_list_databases_response() {
         final var parsed = roundTrip(new ListDatabasesResponse("ok", List.of("db1")));
@@ -107,7 +100,6 @@ public class ResponseParserTest {
                 roundTrip(OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "ok")).getType());
     }
 
-    // An error response keeps its status, message and errorCode
     @Test
     public void test_parses_error_response_preserving_error_code() {
         final var source = new OperationResponse(OperationType.SAVE, "nope", ErrorCode.CROSS_OWNER_TRANSACTION);
@@ -117,7 +109,6 @@ public class ResponseParserTest {
         assertEquals("421-2", parsed.getErrorCode());
     }
 
-    // An errorCode absent from the enum still yields the right status and message
     @Test
     public void test_unknown_error_code_falls_back_to_plain_response() {
         final var json = "{\"type\":\"SAVE\",\"status\":\"ERROR\",\"message\":\"boom\",\"errorCode\":\"999-9\"}";
@@ -128,7 +119,6 @@ public class ResponseParserTest {
         assertNull(parsed.getErrorCode());
     }
 
-    // An error response with no errorCode at all is still parsed
     @Test
     public void test_error_response_without_error_code() {
         final var json = "{\"type\":\"DELETE\",\"status\":\"NOT_FOUND\",\"message\":\"gone\",\"errorCode\":null}";
@@ -137,7 +127,6 @@ public class ResponseParserTest {
         assertNull(parsed.getErrorCode());
     }
 
-    // An OK response of a type with no dedicated mapping becomes a base OperationResponse
     @Test
     public void test_unmapped_operation_type_yields_base_response() {
         final var json = "{\"type\":\"REINDEX\",\"status\":\"OK\",\"message\":\"done\",\"errorCode\":null}";
@@ -147,7 +136,6 @@ public class ResponseParserTest {
         assertEquals("done", parsed.getMessage());
     }
 
-    // A missing list field yields an empty list rather than a null
     @Test
     public void test_missing_list_field_yields_empty_list() {
         final var json = "{\"type\":\"LIST_DATABASES\",\"status\":\"OK\",\"message\":\"ok\"}";
@@ -155,7 +143,6 @@ public class ResponseParserTest {
         assertTrue(parsed.getDatabases().isEmpty());
     }
 
-    // A null document field yields a null object rather than throwing
     @Test
     public void test_null_object_field_yields_null() {
         final var json = "{\"type\":\"FIND_BY_ID\",\"status\":\"OK\",\"message\":\"ok\",\"object\":null}";

@@ -26,7 +26,6 @@ public class DynamicImportProgramTest {
         return engine.run(source, new SimpleHostBindings(args(), null, null, ResourceLimits.unlimited()));
     }
 
-    // Dynamic import of the args module resolves to a namespace exposing its members
     @Test
     public void test_dynamic_import_args_namespace() {
         final var result = run("const m = await import('args'); return m.name;");
@@ -34,14 +33,12 @@ public class DynamicImportProgramTest {
         assertEquals("named", result.getValue().asJsonString().getValue());
     }
 
-    // The namespace also exposes a default binding mirroring the default import
     @Test
     public void test_dynamic_import_default_binding() {
         final var result = run("const m = await import('args'); return m.default.name;");
         assertEquals("named", result.getValue().asJsonString().getValue());
     }
 
-    // Dynamic import of the db module resolves through DatabaseAccess
     @Test
     public void test_dynamic_import_db() {
         final var db = new FakeDatabaseAccess();
@@ -54,7 +51,6 @@ public class DynamicImportProgramTest {
         assertEquals("u1", result.getValue().asJsonString().getValue());
     }
 
-    // An unknown specifier rejects with a catchable module-not-found error
     @Test
     public void test_dynamic_import_unknown_rejects() {
         final var source = "try { await import('nope'); return 'no'; } catch (e) { return e.message; }";
@@ -62,34 +58,29 @@ public class DynamicImportProgramTest {
         assertEquals("Cannot find module 'nope'", result.getValue().asJsonString().getValue());
     }
 
-    // import.meta.url is defined
     @Test
     public void test_import_meta_url() {
         assertEquals("simplejs:main", run("return import.meta.url;").getValue().asJsonString().getValue());
     }
 
-    // A computed specifier expression is coerced to a string
     @Test
     public void test_dynamic_import_computed_specifier() {
         final var result = run("const name = 'ar' + 'gs'; const m = await import(name); return m.name;");
         assertEquals("named", result.getValue().asJsonString().getValue());
     }
 
-    // A dynamic import at statement position parses as an expression statement, not a declaration
     @Test
     public void test_dynamic_import_statement_position() {
         final var result = run("import('args'); return 'ok';");
         assertEquals("ok", result.getValue().asJsonString().getValue());
     }
 
-    // import.meta at statement position also parses as an expression
     @Test
     public void test_import_meta_statement_position() {
         final var result = run("import.meta; return 'ok';");
         assertEquals("ok", result.getValue().asJsonString().getValue());
     }
 
-    // An unknown meta property is a syntax error
     @Test
     public void test_unknown_meta_property_is_syntax_error() {
         final var result = run("return import.foo;");

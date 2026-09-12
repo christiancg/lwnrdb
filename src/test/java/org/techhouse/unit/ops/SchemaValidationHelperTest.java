@@ -41,7 +41,6 @@ public class SchemaValidationHelperTest {
         cache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
     }
 
-    // schema requires object with a required string "name"
     private void installSchema() {
         cache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL, eJson.fromJson(
                 "{\"type\":\"object\",\"required\":[\"name\"]," + "\"properties\":{\"name\":{\"type\":\"string\"}}}",
@@ -62,20 +61,17 @@ public class SchemaValidationHelperTest {
         return obj;
     }
 
-    // With no schema installed, any SAVE passes through
     @Test
     public void test_no_schema_passes() {
         assertNull(SchemaValidationHelper.check(save(doc(null))));
     }
 
-    // A compliant SAVE passes
     @Test
     public void test_save_compliant() {
         installSchema();
         assertNull(SchemaValidationHelper.check(save(doc("Alice"))));
     }
 
-    // A non-compliant SAVE is rejected with 400-7
     @Test
     public void test_save_non_compliant() {
         installSchema();
@@ -84,7 +80,6 @@ public class SchemaValidationHelperTest {
         assertEquals("400-7", response.getErrorCode());
     }
 
-    // A SAVE whose field has the wrong type is rejected
     @Test
     public void test_save_wrong_type() {
         installSchema();
@@ -93,7 +88,6 @@ public class SchemaValidationHelperTest {
         assertNotNull(SchemaValidationHelper.check(save(obj)));
     }
 
-    // BULK_SAVE passes when every document complies
     @Test
     public void test_bulk_all_compliant() {
         installSchema();
@@ -102,7 +96,6 @@ public class SchemaValidationHelperTest {
         assertNull(SchemaValidationHelper.check(request));
     }
 
-    // BULK_SAVE is rejected (whole batch) when any document violates, naming the offending id
     @Test
     public void test_bulk_one_bad() {
         installSchema();
@@ -116,13 +109,11 @@ public class SchemaValidationHelperTest {
         assertTrue(response.getMessage().contains("bad-1"));
     }
 
-    // Non SAVE/BULK_SAVE requests are ignored by the gate
     @Test
     public void test_other_operation_ignored() {
         assertNull(SchemaValidationHelper.check(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL)));
     }
 
-    // The reserved _id field is excluded from validation, so additionalProperties:false still accepts it
     @Test
     public void test_reserved_id_is_excluded_from_validation() {
         cache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL,

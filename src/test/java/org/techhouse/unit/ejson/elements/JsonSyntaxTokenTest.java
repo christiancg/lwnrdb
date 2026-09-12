@@ -9,7 +9,6 @@ import org.techhouse.ejson.elements.JsonSyntaxToken;
 import org.techhouse.ejson.exceptions.UnexpectedCharacterException;
 
 public class JsonSyntaxTokenTest {
-    // Verify fromChar() correctly maps each valid character to its corresponding JsonSyntaxToken
     @Test
     public void test_valid_chars_map_to_correct_tokens() {
         assertEquals(JsonSyntaxToken.LEFT_BRACE, JsonSyntaxToken.fromChar('{'));
@@ -20,7 +19,6 @@ public class JsonSyntaxTokenTest {
         assertEquals(JsonSyntaxToken.COLON, JsonSyntaxToken.fromChar(':'));
     }
 
-    // Test fromChar() with invalid/unsupported characters throws UnexpectedCharacterException
     @Test
     public void test_invalid_chars_throw_exception() {
         char invalidChar = 'x';
@@ -29,7 +27,6 @@ public class JsonSyntaxTokenTest {
         assertEquals("Unexpected character x at position: 0", exception.getMessage());
     }
 
-    // Return consistent hash codes for the same syntax token value
     @Test
     public void test_same_token_returns_same_hashcode() {
         JsonSyntaxToken token1 = JsonSyntaxToken.fromChar('{');
@@ -41,7 +38,6 @@ public class JsonSyntaxTokenTest {
         assertEquals(hashCode1, hashCode2);
     }
 
-    // Verify hash code consistency when using predefined token constants
     @Test
     public void test_predefined_token_constant_hashcode_consistency() {
         JsonSyntaxToken leftBrace1 = JsonSyntaxToken.LEFT_BRACE;
@@ -52,7 +48,6 @@ public class JsonSyntaxTokenTest {
         Assertions.assertNotEquals(leftBrace1.hashCode(), rightBrace.hashCode());
     }
 
-    // Compare two JsonSyntaxToken instances with same SyntaxToken value returns true
     @Test
     public void test_equals_with_same_syntax_token_returns_true() {
         JsonSyntaxToken token1 = JsonSyntaxToken.LEFT_BRACE;
@@ -63,7 +58,6 @@ public class JsonSyntaxTokenTest {
         assertTrue(result);
     }
 
-    // Compare JsonSyntaxToken with null returns false
     @Test
     public void test_equals_with_null_returns_false() {
         JsonSyntaxToken token = JsonSyntaxToken.COLON;
@@ -73,7 +67,6 @@ public class JsonSyntaxTokenTest {
         assertFalse(result);
     }
 
-    // Verify deepCopy returns a new JsonSyntaxToken instance with same value as original
     @Test
     public void test_deep_copy_returns_equal_token() {
         JsonSyntaxToken original = JsonSyntaxToken.LEFT_BRACE;
@@ -84,7 +77,6 @@ public class JsonSyntaxTokenTest {
         assertEquals(original, copy);
     }
 
-    // Test deepCopy with null value (should not be possible due to constructor)
     @Test
     public void test_deep_copy_null_value_not_possible() {
         JsonSyntaxToken token = JsonSyntaxToken.fromChar('{');

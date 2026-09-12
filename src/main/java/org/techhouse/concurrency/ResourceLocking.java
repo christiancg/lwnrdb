@@ -11,14 +11,8 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 
 /**
- * Per-resource read/write locking. Each collection (keyed {@code db|coll}) and each field index
- * (keyed {@code db|coll|field}) gets a {@link ReentrantReadWriteLock}: readers share, writers are
- * exclusive. While a writer holds a resource, nobody else may read or write it; multiple readers
- * may proceed concurrently.
- *
- * <p>Lock-ordering rule: the collection/index locks managed here are always acquired <em>above</em>
- * the per-file locks held inside {@code FileSystem}, never the other way around, so the two tiers
- * cannot deadlock.
+ * The locks here are always acquired <em>above</em> the per-file locks held inside
+ * {@code FileSystem}, never the other way around, or the two tiers deadlock.
  */
 public class ResourceLocking {
     private static final Map<String, ReentrantReadWriteLock> locks = new ConcurrentHashMap<>();
@@ -69,10 +63,8 @@ public class ResourceLocking {
         T run() throws Exception;
     }
 
-    // Acquires each collection's write lock in a deterministic (sorted) order, so two callers holding
-    // overlapping sets can never deadlock against each other, and releases exactly what was acquired.
-    // These locks are thread-owned: the action must complete on this thread and must never suspend or
-    // hand off, or releaseWrite silently no-ops and strands the lock for the process's lifetime.
+    // Sorted order, so two callers with overlapping sets cannot deadlock. Write locks are thread-owned:
+    // the action must complete on this thread, or releaseWrite silently no-ops and strands the lock.
     public <T> T withWriteLocks(Collection<String> collectionIds, LockedAction<T> action) throws Exception {
         final var acquired = new ArrayList<String>();
         try {
@@ -88,10 +80,8 @@ public class ResourceLocking {
         }
     }
 
-    // Bounded write-lock acquisition used by transactions: a transaction acquires each touched
-    // collection's write lock lazily and holds it until commit/rollback, so it waits (up to the
-    // timeout) for an in-flight write to finish rather than failing instantly, but gives up on the
-    // timeout so two concurrent transactions can never deadlock (the caller aborts the transaction).
+    // Transactions hold their write locks until commit/rollback; the timeout is what stops two of
+    // them deadlocking, by making the caller abort instead of waiting forever.
     public boolean tryLockWrite(String dbName, String collName, long timeoutMillis) throws InterruptedException {
         return lockFor(Cache.getCollectionIdentifier(dbName, collName)).writeLock().tryLock(timeoutMillis,
                 java.util.concurrent.TimeUnit.MILLISECONDS);
@@ -105,10 +95,8 @@ public class ResourceLocking {
         releaseReadByName(Cache.getCollectionIdentifier(dbName, collName));
     }
 
-    // Acquire shared read locks on the given identifiers in a deterministic (sorted) order so two
-    // overlapping multi-collection reads can never deadlock. Returns the identifiers actually locked
-    // (in acquisition order); a dirty read takes no lock and returns an empty list, relying on
-    // FileSystem's per-file locks for read validity.
+    // Sorted order, so two overlapping multi-collection reads cannot deadlock. A dirty read takes no
+    // lock at all and relies on FileSystem's per-file locks for read validity.
     public List<String> acquireReadLocks(boolean dirtyRead, List<String> identifiers) throws InterruptedException {
         if (dirtyRead) {
             return List.of();
@@ -121,8 +109,7 @@ public class ResourceLocking {
                 acquired.add(identifier);
             }
         } catch (InterruptedException e) {
-            // The caller only ever releases the returned list, so a throw part-way through has to
-            // release what it already took or those locks are stranded for the process's lifetime.
+            // The caller only releases the returned list, so a partial acquisition must undo itself.
             releaseReadLocks(acquired);
             throw e;
         }

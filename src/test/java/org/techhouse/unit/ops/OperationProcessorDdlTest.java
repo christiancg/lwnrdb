@@ -65,7 +65,6 @@ public class OperationProcessorDdlTest {
         TestUtils.standardTearDown();
     }
 
-    // Process different operation types and return appropriate response objects
     @Test
     public void test_create_database() {
         CreateDatabaseRequest request = new CreateDatabaseRequest("testCreateDb");
@@ -78,7 +77,6 @@ public class OperationProcessorDdlTest {
         assertEquals(OperationType.CREATE_DATABASE, response.getType());
     }
 
-    // Process different operation types and return appropriate response objects
     @Test
     public void test_drop_database() {
         CreateDatabaseRequest request = new CreateDatabaseRequest("testDropDb");
@@ -105,7 +103,6 @@ public class OperationProcessorDdlTest {
         final var fs = IocContainer.get(org.techhouse.fs.FileSystem.class);
         fs.createDatabaseFolder(db);
         fs.createCollectionFile(db, coll);
-        // The admin db entry lists the collection, so the drop must lock it.
         assertTrue(
                 IocContainer.get(org.techhouse.cache.Cache.class).getAdminDbEntry(db).getCollections().contains(coll));
 
@@ -113,7 +110,6 @@ public class OperationProcessorDdlTest {
 
         assertEquals(OperationType.DROP_DATABASE, resp.getType());
         assertEquals(OperationStatus.OK, resp.getStatus());
-        // The per-collection lock was released, so it can be re-acquired.
         final var locks = IocContainer.get(ResourceLocking.class);
         assertDoesNotThrow(() -> {
             locks.lock(db, coll);
@@ -121,7 +117,6 @@ public class OperationProcessorDdlTest {
         });
     }
 
-    // Create and drop indexes with proper validation
     @Test
     public void test_create_and_drop_index() {
         CreateIndexRequest createIndexRequest = new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "fieldName");
@@ -138,7 +133,6 @@ public class OperationProcessorDdlTest {
         assertEquals("Successfully dropped index: fieldName", dropIndexResponse.getMessage());
     }
 
-    // A dirty read takes no collection lock, so it is absent from locksAcquired.
     @Test
     public void test_aggregation_with_analyze_dirtyRead_reports_no_collection_lock() {
         final var coll = "analyzeDirtyColl";
@@ -162,10 +156,8 @@ public class OperationProcessorDdlTest {
                 .contains(Cache.getCollectionIdentifier(TestGlobals.DB, coll)));
     }
 
-    // create a test to create a collection and then drop it
     @Test
     public void test_create_and_drop_collection() {
-        // Create Collection
         CreateCollectionRequest createRequest = new CreateCollectionRequest(TestGlobals.DB, "testCreateAndDropColl");
         OperationResponse createResponse = processor.processMessage(createRequest);
 
@@ -173,7 +165,6 @@ public class OperationProcessorDdlTest {
         assertEquals(OperationType.CREATE_COLLECTION, createResponse.getType());
         assertEquals(OperationStatus.OK, createResponse.getStatus());
 
-        // Drop Collection
         DropCollectionRequest dropRequest = new DropCollectionRequest(TestGlobals.DB, "testCreateAndDropColl");
         OperationResponse dropResponse = processor.processMessage(dropRequest);
 
@@ -225,7 +216,6 @@ public class OperationProcessorDdlTest {
                 "Lock entry must be removed from registry after a successful drop");
     }
 
-    // List databases returns user databases excluding admin
     @Test
     public void test_list_databases_returns_user_databases_excluding_admin() {
         ListDatabasesRequest request = new ListDatabasesRequest();
@@ -239,11 +229,8 @@ public class OperationProcessorDdlTest {
         assertFalse(response.getDatabases().contains(Globals.ADMIN_DB_NAME));
     }
 
-    // List databases returns OK with empty list when no user databases exist
     @Test
     public void test_list_databases_returns_ok_with_empty_list() {
-        // Note: cannot easily test with empty database list given the test setup
-        // creates TestGlobals.DB at @BeforeAll; this test documents the expected behavior
         ListDatabasesRequest request = new ListDatabasesRequest();
 
         ListDatabasesResponse response = (ListDatabasesResponse) processor.processMessage(request);
@@ -251,10 +238,8 @@ public class OperationProcessorDdlTest {
         assertNotNull(response);
         assertEquals(OperationStatus.OK, response.getStatus());
         assertNotNull(response.getDatabases());
-        // List should never be null on success, even if empty
     }
 
-    // List collections returns collections of the database
     @Test
     public void test_list_collections_returns_collections_of_db() {
         ListCollectionsRequest request = new ListCollectionsRequest(TestGlobals.DB);
@@ -267,7 +252,6 @@ public class OperationProcessorDdlTest {
         assertTrue(response.getCollections().contains(TestGlobals.COLL));
     }
 
-    // List collections returns NOT_FOUND for unknown database
     @Test
     public void test_list_collections_unknown_database_returns_not_found() {
         ListCollectionsRequest request = new ListCollectionsRequest("does-not-exist");
@@ -279,7 +263,6 @@ public class OperationProcessorDdlTest {
         assertEquals("404-4", response.getErrorCode());
     }
 
-    // List collections for admin database returns empty list
     @Test
     public void test_list_collections_admin_database_returns_empty_list() {
         ListCollectionsRequest request = new ListCollectionsRequest(Globals.ADMIN_DB_NAME);
@@ -292,7 +275,6 @@ public class OperationProcessorDdlTest {
         assertTrue(response.getCollections().isEmpty());
     }
 
-    // List collections with blank database name returns error
     @Test
     public void test_list_collections_blank_database_name_returns_error() {
         ListCollectionsRequest request = new ListCollectionsRequest("");
@@ -304,7 +286,6 @@ public class OperationProcessorDdlTest {
         assertEquals("400-1", response.getErrorCode());
     }
 
-    // List collections only returns collections of requested database
     @Test
     public void test_list_collections_only_returns_collections_of_requested_db() {
         CreateDatabaseRequest createDbRequest = new CreateDatabaseRequest("otherDb");
@@ -323,7 +304,6 @@ public class OperationProcessorDdlTest {
         assertFalse(response.getCollections().contains("otherColl"));
     }
 
-    // Drop index returns not-found when the collection does not exist
     @Test
     public void test_drop_index_returns_error_for_nonexistent_collection() {
         DropIndexRequest request = new DropIndexRequest(TestGlobals.DB, "noSuchColl", "noSuchField");
@@ -336,7 +316,6 @@ public class OperationProcessorDdlTest {
 
     @Test
     public void test_get_database_stats_returns_populated_payload() {
-        // Make sure there's at least one user document so totals are non-trivial.
         final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         final var obj = new JsonObject();
         obj.addProperty(Globals.PK_FIELD, "stats_seed");
@@ -401,7 +380,6 @@ public class OperationProcessorDdlTest {
         }
     }
 
-    // A dirty read proceeds even while another thread holds the collection write lock.
     @Test
     public void test_dirty_read_proceeds_while_collection_write_locked() throws Exception {
         final var locks = IocContainer.get(ResourceLocking.class);
@@ -426,7 +404,6 @@ public class OperationProcessorDdlTest {
         }
     }
 
-    // An AGGREGATE with a JOIN read-locks both collections and releases them when finished.
     @Test
     public void test_aggregate_with_join_releases_both_collection_locks() {
         processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.JOIN_COLL));
@@ -465,12 +442,10 @@ public class OperationProcessorDdlTest {
                 "Lock for collB must be removed after database drop");
     }
 
-    // REINDEX: returns OK with empty list when no indexes exist on the collection
     @Test
     public void test_reindex_collection_with_no_indexes_returns_ok_empty_list() {
         ReindexRequest request = new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null);
         ReindexResponse response = (ReindexResponse) processor.processMessage(request);
-        // All indexes from prior tests have been dropped; if some still exist the response is still OK
         assertEquals(OperationStatus.OK, response.getStatus());
     }
 }

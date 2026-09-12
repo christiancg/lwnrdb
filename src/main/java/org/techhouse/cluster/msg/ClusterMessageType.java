@@ -1,7 +1,5 @@
 package org.techhouse.cluster.msg;
 
-// Grouped by protocol family. A request and its _ACK always travel as a pair; ERROR substitutes for any
-// ack when the receiving node could not fulfil the request.
 public enum ClusterMessageType {
     JOIN_REQUEST, JOIN_RESPONSE, GOSSIP, GOSSIP_ACK,
 

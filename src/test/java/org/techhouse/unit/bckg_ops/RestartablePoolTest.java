@@ -13,8 +13,6 @@ import org.techhouse.log.Logger;
 public class RestartablePoolTest {
     private static final Logger logger = Logger.logFor(RestartablePoolTest.class);
 
-    // The whole reason the helper exists: a stop has to hand back a usable pool, or the owner's next
-    // start would submit to the executor it just shut down and every task would be rejected.
     @Test
     public void test_restart_after_shutdown_accepts_new_work() throws Exception {
         final var original = Executors.newVirtualThreadPerTaskExecutor();

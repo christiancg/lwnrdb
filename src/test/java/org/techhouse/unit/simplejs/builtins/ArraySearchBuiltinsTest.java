@@ -22,7 +22,6 @@ public class ArraySearchBuiltinsTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // A non-callable predicate throws immediately, even on an empty array
     @Test
     public void test_find_throws_on_non_callable_predicate_even_on_empty_array() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("[].find(null)"));
@@ -31,7 +30,6 @@ public class ArraySearchBuiltinsTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("[].forEach('')"));
     }
 
-    // includes/indexOf use strict equality
     @Test
     public void test_includes_indexof() {
         assertTrue(bool("[1, 2, 3].includes(2)"));
@@ -40,7 +38,6 @@ public class ArraySearchBuiltinsTest {
         assertEquals(-1, num("[1].indexOf(9)"));
     }
 
-    // findIndex/findLast/findLastIndex/lastIndexOf locate elements
     @Test
     public void test_find_variants() {
         assertEquals(1, num("[1, 2, 3].findIndex(x => x === 2)"));
@@ -50,7 +47,6 @@ public class ArraySearchBuiltinsTest {
         assertEquals(3, num("[1, 2, 1, 2].lastIndexOf(2)"));
     }
 
-    // the not-found and non-array branches
     @Test
     public void test_find_and_flatmap_edges() {
         assertTrue(bool("[1, 2].findLast(x => x === 9) === undefined"));
@@ -60,7 +56,6 @@ public class ArraySearchBuiltinsTest {
         assertEquals("4,2,3,4,5", str("let a = [1, 2, 3, 4, 5]; a.copyWithin(0, 3, 4); a.join(',')"));
     }
 
-    // includes uses SameValueZero, so NaN finds itself
     @Test
     public void test_includes_same_value_zero() {
         assertTrue(bool("[NaN].includes(NaN)"));
@@ -68,21 +63,18 @@ public class ArraySearchBuiltinsTest {
         assertTrue(bool("[0].includes(-0)"));
     }
 
-    // indexOf keeps strict equality, so NaN is never found
     @Test
     public void test_index_of_nan_unchanged() {
         assertEquals(-1, num("[NaN].indexOf(NaN)"));
         assertEquals(0, num("[-0].indexOf(0)"));
     }
 
-    // a hole reads as undefined for includes but is skipped by indexOf
     @Test
     public void test_includes_finds_hole_as_undefined() {
         assertTrue(bool("[,].includes(undefined)"));
         assertEquals(-1, num("[,].indexOf(undefined)"));
     }
 
-    // includes honours the fromIndex argument
     @Test
     public void test_includes_from_index() {
         assertFalse(bool("[1, 2].includes(1, 1)"));
@@ -91,14 +83,12 @@ public class ArraySearchBuiltinsTest {
         assertFalse(bool("[1, 2, 3].includes(1, -1)"));
     }
 
-    // includes with no argument searches for undefined
     @Test
     public void test_includes_no_argument() {
         assertTrue(bool("[undefined].includes()"));
         assertFalse(bool("[1].includes()"));
     }
 
-    // indexOf honours fromIndex, including the negative and non-finite forms
     @Test
     public void test_index_of_honours_from_index() {
         assertEquals(2, num("[1, 2, 1].indexOf(1, 1)"));
@@ -109,7 +99,6 @@ public class ArraySearchBuiltinsTest {
         assertEquals(0, num("[1, 2, 1].indexOf(1, 'one')"));
     }
 
-    // lastIndexOf honours fromIndex, counting from the end for a negative one
     @Test
     public void test_last_index_of_honours_from_index() {
         assertEquals(1, num("[0, 1, 1].lastIndexOf(1, 1)"));
@@ -120,7 +109,6 @@ public class ArraySearchBuiltinsTest {
         assertEquals(2, num("[0, 1, 1].lastIndexOf(1, Infinity)"));
     }
 
-    // an index write the array does not own reaches a setter its prototype owns
     @Test
     public void test_index_write_reaches_an_inherited_setter() {
         assertEquals(1,

@@ -17,8 +17,6 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
 import org.techhouse.utils.SearchUtils;
 
-// Maps one field operator plus its operand type onto the index that can answer it. A null result means
-// no index can serve the operator, which is the caller's signal to fall back to a scan.
 final class IndexLookupResolver {
     private IndexLookupResolver() {
     }
@@ -80,7 +78,6 @@ final class IndexLookupResolver {
             case JsonArray arr -> {
                 final var opType = operator.getFieldOperatorType();
                 yield switch (opType) {
-                    // EQUALS/NOT_EQUALS against an array operand means element-match on the whole array.
                     case EQUALS, NOT_EQUALS -> {
                         final var hashIndex = userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName,
                                 IndexKind.ARRAY);
@@ -88,7 +85,6 @@ final class IndexLookupResolver {
                                 ? SearchUtils.findingByOperator(hashIndex, opType, JsonUtils.hashElement(arr))
                                 : null;
                     }
-                    // IN/NOT_IN against an array operand means membership in the list of candidate values.
                     case IN, NOT_IN -> getIdsFromInList(userCache, dbName, collName, fieldName, operator, arr);
                     default -> null;
                 };

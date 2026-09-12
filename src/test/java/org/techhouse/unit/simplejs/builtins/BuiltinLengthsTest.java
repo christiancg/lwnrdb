@@ -8,20 +8,17 @@ import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsString;
 
 // A builtin's `length` is observable but cannot be derived from the Java lambda (which always takes
-// one varargs list), so it comes from a spec table.
 public class BuiltinLengthsTest {
     private static String str(String source) {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
-    // An unlisted name falls back to 1, the commonest builtin arity
     @Test
     public void test_default_length_is_one() {
         assertEquals(1, BuiltinLengths.lengthOf("Array.prototype", "map"));
         assertEquals(1, BuiltinLengths.lengthOf("Nonexistent.prototype", "whatever"));
     }
 
-    // The listed exceptions report their own arity
     @Test
     public void test_listed_lengths() {
         assertEquals(0, BuiltinLengths.lengthOf("Array.prototype", "pop"));
@@ -30,7 +27,6 @@ public class BuiltinLengthsTest {
         assertEquals(2, BuiltinLengths.lengthOf("DataView.prototype", "setUint16"));
     }
 
-    // The table is wired through the Intrinsics wrappers, so it is visible from script
     @Test
     public void test_lengths_visible_from_script() {
         assertEquals("1,2,0,1", str("[Array.prototype.push.length, Array.prototype.slice.length,"
@@ -41,7 +37,6 @@ public class BuiltinLengthsTest {
                 + " Object.prototype.toString.length].join(',')"));
     }
 
-    // The length property keeps the spec's non-writable/non-enumerable/configurable attributes
     @Test
     public void test_length_descriptor_attributes() {
         assertEquals("false,false,true",
@@ -49,7 +44,6 @@ public class BuiltinLengthsTest {
                         + " [d.writable, d.enumerable, d.configurable].join(',')"));
     }
 
-    // The four custom-type globals and crypto carry their own declared arities
     @Test
     public void test_host_boundary_lengths() {
         assertEquals("2,1,6,3", str("[Geo.length, Vector.length, DbDateTime.length, DbTime.length].join(',')"));

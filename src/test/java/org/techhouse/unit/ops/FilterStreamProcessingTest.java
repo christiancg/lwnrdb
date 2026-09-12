@@ -41,10 +41,8 @@ public class FilterStreamProcessingTest {
         TestUtils.standardTearDown();
     }
 
-    // Handle empty or null result streams
     @Test
     public void test_process_operator_null_stream() throws IOException {
-        // Setup
         FieldOperator fieldOp = new FieldOperator(FieldOperatorType.EQUALS, "field1", new JsonString("value1"));
 
         JsonObject testData = new JsonObject();
@@ -62,21 +60,17 @@ public class FilterStreamProcessingTest {
         final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
 
-        // Test
         Stream<JsonObject> result = FilterOperatorHelper.processOperator(fieldOp, null, TestGlobals.DB,
                 TestGlobals.COLL);
 
-        // Verify
         assertNotNull(result);
         List<JsonObject> resultList = result.toList();
         assertEquals(1, resultList.size());
         assertEquals("value1", resultList.getFirst().get("field1").asJsonString().getValue());
     }
 
-    // Process CONJUNCTION operator with valid ConjunctionOperator input and resultStream
     @Test
     public void test_process_conjunction_operator() throws IOException {
-        // Arrange
         List<BaseOperator> operators = new ArrayList<>();
         operators.add(new FieldOperator(FieldOperatorType.EQUALS, "name", new JsonString("test")));
 
@@ -87,17 +81,14 @@ public class FilterStreamProcessingTest {
         testObj.addProperty("name", "test");
         Stream<JsonObject> resultStream = Stream.of(testObj);
 
-        // Act
         Stream<JsonObject> result = FilterOperatorHelper.processOperator(conjunctionOp, resultStream, TestGlobals.DB,
                 TestGlobals.COLL);
 
-        // Assert
         List<JsonObject> resultList = result.toList();
         assertFalse(resultList.isEmpty());
         assertEquals("test", resultList.getFirst().get("name").asJsonString().getValue());
     }
 
-    // Process FIELD operator with valid FieldOperator input and resultStream
     @Test
     public void test_process_field_operator_with_valid_input() throws IOException {
         FieldOperator fieldOperator = new FieldOperator(FieldOperatorType.EQUALS, "field", new JsonString("value"));
@@ -108,7 +99,6 @@ public class FilterStreamProcessingTest {
         assertFalse(processedStream.findAny().isPresent());
     }
 
-    // Successfully handle null resultStream for both operator types
     @Test
     public void test_handle_null_result_stream() throws IOException {
         ConjunctionOperator conjunctionOperator = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of());
@@ -123,7 +113,6 @@ public class FilterStreamProcessingTest {
         assertNotNull(processedFieldStream);
     }
 
-    // Return processed Stream<JsonObject> for valid inputs
     @Test
     public void test_return_processed_stream_for_valid_inputs() throws IOException {
         ConjunctionOperator conjunctionOperator = new ConjunctionOperator(ConjunctionOperatorType.OR, List.of());
@@ -134,7 +123,6 @@ public class FilterStreamProcessingTest {
         assertFalse(processedStream.findAny().isPresent());
     }
 
-    // Process operators with valid dbName and collName parameters
     @Test
     public void test_process_operator_with_valid_db_and_coll() throws IOException {
         ConjunctionOperator conjunctionOperator = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of());
@@ -146,7 +134,6 @@ public class FilterStreamProcessingTest {
         assertNotNull(processedStream);
     }
 
-    // Handle null operator parameter
     @Test
     public void test_handle_null_operator_parameter() {
         Stream<JsonObject> resultStream = Stream.of(new JsonObject());
@@ -155,7 +142,6 @@ public class FilterStreamProcessingTest {
                 () -> FilterOperatorHelper.processOperator(null, resultStream, TestGlobals.DB, TestGlobals.COLL));
     }
 
-    // Handle null values and JsonNull instances
     @Test
     public void test_null_handling() {
         JsonObject testObj = new JsonObject();
@@ -170,7 +156,6 @@ public class FilterStreamProcessingTest {
         assertFalse(tester.test(testObj, "nonExistentField"));
     }
 
-    // processOperator with a JsonArray value exercises the JsonArray index path (IN)
     @Test
     public void test_process_operator_with_json_array_value() throws IOException {
         JsonObject obj = new JsonObject();
@@ -193,14 +178,12 @@ public class FilterStreamProcessingTest {
         arr.add(new JsonString("blue"));
         FieldOperator op = new FieldOperator(FieldOperatorType.IN, "color", arr);
 
-        // With no index on "color", getIdsFromIndex returns null → falls through to full scan
         List<JsonObject> result = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
                 .toList();
 
         assertFalse(result.isEmpty());
     }
 
-    // processOperator filters an existing non-null stream using a field predicate
     @Test
     public void test_process_operator_filters_existing_stream() throws IOException {
         JsonObject match = new JsonObject();

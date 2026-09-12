@@ -40,7 +40,6 @@ public class AggregationSortStepTest {
         TestUtils.standardTearDown();
     }
 
-    // Helper to insert entries directly into cache and page metadata for the test collection
     private void insertEntry(Cache cache, String id, Object fieldValue) {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
@@ -54,7 +53,6 @@ public class AggregationSortStepTest {
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
     }
 
-    // SORT ascending orders documents by the given field
     @Test
     public void test_sort_ascending_orders_documents() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -73,7 +71,6 @@ public class AggregationSortStepTest {
         assertEquals(30, result.get(2).get("score").asJsonNumber().asInteger());
     }
 
-    // SORT descending orders documents by the given field in reverse
     @Test
     public void test_sort_descending_orders_documents() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -92,8 +89,6 @@ public class AggregationSortStepTest {
         assertEquals(10, result.get(2).get("score").asJsonNumber().asInteger());
     }
 
-    // ---- Index-backed aggregation steps (GROUP_BY, JOIN, SORT, DISTINCT) ----
-
     private void addDoc(Cache cache, String id, String field, JsonBaseElement value) {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
@@ -108,7 +103,6 @@ public class AggregationSortStepTest {
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(field));
     }
 
-    // SORT ascending over an indexed field orders documents like the non-indexed path
     @Test
     public void test_sort_ascending_uses_index_matches_scan_order() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -127,7 +121,6 @@ public class AggregationSortStepTest {
         assertEquals(30, result.get(2).get("score").asJsonNumber().asInteger());
     }
 
-    // SORT descending over an indexed field orders documents in reverse
     @Test
     public void test_sort_descending_uses_index_matches_scan_order() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -146,7 +139,6 @@ public class AggregationSortStepTest {
         assertEquals(10, result.get(2).get("score").asJsonNumber().asInteger());
     }
 
-    // SORT after a FILTER must sort only the filtered subset (no index fast-path)
     @Test
     public void test_sort_with_upstream_stream_does_not_use_index() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -167,7 +159,6 @@ public class AggregationSortStepTest {
         assertEquals(30, result.get(1).get("score").asJsonNumber().asInteger());
     }
 
-    // SORT on a mixed scalar+object indexed field includes all docs (scalar and object-valued)
     @Test
     public void test_sort_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -188,8 +179,6 @@ public class AggregationSortStepTest {
         assertEquals(Set.of("s1", "s2", "o1"), ids);
     }
 
-    // Index-backed SORT followed by LIMIT returns only the first N docs in sorted order;
-    // the lazy document-fetch path must not return more than LIMIT elements.
     @Test
     public void test_sort_via_index_with_limit_returns_correct_first_n() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -210,7 +199,6 @@ public class AggregationSortStepTest {
         assertEquals(30, result.get(2).get("score").asJsonNumber().asInteger());
     }
 
-    // Index-backed SORT descending with LIMIT returns the top-N docs in correct order
     @Test
     public void test_sort_via_index_descending_with_limit_returns_top_n() throws IOException {
         final var cache = IocContainer.get(Cache.class);

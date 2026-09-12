@@ -6,13 +6,8 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 
-/**
- * AGGREGATE response variant used only when {@code analyze=true}. It mirrors
- * {@link AggregateResponse} but adds the {@code analyzeResult} object. A dedicated subclass (rather
- * than a nullable field on {@link AggregateResponse}) is required because the EJson reflection
- * serializer emits every field, including nulls — so a nullable field would leak {@code analyzeResult}
- * onto every aggregation response.
- */
+// A dedicated subclass rather than a nullable analyzeResult on AggregateResponse: the EJson reflection
+// serializer emits every field including nulls, which would leak it onto every aggregation response.
 public class AggregateAnalyzeResponse extends OperationResponse {
     public List<JsonObject> results;
     public AnalyzeResult analyzeResult;

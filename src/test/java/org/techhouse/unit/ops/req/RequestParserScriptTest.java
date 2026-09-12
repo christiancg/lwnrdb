@@ -7,7 +7,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.RequestParser;
 
 public class RequestParserScriptTest {
-    // A RUN_SCRIPT line parses into a RunScriptRequest with the escaped source decoded
     @Test
     public void test_parse_run_script_request() {
         String msg = "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"db\","
@@ -19,7 +18,6 @@ public class RequestParserScriptTest {
         assertEquals(1, result.getArgs().get("a").asJsonNumber().getValue().intValue());
     }
 
-    // args is optional and defaults to an empty object rather than null
     @Test
     public void test_parse_run_script_request_without_args() {
         String msg = "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"db\",\"script\":\"return 1;\"}";

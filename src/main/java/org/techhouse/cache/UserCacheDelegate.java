@@ -5,7 +5,6 @@ import java.util.List;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 
-// The user document/index cache surface, passed straight through by Cache.
 interface UserCacheDelegate {
     UserCache userCache();
 

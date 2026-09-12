@@ -35,10 +35,8 @@ public class AggregationDistinctStepTest {
         TestUtils.standardTearDown();
     }
 
-    // Process distinct operation on specific field with valid data
     @Test
     public void test_process_distinct_operation_on_specific_field() throws IOException {
-        // Arrange
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         DistinctAggregationStep distinctStep = new DistinctAggregationStep("distinctField");
         request.setAggregationSteps(List.of(distinctStep));
@@ -50,14 +48,11 @@ public class AggregationDistinctStepTest {
         JsonObject jsonObject3 = new JsonObject();
         jsonObject3.addProperty("distinctField", "value1");
 
-        // Act
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
-        // Assert
         assertEquals(0, result.size());
     }
 
-    // Helper to insert entries directly into cache and page metadata for the test collection
     private void insertEntry(Cache cache, String id, String fieldName, Object fieldValue) {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
@@ -71,7 +66,6 @@ public class AggregationDistinctStepTest {
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
     }
 
-    // DISTINCT returns only unique values for the given field
     @Test
     public void test_distinct_returns_unique_values() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -87,7 +81,6 @@ public class AggregationDistinctStepTest {
         assertEquals(2, result.size());
     }
 
-    // DISTINCT with null fieldName returns unique objects (removes _id) (L138-145)
     @Test
     public void test_distinct_with_null_field_name_returns_unique_objects() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -98,13 +91,10 @@ public class AggregationDistinctStepTest {
         request.setAggregationSteps(List.of(new DistinctAggregationStep(null)));
 
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
-        // null fieldName → distinct on whole object minus _id
         assertNotNull(result);
-        // Both entries have same fields, so distinct should collapse to 1
         assertEquals(1, result.size());
     }
 
-    // DISTINCT with empty fieldName also removes _id and deduplicates (L138-145)
     @Test
     public void test_distinct_with_empty_field_name() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -118,8 +108,6 @@ public class AggregationDistinctStepTest {
         assertNotNull(result);
         assertEquals(1, result.size());
     }
-
-    // ---- Index-backed aggregation steps (GROUP_BY, JOIN, SORT, DISTINCT) ----
 
     private void addDoc(Cache cache, String id, String field, JsonBaseElement value) {
         final var obj = new JsonObject();
@@ -135,7 +123,6 @@ public class AggregationDistinctStepTest {
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(field));
     }
 
-    // DISTINCT over an indexed field returns the same values as a non-indexed scan
     @Test
     public void test_distinct_uses_index_returns_same_values_as_scan() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -157,7 +144,6 @@ public class AggregationDistinctStepTest {
         assertEquals(scanValues, indexValues);
     }
 
-    // Index-backed DISTINCT does not read any documents (still works after the doc cache is evicted)
     @Test
     public void test_distinct_indexed_reads_no_documents() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -174,7 +160,6 @@ public class AggregationDistinctStepTest {
         assertEquals(2, result.size());
     }
 
-    // DISTINCT with a null field name ignores the index and deduplicates whole documents
     @Test
     public void test_distinct_null_field_ignores_index() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -189,7 +174,6 @@ public class AggregationDistinctStepTest {
         assertEquals(1, result.size());
     }
 
-    // Without an index the step falls back to the scan path
     @Test
     public void test_distinct_without_index_falls_back_to_scan() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -225,7 +209,6 @@ public class AggregationDistinctStepTest {
         assertTrue(hasObject);
     }
 
-    // An indexed step on an empty collection returns no results
     @Test
     public void test_indexed_distinct_on_empty_collection_returns_empty() throws IOException {
         final var cache = IocContainer.get(Cache.class);
@@ -238,7 +221,6 @@ public class AggregationDistinctStepTest {
         assertEquals(0, result.size());
     }
 
-    // DISTINCT on a mixed scalar+object indexed field includes the object value in the result
     @Test
     public void test_distinct_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
         final var cache = IocContainer.get(Cache.class);

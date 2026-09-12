@@ -41,9 +41,8 @@ public final class DatabaseOperationHelper {
         return OperationResponse.respondOrError(OperationType.CREATE_DATABASE, ErrorCode.ERROR_CREATING_DATABASE,
                 () -> {
                     final var dbName = createDatabaseRequest.getDatabaseName();
-                    // Guard against re-creating an existing database: createDatabaseFolder returns true for an
-                    // already-present folder, so without this check a duplicate CREATE_DATABASE would overwrite
-                    // the existing admin entry (wiping its collection list and owners) and wrongly report success.
+                    // createDatabaseFolder returns true for an already-present folder, so without this guard
+                    // a duplicate CREATE_DATABASE would overwrite the existing admin entry and report success.
                     if (cache.getAdminDbEntry(dbName) != null) {
                         return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
                     }
@@ -76,9 +75,8 @@ public final class DatabaseOperationHelper {
 
     public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
         final var dbName = dropDatabaseRequest.getDatabaseName();
-        // Lock every collection of the database (in a stable order to avoid deadlock with other
-        // multi-collection acquisitions) so a concurrent save/delete/read or a background index update
-        // on any of them cannot race the file deletion and cache eviction below.
+        // Lock every collection in a stable order (deadlock avoidance with other multi-collection
+        // acquisitions) so nothing races the file deletion and cache eviction below.
         final var dbEntry = cache.getAdminDbEntry(dbName);
         final var collNames = dbEntry != null ? new ArrayList<>(dbEntry.getCollections()) : new ArrayList<String>();
         Collections.sort(collNames);
@@ -94,17 +92,11 @@ public final class DatabaseOperationHelper {
                 for (final var collName : lockedColls) {
                     locks.removeLock(dbName, collName);
                 }
-                // Remove the database's admin metadata synchronously (mirroring synchronous creation and
-                // collection drop). Doing this in the background previously left the admin entry briefly
-                // present after the drop returned OK, so an immediate CREATE_DATABASE of the same name hit
-                // the duplicate guard and wrongly returned DATABASE_ALREADY_EXISTS (or was unregistered
-                // when the queued delete event later ran).
+                // Synchronous, mirroring creation: a background delete lets an immediate re-CREATE hit the
+                // duplicate guard and wrongly return DATABASE_ALREADY_EXISTS.
                 AdminOperationHelper.deleteDatabaseEntry(dbName);
-                // The procedure files went with the folder; drop their compiled programs too, since a
-                // re-created database would restart its procedure versions at 1.
+                // A re-created database restarts its procedure versions at 1, so compiled programs go too.
                 compiledProcedures.invalidateDatabase(dbName);
-                // The schedule files went with the folder too; drop the registry entries now rather than
-                // letting the periodic refresh notice, so nothing keeps firing against a gone database.
                 scheduleRegistry.removeDatabase(dbName);
                 listenManager.unregisterAllForDatabase(dbName);
                 return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");

@@ -13,9 +13,6 @@ import org.techhouse.simplejs.host.HostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 
-/**
- * The repeated-invocation seam: one module evaluation, many calls, and one budget shared by all of them.
- */
 public class ScriptCallableTest {
     private final SimpleJs simpleJs = new SimpleJs();
 
@@ -68,7 +65,6 @@ public class ScriptCallableTest {
         }
     }
 
-    // A per-document failure carries the same frames a RUN_SCRIPT failure would
     @Test
     public void test_per_document_failure_carries_a_stack() {
         try (var callable = open("""
@@ -107,7 +103,6 @@ public class ScriptCallableTest {
         assertEquals("TypeError", error.getErrorName());
     }
 
-    // The plan's central invariant: the budget belongs to the pipeline, not to one document.
     @Test
     public void test_shares_one_budget_across_calls() {
         final var limits = new ResourceLimits(3000, -1, -1);
@@ -144,7 +139,6 @@ public class ScriptCallableTest {
         }
     }
 
-    // Without the per-document release, the document count alone would exhaust the memory budget.
     @Test
     public void test_memory_budget_is_released_between_documents() {
         final var limits = new ResourceLimits(-1, -1, -1, 64L * 1024);
@@ -285,8 +279,6 @@ public class ScriptCallableTest {
         }
     }
 
-    // The argument is an EJsonInterop.fromEjson conversion, not the host's own object, so a FILTER
-    // predicate cannot corrupt a cached document by mutating what it is handed.
     @Test
     public void test_script_cannot_write_through_to_the_host_document() {
         try (var callable = open("export default (doc) => { doc.mutated = true; return doc.mutated; };")) {

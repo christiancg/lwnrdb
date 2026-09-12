@@ -7,7 +7,6 @@ import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 
 public class OneParamMidOperatorTest {
-    // Create operator with valid type and operand
     @Test
     public void test_create_operator_with_valid_params() {
         MidOperationType type = MidOperationType.ABS;
@@ -19,7 +18,6 @@ public class OneParamMidOperatorTest {
         assertEquals(operand, operator.getOperand());
     }
 
-    // Test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         MidOperationType type = MidOperationType.ABS;

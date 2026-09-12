@@ -52,11 +52,6 @@ public final class DatabaseStatsHelper {
                 });
     }
 
-    // In-doubt distributed transactions still holding this node's write locks (a prepared 2PC participant
-    // whose coordinator has not yet delivered a decision), so an operator can spot them and, if needed,
-    // force a resolution with RESOLVE_TRANSACTION.
-    // A trigger runs asynchronously with no client waiting on it, so these counters are the operator's
-    // only window into whether they are running, failing or being dropped under load.
     private static JsonObject buildTriggerStats() {
         final var triggers = new JsonObject();
         triggers.addProperty("enabled", Configuration.getInstance().isTriggersEnabled());
@@ -71,15 +66,10 @@ public final class DatabaseStatsHelper {
         triggers.addProperty("beforeReplaced", BeforeHookContext.getReplaced());
         triggers.addProperty("beforeRejected", BeforeHookContext.getRejected());
         triggers.addProperty("beforeFailed", BeforeHookContext.getFailed());
-        // Runs recorded but not yet applied. A number that stays above zero while nothing is queued means
-        // runs are stranded - their node never came back, or their collection was dropped - and they will be
-        // garbage-collected after triggerRunRetentionMs rather than ever running.
         triggers.addProperty("pendingRuns", (long) pendingRunCount());
         return triggers;
     }
 
-    // Like a trigger, a scheduled run has no client waiting on it, so these counters are the operator's only
-    // window into whether jobs are firing, failing, being skipped or being dropped under load.
     private static JsonObject buildScheduleStats() {
         final var schedules = new JsonObject();
         schedules.addProperty("enabled", Configuration.getInstance().isSchedulesEnabled());
@@ -92,8 +82,6 @@ public final class DatabaseStatsHelper {
         return schedules;
     }
 
-    // Where scripts are running: this node's live count plus how often placement forwarded a run elsewhere
-    // and how often that forward failed and the run stayed here.
     private static JsonObject buildScriptStats() {
         final var scripts = new JsonObject();
         scripts.addProperty("routingEnabled", Configuration.getInstance().isScriptRoutingEnabled());

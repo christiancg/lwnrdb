@@ -1,7 +1,6 @@
 package org.techhouse.ops;
 
 public enum ErrorCode {
-    // ── 400 Bad Request (client / validation errors) ──────────────────────
     VALIDATION_ERROR("400-1", null, OperationStatus.ERROR), ENTRY_TOO_LARGE("400-2",
             "Entry size exceeds maximum allowed size", OperationStatus.ERROR), DUPLICATE_ID("400-3",
                     "Duplicate _id in bulk save request", OperationStatus.ERROR), CANNOT_DELETE_LAST_ADMIN("400-4",
@@ -52,16 +51,13 @@ public enum ErrorCode {
                                                                                                                                                                     "A before trigger rejected this write",
                                                                                                                                                                     OperationStatus.ERROR),
 
-    // ── 401 Unauthenticated ───────────────────────────────────
     MUST_AUTHENTICATE_FIRST("401-1", "Must authenticate first", OperationStatus.UNAUTHENTICATED), USER_NO_LONGER_EXISTS(
             "401-2", "User no longer exists", OperationStatus.UNAUTHENTICATED), WRONG_CREDENTIALS("401-3",
                     "The user doesn't exist or the wrong credentials have been provided", OperationStatus.ERROR),
 
-    // ── 403 Forbidden ─────────────────────────────────────────
     NO_PERMISSIONS("403-1", "Action is forbidden, no permissions", OperationStatus.FORBIDDEN), SCRIPTS_DISABLED("403-2",
             "Script execution is disabled on this server", OperationStatus.FORBIDDEN),
 
-    // ── 404 Not Found ─────────────────────────────────────────
     USER_NOT_FOUND("404-1", "User not found", OperationStatus.NOT_FOUND), ENTRY_NOT_FOUND("404-2", "Entry not found",
             OperationStatus.NOT_FOUND), NO_RESULTS("404-3", "No results",
                     OperationStatus.NOT_FOUND), DATABASE_NOT_FOUND("404-4", "Database not found",
@@ -78,11 +74,9 @@ public enum ErrorCode {
                                                                             "404-10", "Schedule not found",
                                                                             OperationStatus.NOT_FOUND),
 
-    // ── 408 Request Timeout ───────────────────────────────────
     SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR), SCRIPT_CANCELLED("408-2",
             "Script was cancelled", OperationStatus.ERROR),
 
-    // ── 409 Conflict ──────────────────────────────────────────
     USER_ALREADY_EXISTS("409-1", "User already exists", OperationStatus.ERROR), DATABASE_ALREADY_EXISTS("409-2",
             "Database already exists", OperationStatus.ERROR), TRANSACTION_ALREADY_ACTIVE("409-3",
                     "A transaction is already in progress for this connection",
@@ -97,12 +91,10 @@ public enum ErrorCode {
                                                             "The procedure or trigger was modified by someone else",
                                                             OperationStatus.ERROR),
 
-    // ── 421 Misdirected (cluster routing) ────────────────────────
     NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection",
             OperationStatus.ERROR), CROSS_OWNER_TRANSACTION("421-2",
                     "A transaction may only touch collections owned by a single node", OperationStatus.ERROR),
 
-    // ── 500 Internal Server Error ─────────────────────────────
     AUTHENTICATION_ERROR("500-1", "Error during authentication", OperationStatus.ERROR), ERROR_CREATING_USER("500-2",
             "Error creating user", OperationStatus.ERROR), ERROR_DELETING_USER("500-3", "Error deleting user",
                     OperationStatus.ERROR), ERROR_CHANGING_PASSWORD("500-4", "Error changing password",
@@ -183,7 +175,6 @@ public enum ErrorCode {
                                                                                                                                                                                                                                                             "Error while deleting the schedule",
                                                                                                                                                                                                                                                             OperationStatus.ERROR),
 
-    // ── 503 Service Unavailable ───────────────────────────────
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR), NO_QUORUM("503-2",
             "Cluster does not have a write quorum", OperationStatus.ERROR), REPLICATION_TIMEOUT("503-3",
                     "Timed out waiting for the replication quorum", OperationStatus.ERROR), OWNER_UNREACHABLE("503-4",

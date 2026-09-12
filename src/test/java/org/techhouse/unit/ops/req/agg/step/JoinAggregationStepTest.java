@@ -7,7 +7,6 @@ import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 
 public class JoinAggregationStepTest {
-    // Constructor initializes all fields correctly with valid string parameters
     @Test
     public void test_constructor_initializes_fields_with_valid_params() {
         String joinCollection = "users";
@@ -24,7 +23,6 @@ public class JoinAggregationStepTest {
         assertEquals(asField, joinStep.getAsField());
     }
 
-    // Constructor handles empty strings for all parameters
     @Test
     public void test_constructor_handles_empty_string_params() {
         String emptyString = "";
@@ -38,18 +36,15 @@ public class JoinAggregationStepTest {
         assertEquals(emptyString, joinStep.getAsField());
     }
 
-    // test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         JoinAggregationStep joinStep = new JoinAggregationStep("users", "userId", "id", "userDetails");
 
-        // Test getters
         assertEquals("users", joinStep.getJoinCollection());
         assertEquals("userId", joinStep.getLocalField());
         assertEquals("id", joinStep.getRemoteField());
         assertEquals("userDetails", joinStep.getAsField());
 
-        // Test setters
         joinStep.setJoinCollection("orders");
         joinStep.setLocalField("orderId");
         joinStep.setRemoteField("orderRef");

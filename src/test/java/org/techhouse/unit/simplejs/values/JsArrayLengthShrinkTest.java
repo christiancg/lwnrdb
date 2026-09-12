@@ -28,7 +28,6 @@ public class JsArrayLengthShrinkTest {
         return array;
     }
 
-    // Truncation walks down from the tail and stops at the first non-configurable index
     @Test
     public void test_truncation_stops_at_a_non_configurable_index() {
         final var array = array(4);
@@ -38,8 +37,6 @@ public class JsArrayLengthShrinkTest {
         assertTrue(array.setLength(2));
     }
 
-    // ArraySetLength's descending walk (removeSparseTailDown) stops at the first non-configurable
-    // sparse index and leaves length just above it, mirroring the dense-region behaviour.
     @Test
     public void test_shrinking_past_a_non_configurable_sparse_index_is_rejected() {
         assertEquals("[true,100000001]",
@@ -49,8 +46,6 @@ public class JsArrayLengthShrinkTest {
                         + " JSON.stringify([threw, a.length])"));
     }
 
-    // removeSparseTailDown's success path: a *configurable* sparse index is dropped outright (not
-    // merely rejected) when the shrink walks past it, unlike the non-configurable case above.
     @Test
     public void test_shrinking_past_a_configurable_sparse_index_removes_it() {
         assertEquals("[true,0,false]",
@@ -58,8 +53,6 @@ public class JsArrayLengthShrinkTest {
                         + " JSON.stringify([before, a.length, 100000000 in a])"));
     }
 
-    // "length" is always non-configurable, so deleting it must always fail - not silently succeed by
-    // falling through the "absent key" path the way an ordinary named property does.
     @Test
     public void test_delete_length_always_fails() {
         final var array = array(2);
@@ -67,7 +60,6 @@ public class JsArrayLengthShrinkTest {
         assertEquals(2, array.length());
     }
 
-    // The JS-visible counterpart: Reflect.deleteProperty on an array's "length" must report false.
     @Test
     public void test_reflect_delete_length_reports_false() {
         assertFalse(((JsBoolean) Interpreter.run("Reflect.deleteProperty([1, 2], 'length')")).getValue());
@@ -85,8 +77,6 @@ public class JsArrayLengthShrinkTest {
         assertFalse(array.hasProperty(Long.toString(wideIndex)));
     }
 
-    // A non-configurable wide index stops the descending truncation walk exactly like a non-
-    // configurable sparse/dense one does, leaving length just above it.
     @Test
     public void test_shrinking_past_a_non_configurable_wide_index_is_rejected() {
         final var array = new JsArray();
@@ -97,8 +87,6 @@ public class JsArrayLengthShrinkTest {
         assertEquals(wideIndex + 1, array.length());
     }
 
-    // removeWideTailDown's descending walk skips a wide index that is still below the new length
-    // (the "continue" branch) while still removing one at or past it, in the same truncation call.
     @Test
     public void test_shrinking_skips_a_surviving_wide_index_but_removes_a_later_one() {
         final var array = new JsArray();
@@ -112,8 +100,6 @@ public class JsArrayLengthShrinkTest {
         assertFalse(array.hasProperty(Long.toString(removed)));
     }
 
-    // A symbol-keyed delete on an array falls through to the ordinary JsValue path (arrays have no
-    // exotic symbol-keyed behaviour), rather than the array-index-specific branches above it.
     @Test
     public void test_delete_symbol_keyed_property() {
         final var array = new JsArray();
@@ -124,8 +110,6 @@ public class JsArrayLengthShrinkTest {
         assertFalse(array.hasOwnKey(symbol));
     }
 
-    // removeWideTailDown's descending walk must skip (not touch) a wide key still below the new
-    // length rather than rejecting or removing it.
     @Test
     public void test_shrinking_skips_a_wide_key_still_below_the_new_length() {
         final var array = new JsArray();
@@ -148,9 +132,6 @@ public class JsArrayLengthShrinkTest {
         assertEquals(1, JsEval.num("class A extends Array {} const a = new A(1, 2, 3); a.length = 1; a.length"));
     }
 
-    // Object.getOwnPropertyDescriptor(subclassInstance, 'length') already delegates to the wrapped
-    // primitive (ObjectBuiltins, outside this stream's scope) and reports the real array's flags -
-    // the language/statements/class/subclass/builtin-objects/Array/length.js scenario end to end.
     @Test
     public void test_array_subclass_instance_length_descriptor_and_truncation_end_to_end() {
         assertEquals("true,false,false,true",

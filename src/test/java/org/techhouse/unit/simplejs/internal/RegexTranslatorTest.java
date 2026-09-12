@@ -10,10 +10,8 @@ import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.internal.regex.RegexMatcher;
 
-// The literal escapes below are deliberate: these cases turn on invisible or homoglyph code
-// points (U+FE0F variation selector, U+20E3 combining keycap, U+017F long s, U+212A Kelvin sign,
-// which renders identically to ASCII K). Spelling them as characters would make the assertions
-// unreadable and let an editor or a merge silently normalise them.
+// The literal escapes below are deliberate: these cases turn on invisible or homoglyph code points
+// (U+FE0F, U+20E3, U+017F, U+212A), which an editor or a merge would otherwise silently normalise.
 @SuppressWarnings("UnnecessaryUnicodeEscape")
 public class RegexTranslatorTest {
     private static boolean matches(String source, String flags, String input) {
@@ -37,8 +35,6 @@ public class RegexTranslatorTest {
         assertEquals("dgimsy", RegexTranslator.compile("a", "dgimsy").getFlags());
     }
 
-    // \q{} alternatives longer than one code point become an alternation, ordered longest-first so
-    // the longest alternative wins exactly as a character class would.
     @Test
     public void translatesMultiCodePointStringAlternativesToAnAlternation() {
         assertTrue(fullMatch("[\\q{a|abc|ab}]", "v", "abc"));
@@ -80,7 +76,6 @@ public class RegexTranslatorTest {
         assertTrue(fullMatch("[\\p{Emoji_Keycap_Sequence}]", "v", "9️⃣"));
     }
 
-    // Modifier groups translate to java inline flag groups; the early errors are ours to raise.
     @Test
     public void translatesModifierGroups() {
         assertTrue(matches("(?i:a)b", "", "Ab"));
@@ -124,8 +119,6 @@ public class RegexTranslatorTest {
         assertFalse(matches("b{9007199254740991}", "", "bbb"));
     }
 
-    // java only accepts [A-Za-z][A-Za-z0-9]* group names, so every named group is renamed and the
-    // original name is kept as its alias.
     @Test
     public void renamesGroupNamesJavaWouldReject() {
         final var regexp = RegexTranslator.compile("(?<_>a)(?<π>b)", "");
@@ -143,8 +136,6 @@ public class RegexTranslatorTest {
         rejects("(?<a>x)(?<a>y)", "");
     }
 
-    // A duplicate name in a different alternative is legal from ES2025 on; both aliases are kept, so
-    // a backreference can match whichever one participated.
     @Test
     public void allowsDuplicateGroupNamesInDifferentAlternatives() {
         final var regexp = RegexTranslator.compile("(?<a>x)|(?<a>y)", "");
@@ -158,20 +149,13 @@ public class RegexTranslatorTest {
         assertTrue(matches("\\1(A)", "", "AA"));
     }
 
-    // A numbered backreference *inside its own group's body* (a self-reference before the group has
-    // closed) is a forward reference too and must match the empty string, exactly like a
-    // backreference lexically before the group. This tracks groups closed so far by incrementing the
-    // "opened" count only *after* a group's body is parsed (mirroring the named-group `opened` set)
-    // rather than as soon as the group is entered - the latter would incorrectly treat the group as
-    // already available to itself.
+    // A numbered backreference inside its own group's body is a forward reference too and must match the empty
+    // string: the "opened" count only increments after a group's body is parsed.
     @Test
     public void treatsASelfReferentialBackreferenceInsideItsOwnGroupAsTheEmptyString() {
         assertTrue(fullMatch("(abc\\1)", "", "abc"));
         assertFalse(fullMatch("(abc\\1)", "", "abcabc"));
-        // A sibling group that closed earlier is available to a numbered backreference nested deeper.
         assertTrue(fullMatch("(a)(b\\1)", "", "aba"));
-        // A backreference to an outer group from inside its own nested child is still a forward
-        // reference (the outer group has not closed yet either).
         assertTrue(fullMatch("(a(b\\1))", "", "ab"));
     }
 
@@ -215,8 +199,6 @@ public class RegexTranslatorTest {
         assertTrue(matches("(?i:k)", "u", "K"));
     }
 
-    // A backreference to a duplicated name compiles to an alternation of its aliases, so whichever
-    // one participated is the one that matches.
     @Test
     public void aBackreferenceToADuplicatedNameTriesEveryAlias() {
         assertTrue(matches("(?:(?<a>x)|(?<a>y))\\k<a>", "", "yy"));
@@ -240,26 +222,20 @@ public class RegexTranslatorTest {
         rejects("(?<\\u41>x)", "");
     }
 
-    // An empty remove list is legal: RegularExpressionFlags may be empty on either side of the dash.
     @Test
     public void translatesModifierGroupsWithAnEmptyRemoveList() {
         assertTrue(matches("(?i-:a)", "", "A"));
         assertTrue(matches("(?m:^b)", "", "a\nb"));
     }
 
-    // A reference to the group it sits inside cannot have participated, so it matches the empty
-    // string rather than failing the whole alternative.
     @Test
     public void treatsASelfReferenceAsAForwardReference() {
         assertTrue(matches("(?<a>\\k<a>\\w)..", "", "bab"));
         assertTrue(matches("\\k<a>(?<a>b)\\w\\k<a>", "", "bab"));
     }
 
-    // Runtime Semantics: Canonicalize(rer, ch) folds the *candidate character* before testing
-    // set membership, not the compiled CharSet itself; for a negated case-related general
-    // category (\P{Lu}) those two orders disagree. java.util.regex's own UNICODE_CASE only ever
-    // folds the positive set, so a bare (?iu:\P{Lu}) still rejects "A" - it has to be recompiled
-    // as an explicit per-candidate-folded class instead.
+    // Canonicalize(rer, ch) folds the candidate character before testing set membership, not the compiled
+    // CharSet; java's UNICODE_CASE only folds the positive set, so (?iu:\P{Lu}) still rejects "A".
     @Test
     public void ignoreCaseFoldsTheCandidateForANegatedCaseCategory() {
         assertTrue(fullMatch("(?i:\\P{Lu})", "u", "A"));
@@ -269,10 +245,8 @@ public class RegexTranslatorTest {
         assertTrue(fullMatch("(?i:\\P{Lu})", "u", "0"));
     }
 
-    // A handful of Unicode CaseFolding.txt "simple"/"common" pairs (precomposed Greek accented
-    // iotas/upsilons, the "st" ligatures) have no ordinary upper/lowercase relationship at all, so
-    // java's own UNICODE_CASE never joins them; a literal unicode escape naming one has to spell
-    // the match as the pair explicitly, both inside and outside a character class.
+    // A few Unicode CaseFolding.txt simple/common pairs have no ordinary upper/lowercase relationship, so
+    // java's UNICODE_CASE never joins them and the match has to spell the pair explicitly.
     @Test
     public void ignoreCaseJoinsExtraCaseFoldPairsWithoutOrdinaryCasing() {
         assertTrue(fullMatch("[\\u0390]", "ui", "\u1fd3"));
@@ -284,7 +258,6 @@ public class RegexTranslatorTest {
         assertTrue(fullMatch("\\u0390", "ui", "\u1fd3"));
     }
 
-    // Without ignoreCase the extra fold table is inert: the escape names only its own codepoint.
     @Test
     public void extraCaseFoldPairsAreInertWithoutIgnoreCase() {
         assertFalse(fullMatch("[\\u0390]", "u", "\u1fd3"));

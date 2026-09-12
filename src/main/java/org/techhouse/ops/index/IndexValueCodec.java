@@ -7,14 +7,10 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
 
-// Converts between an index entry's stored value and the JSON element the pipeline works with.
 public final class IndexValueCodec {
     private IndexValueCodec() {
     }
 
-    // Converts a FieldIndexEntry value back to its wire element so it can be used as a group key,
-    // distinct value, or join key. Numbers/strings/booleans are stored as raw Java types; custom
-    // types and nulls are already JsonBaseElements and pass through unchanged.
     public static JsonBaseElement indexValueToElement(Object value) {
         return switch (value) {
             case null -> JsonNull.INSTANCE;
@@ -26,11 +22,6 @@ public final class IndexValueCodec {
         };
     }
 
-    // Inverse of indexValueToElement: converts a JsonBaseElement (local join value) to the raw
-    // Java type used as the key in a field index, so it can be passed to cache.getIdsFromIndex.
-    // Returns null for JsonNull, JsonObject, JsonArray, or unknown types — those callers must skip
-    // the index lookup for that value (null is handled separately; objects/arrays use hash indexes
-    // which are not suitable for exact-key join lookups).
     public static Object elementToLookupValue(JsonBaseElement element) {
         if (element == null || element.isJsonNull()) {
             return null;
@@ -47,9 +38,8 @@ public final class IndexValueCodec {
         return null;
     }
 
-    // Field indexes persist numbers as doubles, but documents represent integral numbers as
-    // integers; normalize so an index-derived number hashes and compares equal to the same value
-    // read from a document (this matters for JOIN key lookups, which rely on hashCode).
+    // Field indexes persist numbers as doubles while documents keep integral ones as ints; normalize so
+    // an index-derived number hashes equal to the same value read from a document (JOIN keys rely on it).
     private static JsonBaseElement numberToElement(Number number) {
         final var asDouble = number.doubleValue();
         if (asDouble % 1.0 == 0 && asDouble >= Integer.MIN_VALUE && asDouble <= Integer.MAX_VALUE) {

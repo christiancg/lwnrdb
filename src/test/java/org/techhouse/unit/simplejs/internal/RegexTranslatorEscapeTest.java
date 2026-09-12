@@ -9,10 +9,8 @@ import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.internal.regex.RegexMatcher;
 
-// The literal escapes below are deliberate: these cases turn on invisible or homoglyph code
-// points (U+FE0F variation selector, U+20E3 combining keycap, U+017F long s, U+212A Kelvin sign,
-// which renders identically to ASCII K). Spelling them as characters would make the assertions
-// unreadable and let an editor or a merge silently normalise them.
+// The literal escapes below are deliberate: these cases turn on invisible or homoglyph code points
+// (U+FE0F, U+20E3, U+017F, U+212A), which an editor or a merge would otherwise silently normalise.
 @SuppressWarnings("UnnecessaryUnicodeEscape")
 public class RegexTranslatorEscapeTest {
     private static boolean matches(String source, String flags, String input) {
@@ -35,8 +33,8 @@ public class RegexTranslatorEscapeTest {
         assertFalse(fullMatch("[\\q{0|2|4}]", "v", "7"));
     }
 
-    // The alternatives are ClassSetCharacters, so their escapes have to be decoded before their
-    // length can be judged: \q{9️⃣} is one three-code-point string, not twelve characters.
+    // The alternatives are ClassSetCharacters, so their escapes have to be decoded before their length can be
+    // judged: the keycap sequence is one three-code-point string, not twelve characters.
     @Test
     public void decodesEscapesInsideStringAlternatives() {
         assertTrue(fullMatch("^[\\q{0|2|4|9\\uFE0F\\u20E3}_]+$", "v", "9️⃣"));
@@ -45,7 +43,6 @@ public class RegexTranslatorEscapeTest {
         assertTrue(fullMatch("[\\q{\\u{1D306}\\u{1D307}}]", "v", new String(new int[]{0x1D306, 0x1D307}, 0, 2)));
     }
 
-    // v-mode makes the ClassSetSyntaxCharacters and the reserved double punctuators early errors.
     @Test
     public void rejectsUnescapedSetSyntaxCharacters() {
         for (final var syntax : new String[]{"(", ")", "{", "}", "/", "-", "|"}) {
@@ -154,9 +151,8 @@ public class RegexTranslatorEscapeTest {
         rejects("\\c1", "u");
     }
 
-    // Annex B's ControlLetter accepts either case, but java.util.regex's own `\cX` syntax only
-    // recognises an uppercase letter, so a lowercase one must be translated by computed value
-    // (`letter % 32`) rather than passed through as `\cx`.
+    // Annex B's ControlLetter accepts either case, but java.util.regex's `\cX` only recognises an uppercase
+    // letter, so a lowercase one is translated by computed value (`letter % 32`).
     @Test
     public void translatesLowercaseControlEscapes() {
         assertTrue(fullMatch("\\ca", "", ""));
@@ -229,8 +225,6 @@ public class RegexTranslatorEscapeTest {
         assertTrue(matches("(?<a\\u200C>x)", "", "x"));
     }
 
-    // The seven properties of strings are sets of sequences, so each renders as an alternation
-    // (ordered longest-first) rather than a character class, and only under the v flag.
     @Test
     public void translatesEachPropertyOfStringsToAnAlternation() {
         assertTrue(fullMatch("\\p{Emoji_Keycap_Sequence}", "v", "9\ufe0f\u20e3"));
@@ -249,8 +243,6 @@ public class RegexTranslatorEscapeTest {
         assertFalse(matches("^\\p{RGI_Emoji}$", "v", "a"));
     }
 
-    // Longest-first: the keycap sequence must win over its own leading digit, which the same set
-    // also contains through Basic_Emoji.
     @Test
     public void prefersTheLongestPropertyOfStringsAlternative() {
         assertTrue(fullMatch("^\\p{RGI_Emoji}$", "v", "9\ufe0f\u20e3"));
@@ -276,8 +268,7 @@ public class RegexTranslatorEscapeTest {
         assertTrue(fullMatch("[\\p{Emoji_Keycap_Sequence}\\q{ab}]", "v", "ab"));
     }
 
-    // ECMA-262 forbids UAX #44 loose matching: a property name differing by whitespace or case is
-    // not the same property, it is an early error.
+    // ECMA-262 forbids UAX #44 loose matching: a name differing by whitespace or case is an early error.
     @Test
     public void rejectsLooselyMatchedPropertyNames() {
         rejects("\\p{ General_Category=Uppercase_Letter }", "u");
@@ -288,8 +279,8 @@ public class RegexTranslatorEscapeTest {
         assertTrue(matches("[\\p{Hex}\\P{Hex}]", "u", "\u2603"));
     }
 
-    // GetWordCharacters: under ignoreCase in unicode mode the two code points that case-fold into
-    // the ASCII word set join it, which java's own \w and \b never do.
+    // GetWordCharacters: under ignoreCase in unicode mode the two code points that case-fold into the ASCII
+    // word set join it, which java's own \w and \b never do.
     @Test
     public void widensTheWordCharacterSetUnderIgnoreCase() {
         assertTrue(matches("(?i:\\w)", "u", "\u017f"));
@@ -302,8 +293,8 @@ public class RegexTranslatorEscapeTest {
         assertFalse(matches("(?i:\\w)", "", "\u017f"));
     }
 
-    // Without u or v a pattern matches code units, so a supplementary code point is two of them and
-    // a dotAll `.` may not swallow it whole.
+    // Without u or v a pattern matches code units, so a supplementary code point is two of them and a dotAll
+    // `.` may not swallow it whole.
     @Test
     public void matchesCodeUnitsWithoutUnicodeMode() {
         final var astral = new String(new int[]{0x10300}, 0, 1);
@@ -332,8 +323,6 @@ public class RegexTranslatorEscapeTest {
         assertFalse(matches("[]", "v", "a"));
     }
 
-    // Without ignoreCase (or without the property being case-related) the plain \p{}/\P{} path is
-    // unaffected: no per-candidate folding is applied.
     @Test
     public void nonIgnoreCasePropertyEscapesAreUnaffectedByFolding() {
         assertFalse(fullMatch("\\P{Lu}", "u", "A"));

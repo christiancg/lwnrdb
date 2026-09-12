@@ -40,7 +40,6 @@ public class FileSystemHashIndexTest {
         }
     }
 
-    // writeHashIndexFile with an empty list writes nothing; reading returns null
     @Test
     public void test_hash_index_write_empty_list_is_noop()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -50,7 +49,6 @@ public class FileSystemHashIndexTest {
         assertNull(fileSystem.readWholeHashIndexFile(TestGlobals.DB, TestGlobals.COLL, "payload", IndexKind.OBJECT));
     }
 
-    // updateHashIndexFiles inserts a new entry then removes it again
     @Test
     public void test_hash_index_update_insert_then_remove()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -72,7 +70,6 @@ public class FileSystemHashIndexTest {
         assertTrue(index == null || index.stream().noneMatch(e -> e.getValue().equals("cccc3333")));
     }
 
-    // dropIndex removes the per-kind hash index files alongside scalar ones
     @Test
     public void test_drop_index_removes_hash_index_files()
             throws IOException, NoSuchFieldException, IllegalAccessException {

@@ -39,10 +39,8 @@ public class FilterConjunctionOperatorTest {
         TestUtils.standardTearDown();
     }
 
-    // Process field operators with equals/not equals comparisons for primitive types
     @Test
     public void test_field_operator_equals_not_equals_primitives() {
-        // Setup
         FieldOperator equalsOp = new FieldOperator(FieldOperatorType.EQUALS, "age", new JsonNumber(25));
         FieldOperator notEqualsOp = new FieldOperator(FieldOperatorType.NOT_EQUALS, "active", new JsonBoolean(true));
 
@@ -54,20 +52,17 @@ public class FilterConjunctionOperatorTest {
         testObj2.addProperty("age", 30);
         testObj2.addProperty("active", true);
 
-        // Test equals operator
         BiPredicate<JsonObject, String> equalsTester = FilterOperatorHelper.getTester(equalsOp,
                 FieldOperatorType.EQUALS);
         assertTrue(equalsTester.test(testObj1, "age"));
         assertFalse(equalsTester.test(testObj2, "age"));
 
-        // Test not equals operator
         BiPredicate<JsonObject, String> notEqualsTester = FilterOperatorHelper.getTester(notEqualsOp,
                 FieldOperatorType.NOT_EQUALS);
         assertTrue(notEqualsTester.test(testObj1, "active"));
         assertFalse(notEqualsTester.test(testObj2, "active"));
     }
 
-    // NOR conjunction returns only entries matching neither sub-operator
     @Test
     public void test_nor_conjunction_operator() throws IOException {
         JsonObject matchA = new JsonObject();
@@ -104,7 +99,6 @@ public class FilterConjunctionOperatorTest {
         assertEquals("Charlie", result.getFirst().get("name").asJsonString().getValue());
     }
 
-    // NAND conjunction returns entries not matching all sub-operators simultaneously
     @Test
     public void test_nand_conjunction_operator() throws IOException {
         JsonObject obj1 = new JsonObject();
@@ -129,7 +123,6 @@ public class FilterConjunctionOperatorTest {
         cache.putAdminCollectionEntry(adminCollEntry,
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0));
 
-        // NAND of (x==10 AND y==20) means: NOT(x==10 AND y==20) → obj2 matches, obj1 does not
         ConjunctionOperator nandOp = new ConjunctionOperator(ConjunctionOperatorType.NAND,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "x", new JsonNumber(10)),
                         new FieldOperator(FieldOperatorType.EQUALS, "y", new JsonNumber(20))));
@@ -141,7 +134,6 @@ public class FilterConjunctionOperatorTest {
         assertEquals("2", result.getFirst().get(Globals.PK_FIELD).asJsonString().getValue());
     }
 
-    // XOR conjunction returns entries matching exactly one sub-operator
     @Test
     public void test_xor_conjunction_operator() throws IOException {
         JsonObject obj1 = new JsonObject();
@@ -166,7 +158,6 @@ public class FilterConjunctionOperatorTest {
         cache.putAdminCollectionEntry(adminCollEntry,
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0));
 
-        // XOR of (a==true, b==true): obj1 matches only a==true (1 match) → included; obj2 matches both → excluded
         ConjunctionOperator xorOp = new ConjunctionOperator(ConjunctionOperatorType.XOR,
                 List.of(new FieldOperator(FieldOperatorType.EQUALS, "a", new JsonBoolean(true)),
                         new FieldOperator(FieldOperatorType.EQUALS, "b", new JsonBoolean(true))));
@@ -178,7 +169,6 @@ public class FilterConjunctionOperatorTest {
         assertEquals("1", result.getFirst().get(Globals.PK_FIELD).asJsonString().getValue());
     }
 
-    // getTester: IN operator with JsonArray matches when value is in the array
     @Test
     public void test_in_operator_tester_matches() {
         JsonObject obj = new JsonObject();
@@ -193,7 +183,6 @@ public class FilterConjunctionOperatorTest {
         assertTrue(tester.test(obj, "color"));
     }
 
-    // getTester: IN operator with JsonArray returns false when value is not in the array
     @Test
     public void test_in_operator_tester_no_match() {
         JsonObject obj = new JsonObject();
@@ -208,7 +197,6 @@ public class FilterConjunctionOperatorTest {
         assertFalse(tester.test(obj, "color"));
     }
 
-    // getTester: NOT_IN operator with JsonArray returns true when value is not in the array
     @Test
     public void test_not_in_operator_tester() {
         JsonObject obj = new JsonObject();
@@ -223,7 +211,6 @@ public class FilterConjunctionOperatorTest {
         assertTrue(tester.test(obj, "color"));
     }
 
-    // Nested conjunction operator (conjunction within conjunction) is processed recursively
     @Test
     public void test_nested_conjunction_operators() throws IOException {
         JsonObject obj = new JsonObject();
@@ -292,7 +279,6 @@ public class FilterConjunctionOperatorTest {
         assertFalse(notEqualsTester.test(match, "data"));
     }
 
-    // getTester: whole-array EQUALS / NOT_EQUALS on the scan path (order sensitive)
     @Test
     public void test_array_equals_not_equals_tester() {
         FieldOperator equalsOp = new FieldOperator(FieldOperatorType.EQUALS, "data", arrField("x", "y"));
@@ -334,7 +320,6 @@ public class FilterConjunctionOperatorTest {
         assertFalse(notInTester.test(inDoc, "data"));
         assertTrue(notInTester.test(outDoc, "data"));
 
-        // arrays as candidates work the same way
         JsonArray arrayList = new JsonArray();
         arrayList.add(arrField("x", "y"));
         FieldOperator arrInOp = new FieldOperator(FieldOperatorType.IN, "data", arrayList);

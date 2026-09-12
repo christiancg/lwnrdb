@@ -80,7 +80,6 @@ public class FileSystemFieldIndexTest {
         assertEquals(id, result.get_id());
     }
 
-    // Successfully inserts new entry into collection file and creates index entry
     @Test
     public void test_insert_entry_creates_index() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
@@ -106,7 +105,6 @@ public class FileSystemFieldIndexTest {
         assertTrue(collFile.exists());
     }
 
-    // Successfully writes index entries to file for each type in the map
     @Test
     public void test_writes_index_entries_to_file() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
@@ -127,7 +125,6 @@ public class FileSystemFieldIndexTest {
         assertTrue(fileContent.endsWith(Globals.NEWLINE));
     }
 
-    // Successfully update index file when both insertedEntry and removedEntry are provided
     @Test
     public void test_update_index_files_with_insert_and_remove()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -152,7 +149,6 @@ public class FileSystemFieldIndexTest {
                 || fileContent.contains("value2" + Globals.ID_SEPARATOR + "id4" + Globals.ID_SEPARATOR + "id3"));
     }
 
-    // Handle case when removedEntry has empty ids set
     @Test
     public void test_update_index_files_with_empty_ids_remove()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -173,7 +169,6 @@ public class FileSystemFieldIndexTest {
         assertFalse(fileContent.contains("123" + Globals.INDEX_ENTRY_SEPARATOR));
     }
 
-    // Successfully delete all index files for a given field in an existing collection
     @Test
     public void test_delete_index_files_success() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
@@ -199,10 +194,8 @@ public class FileSystemFieldIndexTest {
         assertFalse(indexFile2.exists());
     }
 
-    // Successfully reads and maps index files for a given field in a collection
     @Test
     public void test_read_and_map_index_files_success() throws NoSuchFieldException, IllegalAccessException {
-        // Arrange
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         String fieldName = "age";
@@ -214,7 +207,6 @@ public class FileSystemFieldIndexTest {
         indexEntryMap.put(String.class, stringEntries);
         fileSystem.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, indexEntryMap);
 
-        // Act
         ConcurrentMap<String, List<FieldIndexEntry<?>>> result = fileSystem.readAllWholeFieldIndexFiles(TestGlobals.DB,
                 TestGlobals.COLL, fieldName);
 
@@ -223,7 +215,6 @@ public class FileSystemFieldIndexTest {
         assertEquals(2, result.get("String").size());
     }
 
-    // Read and parse index file entries for Number type fields
     @Test
     public void test_read_number_type_index_entries() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
@@ -246,11 +237,9 @@ public class FileSystemFieldIndexTest {
         assertTrue(entries.get(1).getIds().contains("id3"));
     }
 
-    // Returns sorted list of PkIndexEntry objects when index file exists and contains entries
     @Test
     public void test_read_index_file_returns_sorted_entries()
             throws IOException, NoSuchFieldException, IllegalAccessException {
-        // Arrange
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
@@ -269,17 +258,14 @@ public class FileSystemFieldIndexTest {
                         + Globals.INDEX_ENTRY_SEPARATOR + "0" + Globals.INDEX_ENTRY_SEPARATOR + "0");
         Files.write(path, fileLines);
 
-        // Act
         List<PkIndexEntry> result = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
 
-        // Assert
         assertEquals(3, result.size());
         assertEquals("value1", result.get(0).getValue());
         assertEquals("value2", result.get(1).getValue());
         assertEquals("value3", result.get(2).getValue());
     }
 
-    // findPkIndexEntry returns matching entry from configured path
     @Test
     public void test_find_pk_index_entry() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
@@ -301,7 +287,6 @@ public class FileSystemFieldIndexTest {
         assertNull(fileSystem.findPkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "nope"));
     }
 
-    // getByIndexEntries returns an empty list for null or empty input
     @Test
     public void test_get_by_index_entries_empty_input()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -312,7 +297,6 @@ public class FileSystemFieldIndexTest {
         assertTrue(fs.getByIndexEntries(new ArrayList<>()).isEmpty());
     }
 
-    // getByIndexEntries reads only the requested entries across multiple pages
     @Test
     public void test_get_by_index_entries_reads_requested_across_pages()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -345,7 +329,6 @@ public class FileSystemFieldIndexTest {
             byId.put(ix.get_id(), ix.getIndex());
         }
 
-        // Request one from page 0 and one from page 1 — must get exactly those two.
         final var requested = List.of(byId.get("p0-1"), byId.get("p1-0"));
         final var result = fs.getByIndexEntries(requested);
 
@@ -357,7 +340,6 @@ public class FileSystemFieldIndexTest {
         assertEquals(1, p01.getData().get("v").asJsonNumber().getValue().intValue());
     }
 
-    // getByIndexEntries reads multiple entries from a single page in position order
     @Test
     public void test_get_by_index_entries_single_page_multiple()
             throws IOException, NoSuchFieldException, IllegalAccessException {
@@ -386,7 +368,6 @@ public class FileSystemFieldIndexTest {
         assertEquals(Set.of("id-0", "id-1", "id-2"), ids);
     }
 
-    // updateFromCollection returns the new index entry plus the compaction for the old slot.
     @Test
     public void test_update_returns_index_entry_and_compaction()
             throws IOException, NoSuchFieldException, IllegalAccessException {

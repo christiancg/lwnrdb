@@ -171,7 +171,6 @@ public class OperationProcessorBeforeHookTest {
         assertNull(find("b5"));
     }
 
-    // One interpreter per request: the module body must evaluate once for the whole batch.
     @Test
     public void test_bulk_save_evaluates_the_module_body_once() throws Exception {
         installHook("counter", "counter", "let opened = 0; opened++; export default (d) => ({ ...d, opened: opened });",
@@ -194,7 +193,6 @@ public class OperationProcessorBeforeHookTest {
         assertNotNull(find("d1"));
     }
 
-    // The hook is handed the stored document, not the request, which carries only the _id.
     @Test
     public void test_delete_hook_receives_the_stored_document() throws Exception {
         assertEquals(OperationStatus.OK, save("d2").getStatus());

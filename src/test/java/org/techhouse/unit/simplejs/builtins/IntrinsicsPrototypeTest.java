@@ -77,7 +77,6 @@ public class IntrinsicsPrototypeTest {
                 new org.techhouse.simplejs.internal.EventLoop(), (_, _, _) -> JsUndefined.getInstance());
     }
 
-    // Every runtime value type resolves to a prototype, and anything else falls back to Object.prototype
     @Test
     public void test_proto_for_every_value_type() {
         final var realm = intrinsics();
@@ -106,11 +105,8 @@ public class IntrinsicsPrototypeTest {
         }
     }
 
-    // %AsyncFunction%/%GeneratorFunction%/%AsyncGeneratorFunction% are subclasses of %Function% per
-    // spec (Object.getPrototypeOf(AsyncFunction) === Function): the real Function constructor doesn't
-    // exist yet when Intrinsics builds these function-kind constructors, so the own-[[Prototype]]
-    // link starts unset and is wired later by linkFunctionKindConstructors, mirroring
-    // linkIteratorPrototypes's realm-bootstrap handoff.
+    // The real Function constructor does not exist yet when Intrinsics builds the function-kind constructors,
+    // so their own [[Prototype]] starts unset and is wired later by linkFunctionKindConstructors.
     @Test
     public void test_link_function_kind_constructors_wires_own_prototype() {
         final var realm = intrinsics();
@@ -132,7 +128,6 @@ public class IntrinsicsPrototypeTest {
         assertSame(functionCtor, asyncGeneratorCtor.getOwnProto());
     }
 
-    // Each family's NAMES list agrees exactly with the keys installed on its prototype
     @Test
     public void test_names_match_prototype_keys() {
         final var realm = intrinsics();
@@ -176,7 +171,6 @@ public class IntrinsicsPrototypeTest {
         }
         for (final var key : proto.keys()) {
             // String.prototype is itself a String wrapper, so it owns the exotic `length` of its
-            // empty [[StringData]] on top of the family's methods.
             assertTrue(
                     "constructor".equals(key) || "name".equals(key) || "message".equals(key) || "length".equals(key)
                             || names.contains(key) || accessors.contains(key),
@@ -184,7 +178,6 @@ public class IntrinsicsPrototypeTest {
         }
     }
 
-    // Every NAMES entry resolves to a real method for a matching receiver
     @Test
     public void test_names_resolve_to_methods() {
         final var buffer = new JsArrayBuffer(8);
@@ -234,7 +227,6 @@ public class IntrinsicsPrototypeTest {
         }
     }
 
-    // Every prototype chain terminates at Object.prototype
     @Test
     public void test_prototype_chain_roots_at_object_proto() {
         final var realm = intrinsics();
@@ -254,7 +246,6 @@ public class IntrinsicsPrototypeTest {
         assertNull(realm.objectProto.getProto());
     }
 
-    // Error prototypes share Error.prototype as their base and an unknown name falls back to it
     @Test
     public void test_error_prototypes() {
         final var realm = intrinsics();
@@ -266,7 +257,6 @@ public class IntrinsicsPrototypeTest {
         assertTrue(error.isErrorData());
     }
 
-    // Namespace members are installed non-enumerable, so Object.keys sees none of them
     @Test
     public void namespaceMembersAreNonEnumerable() {
         assertEquals(0, num("Object.keys(Math).length"));
@@ -279,8 +269,6 @@ public class IntrinsicsPrototypeTest {
         assertTrue(bool("Object.getOwnPropertyDescriptor(Math, 'floor').configurable === true"));
     }
 
-    // ToObject is the single boxing path: it hands back an object-like value untouched, boxes a
-    // primitive onto the matching intrinsic prototype, and rejects null/undefined
     @Test
     public void toObjectBoxesPrimitivesOntoTheirPrototype() {
         final var realm = intrinsics();
@@ -298,8 +286,6 @@ public class IntrinsicsPrototypeTest {
         assertNotSame(realm.toObject(new JsNumber(1)), realm.toObject(new JsNumber(1)));
     }
 
-    // The realm's Object.prototype is linked onto the plain {value, done} object a sync generator's
-    // next/return/throw build (InterpreterUtils.stepResult has no realm of its own to reach it).
     @Test
     public void syncGeneratorResultObjectsLinkObjectPrototype() {
         assertTrue(bool("""
@@ -314,8 +300,6 @@ public class IntrinsicsPrototypeTest {
                 """));
     }
 
-    // %GeneratorPrototype%/%AsyncGeneratorPrototype%'s own `constructor` is the corresponding
-    // function-kind prototype object (%GeneratorFunction.prototype%), not left unset.
     @Test
     public void generatorPrototypeOwnsItsConstructorBackLink() {
         assertTrue(bool("""

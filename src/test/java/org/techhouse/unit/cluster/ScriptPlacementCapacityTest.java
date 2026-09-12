@@ -18,11 +18,6 @@ import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
 
-/**
- * Placement compares load against {@code maxConcurrentScripts}, not absolute load: with a cap in play a node
- * running 3/4 is nearly full while one running 6/32 is idle, so the absolute comparison would send work to
- * the saturated node.
- */
 public class ScriptPlacementCapacityTest {
     private static final long EPOCH = 42L;
     private static final String DB = "placement_db";
@@ -94,7 +89,6 @@ public class ScriptPlacementCapacityTest {
         assertEquals("b", placement.choose(DB).getNodeId());
     }
 
-    // A saturated target could only answer 503-6, so forwarding to it would waste a round trip.
     @Test
     public void test_skips_a_saturated_target() throws Exception {
         membership(node("a-self", 1, 99, 100), node("b", 2, 4, 4), node("c", 3, 30, 32));
@@ -102,7 +96,6 @@ public class ScriptPlacementCapacityTest {
         assertEquals("c", placement.choose(DB).getNodeId());
     }
 
-    // Two nodes at the same ratio are equally good, so the draw order decides and the first sample wins.
     @Test
     public void test_equal_ratios_break_on_the_first_sample() throws Exception {
         membership(node("a-self", 1, 99, 100), node("c", 2, 2, 4), node("b", 3, 8, 16));
@@ -110,7 +103,6 @@ public class ScriptPlacementCapacityTest {
         assertEquals("c", placement.choose(DB).getNodeId());
     }
 
-    // Both full: neither is preferable, so the draw order decides rather than the ratio.
     @Test
     public void test_two_saturated_samples_still_choose_one() throws Exception {
         membership(node("a-self", 1, 99, 100), node("c", 2, 4, 4), node("b", 3, 32, 32));

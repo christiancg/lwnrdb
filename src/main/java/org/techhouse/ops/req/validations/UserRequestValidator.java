@@ -125,8 +125,8 @@ public final class UserRequestValidator {
                 return ValidationResult.fail(
                         "database name in script permissions must be 3-64 alphanumeric characters, underscores, or hyphens");
             }
-            // A typo'd level name must fail loudly rather than read as NONE: an operator cannot explain a
-            // denial they never asked for. The boolean form is still accepted for backward compatibility.
+            // The boolean form is still accepted for backward compatibility; a typo'd level name must fail
+            // loudly rather than read as NONE.
             final var value = entry.getValue();
             if (value == null || value.getJsonType() == JsonBaseElement.JsonType.BOOLEAN) {
                 continue;

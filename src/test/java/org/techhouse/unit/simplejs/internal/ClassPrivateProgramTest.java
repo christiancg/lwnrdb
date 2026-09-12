@@ -24,7 +24,6 @@ public class ClassPrivateProgramTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // two evaluations of the same class factory produce non-interchangeable private slots
     @Test
     public void test_class_factory_evaluations_do_not_share_a_slot() {
         final var source = """
@@ -44,7 +43,6 @@ public class ClassPrivateProgramTest {
         assertEquals("v|TypeError", str(source));
     }
 
-    // a private static member is reachable only through the class object that declared it
     @Test
     public void test_private_static_members_are_per_evaluation() {
         final var source = """
@@ -60,7 +58,6 @@ public class ClassPrivateProgramTest {
         assertEquals("vv|TypeError", str(source));
     }
 
-    // branding the same object twice with a class that has private methods is a TypeError
     @Test
     public void test_second_brand_add_throws() {
         final var source = """
@@ -75,13 +72,11 @@ public class ClassPrivateProgramTest {
         assertEquals("first|TypeError", str(source));
     }
 
-    // a private name declared by an outer class is visible inside a nested class's methods
     @Test
     public void test_private_name_reaches_a_nested_class() {
         assertEquals(7, num());
     }
 
-    // a nested class's own #name shadows the outer one, so a brand check answers per declaration
     @Test
     public void test_shadowed_private_name_answers_per_declaration() {
         final var source = """
@@ -98,7 +93,6 @@ public class ClassPrivateProgramTest {
         assertTrue(bool(source));
     }
 
-    // a class's private names are already in scope in its computed keys
     @Test
     public void test_private_name_is_visible_in_a_computed_key() {
         final var source = """
@@ -111,7 +105,6 @@ public class ClassPrivateProgramTest {
         assertEquals("TypeError", str(source));
     }
 
-    // `#x in obj` works inside a nested arrow and reports false for an unrelated object
     @Test
     public void test_brand_check_inside_a_nested_arrow() {
         final var source = """
@@ -124,7 +117,6 @@ public class ClassPrivateProgramTest {
         assertTrue(bool(source));
     }
 
-    // a private field cannot be added to a receiver that was made non-extensible first
     @Test
     public void test_private_field_on_a_non_extensible_receiver_throws() {
         final var source = """
