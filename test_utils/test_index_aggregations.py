@@ -736,9 +736,9 @@ def geo_suite(c):
 # Correctness regressions
 # ══════════════════════════════════════════════════════════════════════════
 
-REG_UNICODE = "idxagg_reg_unicode"   # non-ASCII indexed values survive an in-place index rewrite
-REG_SINGLE = "idxagg_reg_single"     # range queries against an index holding one distinct value
-REG_CONJ = "idxagg_reg_conj"         # multi-child conjunction applied to an already-filtered stream
+REG_UNICODE = "idxagg_reg_unicode"
+REG_SINGLE = "idxagg_reg_single"
+REG_CONJ = "idxagg_reg_conj"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -748,15 +748,11 @@ def reg_filter(c, coll, field, value, op="EQUALS"):
 
 
 def probe_non_ascii_indexed_values(c):
-    # A non-ASCII indexed value used to be written one byte per char, so the .idx became undecodable
-    # and every later read of that field failed — taking the ASCII entries beside it down too.
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_UNICODE})
     for doc_id, city in (("u1", "café"), ("u2", "日本語"), ("u3", "plain"), ("u4", "a😀b")):
         save_doc(c, REG_UNICODE, {"_id": doc_id, "city": city})
     c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_UNICODE, "fieldName": "city"})
     wait_for_indexes(c, [(REG_UNICODE, "city")])
-    # Re-point one document and add a second under an existing non-ASCII value: both rewrite the
-    # index line in place, which is the path that used to corrupt the file.
     save_doc(c, REG_UNICODE, {"_id": "u3", "city": "日本語"})
     save_doc(c, REG_UNICODE, {"_id": "u5", "city": "café"})
     wait_for_background()
@@ -770,8 +766,6 @@ def probe_non_ascii_indexed_values(c):
 
 
 def probe_single_valued_index_ranges(c):
-    # Every document shares one indexed value, so the field index holds exactly one entry. A range
-    # query against a single-entry index used to short-circuit to "no results".
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_SINGLE})
     for i in range(5):
         save_doc(c, REG_SINGLE, {"_id": f"s{i}", "score": 10})
@@ -794,8 +788,6 @@ def probe_single_valued_index_ranges(c):
 
 
 def probe_conjunction_after_a_filter_step(c):
-    # The second FILTER receives the first step's stream rather than being the pipeline source. A
-    # conjunction with two or more children used to hand that one single-use stream to every child.
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CONJ})
     for doc_id, role, active in (("a", "admin", "yes"), ("b", "admin", "no"),
                                  ("c", "user", "yes"), ("ghost", "ghost", "yes")):

@@ -132,13 +132,14 @@ public final class AggregationOperationHelper {
             String dbName, String collName, PipelineScriptContext context) throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var mapStep = (MapAggregationStep) baseMapStep;
-        for (var step : mapStep.getOperators()) {
-            resultStream = resultStream.map(jsonObject -> {
-                final var copy = jsonObject.deepCopy();
-                return MapOperatorHelper.processOperator(step, copy, context);
-            });
-        }
-        return resultStream;
+        final var operators = mapStep.getOperators();
+        return resultStream.map(jsonObject -> {
+            var mapped = jsonObject.deepCopy();
+            for (var step : operators) {
+                mapped = MapOperatorHelper.processOperator(step, mapped, context);
+            }
+            return mapped;
+        });
     }
 
     private static Stream<JsonObject> processReduceStep(BaseAggregationStep baseReduceStep,
@@ -167,11 +168,10 @@ public final class AggregationOperationHelper {
                 .entrySet().stream().map(jsonElementListEntry -> {
                     final var groupedEntry = new JsonObject();
                     groupedEntry.add(groupByStep.getFieldName(), jsonElementListEntry.getKey());
-                    final var values = jsonElementListEntry.getValue().stream().reduce(new JsonArray(),
-                            (jsonArray, jsonObject) -> {
-                                jsonArray.add(jsonObject);
-                                return jsonArray;
-                            }, (jsonArray, _) -> jsonArray);
+                    final var values = new JsonArray();
+                    for (final var grouped : jsonElementListEntry.getValue()) {
+                        values.add(grouped);
+                    }
                     groupedEntry.add(GROUP_FIELD_NAME, values);
                     return groupedEntry;
                 });

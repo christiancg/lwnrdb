@@ -1,6 +1,5 @@
 package org.techhouse.ejson.type_adapters.impl;
 
-import java.util.stream.Collectors;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.type_adapters.TypeAdapter;
@@ -10,9 +9,17 @@ public class JsonArrayTypeAdapter implements TypeAdapter<JsonArray> {
 
     @Override
     public String toJson(JsonArray value) {
-        return '[' + value.asList().stream()
-                .map(element -> TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(element))
-                .collect(Collectors.joining(",")) + ']';
+        final var elementAdapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);
+        final var builder = new StringBuilder("[");
+        var first = true;
+        for (final var element : value) {
+            if (!first) {
+                builder.append(',');
+            }
+            first = false;
+            builder.append(elementAdapter.toJson(element));
+        }
+        return builder.append(']').toString();
     }
 
     @Override

@@ -3,6 +3,7 @@ package org.techhouse.listen;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -19,12 +20,7 @@ public final class ResultHasher {
         final var json = eJson.toJson(wrapper);
         try {
             final var digest = MessageDigest.getInstance("SHA-256");
-            final var bytes = digest.digest(json.getBytes(StandardCharsets.UTF_8));
-            final var sb = new StringBuilder(64);
-            for (var b : bytes) {
-                sb.append(String.format("%02x", b));
-            }
-            return sb.toString();
+            return HexFormat.of().formatHex(digest.digest(json.getBytes(StandardCharsets.UTF_8)));
         } catch (NoSuchAlgorithmException e) {
             throw new RuntimeException("SHA-256 not available", e);
         }

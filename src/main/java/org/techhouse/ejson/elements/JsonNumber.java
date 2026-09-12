@@ -9,7 +9,6 @@ public class JsonNumber extends JsonPrimitive<Number> {
     public JsonNumber(Number value) {
         if (value != null) {
             this.value = value;
-            this.strLength = String.valueOf(value).length();
         }
     }
 

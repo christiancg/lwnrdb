@@ -11,6 +11,7 @@ import java.util.UUID;
 import javax.net.ssl.SSLException;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterRouter;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
@@ -48,9 +49,9 @@ public class MessageProcessor implements Runnable {
     public void run() {
         try (socket) {
             final var reader = new BufferedReader(
-                    new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+                    new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8), Globals.BUFFER_SIZE);
             final var writer = new BufferedWriter(
-                    new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
+                    new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8), Globals.BUFFER_SIZE);
             if (clientId != null) {
                 clientTracker.registerWriter(clientId, writer);
                 final var writerLock = clientTracker.getWriterLock(clientId);

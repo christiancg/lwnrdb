@@ -16,6 +16,8 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
 
     private static final int GEO_HASH_ORDER_PRECISION = 12;
 
+    private String orderHash;
+
     public JsonGeo(GeoPoint customValue) {
         super("#" + CUSTOM_TYPE_NAME + "(" + customValue.lat() + "," + customValue.lng() + ")");
     }
@@ -74,7 +76,12 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
     }
 
     public String geoHash() {
-        return GeoUtils.geoHash(customValue.lat(), customValue.lng(), GEO_HASH_ORDER_PRECISION);
+        var cached = orderHash;
+        if (cached == null) {
+            cached = GeoUtils.geoHash(customValue.lat(), customValue.lng(), GEO_HASH_ORDER_PRECISION);
+            orderHash = cached;
+        }
+        return cached;
     }
 
     @Override
@@ -109,7 +116,7 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
     private boolean applyWithin(Map<String, JsonBaseElement> args) {
         final var polygonArray = args.get("polygon").asJsonArray();
         final var polygon = new ArrayList<GeoPoint>();
-        for (var vertex : polygonArray.asList()) {
+        for (var vertex : polygonArray) {
             polygon.add(toGeoPoint(vertex));
         }
         return GeoUtils.pointInPolygon(customValue, polygon);

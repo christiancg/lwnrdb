@@ -129,6 +129,7 @@ public class TestUtils {
             final var key = configKey(fieldName);
             if (key != null) {
                 configValues(configuration).put(key, fieldValue == null ? null : String.valueOf(fieldValue));
+                configResolved(configuration).remove(key);
                 return;
             }
         }
@@ -152,6 +153,14 @@ public class TestUtils {
         final var field = Configuration.class.getDeclaredField("values");
         field.setAccessible(true);
         return (Map<ConfigKey, String>) field.get(configuration);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<ConfigKey, Object> configResolved(Configuration configuration)
+            throws NoSuchFieldException, IllegalAccessException {
+        final var field = Configuration.class.getDeclaredField("resolved");
+        field.setAccessible(true);
+        return (Map<ConfigKey, Object>) field.get(configuration);
     }
 
     private static Object configValue(Configuration configuration, ConfigKey key, Class<?> fieldType)
