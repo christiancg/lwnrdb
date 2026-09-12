@@ -28,7 +28,7 @@ import org.techhouse.test.TestUtils;
 
 public class MemoryManagementTest {
 
-    private long savedMaxMemoryBytes;
+    private volatile long savedMaxMemoryBytes;
 
     @BeforeEach
     public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {

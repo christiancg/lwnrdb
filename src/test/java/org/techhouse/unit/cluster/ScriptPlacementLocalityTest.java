@@ -38,10 +38,10 @@ public class ScriptPlacementLocalityTest {
     private ScriptPlacement placement;
     private StubCache stubCache;
     private StubOwnership stubOwnership;
-    private boolean origEnabled;
-    private boolean origRouting;
-    private int origWeight;
-    private long origEpoch;
+    private volatile boolean origEnabled;
+    private volatile boolean origRouting;
+    private volatile int origWeight;
+    private volatile long origEpoch;
 
     private static NodeInfo node(String id, int port, int scriptLoad, int scriptCapacity) {
         final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, scriptCapacity);
