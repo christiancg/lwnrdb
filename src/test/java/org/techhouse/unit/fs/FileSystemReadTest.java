@@ -340,9 +340,6 @@ public class FileSystemReadTest {
         DbEntry read = fileSystem.getById(indexEntry);
         assertEquals(value, read.getData().get("text").asJsonString().getValue());
 
-        // Only control characters, quotes, backslashes and lone surrogates are escaped, so a page
-        // holds these characters raw and multi-byte. The length the PK index records is the UTF-8
-        // byte length, so the page must be written as UTF-8 or readFully overruns the entry.
         File page = new File(TestGlobals.PATH + '/' + TestGlobals.DB + '/' + TestGlobals.COLL + '/' + TestGlobals.COLL
                 + "-" + indexEntry.getPage() + Globals.DB_FILE_EXTENSION);
         assertEquals(page.length(), indexEntry.getLength());

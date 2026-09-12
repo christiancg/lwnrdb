@@ -65,8 +65,6 @@
         <exclude name="AvoidUsingVolatile"/>
     </rule>
 
-    <!-- Crypto misuse. Cheap to keep honest now that there is a TLS layer and a
-         password hasher; both rules are clean today. -->
     <rule ref="category/java/security.xml"/>
 
     <!-- A few high-value best practices -->
@@ -87,15 +85,8 @@
     <rule ref="category/java/bestpractices.xml/AvoidReassigningCatchVariables"/>
     <rule ref="category/java/bestpractices.xml/AvoidPrintStackTrace"/>
     <rule ref="category/java/bestpractices.xml/SimplifiableTestAssertion"/>
-    <!-- A @SuppressWarnings or NOPMD that no longer suppresses anything is a lie
-         about the code; this is what keeps the handful the tree carries honest. -->
     <rule ref="category/java/bestpractices.xml/UnnecessaryWarningSuppression"/>
 
-    <!-- Charset and shared-digest correctness. Every byte this engine writes is a
-         document, an index line or a wire frame, so a decode that resolves its
-         charset from the platform default is a portability bug, not a style nit;
-         a shared MessageDigest field would be a concurrency bug in the object and
-         array hash indexes. -->
     <rule ref="category/java/bestpractices.xml/UseStandardCharsets"/>
     <rule ref="category/java/bestpractices.xml/RelianceOnDefaultCharset"/>
     <rule ref="category/java/bestpractices.xml/AvoidMessageDigestField"/>
@@ -103,8 +94,6 @@
     <rule ref="category/java/bestpractices.xml/UseTryWithResources"/>
     <rule ref="category/java/bestpractices.xml/UseCollectionIsEmpty"/>
 
-    <!-- Design rules that are clean today and cheap to keep clean. Mutable static
-         state in particular would undercut the IoC singletons everything fetches. -->
     <rule ref="category/java/design.xml/MutableStaticState"/>
     <rule ref="category/java/design.xml/ImmutableField"/>
     <rule ref="category/java/design.xml/SingularField"/>
@@ -118,11 +107,6 @@
     <rule ref="category/java/design.xml/ClassWithOnlyPrivateConstructorsShouldBeFinal"/>
     <rule ref="category/java/design.xml/DoNotExtendJavaLangError"/>
 
-    <!-- Dead-weight removal. The code style category as a whole stays off (Spotless
-         and Checkstyle own formatting and naming); these are the members of it that
-         delete code rather than rearrange it. UnnecessaryBlock and UnnecessaryModifier
-         are deliberately absent - Checkstyle's AvoidNestedBlocks and RedundantModifier
-         already report them. -->
     <rule ref="category/java/codestyle.xml/EmptyControlStatement"/>
     <rule ref="category/java/codestyle.xml/UnnecessaryConstructor"/>
     <rule ref="category/java/codestyle.xml/UnnecessaryLocalBeforeReturn"/>
