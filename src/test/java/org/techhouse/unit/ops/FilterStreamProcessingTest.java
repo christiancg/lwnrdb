@@ -203,4 +203,91 @@ public class FilterStreamProcessingTest {
         assertEquals("admin", result.getFirst().get("role").asJsonString().getValue());
     }
 
+    private static JsonObject doc(String id, String role, String active) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.addProperty("role", role);
+        obj.addProperty("active", active);
+        return obj;
+    }
+
+    private static Stream<JsonObject> incoming() {
+        return Stream.of(doc("a", "admin", "yes"), doc("b", "admin", "no"), doc("c", "user", "yes"));
+    }
+
+    private static ConjunctionOperator twoChildren(ConjunctionOperatorType type) {
+        final List<BaseOperator> operators = new ArrayList<>();
+        operators.add(new FieldOperator(FieldOperatorType.EQUALS, "role", new JsonString("admin")));
+        operators.add(new FieldOperator(FieldOperatorType.EQUALS, "active", new JsonString("yes")));
+        return new ConjunctionOperator(type, operators);
+    }
+
+    private static List<String> idsOf(Stream<JsonObject> stream) {
+        return stream.map(obj -> obj.get(Globals.PK_FIELD).asJsonString().getValue()).sorted().toList();
+    }
+
+    @Test
+    public void test_and_conjunction_with_two_children_over_existing_stream() throws IOException {
+        final var result = FilterOperatorHelper.processOperator(twoChildren(ConjunctionOperatorType.AND), incoming(),
+                TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(List.of("a"), idsOf(result));
+    }
+
+    @Test
+    public void test_or_conjunction_with_two_children_over_existing_stream() throws IOException {
+        final var result = FilterOperatorHelper.processOperator(twoChildren(ConjunctionOperatorType.OR), incoming(),
+                TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(List.of("a", "b", "c"), idsOf(result));
+    }
+
+    @Test
+    public void test_xor_conjunction_with_two_children_over_existing_stream() throws IOException {
+        final var result = FilterOperatorHelper.processOperator(twoChildren(ConjunctionOperatorType.XOR), incoming(),
+                TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(List.of("b", "c"), idsOf(result));
+    }
+
+    @Test
+    public void test_nand_conjunction_with_two_children_over_existing_stream() throws IOException {
+        final var result = FilterOperatorHelper.processOperator(twoChildren(ConjunctionOperatorType.NAND), incoming(),
+                TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(List.of("b", "c"), idsOf(result));
+    }
+
+    @Test
+    public void test_nor_conjunction_with_two_children_over_existing_stream() throws IOException {
+        final var result = FilterOperatorHelper.processOperator(twoChildren(ConjunctionOperatorType.NOR), incoming(),
+                TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(List.of(), idsOf(result));
+    }
+
+    @Test
+    public void test_nested_conjunction_with_two_children_over_existing_stream() throws IOException {
+        final List<BaseOperator> outer = new ArrayList<>();
+        outer.add(twoChildren(ConjunctionOperatorType.OR));
+        outer.add(new FieldOperator(FieldOperatorType.EQUALS, "active", new JsonString("yes")));
+        final var operator = new ConjunctionOperator(ConjunctionOperatorType.AND, outer);
+
+        final var result = FilterOperatorHelper.processOperator(operator, incoming(), TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(List.of("a", "c"), idsOf(result));
+    }
+
+    @Test
+    public void test_three_children_conjunction_over_existing_stream() throws IOException {
+        final List<BaseOperator> operators = new ArrayList<>();
+        operators.add(new FieldOperator(FieldOperatorType.EQUALS, "role", new JsonString("admin")));
+        operators.add(new FieldOperator(FieldOperatorType.EQUALS, "active", new JsonString("yes")));
+        operators.add(new FieldOperator(FieldOperatorType.NOT_EQUALS, "role", new JsonString("user")));
+        final var operator = new ConjunctionOperator(ConjunctionOperatorType.AND, operators);
+
+        final var result = FilterOperatorHelper.processOperator(operator, incoming(), TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(List.of("a"), idsOf(result));
+    }
 }

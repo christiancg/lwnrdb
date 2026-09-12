@@ -16,6 +16,9 @@ import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.elements.JsonCustom;
 
 final class FieldIndexStore {
+    private static final byte[] NEWLINE_BYTES = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
+    private static final byte SEPARATOR_BYTE = (byte) Globals.ID_SEPARATOR.charAt(0);
+
     private final FilePaths paths;
 
     FieldIndexStore(FilePaths paths) {
@@ -101,13 +104,12 @@ final class FieldIndexStore {
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-            final var strWholeFile = readFully(writer);
-            final var indexOfExisting = searchIndexValue(strWholeFile, value);
+            final var wholeFile = readFully(writer);
+            final var indexOfExisting = searchIndexValue(wholeFile, value);
             if (indexOfExisting >= 0) {
-                shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                shiftOtherEntries(writer, wholeFile, indexOfExisting);
                 if (!entry.getIds().isEmpty()) {
-                    writer.writeBytes(entry.toFileEntry());
-                    writer.writeBytes(Globals.NEWLINE);
+                    writeLine(writer, entry.toFileEntry());
                 }
             }
         } finally {
@@ -119,37 +121,90 @@ final class FieldIndexStore {
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-            final var strWholeFile = readFully(writer);
-            final var indexOfExisting = searchIndexValue(strWholeFile, value);
+            final var wholeFile = readFully(writer);
+            final var indexOfExisting = searchIndexValue(wholeFile, value);
             if (indexOfExisting >= 0) {
-                shiftOtherEntries(writer, strWholeFile, indexOfExisting);
+                shiftOtherEntries(writer, wholeFile, indexOfExisting);
             } else {
-                writer.seek(strWholeFile.length());
+                writer.seek(wholeFile.length);
             }
-            writer.writeBytes(entry.toFileEntry());
-            writer.writeBytes(Globals.NEWLINE);
+            writeLine(writer, entry.toFileEntry());
         } finally {
             lock.unlock();
         }
     }
 
-    private int searchIndexValue(String strWholeFile, String value) {
+    private int searchIndexValue(byte[] wholeFile, String value) {
+        final var target = value.getBytes(StandardCharsets.UTF_8);
         int lineStart = 0;
-        while (lineStart < strWholeFile.length()) {
-            final int lineEnd = strWholeFile.indexOf(Globals.NEWLINE, lineStart);
-            final int effectiveEnd = lineEnd == -1 ? strWholeFile.length() : lineEnd;
-            final var line = strWholeFile.substring(lineStart, effectiveEnd);
-            if (!line.isBlank()) {
-                final var separatorIdx = line.indexOf(Globals.ID_SEPARATOR);
-                if (separatorIdx >= 0 && line.substring(0, separatorIdx).equals(value)) {
-                    return lineStart == 0 ? 0 : lineStart - Globals.NEWLINE_CHAR_LENGTH;
+        while (lineStart < wholeFile.length) {
+            final int lineEnd = indexOfNewline(wholeFile, lineStart);
+            final int effectiveEnd = lineEnd == -1 ? wholeFile.length : lineEnd;
+            if (!isBlankRegion(wholeFile, lineStart, effectiveEnd)) {
+                final int separatorIdx = indexOfSeparator(wholeFile, lineStart, effectiveEnd);
+                if (separatorIdx >= 0 && regionEquals(wholeFile, lineStart, separatorIdx, target)) {
+                    return lineStart == 0 ? 0 : lineStart - NEWLINE_BYTES.length;
                 }
             }
             if (lineEnd == -1)
                 break;
-            lineStart = lineEnd + Globals.NEWLINE_CHAR_LENGTH;
+            lineStart = lineEnd + NEWLINE_BYTES.length;
         }
         return -1;
+    }
+
+    private static int indexOfNewline(byte[] wholeFile, int from) {
+        final int limit = wholeFile.length - NEWLINE_BYTES.length;
+        for (int i = from; i <= limit; i++) {
+            if (startsWithNewline(wholeFile, i)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean startsWithNewline(byte[] wholeFile, int from) {
+        if (from < 0 || from + NEWLINE_BYTES.length > wholeFile.length) {
+            return false;
+        }
+        for (int i = 0; i < NEWLINE_BYTES.length; i++) {
+            if (wholeFile[from + i] != NEWLINE_BYTES[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int indexOfSeparator(byte[] wholeFile, int from, int to) {
+        for (int i = from; i < to; i++) {
+            if (wholeFile[i] == SEPARATOR_BYTE) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean regionEquals(byte[] wholeFile, int from, int to, byte[] target) {
+        if (to - from != target.length) {
+            return false;
+        }
+        for (int i = 0; i < target.length; i++) {
+            if (wholeFile[from + i] != target[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isBlankRegion(byte[] wholeFile, int from, int to) {
+        for (int i = from; i < to; i++) {
+            final var b = wholeFile[i];
+            final var whitespace = b == ' ' || (b >= 0x09 && b <= 0x0D) || (b >= 0x1C && b <= 0x1F);
+            if (!whitespace) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private <K> String getStringValue(FieldIndexEntry<K> entry) {
@@ -169,27 +224,30 @@ final class FieldIndexStore {
         return strValue;
     }
 
-    private void shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting)
-            throws IOException {
+    private void shiftOtherEntries(RandomAccessFile writer, byte[] wholeFile, int indexOfExisting) throws IOException {
         var replacementIndex = indexOfExisting;
-        var fromExistingEntry = strWholeFile.substring(indexOfExisting);
-        if (fromExistingEntry.startsWith(Globals.NEWLINE)) {
-            fromExistingEntry = fromExistingEntry.substring(Globals.NEWLINE_CHAR_LENGTH);
-            replacementIndex += Globals.NEWLINE_CHAR_LENGTH;
+        if (startsWithNewline(wholeFile, replacementIndex)) {
+            replacementIndex += NEWLINE_BYTES.length;
         }
-        var otherEntries = fromExistingEntry.substring(fromExistingEntry.indexOf(Globals.NEWLINE));
-        if (otherEntries.startsWith(Globals.NEWLINE)) {
-            otherEntries = otherEntries.substring(Globals.NEWLINE_CHAR_LENGTH);
-        }
+        final int lineEnd = indexOfNewline(wholeFile, replacementIndex);
+        final int tailStart = lineEnd == -1 ? wholeFile.length : lineEnd + NEWLINE_BYTES.length;
+        final int tailLength = wholeFile.length - tailStart;
         writer.seek(replacementIndex);
-        writer.writeBytes(otherEntries);
-        writer.setLength(replacementIndex + otherEntries.length());
+        if (tailLength > 0) {
+            writer.write(wholeFile, tailStart, tailLength);
+        }
+        writer.setLength((long) replacementIndex + tailLength);
     }
 
-    private String readFully(RandomAccessFile writer) throws IOException {
+    private static void writeLine(RandomAccessFile writer, String line) throws IOException {
+        writer.write(line.getBytes(StandardCharsets.UTF_8));
+        writer.write(NEWLINE_BYTES);
+    }
+
+    private byte[] readFully(RandomAccessFile writer) throws IOException {
         final var fileLength = (int) writer.length();
         byte[] buffer = new byte[fileLength];
         writer.readFully(buffer, 0, fileLength);
-        return new String(buffer, StandardCharsets.UTF_8);
+        return buffer;
     }
 }

@@ -93,11 +93,11 @@ public final class SearchUtils {
     // Relies on the entries being sorted by value, which FieldIndexLoader guarantees.
     private static <V> int binarySearchBoundary(List<FieldIndexEntry<V>> entries, V value,
             GreaterSmallerEqualsType type, ToIntBiFunction<V, V> compare) {
-        int start = 0;
-        int end = entries.size() - 1;
-        if (end == 0) {
+        if (entries.isEmpty()) {
             return -1;
         }
+        int start = 0;
+        int end = entries.size() - 1;
         switch (type) {
             case SMALLER_THAN -> {
                 if (compare.applyAsInt(entries.get(end).getValue(), value) < 0) {

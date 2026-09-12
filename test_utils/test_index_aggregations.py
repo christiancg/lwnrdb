@@ -733,6 +733,107 @@ def geo_suite(c):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Correctness regressions
+# ══════════════════════════════════════════════════════════════════════════
+
+REG_UNICODE = "idxagg_reg_unicode"   # non-ASCII indexed values survive an in-place index rewrite
+REG_SINGLE = "idxagg_reg_single"     # range queries against an index holding one distinct value
+REG_CONJ = "idxagg_reg_conj"         # multi-child conjunction applied to an already-filtered stream
+
+
+def reg_filter(c, coll, field, value, op="EQUALS"):
+    r = agg(c, coll, [{"type": "FILTER",
+                       "operator": {"fieldOperatorType": op, "field": field, "value": value}}])
+    return sorted(d.get("_id") for d in (r.get("results") or []))
+
+
+def probe_non_ascii_indexed_values(c):
+    # A non-ASCII indexed value used to be written one byte per char, so the .idx became undecodable
+    # and every later read of that field failed — taking the ASCII entries beside it down too.
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_UNICODE})
+    for doc_id, city in (("u1", "café"), ("u2", "日本語"), ("u3", "plain"), ("u4", "a😀b")):
+        save_doc(c, REG_UNICODE, {"_id": doc_id, "city": city})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_UNICODE, "fieldName": "city"})
+    wait_for_indexes(c, [(REG_UNICODE, "city")])
+    # Re-point one document and add a second under an existing non-ASCII value: both rewrite the
+    # index line in place, which is the path that used to corrupt the file.
+    save_doc(c, REG_UNICODE, {"_id": "u3", "city": "日本語"})
+    save_doc(c, REG_UNICODE, {"_id": "u5", "city": "café"})
+    wait_for_background()
+
+    for city, expected in (("café", ["u1", "u5"]), ("日本語", ["u2", "u3"]), ("a😀b", ["u4"])):
+        got = reg_filter(c, REG_UNICODE, "city", city)
+        check(f"non-ASCII indexed value {city!r} is queryable after an in-place index rewrite",
+              got == expected, detail=f"expected {expected}, got {got}")
+    check("re-pointed document no longer answers under its old non-ASCII value",
+          "u3" not in reg_filter(c, REG_UNICODE, "city", "plain"))
+
+
+def probe_single_valued_index_ranges(c):
+    # Every document shares one indexed value, so the field index holds exactly one entry. A range
+    # query against a single-entry index used to short-circuit to "no results".
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_SINGLE})
+    for i in range(5):
+        save_doc(c, REG_SINGLE, {"_id": f"s{i}", "score": 10})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_SINGLE, "fieldName": "score"})
+    wait_for_indexes(c, [(REG_SINGLE, "score")])
+    wait_for_background()
+
+    everything = sorted(f"s{i}" for i in range(5))
+    for op, value, expected in (("GREATER_THAN", 5, everything),
+                                ("GREATER_THAN_EQUALS", 10, everything),
+                                ("SMALLER_THAN", 20, everything),
+                                ("SMALLER_THAN_EQUALS", 10, everything),
+                                ("GREATER_THAN", 10, []),
+                                ("SMALLER_THAN", 10, []),
+                                ("GREATER_THAN_EQUALS", 15, []),
+                                ("SMALLER_THAN_EQUALS", 5, [])):
+        got = reg_filter(c, REG_SINGLE, "score", value, op)
+        check(f"single-valued index answers {op} {value}", got == expected,
+              detail=f"expected {expected}, got {got}")
+
+
+def probe_conjunction_after_a_filter_step(c):
+    # The second FILTER receives the first step's stream rather than being the pipeline source. A
+    # conjunction with two or more children used to hand that one single-use stream to every child.
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CONJ})
+    for doc_id, role, active in (("a", "admin", "yes"), ("b", "admin", "no"),
+                                 ("c", "user", "yes"), ("ghost", "ghost", "yes")):
+        save_doc(c, REG_CONJ, {"_id": doc_id, "role": role, "active": active})
+    wait_for_background()
+
+    leaves = [{"fieldOperatorType": "EQUALS", "field": "role", "value": "admin"},
+              {"fieldOperatorType": "EQUALS", "field": "active", "value": "yes"}]
+    for conj, expected in (("AND", ["a"]), ("OR", ["a", "b", "c"]), ("XOR", ["b", "c"]),
+                           ("NAND", ["b", "c"]), ("NOR", [])):
+        r = agg(c, REG_CONJ, [
+            {"type": "FILTER",
+             "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "role", "value": "ghost"}},
+            {"type": "FILTER", "operator": {"conjunctionType": conj, "operators": leaves}}])
+        got = sorted(d.get("_id") for d in (r.get("results") or []))
+        check(f"{conj} conjunction with two children runs on an already-filtered stream",
+              got == expected, detail=f"expected {expected}, got {got}")
+
+    nested = agg(c, REG_CONJ, [
+        {"type": "FILTER",
+         "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "role", "value": "ghost"}},
+        {"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": [
+            {"conjunctionType": "OR", "operators": leaves},
+            {"fieldOperatorType": "EQUALS", "field": "active", "value": "yes"}]}}])
+    got = sorted(d.get("_id") for d in (nested.get("results") or []))
+    check("nested conjunction runs on an already-filtered stream", got == ["a", "c"],
+          detail=f"expected ['a', 'c'], got {got}")
+
+
+def regression_suite(c):
+    section("Correctness regressions: non-ASCII index values, single-valued index ranges, "
+            "conjunctions over a filtered stream")
+    probe_non_ascii_indexed_values(c)
+    probe_single_valued_index_ranges(c)
+    probe_conjunction_after_a_filter_step(c)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -802,6 +903,11 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         geo_suite(c)
+
+    # Phase 5 — correctness regressions for previously-fixed index and conjunction defects.
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        regression_suite(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
