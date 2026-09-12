@@ -9,6 +9,7 @@ public final class NumberFormatter {
     }
 
     private static final double TWO_POW_32 = 4294967296d;
+    private static final double TWO_POW_53 = 9007199254740992d;
     private static final int MAX_PLAIN_EXPONENT = 21;
     private static final int MIN_PLAIN_EXPONENT = -6;
 
@@ -43,6 +44,9 @@ public final class NumberFormatter {
     }
 
     private static String format(final double magnitude) {
+        if (magnitude < TWO_POW_53 && magnitude == Math.floor(magnitude)) {
+            return Long.toString((long) magnitude);
+        }
         final var decimal = shortestDecimal(magnitude);
         final var digits = decimal.unscaledValue().toString();
         final var k = digits.length();

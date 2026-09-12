@@ -28,8 +28,8 @@
         <!-- Catching Exception at request/connection boundaries is a deliberate
              pattern in this server (log + return an ERROR response). -->
         <exclude name="AvoidCatchingGenericException"/>
-        <!-- LinkedTreeMap is a vendored Gson-style structure; its Serializable
-             contract is intentional and should not be restructured here. -->
+        <!-- ConfigKey is an enum (implicitly Serializable) whose Rule field is a
+             validation strategy, never serialized. -->
         <exclude name="NonSerializableClass"/>
         <!-- High false-positive rate here: server socket and the long-lived
              executor services are owned and closed on shutdown, not per-scope. -->

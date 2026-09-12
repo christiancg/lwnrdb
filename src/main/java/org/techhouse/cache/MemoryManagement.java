@@ -8,6 +8,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -79,6 +80,8 @@ public class MemoryManagement {
         });
         scheduler.scheduleAtFixedRate(this::runEvictionSweepSafely, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
                 TimeUnit.SECONDS);
+        scheduler.scheduleAtFixedRate(this::flushUsageProfileSafely, SWEEP_INTERVAL_SECONDS, SWEEP_INTERVAL_SECONDS,
+                TimeUnit.SECONDS);
         scheduler.scheduleAtFixedRate(this::submitCleanupTask, USAGE_CLEANUP_INTERVAL_SECONDS,
                 USAGE_CLEANUP_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
@@ -95,6 +98,24 @@ public class MemoryManagement {
             runEvictionSweep();
         } catch (Exception e) {
             logger.error("Eviction sweep failed", e);
+        }
+    }
+
+    private void flushUsageProfileSafely() {
+        try {
+            flushUsageProfile();
+        } catch (Exception e) {
+            logger.error("Usage profile flush failed", e);
+        }
+    }
+
+    public void flushUsageProfile() {
+        if (isCachingDisabled()) {
+            return;
+        }
+        for (final var counter : usageTracker.drainDirtyCounters()) {
+            taskManager.submitBackgroundTask(new CollectionUsageEvent(counter.kind(), counter.dbName(),
+                    counter.collName(), counter.indexKey(), counter.getLastAccessMillis()));
         }
     }
 
@@ -143,18 +164,27 @@ public class MemoryManagement {
         evictDownTo(Math.max(0L, maxBytes - nextPageEstimateBytes));
     }
 
+    private record RankedResource(CacheableResource resource, int tier, long accessCount, long lastAccess) {
+    }
+
     private void evictDownTo(long targetBytes) {
         var resources = userCache.listCacheableResources();
-        if (sumBytes(resources) <= targetBytes) {
+        var remaining = sumBytes(resources);
+        if (remaining <= targetBytes) {
             return;
         }
-        final var ranked = new ArrayList<>(resources);
-        ranked.sort(Comparator.comparingInt((CacheableResource r) -> tierOrdinal(r.kind()))
-                .thenComparingLong(usageTracker::accessCountFor).thenComparingLong(usageTracker::lastAccessFor));
-        for (var resource : ranked) {
-            if (userCacheBytes() <= targetBytes) {
+        final var ranked = new ArrayList<RankedResource>(resources.size());
+        for (var resource : resources) {
+            ranked.add(new RankedResource(resource, tierOrdinal(resource.kind()), usageTracker.accessCountFor(resource),
+                    usageTracker.lastAccessFor(resource)));
+        }
+        ranked.sort(Comparator.comparingInt(RankedResource::tier).thenComparingLong(RankedResource::accessCount)
+                .thenComparingLong(RankedResource::lastAccess));
+        for (var candidate : ranked) {
+            if (remaining <= targetBytes) {
                 break;
             }
+            final var resource = candidate.resource();
             if (!locks.tryLockWrite(resource.dbName(), resource.collName())) {
                 continue;
             }
@@ -167,6 +197,7 @@ public class MemoryManagement {
                     default -> {
                     }
                 }
+                remaining -= resource.estimatedSizeBytes();
             } finally {
                 locks.releaseWrite(resource.dbName(), resource.collName());
             }

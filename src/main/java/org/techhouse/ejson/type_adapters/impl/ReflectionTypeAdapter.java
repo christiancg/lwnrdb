@@ -1,6 +1,8 @@
 package org.techhouse.ejson.type_adapters.impl;
 
 import java.lang.reflect.Field;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.internal.ReflectionUtils;
@@ -10,8 +12,20 @@ import org.techhouse.log.Logger;
 
 public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 
+    private static final Map<Class<?>, Boolean> genericTypes = new ConcurrentHashMap<>();
+
     private final Logger logger = Logger.logFor(ReflectionTypeAdapter.class);
     private final Class<T> clazz;
+
+    private static boolean isGeneric(Class<?> type) {
+        final var cached = genericTypes.get(type);
+        if (cached != null) {
+            return cached;
+        }
+        final var generic = type.getTypeParameters().length > 0;
+        genericTypes.putIfAbsent(type, generic);
+        return generic;
+    }
 
     public ReflectionTypeAdapter(Class<T> clazz) {
         if (clazz == null) {
@@ -22,26 +36,33 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
 
     @Override
     public String toJson(T value) {
-        final var result = new StringBuilder();
-        result.append('{');
-        final var clazz = value.getClass();
-        final var fields = ReflectionUtils.getFields(clazz);
+        final var out = new StringBuilder();
+        toJson(value, out);
+        return out.toString();
+    }
+
+    @Override
+    public void toJson(T value, StringBuilder out) {
+        out.append('{');
+        final var actualClass = value.getClass();
+        final var fields = ReflectionUtils.getFields(actualClass);
         for (var i = 0; i < fields.length; i++) {
-            result.append('"');
-            result.append(fields[i].getName());
-            result.append('"');
-            result.append(':');
+            out.append('"');
+            out.append(fields[i].getName());
+            out.append('"');
+            out.append(':');
+            final var mark = out.length();
             try {
-                result.append(getFieldValue(fields[i], value));
+                appendFieldValue(fields[i], value, out);
             } catch (Exception e) {
-                result.append("null");
+                out.setLength(mark);
+                out.append("null");
             }
             if (i < fields.length - 1) {
-                result.append(',');
+                out.append(',');
             }
         }
-        result.append('}');
-        return result.toString();
+        out.append('}');
     }
 
     @Override
@@ -71,17 +92,18 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
         }
     }
 
-    private <U> String getFieldValue(Field field, U instance) throws IllegalAccessException, ClassNotFoundException {
+    private <U> void appendFieldValue(Field field, U instance, StringBuilder out)
+            throws IllegalAccessException, ClassNotFoundException {
         Object value = ReflectionUtils.getFieldValue(field, instance);
         if (value != null) {
-            final var pClass = field.getType();
-            return hardCast(value, pClass, field);
+            appendHardCast(value, field.getType(), field, out);
         } else {
-            return "null";
+            out.append("null");
         }
     }
 
-    private <P> String hardCast(Object value, Class<P> pClass, Field field) throws ClassNotFoundException {
+    private <P> void appendHardCast(Object value, Class<P> pClass, Field field, StringBuilder out)
+            throws ClassNotFoundException {
         P casted;
         if (field.getType().isPrimitive()) {
             //noinspection unchecked
@@ -90,15 +112,15 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             casted = pClass.cast(value);
         }
         TypeAdapter<P> adapter;
-        if (field.getType().getTypeParameters().length > 0) {
+        if (isGeneric(field.getType())) {
             adapter = TypeAdapterFactory.getAdapter(field.getGenericType());
         } else {
             adapter = TypeAdapterFactory.getAdapter(pClass);
         }
         if (adapter != null) {
-            return adapter.toJson(casted);
+            adapter.toJson(casted, out);
         } else {
-            return null;
+            out.append("null");
         }
     }
 
@@ -111,7 +133,7 @@ public class ReflectionTypeAdapter<T> implements TypeAdapter<T> {
             return;
         }
         TypeAdapter<?> typeAdapter;
-        if (field.getType().getTypeParameters().length > 0) {
+        if (isGeneric(field.getType())) {
             typeAdapter = TypeAdapterFactory.getAdapter(field.getGenericType());
         } else {
             typeAdapter = TypeAdapterFactory.getAdapter(field.getType());

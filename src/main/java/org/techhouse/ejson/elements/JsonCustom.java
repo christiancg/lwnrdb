@@ -2,10 +2,13 @@ package org.techhouse.ejson.elements;
 
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
 public abstract class JsonCustom<T> extends JsonString {
+    private static final Pattern CUSTOM_JSON = Pattern.compile(Globals.CUSTOM_JSON_REGEX);
+
     protected T customValue;
 
     public JsonCustom(T customValue) {
@@ -14,7 +17,7 @@ public abstract class JsonCustom<T> extends JsonString {
     }
 
     public JsonCustom(String strValue) {
-        if (strValue == null || strValue.isEmpty() || !strValue.matches(Globals.CUSTOM_JSON_REGEX)) {
+        if (strValue == null || !matchesCustomFormat(strValue)) {
             throw new WrongFormatCustomTypeException(getClass().getName());
         }
         this.value = strValue;
@@ -53,7 +56,10 @@ public abstract class JsonCustom<T> extends JsonString {
     }
 
     public static Boolean isJsonCustom(JsonString str) {
-        final var value = str.get();
-        return value.matches(Globals.CUSTOM_JSON_REGEX);
+        return matchesCustomFormat(str.get());
+    }
+
+    private static boolean matchesCustomFormat(String value) {
+        return value != null && !value.isEmpty() && value.charAt(0) == '#' && CUSTOM_JSON.matcher(value).matches();
     }
 }

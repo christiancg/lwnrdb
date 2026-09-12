@@ -39,7 +39,6 @@ public final class AdminUsageHelper {
         if (cache.getAdminCollectionEntry(event.getDbName(), event.getCollName()) == null) {
             return;
         }
-        memoryManagement.recordAccess(event.getKind(), event.getDbName(), event.getCollName(), event.getIndexKey());
         final var counter = memoryManagement.getCounter(event.getKind(), event.getDbName(), event.getCollName(),
                 event.getIndexKey());
         if (counter == null) {

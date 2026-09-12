@@ -2,7 +2,6 @@ package org.techhouse.ejson.internal;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -18,54 +17,39 @@ public final class Lexer {
     private Lexer() {
     }
 
-    private static final Set<Character> JSON_SYNTAX = Set.of(',', ':', '[', ']', '{', '}');
-    private static final Set<Character> JSON_WHITESPACE = Set.of(' ', '\t', '\b', '\n', '\r');
-    private static final int FALSE_LEN = "false".length();
-    private static final int TRUE_LEN = "true".length();
-    private static final int NULL_LEN = "null".length();
+    private static final String TRUE_LITERAL = "true";
+    private static final String FALSE_LITERAL = "false";
+    private static final String NULL_LITERAL = "null";
+    private static final int FALSE_LEN = FALSE_LITERAL.length();
+    private static final int TRUE_LEN = TRUE_LITERAL.length();
+    private static final int NULL_LEN = NULL_LITERAL.length();
     private static final int UNICODE_ESCAPE_DIGITS = 4;
-    private static final Set<Character> NUMBER_CHARACTERS = Set.of('0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-            '-', '.');
+    private static final int ESTIMATED_CHARS_PER_TOKEN = 8;
 
     public static List<JsonBaseElement> lex(String input) {
-        final var tokens = new ArrayList<JsonBaseElement>();
-        for (var i = 0; i < input.length(); i++) {
-            final var ss = input.substring(i);
-            final var ls = lexString(ss);
-            if (ls != null) {
-                final var str = ls.value();
-                if (JsonCustom.isJsonCustom(str)) {
-                    tokens.add(CustomTypeFactory.getCustomTypeInstance(str));
-                } else {
-                    tokens.add(str);
-                }
-                i += ls.rawLength() + 1;
-                continue;
-            }
-            final var ld = lexNumber(ss);
-            if (ld != null) {
-                tokens.add(ld);
-                i += ld.getStrLength() - 1;
-                continue;
-            }
-            final var lb = lexBoolean(ss);
-            if (lb != null) {
-                tokens.add(lb);
-                i += (lb.getValue() ? TRUE_LEN : FALSE_LEN) - 1;
-                continue;
-            }
-            final var ln = lexNull(ss);
-            if (ln != null) {
-                tokens.add(ln);
-                i += NULL_LEN - 1;
-                continue;
-            }
+        final var length = input.length();
+        final var tokens = new ArrayList<JsonBaseElement>(length / ESTIMATED_CHARS_PER_TOKEN + 16);
+        var i = 0;
+        while (i < length) {
             final var c = input.charAt(i);
-            if (JSON_WHITESPACE.contains(c)) {
-                continue;
-            }
-            if (JSON_SYNTAX.contains(c)) {
+            if (c == '"') {
+                i = lexString(input, i, tokens);
+            } else if (isNumberCharacter(c)) {
+                i = lexNumber(input, i, tokens);
+            } else if (input.regionMatches(i, TRUE_LITERAL, 0, TRUE_LEN)) {
+                tokens.add(new JsonBoolean(true));
+                i += TRUE_LEN;
+            } else if (input.regionMatches(i, FALSE_LITERAL, 0, FALSE_LEN)) {
+                tokens.add(new JsonBoolean(false));
+                i += FALSE_LEN;
+            } else if (input.regionMatches(i, NULL_LITERAL, 0, NULL_LEN)) {
+                tokens.add(JsonNull.INSTANCE);
+                i += NULL_LEN;
+            } else if (isJsonWhitespace(c)) {
+                i++;
+            } else if (isJsonSyntax(c)) {
                 tokens.add(JsonSyntaxToken.fromChar(c));
+                i++;
             } else {
                 throw new UnexpectedCharacterException(c, i);
             }
@@ -73,20 +57,28 @@ public final class Lexer {
         return tokens;
     }
 
-    private record LexedString(JsonString value, int rawLength) {
+    private static boolean isNumberCharacter(char c) {
+        return (c >= '0' && c <= '9') || c == '-' || c == '.';
     }
 
-    private static LexedString lexString(String input) {
-        if (input.charAt(0) != '"') {
-            return null;
-        }
+    private static boolean isJsonWhitespace(char c) {
+        return c == ' ' || c == '\t' || c == '\b' || c == '\n' || c == '\r';
+    }
+
+    private static boolean isJsonSyntax(char c) {
+        return c == ',' || c == ':' || c == '[' || c == ']' || c == '{' || c == '}';
+    }
+
+    private static int lexString(String input, int start, List<JsonBaseElement> tokens) {
         final var builder = new StringBuilder();
         final var length = input.length();
-        var i = 1;
+        var i = start + 1;
         while (i < length) {
             final var c = input.charAt(i);
             if (c == '"') {
-                return new LexedString(new JsonString(builder.toString()), i - 1);
+                final var str = new JsonString(builder.toString());
+                tokens.add(JsonCustom.isJsonCustom(str) ? CustomTypeFactory.getCustomTypeInstance(str) : str);
+                return i + 1;
             }
             if (c == '\\' && i + 1 < length) {
                 i = appendEscape(builder, input, i + 1);
@@ -136,61 +128,33 @@ public final class Lexer {
         return position + UNICODE_ESCAPE_DIGITS;
     }
 
-    private static JsonNull lexNull(String input) {
+    private static int lexNumber(String input, int start, List<JsonBaseElement> tokens) {
         final var length = input.length();
-        if (length >= NULL_LEN && input.substring(0, NULL_LEN).equals("null")) {
-            return JsonNull.INSTANCE;
-        }
-        return null;
-    }
-
-    private static JsonNumber lexNumber(String input) {
-        final var strNumber = new StringBuilder();
-        var index = 0;
-        while (index < input.length() && NUMBER_CHARACTERS.contains(input.charAt(index))) {
-            strNumber.append(input.charAt(index));
-            index++;
-        }
-        if (strNumber.isEmpty()) {
-            return null;
-        }
-        appendExponent(input, index, strNumber);
-        return new JsonNumber(strNumber.toString());
-    }
-
-    private static void appendExponent(String input, int start, StringBuilder strNumber) {
         var index = start;
-        if (index >= input.length() || (input.charAt(index) != 'e' && input.charAt(index) != 'E')) {
-            return;
-        }
-        final var marker = input.charAt(index);
-        index++;
-        final var sign = index < input.length() && (input.charAt(index) == '+' || input.charAt(index) == '-')
-                ? input.charAt(index)
-                : 0;
-        if (sign != 0) {
+        while (index < length && isNumberCharacter(input.charAt(index))) {
             index++;
         }
-        if (index >= input.length() || !Character.isDigit(input.charAt(index))) {
-            return;
-        }
-        strNumber.append(marker);
-        if (sign != 0) {
-            strNumber.append(sign);
-        }
-        while (index < input.length() && Character.isDigit(input.charAt(index))) {
-            strNumber.append(input.charAt(index));
-            index++;
-        }
+        final var end = exponentEnd(input, index);
+        tokens.add(new JsonNumber(input.substring(start, end)));
+        return end;
     }
 
-    private static JsonBoolean lexBoolean(String input) {
+    private static int exponentEnd(String input, int start) {
         final var length = input.length();
-        if (length >= TRUE_LEN && input.substring(0, TRUE_LEN).equals("true")) {
-            return new JsonBoolean(true);
-        } else if (length >= FALSE_LEN && input.substring(0, FALSE_LEN).equals("false")) {
-            return new JsonBoolean(false);
+        var index = start;
+        if (index >= length || (input.charAt(index) != 'e' && input.charAt(index) != 'E')) {
+            return start;
         }
-        return null;
+        index++;
+        if (index < length && (input.charAt(index) == '+' || input.charAt(index) == '-')) {
+            index++;
+        }
+        if (index >= length || !Character.isDigit(input.charAt(index))) {
+            return start;
+        }
+        while (index < length && Character.isDigit(input.charAt(index))) {
+            index++;
+        }
+        return index;
     }
 }

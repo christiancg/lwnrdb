@@ -19,13 +19,28 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
     }
 
     public String toFileEntry() {
-        String strValue;
-        if (value instanceof JsonCustom<?> jc) {
-            strValue = jc.getValue();
-        } else {
-            strValue = value.toString();
+        return indexKeyOf(value) + Globals.ID_SEPARATOR + String.join(Globals.ID_SEPARATOR, ids);
+    }
+
+    public static String indexKeyOf(Object indexedValue) {
+        if (indexedValue instanceof JsonCustom<?> jc) {
+            return jc.getValue();
         }
-        return strValue + Globals.ID_SEPARATOR + String.join(Globals.ID_SEPARATOR, ids);
+        if (indexedValue instanceof Number number) {
+            final var asDouble = number.doubleValue();
+            if (asDouble % 1 == 0 && asDouble >= Long.MIN_VALUE && asDouble <= Long.MAX_VALUE) {
+                return Long.toString(number.longValue());
+            }
+            return Double.toString(asDouble);
+        }
+        return indexedValue.toString();
+    }
+
+    public static boolean sameIndexedValue(Object indexedValue, Object candidate) {
+        if (indexedValue instanceof Number indexedNumber && candidate instanceof Number candidateNumber) {
+            return Double.compare(indexedNumber.doubleValue(), candidateNumber.doubleValue()) == 0;
+        }
+        return Objects.equals(indexedValue, candidate);
     }
 
     public static <T> FieldIndexEntry<T> fromIndexFileEntry(String databaseName, String collectionName, String line,

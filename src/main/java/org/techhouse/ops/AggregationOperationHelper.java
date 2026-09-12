@@ -132,13 +132,14 @@ public final class AggregationOperationHelper {
             String dbName, String collName, PipelineScriptContext context) throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var mapStep = (MapAggregationStep) baseMapStep;
-        for (var step : mapStep.getOperators()) {
-            resultStream = resultStream.map(jsonObject -> {
-                final var copy = jsonObject.deepCopy();
-                return MapOperatorHelper.processOperator(step, copy, context);
-            });
-        }
-        return resultStream;
+        final var operators = mapStep.getOperators();
+        return resultStream.map(jsonObject -> {
+            var mapped = jsonObject.deepCopy();
+            for (var step : operators) {
+                mapped = MapOperatorHelper.processOperator(step, mapped, context);
+            }
+            return mapped;
+        });
     }
 
     private static Stream<JsonObject> processReduceStep(BaseAggregationStep baseReduceStep,
@@ -167,11 +168,10 @@ public final class AggregationOperationHelper {
                 .entrySet().stream().map(jsonElementListEntry -> {
                     final var groupedEntry = new JsonObject();
                     groupedEntry.add(groupByStep.getFieldName(), jsonElementListEntry.getKey());
-                    final var values = jsonElementListEntry.getValue().stream().reduce(new JsonArray(),
-                            (jsonArray, jsonObject) -> {
-                                jsonArray.add(jsonObject);
-                                return jsonArray;
-                            }, (jsonArray, _) -> jsonArray);
+                    final var values = new JsonArray();
+                    for (final var grouped : jsonElementListEntry.getValue()) {
+                        values.add(grouped);
+                    }
                     groupedEntry.add(GROUP_FIELD_NAME, values);
                     return groupedEntry;
                 });
@@ -220,10 +220,10 @@ public final class AggregationOperationHelper {
         final var joinedCollection = buildJoinLookup(dbName, joinCollectionName, joinCollectionRemoteField, leftEntries,
                 joinCollectionLocalField);
         return leftEntries.stream().map(jsonObject -> {
-            if (JsonUtils.hasInPath(jsonObject, joinCollectionLocalField)) {
+            final var localValue = JsonUtils.resolvePath(jsonObject, joinCollectionLocalField);
+            if (localValue != null) {
                 final var copy = jsonObject.deepCopy();
-                final var found = joinedCollection.get(JsonUtils.getFromPath(copy, joinCollectionLocalField));
-                copy.add(as, found);
+                copy.add(as, joinedCollection.get(localValue));
                 return copy;
             }
             return jsonObject;
@@ -234,8 +234,9 @@ public final class AggregationOperationHelper {
             String remoteField, List<JsonObject> leftEntries, String localField) throws IOException {
         final var localValues = new HashSet<JsonBaseElement>();
         for (var left : leftEntries) {
-            if (JsonUtils.hasInPath(left, localField)) {
-                localValues.add(JsonUtils.getFromPath(left, localField));
+            final var localValue = JsonUtils.resolvePath(left, localField);
+            if (localValue != null) {
+                localValues.add(localValue);
             }
         }
         final var matchingIds = IndexHelper.getMatchingIdsForJoin(dbName, joinCollectionName, remoteField, localValues);
@@ -254,8 +255,8 @@ public final class AggregationOperationHelper {
         final var lookup = new HashMap<JsonBaseElement, JsonArray>();
         for (var dbEntry : matchedDocs) {
             final var data = dbEntry.getData();
-            if (JsonUtils.hasInPath(data, remoteField)) {
-                final var key = JsonUtils.getFromPath(data, remoteField);
+            final var key = JsonUtils.resolvePath(data, remoteField);
+            if (key != null) {
                 lookup.computeIfAbsent(key, _ -> new JsonArray()).add(data);
             }
         }

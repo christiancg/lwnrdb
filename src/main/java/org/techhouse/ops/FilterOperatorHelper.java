@@ -59,14 +59,16 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator,
             Stream<JsonObject> resultStream, String dbName, String collName, PipelineScriptContext context)
             throws IOException {
+        final var buffered = resultStream == null ? null : resultStream.toList();
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
+            final var stepStream = buffered == null ? null : buffered.stream();
             final var partialResults = switch (step.getType()) {
                 case CONJUNCTION ->
-                    processConjunctionOperator((ConjunctionOperator) step, resultStream, dbName, collName, context);
-                case FIELD -> processFieldOperator((FieldOperator) step, resultStream, dbName, collName);
-                case CUSTOM -> processCustomOperator((CustomOperator) step, resultStream, dbName, collName);
-                case SCRIPT -> processScriptOperator((ScriptOperator) step, resultStream, dbName, collName, context);
+                    processConjunctionOperator((ConjunctionOperator) step, stepStream, dbName, collName, context);
+                case FIELD -> processFieldOperator((FieldOperator) step, stepStream, dbName, collName);
+                case CUSTOM -> processCustomOperator((CustomOperator) step, stepStream, dbName, collName);
+                case SCRIPT -> processScriptOperator((ScriptOperator) step, stepStream, dbName, collName, context);
             };
             combinationResult.add(partialResults);
         }
@@ -76,11 +78,13 @@ public class FilterOperatorHelper {
             case XOR -> andXorConjunction(combinationResult, 1);
             case NOR -> {
                 final var combined = orConjunction(combinationResult);
-                yield norNandAllStreamAggregation(combined, resultStream, dbName, collName);
+                yield norNandAllStreamAggregation(combined, buffered == null ? null : buffered.stream(), dbName,
+                        collName);
             }
             case NAND -> {
                 final var combined = andXorConjunction(combinationResult, operator.getOperators().size());
-                yield norNandAllStreamAggregation(combined, resultStream, dbName, collName);
+                yield norNandAllStreamAggregation(combined, buffered == null ? null : buffered.stream(), dbName,
+                        collName);
             }
         };
     }
@@ -193,10 +197,7 @@ public class FilterOperatorHelper {
             args.put(entry.getKey(), entry.getValue());
         }
         return (JsonObject toTest, String fieldName) -> {
-            if (!JsonUtils.hasInPath(toTest, fieldName)) {
-                return false;
-            }
-            final var element = JsonUtils.getFromPath(toTest, fieldName);
+            final var element = JsonUtils.resolvePath(toTest, fieldName);
             if (element == null || !element.isJsonCustom()) {
                 return false;
             }
@@ -255,10 +256,7 @@ public class FilterOperatorHelper {
 
     private static Double scoreDocument(JsonObject document, String fieldName, String operatorName,
             Map<String, JsonBaseElement> args) {
-        if (!JsonUtils.hasInPath(document, fieldName)) {
-            return null;
-        }
-        final var element = JsonUtils.getFromPath(document, fieldName);
+        final var element = JsonUtils.resolvePath(document, fieldName);
         if (element == null || !element.isJsonCustom()) {
             return null;
         }

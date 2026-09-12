@@ -49,13 +49,13 @@ public final class JsonPrettyWriter {
     }
 
     private static void writeArray(StringBuilder builder, JsonArray array, String indent, int depth) {
-        if (array.asList().isEmpty()) {
+        if (array.isEmpty()) {
             builder.append("[]");
             return;
         }
         builder.append('[');
         var first = true;
-        for (final var item : array.asList()) {
+        for (final var item : array) {
             if (!first) {
                 builder.append(',');
             }

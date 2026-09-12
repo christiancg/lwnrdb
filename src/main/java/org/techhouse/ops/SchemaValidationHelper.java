@@ -1,9 +1,13 @@
 package org.techhouse.ops;
 
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.exceptions.InvalidSchemaException;
+import org.techhouse.ejson.validate.SchemaValidationResult;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -15,6 +19,10 @@ public final class SchemaValidationHelper {
     private static final Logger logger = Logger.logFor(SchemaValidationHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final Map<String, CheckedSchema> checkedSchemas = new ConcurrentHashMap<>();
+
+    private record CheckedSchema(JsonObject source, SchemaValidationResult metaResult) {
+    }
 
     private SchemaValidationHelper() {
     }
@@ -63,8 +71,24 @@ public final class SchemaValidationHelper {
         if (schema == null) {
             return null;
         }
-        final var result = eJson.validateWithSchema(withoutId(object), schema);
+        requireValidSchema(dbName, collName, schema);
+        final var result = eJson.validateInstance(withoutId(object), schema);
         return result.isValid() ? null : String.join("; ", result.getErrors());
+    }
+
+    private static void requireValidSchema(String dbName, String collName, JsonObject schema) {
+        final var key = Cache.getCollectionIdentifier(dbName, collName);
+        final var cached = checkedSchemas.get(key);
+        final var checked = cached != null && cached.source() == schema
+                ? cached
+                : new CheckedSchema(schema, eJson.validateSchema(schema));
+        if (checked != cached) {
+            checkedSchemas.put(key, checked);
+        }
+        if (!checked.metaResult().isValid()) {
+            throw new InvalidSchemaException("Cannot validate against an invalid schema: "
+                    + String.join("; ", checked.metaResult().getErrors()));
+        }
     }
 
     // _id is system-assigned, not user data the schema governs, so additionalProperties:false need not declare it.

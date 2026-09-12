@@ -8,12 +8,12 @@ import org.techhouse.ejson.elements.JsonNumber;
 
 public class JsonNumberTest {
     @Test
-    public void test_number_constructor_sets_value_and_length() {
+    public void test_number_constructor_sets_value_and_leaves_lexer_length_unset() {
         Integer testValue = 12345;
         JsonNumber jsonNumber = new JsonNumber(testValue);
 
         assertEquals(testValue, jsonNumber.getValue());
-        assertEquals(5, jsonNumber.getStrLength());
+        assertEquals(0, jsonNumber.getStrLength());
     }
 
     @Test
@@ -48,7 +48,7 @@ public class JsonNumberTest {
         JsonNumber jsonNumber = new JsonNumber(inputValue);
 
         assertEquals(inputValue, jsonNumber.getValue());
-        assertEquals(2, jsonNumber.getStrLength());
+        assertEquals(0, jsonNumber.getStrLength());
     }
 
     @Test

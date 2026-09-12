@@ -10,6 +10,7 @@ import org.techhouse.log.Logger;
 public final class Configuration {
     private static final Configuration config = new Configuration();
     private final Map<ConfigKey, String> values = new EnumMap<>(ConfigKey.class);
+    private final Map<ConfigKey, Object> resolved = new EnumMap<>(ConfigKey.class);
     private boolean loading;
     private static final Logger logger = Logger.logFor(Configuration.class);
 
@@ -20,6 +21,7 @@ public final class Configuration {
     @SuppressWarnings("PMD.UnusedAssignment")
     private void load() {
         loading = true;
+        resolved.clear();
         try {
             final var configs = ConfigReader.loadConfiguration();
             final var errors = ConfigurationValidator.validate(configs);
@@ -37,19 +39,19 @@ public final class Configuration {
     }
 
     private int intValue(ConfigKey key) {
-        return Integer.parseInt(values.get(key).trim());
+        return (int) resolved.computeIfAbsent(key, k -> Integer.parseInt(values.get(k).trim()));
     }
 
     private long longValue(ConfigKey key) {
-        return Long.parseLong(values.get(key).trim());
+        return (long) resolved.computeIfAbsent(key, k -> Long.parseLong(values.get(k).trim()));
     }
 
     private long sizeValue(ConfigKey key) {
-        return SizeParser.parse(values.get(key));
+        return (long) resolved.computeIfAbsent(key, k -> SizeParser.parse(values.get(k)));
     }
 
     private boolean booleanValue(ConfigKey key) {
-        return Boolean.parseBoolean(values.get(key).trim());
+        return (boolean) resolved.computeIfAbsent(key, k -> Boolean.parseBoolean(values.get(k).trim()));
     }
 
     public static Configuration getInstance() {

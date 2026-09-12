@@ -6,7 +6,6 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.CollectionOperationHelper;
@@ -368,9 +367,9 @@ public class OperationProcessor {
                 .of(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME));
         return OperationLocks.withReadLocks(request.isDirtyRead(), lockSet, OperationType.LIST_USERS,
                 ErrorCode.ERROR_LISTING_USERS, () -> {
+                    final var ownedByUser = UserOperationHelper.ownedDatabasesByUser(cache.getAllAdminDbEntries());
                     final var userStream = cache.getAllAdminUserEntries().stream()
-                            .map(user -> user.toResponseJson(cache.getAllAdminDbEntries().stream()
-                                    .filter(db -> db.isOwner(user.get_id())).map(DbEntry::get_id).toList()));
+                            .map(user -> user.toResponseJson(ownedByUser.getOrDefault(user.get_id(), List.of())));
                     final var results = AggregationOperationHelper.processStepsOnStream(request.getAggregationSteps(),
                             userStream);
                     return results.isEmpty()

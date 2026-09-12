@@ -293,6 +293,7 @@ public final class MapOperatorHelper {
 
     private static JsonObject concat(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
         final var operands = midOperator.getOperands();
+        final var elementAdapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);
         StringBuilder result = new StringBuilder();
         for (var concatStep : operands) {
             if (concatStep.isJsonPrimitive()) {
@@ -301,7 +302,7 @@ public final class MapOperatorHelper {
                     final var primitiveString = primitive.asJsonString().getValue();
                     String toAdd;
                     if (primitiveString.startsWith(Globals.STRING_LITERAL_PREFIX)) {
-                        toAdd = primitiveString.replaceFirst("-", "");
+                        toAdd = primitiveString.substring(Globals.STRING_LITERAL_PREFIX.length());
                     } else {
                         final var fieldName = primitive.asJsonString().getValue();
                         final var element = JsonUtils.getFromPath(obj, fieldName);
@@ -310,12 +311,12 @@ public final class MapOperatorHelper {
                         } else if (element.isJsonString()) {
                             toAdd = element.asJsonString().getValue();
                         } else {
-                            toAdd = TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(element);
+                            toAdd = elementAdapter.toJson(element);
                         }
                     }
                     result.append(toAdd);
                 } else {
-                    result.append(TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(concatStep));
+                    result.append(elementAdapter.toJson(concatStep));
                 }
             } else if (concatStep.isJsonArray()) {
                 for (var arrayElement : concatStep.asJsonArray()) {

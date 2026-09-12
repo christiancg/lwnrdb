@@ -1,7 +1,6 @@
 package org.techhouse.ejson.validate;
 
 import java.util.List;
-import java.util.regex.Pattern;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
@@ -107,7 +106,7 @@ class SchemaObjectValidator {
             }
             if (patternProperties != null) {
                 for (final var pp : patternProperties.asJsonObject().entrySet()) {
-                    if (Pattern.compile(pp.getKey()).matcher(key).find()) {
+                    if (SchemaPatterns.compile(pp.getKey()).matcher(key).find()) {
                         covered = true;
                         nodeValidator.validateNode(entry.getValue(), pp.getValue(), schema, childPath, errors);
                     }

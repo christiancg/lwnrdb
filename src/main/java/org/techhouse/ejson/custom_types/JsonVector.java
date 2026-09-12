@@ -12,6 +12,8 @@ public class JsonVector extends JsonCustom<double[]> {
     public static final String OPERATOR_NEAREST = "nearest";
     public static final int SIMHASH_BITS = 16;
 
+    private String signature;
+
     public JsonVector(double[] customValue) {
         super(buildWireValue(customValue));
     }
@@ -81,7 +83,12 @@ public class JsonVector extends JsonCustom<double[]> {
     }
 
     public String simHash() {
-        return VectorUtils.simHash(customValue, SIMHASH_BITS);
+        var cached = signature;
+        if (cached == null) {
+            cached = VectorUtils.simHash(customValue, SIMHASH_BITS);
+            signature = cached;
+        }
+        return cached;
     }
 
     @Override
