@@ -10,10 +10,6 @@ import org.techhouse.simplejs.exceptions.UnexpectedTokenException;
 import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 
-/**
- * Pins the invariant the compiled-procedure cache rests on: a parsed program holds no per-run state, so one
- * CompiledScript can back every call of a stored procedure.
- */
 public class CompiledScriptReuseTest {
     private final SimpleJs simpleJs = new SimpleJs();
 
@@ -36,7 +32,6 @@ public class CompiledScriptReuseTest {
         assertEquals("bob!", second.getValue().asJsonString().getValue());
     }
 
-    // A regex literal keeps its pattern text, not a compiled object with a mutable lastIndex
     @Test
     public void test_regex_last_index_does_not_leak_between_runs() {
         final var compiled = simpleJs.compile(
@@ -57,7 +52,6 @@ public class CompiledScriptReuseTest {
                 simpleJs.run(compiled, hostWith(null, null)).getValue().asJsonNumber().getValue().doubleValue());
     }
 
-    // A class declaration installs methods on a fresh prototype each run
     @Test
     public void test_class_state_does_not_leak_between_runs() {
         final var compiled = simpleJs.compile(
@@ -68,13 +62,11 @@ public class CompiledScriptReuseTest {
                 simpleJs.run(compiled, hostWith(null, null)).getValue().asJsonNumber().getValue().doubleValue());
     }
 
-    // compile() throws so a caller can refuse to persist an unparseable procedure
     @Test
     public void test_compile_rejects_syntax_error_by_throwing() {
         assertThrows(UnexpectedTokenException.class, () -> simpleJs.compile("return (;", false));
     }
 
-    // ...while the source overload keeps its contract of reporting it as a result
     @Test
     public void test_run_string_still_returns_syntax_error_result() {
         final var result = simpleJs.run("return (;", hostWith(null, null));
@@ -91,7 +83,6 @@ public class CompiledScriptReuseTest {
         assertEquals(compiled.sourceHash(), simpleJs.compile("return 1;", false).sourceHash());
     }
 
-    // A program parsed under the other goal is the wrong program, so it is parsed again rather than run
     @Test
     public void test_run_with_mismatched_script_goal_reparses() {
         final var compiled = simpleJs.compile("return 41 + 1;", false);

@@ -15,9 +15,6 @@ public class Client {
     private volatile BufferedWriter writer;
     private final ReentrantLock writerLock = new ReentrantLock();
     private Transaction activeTransaction;
-    // Edge-side coordinator state for an open (possibly cross-owner) transaction: whether this node holds a
-    // local slice (a write to a collection it owns) and the "host:port" addresses of the remote owners that
-    // hold a slice (the 2PC participants). Populated as the transaction's writes are routed.
     private volatile boolean hasLocalSlice;
     private final Set<String> transactionParticipants = ConcurrentHashMap.newKeySet();
 

@@ -9,9 +9,6 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 
-// The global functions and the Number/BigInt/Date/Error/Math/String/JSON builtins all reach the
-// script through the ops-aware JsCoercion overloads, so a poisoned valueOf/toString must be
-// observed and a Symbol argument must throw.
 public class CoercionThreadingProgramTest {
     private static double num(String source) {
         return ((JsNumber) Interpreter.run(source)).getValue();
@@ -30,7 +27,6 @@ public class CoercionThreadingProgramTest {
                 "(function(){ try { " + expression + "; return 'no throw'; }" + " catch (e) { return e.name; } })()");
     }
 
-    // isNaN/isFinite observe a poisoned valueOf instead of silently stringifying the object
     @Test
     public void test_global_predicates_observe_to_primitive() {
         assertEquals("RangeError", caught("isNaN({valueOf: function(){ throw new RangeError(); }})"));
@@ -39,7 +35,6 @@ public class CoercionThreadingProgramTest {
         assertTrue(bool("isFinite({valueOf: function(){ return 1; }})"));
     }
 
-    // Number() is ToNumeric over ToPrimitive, so valueOf wins over toString
     @Test
     public void test_number_argument_coercion() {
         assertEquals(1, num("Number({valueOf: function(){ return '1'; }, toString: function(){ return 0; }})"));
@@ -47,7 +42,6 @@ public class CoercionThreadingProgramTest {
         assertEquals("TypeError", caught("Number(Symbol())"));
     }
 
-    // parseInt/parseFloat strip the full StrWhiteSpace set, not Java's
     @Test
     public void test_parse_whitespace_and_infinity() {
         assertEquals(1.1, num("parseFloat('\\u00A01.1')"));
@@ -56,28 +50,24 @@ public class CoercionThreadingProgramTest {
         assertEquals(1, num("parseFloat('1ex')"));
     }
 
-    // The parseInt radix is ToInt32, so a value past 2^32 wraps rather than saturating
     @Test
     public void test_parse_int_radix_is_to_int32() {
         assertEquals(3, num("parseInt('11', 4294967298)"));
         assertEquals(11, num("parseInt('11', Number.POSITIVE_INFINITY)"));
     }
 
-    // Only ASCII digits count: an Arabic-Indic digit terminates the literal
     @Test
     public void test_parse_rejects_non_ascii_digits() {
         assertTrue(Double.isNaN(num("parseInt('\\u0660')")));
         assertTrue(Double.isNaN(num("parseFloat('\\u0660')")));
     }
 
-    // The Number namespace constants are non-writable and non-configurable
     @Test
     public void test_number_constants_are_frozen() {
         assertTrue(bool("var d = Object.getOwnPropertyDescriptor(Number, 'MAX_VALUE');"
                 + "d.writable === false && d.configurable === false && d.enumerable === false"));
     }
 
-    // toPrecision/toExponential render significant digits from the exact binary expansion
     @Test
     public void test_number_formatting() {
         assertEquals("7.00", str("(7).toPrecision(3)"));
@@ -87,7 +77,6 @@ public class CoercionThreadingProgramTest {
         assertEquals("1.23456e+2", str("(123.456).toExponential()"));
     }
 
-    // The precision is coerced before the range is checked, and NaN/Infinity answer before both
     @Test
     public void test_number_formatting_order() {
         assertEquals("NaN", str("(NaN).toPrecision(Infinity)"));
@@ -96,7 +85,6 @@ public class CoercionThreadingProgramTest {
         assertEquals("EvalError", caught("(1).toString({valueOf: function(){ throw new EvalError(); }})"));
     }
 
-    // BigInt reads the radix prefixes and reports a non-integral Number as a RangeError
     @Test
     public void test_bigint_conversion() {
         assertTrue(bool("BigInt('0b1111') === 15n"));
@@ -104,8 +92,6 @@ public class CoercionThreadingProgramTest {
         assertEquals("RangeError", caught("BigInt({valueOf: function(){ return NaN; }})"));
     }
 
-    // decodeURI rejects a malformed sequence: a non-ASCII hex digit, an overlong form and a
-    // surrogate code point are all URIErrors
     @Test
     public void test_decode_uri_rejects_malformed_sequences() {
         assertEquals("URIError", caught("decodeURI('%\\u06601')"));
@@ -115,14 +101,12 @@ public class CoercionThreadingProgramTest {
         assertEquals("A", str("decodeURI('%41')"));
     }
 
-    // The URI functions coerce their argument through ToPrimitive
     @Test
     public void test_uri_functions_coerce_argument() {
         assertEquals("ab", str("encodeURI({toString: function(){ return 'ab'; }})"));
         assertEquals("EvalError", caught("decodeURI({toString: function(){ throw new EvalError(); }})"));
     }
 
-    // Math coerces every argument before comparing them, and rounds a negative half toward -0
     @Test
     public void test_math_coercion_and_rounding() {
         assertEquals(1, num("var n = 0; Math.max(NaN, {valueOf: function(){ n = 1; return 0; }}); n"));
@@ -134,7 +118,6 @@ public class CoercionThreadingProgramTest {
         assertEquals("EvalError", caught("Math.hypot(1, {valueOf: function(){ throw new EvalError(); }})"));
     }
 
-    // atanh keeps the sign of a zero and rejects a magnitude above one
     @Test
     public void test_math_atanh() {
         assertTrue(bool("1 / Math.atanh(-0) === -Infinity"));
@@ -142,7 +125,6 @@ public class CoercionThreadingProgramTest {
         assertTrue(bool("Number.isNaN(Math.atanh(2))"));
     }
 
-    // String.raw is generic over any array-like template
     @Test
     public void test_string_raw_is_generic() {
         assertEquals("enullundefined123",
@@ -152,14 +134,12 @@ public class CoercionThreadingProgramTest {
         assertEquals("TypeError", caught("String.raw({})"));
     }
 
-    // fromCharCode applies ToUint16 rather than saturating an out-of-int argument
     @Test
     public void test_from_char_code_wraps() {
         assertEquals(0, num("String.fromCharCode(Infinity).charCodeAt(0)"));
         assertEquals(65534, num("String.fromCharCode(4294967294).charCodeAt(0)"));
     }
 
-    // repeat rejects an infinite count instead of truncating it to Integer.MAX_VALUE
     @Test
     public void test_repeat_rejects_infinity() {
         assertEquals("RangeError", caught("'a'.repeat(Infinity)"));
@@ -167,8 +147,6 @@ public class CoercionThreadingProgramTest {
         assertEquals("aa", str("'a'.repeat(2)"));
     }
 
-    // split reads ToUint32(limit) before ToString(separator), and a zero limit wins over an
-    // undefined separator
     @Test
     public void test_split_limit_ordering() {
         assertEquals(0, num("'abc'.split(undefined, 0).length"));

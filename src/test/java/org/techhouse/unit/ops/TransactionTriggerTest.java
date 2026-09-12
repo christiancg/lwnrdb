@@ -36,11 +36,6 @@ import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * Triggers fired by a committed transaction. A DELETED trigger is the interesting case: the commit cannot
- * re-read the document the way it re-reads a saved one, so the document is captured when the delete is
- * buffered and travels with the buffered operation.
- */
 public class TransactionTriggerTest {
     private static final Configuration configuration = Configuration.getInstance();
 
@@ -158,8 +153,6 @@ public class TransactionTriggerTest {
         assertEquals(7d, valueOf(events.getFirst()));
     }
 
-    // The buffered operations replay in order, so a save earlier in the same transaction is the version the
-    // delete removes - and the version the trigger must see.
     @Test
     public void test_a_document_saved_then_deleted_in_one_transaction_carries_the_buffered_version() {
         final var clientId = newClient();
@@ -256,8 +249,6 @@ public class TransactionTriggerTest {
         assertEquals(Set.of("tx-bulk-old"), idsOf(events, EventType.UPDATED));
     }
 
-    // The classification follows the transaction's own read-your-writes view, so the second save of a
-    // document the same transaction just created is an update.
     @Test
     public void test_a_document_inserted_then_saved_again_fires_created_then_updated() {
         final var clientId = newClient();
@@ -272,7 +263,6 @@ public class TransactionTriggerTest {
         assertEquals(Set.of("tx-new-2"), idsOf(events, EventType.UPDATED));
     }
 
-    // A delete buffered before the save clears the document, so the save that follows creates it again.
     @Test
     public void test_a_document_deleted_then_saved_again_fires_created() {
         final var clientId = newClient();

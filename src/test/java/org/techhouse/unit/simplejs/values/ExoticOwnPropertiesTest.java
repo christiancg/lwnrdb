@@ -79,7 +79,6 @@ public class ExoticOwnPropertiesTest {
         return types;
     }
 
-    // Every adopting type answers a real table, so defineProperty is never silently ignored
     @Test
     public void test_define_property_is_not_silently_ignored() {
         for (final var entry : adoptingTypes().entrySet()) {
@@ -91,7 +90,6 @@ public class ExoticOwnPropertiesTest {
         }
     }
 
-    // The flags stored on a key are the flags reported back, per type
     @Test
     public void test_get_own_property_descriptor_reports_real_flags() {
         for (final var entry : adoptingTypes().entrySet()) {
@@ -102,7 +100,6 @@ public class ExoticOwnPropertiesTest {
         }
     }
 
-    // delete removes a configurable own property and rejects a non-configurable one
     @Test
     public void test_delete_removes_configurable_own_property() {
         for (final var entry : adoptingTypes().entrySet()) {
@@ -116,7 +113,6 @@ public class ExoticOwnPropertiesTest {
         }
     }
 
-    // Primitives keep a null table, which is what distinguishes them from an object
     @Test
     public void test_primitives_have_no_table() {
         assertNull(new JsNumber(1).ownProperties());
@@ -128,7 +124,6 @@ public class ExoticOwnPropertiesTest {
         assertNull(new JsSymbol("x").ownProperties());
     }
 
-    // An array's index/length exotica win over the table; the table only holds named keys
     @Test
     public void test_array_exotic_behaviour_takes_precedence_over_table() {
         final var array = new JsArray(List.of(new JsNumber(1), new JsNumber(2)));
@@ -139,7 +134,6 @@ public class ExoticOwnPropertiesTest {
         assertTrue(array.ownProperties().has("named"));
     }
 
-    // A typed array's canonical numeric index reads through the buffer, not the table
     @Test
     public void test_typed_array_exotic_behaviour_takes_precedence_over_table() {
         final var typed = new JsTypedArray(JsTypedArray.Kind.INT8, new JsArrayBuffer(2), 0, 2);
@@ -148,7 +142,6 @@ public class ExoticOwnPropertiesTest {
         assertFalse(typed.ownProperties().has("0"));
     }
 
-    // globalThis keeps its bindings in the Environment, never duplicated into the table
     @Test
     public void test_global_object_falls_through_to_the_environment() {
         final var env = Environment.global();
@@ -158,7 +151,6 @@ public class ExoticOwnPropertiesTest {
         assertFalse(global.ownProperties().has("x"));
     }
 
-    // A class and its static owner share one table rather than the substrate seeing two
     @Test
     public void test_class_shares_its_static_owner_table() {
         final var cls = new JsClass("C", null, Environment.global());

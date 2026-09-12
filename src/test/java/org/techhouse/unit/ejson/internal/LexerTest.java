@@ -13,7 +13,6 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.internal.Lexer;
 
 public class LexerTest {
-    // Lexing valid JSON string with quotes returns JsonString element
     @Test
     public void test_lex_valid_json_string() {
         String input = "\"test string\"";
@@ -26,7 +25,6 @@ public class LexerTest {
         assertEquals("test string", ((JsonString) result.getFirst()).getValue());
     }
 
-    // Lexing empty string returns empty token list
     @Test
     public void test_lex_empty_string() {
         String input = "";
@@ -37,7 +35,6 @@ public class LexerTest {
         assertTrue(result.isEmpty());
     }
 
-    // Successfully lexing a valid number and returns JsonNumber token
     @Test
     public void test_lex_number() {
         String input = "12345";
@@ -47,7 +44,6 @@ public class LexerTest {
         assertEquals(12345, ((JsonNumber) tokens.getFirst()).getValue());
     }
 
-    // Successfully lexing true/false boolean values and returns JsonBoolean token
     @Test
     public void test_lex_boolean() {
         String inputTrue = "true";
@@ -63,7 +59,6 @@ public class LexerTest {
         assertFalse(((JsonBoolean) tokensFalse.getFirst()).getValue());
     }
 
-    // Successfully lexing null value and returns JsonNull token
     @Test
     public void test_lex_null() {
         String input = "null";
@@ -72,7 +67,6 @@ public class LexerTest {
         assertInstanceOf(JsonNull.class, tokens.getFirst());
     }
 
-    // Lexing a custom type string and returns a JsonCustom token (L27 branch)
     @Test
     public void test_lex_custom_type_string() {
         new org.techhouse.ejson.EJson(); // registers custom types
@@ -82,7 +76,6 @@ public class LexerTest {
         assertInstanceOf(JsonCustom.class, tokens.getFirst());
     }
 
-    // Numbers in exponent notation lex as a single token, with either exponent sign
     @Test
     public void test_lex_exponent_numbers() {
         assertEquals(1e21, Lexer.lex("1e+21").getFirst().asJsonNumber().getValue().doubleValue());
@@ -91,14 +84,12 @@ public class LexerTest {
         assertEquals(-4.9e-324, Lexer.lex("-4.9E-324").getFirst().asJsonNumber().getValue().doubleValue());
     }
 
-    // An exponent marker with no digits after it is not absorbed into the number token
     @Test
     public void test_lex_incomplete_exponent_is_not_consumed() {
         assertThrows(org.techhouse.ejson.exceptions.UnexpectedCharacterException.class, () -> Lexer.lex("[1e]"));
         assertThrows(org.techhouse.ejson.exceptions.UnexpectedCharacterException.class, () -> Lexer.lex("[1e+]"));
     }
 
-    // Unterminated string throws MissingEndOfStringException (L79 branch)
     @Test
     public void test_lex_unterminated_string_throws() {
         String input = "\"unclosed";

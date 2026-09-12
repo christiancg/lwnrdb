@@ -10,12 +10,6 @@ import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * ArrowParameters may not Contain a YieldExpression or an AwaitExpression, which the parser checks by walking
- * the parsed parameter list. The walk has to reach every expression shape a default value can take, and stop
- * at a nested function boundary - so both halves are pinned here: a parameter list full of ordinary
- * expressions parses, and each shape wrapping a `yield`/`await` does not.
- */
 public class ArrowParameterEarlyErrorTest {
     private static String str() {
         return ((JsString) Interpreter.run("""
@@ -55,13 +49,11 @@ public class ArrowParameterEarlyErrorTest {
         assertTrue(failure.getMessage().contains("Arrow parameters"), failure.getMessage());
     }
 
-    // Every expression shape the walk recurses through, none of them containing yield
     @Test
     public void test_a_parameter_list_of_ordinary_expressions_parses_inside_a_generator() {
         assertEquals("3,-3,2,true,t3,x,-3,1,2,1,number,0", str());
     }
 
-    // A nested function is an opaque boundary: its own yield belongs to it, not to the arrow's parameters
     @Test
     public void test_a_nested_generator_in_a_default_is_not_the_arrows_yield() {
         assertEquals(5, num());

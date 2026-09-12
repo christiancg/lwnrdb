@@ -134,7 +134,6 @@ public class EventProcessorHelperTest {
 
     @Test
     public void processEntityEventSkipsVanishedCollection() {
-        // The collection was dropped while this event was queued (no admin collection entry exists).
         final var pending = IocContainer.get(PendingIndexWrites.class);
         final var entry = new DbEntry();
         entry.set_id("ghost");
@@ -143,7 +142,6 @@ public class EventProcessorHelperTest {
 
         Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processEvent(entityEvent));
 
-        // The event is skipped: pending is cleared and no admin page metadata is created for it.
         Assertions.assertFalse(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains("ghost"));
         final var cache = IocContainer.get(Cache.class);
         Assertions.assertNull(cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL));
@@ -164,7 +162,6 @@ public class EventProcessorHelperTest {
         final var entityEvent = new EntityEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, entry);
         Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processEvent(entityEvent));
 
-        // The re-check inside baseUpdateEntryCount must prevent orphan page metadata from being created.
         final var cache = IocContainer.get(Cache.class);
         Assertions.assertNull(cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL),
                 "No orphan page metadata must be created for a dropped collection");

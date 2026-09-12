@@ -9,7 +9,6 @@ import org.techhouse.ops.req.agg.step.map.MapOperationType;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
 
 public class MapOperatorTest {
-    // Create MapOperator with ADD_FIELD type and valid fieldName
     @Test
     public void create_map_operator_with_add_field_type() {
         String fieldName = "testField";
@@ -20,7 +19,6 @@ public class MapOperatorTest {
         assertNull(mapOperator.getCondition());
     }
 
-    // Test getters and setters provided by lombok
     @Test
     public void test_map_operator_getters_and_setters() {
         String fieldName = "testField";

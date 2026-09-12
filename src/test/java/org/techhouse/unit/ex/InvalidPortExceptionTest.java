@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ex.InvalidPortException;
 
 public class InvalidPortExceptionTest {
-    // Create exception with valid port string and cause exception
     @Test
     public void test_create_exception_with_port_and_cause() {
         String invalidPort = "65536";
@@ -18,7 +17,6 @@ public class InvalidPortExceptionTest {
         assertEquals(cause, exception.getCause());
     }
 
-    // Create exception with null port string
     @Test
     public void test_create_exception_with_null_port() {
         IllegalArgumentException cause = new IllegalArgumentException("Port cannot be null");

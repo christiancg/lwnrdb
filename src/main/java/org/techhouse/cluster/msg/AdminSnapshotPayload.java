@@ -3,26 +3,16 @@ package org.techhouse.cluster.msg;
 import java.util.List;
 import org.techhouse.ejson.elements.JsonObject;
 
-/**
- * Carrier for the coordinator-authoritative admin snapshot exchanged on {@code ADMIN_SNAPSHOT_ACK}: the
- * responding node's admin epoch plus its full admin state (each database, collection, and user as its stored
- * JSON). A conforming node adopts this snapshot only when its {@code epoch} is higher than the node's own.
- */
 public class AdminSnapshotPayload {
     private long epoch;
     private List<JsonObject> databases = List.of();
     private List<JsonObject> collections = List.of();
     private List<JsonObject> users = List.of();
-    // Per-collection JSON Schemas, keyed by "db|coll" -> schema object. Only constrained collections
-    // appear; an absent key means the collection has no schema. Defaulted (never null) so a peer on an
-    // older version that omits the field still deserializes to an empty map rather than null.
+    // Defaulted (never null) so a peer on an older version that omits the field still deserializes to an
+    // empty map rather than null.
     private JsonObject schemas;
-    // Stored procedures keyed "db|name" -> the definition JSON, and triggers keyed "db|coll" -> the JSON
-    // array of that collection's triggers. Defaulted for the same reason schemas is: a peer on an older
-    // version that omits the field must deserialize to empty rather than null.
     private JsonObject procedures;
     private JsonObject triggers;
-    // Schedules keyed "db|name" -> the definition JSON. Defaulted for the same older-peer reason.
     private JsonObject schedules;
 
     public AdminSnapshotPayload() {

@@ -1,9 +1,5 @@
 package org.techhouse.cluster.msg;
 
-/**
- * One row of a collection anti-entropy digest: a document id, its last-write-wins version, and whether that
- * version is a tombstone (a delete) rather than a live document.
- */
 public class DigestEntry {
     private String id;
     private long version;

@@ -9,7 +9,6 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 
 public class EntityEventTest {
-    // Creating an EntityEvent with valid EventType, dbName, collName, and DbEntry
     @Test
     public void test_create_entity_event_with_valid_parameters() {
         EventType type = EventType.CREATED;
@@ -26,7 +25,6 @@ public class EntityEventTest {
         assertEquals(dbEntry, entityEvent.getDbEntry());
     }
 
-    // Test getters and setters
     @Test
     public void test_getters() {
         EventType type = EventType.CREATED;
@@ -40,7 +38,6 @@ public class EntityEventTest {
         assertEquals(dbEntry, entityEvent.getDbEntry());
     }
 
-    // Test hashcode and equals
     @Test
     public void test_equals_and_hashCode() {
         EventType type = EventType.CREATED;

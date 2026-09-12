@@ -12,7 +12,6 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public class CoroutineTest {
-    // park/resume round-trips a yielded value and the value sent back in
     @Test
     public void test_park_resume_round_trip() {
         final var coroutine = new Coroutine();
@@ -25,7 +24,6 @@ public class CoroutineTest {
         assertEquals(42, ((JsNumber) second.value()).getValue());
     }
 
-    // resuming a done coroutine returns an undefined, done step
     @Test
     public void test_resume_after_done() {
         final var coroutine = new Coroutine();
@@ -36,7 +34,6 @@ public class CoroutineTest {
         assertInstanceOf(JsUndefined.class, step.value());
     }
 
-    // resumeThrow injects an uncaught error that escapes the body
     @Test
     public void test_resume_throw_escapes() {
         final var coroutine = new Coroutine();
@@ -48,7 +45,6 @@ public class CoroutineTest {
         assertThrows(JsThrowException.class, () -> coroutine.resumeThrow(new JsString("boom")));
     }
 
-    // resumeReturn unwinds the body and reports the return value
     @Test
     public void test_resume_return() {
         final var coroutine = new Coroutine();
@@ -62,7 +58,6 @@ public class CoroutineTest {
         assertEquals(99, ((JsNumber) step.value()).getValue());
     }
 
-    // cancel unwinds a suspended coroutine without running the rest of the body
     @Test
     public void test_cancel_suspended() {
         final var coroutine = new Coroutine();
@@ -78,7 +73,6 @@ public class CoroutineTest {
         assertFalse(ran[0]);
     }
 
-    // a value written by the body before yielding is visible after resume (happens-before)
     @Test
     public void test_mutual_exclusion_visibility() {
         final var coroutine = new Coroutine();
@@ -91,7 +85,6 @@ public class CoroutineTest {
         assertEquals(7, ((JsNumber) box[0]).getValue());
     }
 
-    // return() on a coroutine that never started completes it immediately
     @Test
     public void test_return_before_start() {
         final var coroutine = new Coroutine();
@@ -101,7 +94,6 @@ public class CoroutineTest {
         assertEquals(5, ((JsNumber) step.value()).getValue());
     }
 
-    // a yield pause reports YIELD and exposes the yielded value
     @Test
     public void test_pause_reason_yield() {
         final var coroutine = new Coroutine();
@@ -111,7 +103,6 @@ public class CoroutineTest {
         assertEquals(3, ((JsNumber) coroutine.yieldedValue()).getValue());
     }
 
-    // the resume observer fires after each resume with the escaped error (null on success)
     @Test
     public void test_resume_observer_fires() {
         final var coroutine = new Coroutine();
@@ -135,7 +126,6 @@ public class CoroutineTest {
         assertEquals(2, ((JsNumber) coroutine.completedValue()).getValue());
     }
 
-    // markAsync flags a coroutine as async-capable
     @Test
     public void test_mark_async() {
         final var coroutine = new Coroutine();
@@ -144,7 +134,6 @@ public class CoroutineTest {
         assertTrue(coroutine.isAsync());
     }
 
-    // resuming from inside the body would wait on a hand-off that can never come, so it throws
     @Test
     public void test_reentrant_resume_throws_type_error_instead_of_deadlocking() {
         final var coroutine = new Coroutine();
@@ -159,7 +148,6 @@ public class CoroutineTest {
         assertNotNull(reentrant[0]);
     }
 
-    // a delegated yield is marked for the driver and the marking is consumed by the yield itself
     @Test
     public void test_delegated_yield_marker_is_one_shot() {
         final var coroutine = new Coroutine();

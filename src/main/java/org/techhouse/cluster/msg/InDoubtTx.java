@@ -2,11 +2,6 @@ package org.techhouse.cluster.msg;
 
 import java.util.List;
 
-/**
- * One in-doubt (PREPARED) distributed transaction as reported by a node over LIST_TX(_ACK): the
- * distributed-transaction id, the coordinator address recorded in its PREPARED marker, the participant
- * address set, when it was prepared, and this node's status for it.
- */
 public class InDoubtTx {
     private String dtxId;
     private String coordinator;

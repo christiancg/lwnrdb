@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ex.DependencyInjectionFailed;
 
 public class DependencyInjectionFailedTest {
-    // Create exception with cause and verify message is 'The dependency injection failed'
     @Test
     public void test_exception_with_cause_has_correct_message() {
         Exception cause = new RuntimeException("Some error");
@@ -18,7 +17,6 @@ public class DependencyInjectionFailedTest {
         assertEquals(cause, exception.getCause());
     }
 
-    // Create exception with null cause
     @Test
     public void test_exception_with_null_cause() {
         DependencyInjectionFailed exception = new DependencyInjectionFailed(null);

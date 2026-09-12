@@ -12,11 +12,6 @@ import org.techhouse.bckg_ops.events.EventType;
 
 public class BackgroundProcessorThreadTest {
 
-    /**
-     * This class contains tests for the BackgroundProcessorThread class.
-     * Specifically, the tests focus on the run method in BackgroundProcessorThread.
-     */
-
     @Test
     public void testRunWhenQueueHasEvent() throws InterruptedException {
         LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
@@ -27,8 +22,8 @@ public class BackgroundProcessorThreadTest {
         Thread thread = new Thread(new BackgroundProcessorThread(queue, new AtomicInteger(), new IdleSignal()));
         thread.start();
 
-        Thread.sleep(1000); // waiting for the thread to process the event
-        thread.interrupt(); // interrupting the thread to stop it as the run method has an infinite loop
+        Thread.sleep(1000);
+        thread.interrupt();
     }
 
     @Test
@@ -39,7 +34,6 @@ public class BackgroundProcessorThreadTest {
         thread.start();
         assertTrue(thread.isAlive());
 
-        // we just need to make sure the thread didn't crash, as the run method will indefinitely wait for an event
-        thread.interrupt(); // this is to stop the thread as the run method has an infinite loop
+        thread.interrupt();
     }
 }

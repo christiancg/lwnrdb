@@ -26,7 +26,6 @@ import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 
 public class JsCoercionTest {
-    // toBoolean follows JS truthiness for every value kind
     @Test
     public void test_to_boolean() {
         assertTrue(JsCoercion.toBoolean(JsBoolean.TRUE));
@@ -44,7 +43,6 @@ public class JsCoercionTest {
         assertTrue(JsCoercion.toBoolean(new JsArray()));
     }
 
-    // toNumber converts primitives, parsing decimal, radix, and Infinity strings
     @Test
     public void test_to_number() {
         assertEquals(5, JsCoercion.toNumber(new JsNumber(5)));
@@ -63,13 +61,11 @@ public class JsCoercionTest {
         assertTrue(Double.isNaN(JsCoercion.toNumber(new JsString("5d"))));
     }
 
-    // toNumber of a BigInt throws, mirroring +bigint in JS
     @Test
     public void test_to_number_bigint_throws() {
         assertThrows(TypeErrorException.class, () -> JsCoercion.toNumber(new JsBigInt(BigInteger.ONE)));
     }
 
-    // toStr renders each value kind, integers without a decimal point
     @Test
     public void test_to_str() {
         assertEquals("hi", JsCoercion.toStr(new JsString("hi")));
@@ -86,7 +82,6 @@ public class JsCoercionTest {
         assertEquals("[object Object]", JsCoercion.toStr(new JsObject()));
     }
 
-    // Number toStr follows the spec Number::toString, including the exponential thresholds
     @Test
     public void test_to_str_number_matches_spec() {
         assertEquals("0", JsCoercion.toStr(new JsNumber(-0d)));
@@ -101,14 +96,12 @@ public class JsCoercionTest {
         assertEquals("0.3333333333333333", JsCoercion.toStr(new JsNumber(1d / 3)));
     }
 
-    // Array toStr joins with commas, leaving holes for null and undefined elements
     @Test
     public void test_to_str_array() {
         final var array = new JsArray(List.of(new JsNumber(1), JsNull.getInstance(), new JsNumber(3)));
         assertEquals("1,,3", JsCoercion.toStr(array));
     }
 
-    // typeof reports the value kind, with null classified as object
     @Test
     public void test_type_of() {
         assertEquals("number", JsCoercion.typeOf(new JsNumber(1)));
@@ -121,14 +114,12 @@ public class JsCoercionTest {
         assertEquals("object", JsCoercion.typeOf(new JsArray()));
     }
 
-    // toPrimitive stringifies objects and arrays, leaving primitives untouched
     @Test
     public void test_to_primitive() {
         assertEquals("[object Object]", ((JsString) JsCoercion.toPrimitive(new JsObject())).getValue());
         assertEquals(5, ((JsNumber) JsCoercion.toPrimitive(new JsNumber(5))).getValue());
     }
 
-    // Function values report the function typeof and a non-throwing string form
     @Test
     public void test_function_coercion() {
         final var function = new JsFunction("f", List.of(), null, false, false, false, false, Environment.global());
@@ -140,7 +131,6 @@ public class JsCoercionTest {
         assertTrue(JsCoercion.toBoolean(function));
     }
 
-    // The ops-aware overloads fall back to the primitive/string coercion when ops is null (no user code)
     @Test
     public void test_ops_aware_overloads_null_ops() {
         assertEquals(5, JsCoercion.toNumber(new JsNumber(5), null));
@@ -150,7 +140,6 @@ public class JsCoercionTest {
         assertEquals("1,2", JsCoercion.toStr(new JsArray(List.of(new JsNumber(1), new JsNumber(2))), null));
     }
 
-    // isObject is the complement of the spec's primitive set, so every non-primitive coerces
     @Test
     public void test_is_object() {
         assertFalse(JsCoercion.isObject(new JsNumber(1)));
@@ -165,7 +154,6 @@ public class JsCoercionTest {
         assertTrue(JsCoercion.isObject(new JsNativeFunction("n", (_, _) -> JsUndefined.getInstance())));
     }
 
-    // toPrimitive covers every object-like value, not only plain objects and arrays
     @Test
     public void test_to_primitive_object_like() {
         final var function = new JsNativeFunction("f", (_, _) -> JsUndefined.getInstance());
@@ -175,7 +163,6 @@ public class JsCoercionTest {
         assertEquals("[object Map]", ((JsString) JsCoercion.toPrimitive(new JsMap())).getValue());
     }
 
-    // A primitive wrapper coerces through its boxed value, and a boxed symbol describes itself
     @Test
     public void test_wrapper_coercion() {
         final var wrapper = new JsObject();
@@ -188,13 +175,11 @@ public class JsCoercionTest {
         assertEquals("Symbol(tag)", JsCoercion.toStr(symbolWrapper));
     }
 
-    // toNumber of a symbol throws, mirroring +symbol in JS
     @Test
     public void test_to_number_symbol_throws() {
         assertThrows(TypeErrorException.class, () -> JsCoercion.toNumber(new JsSymbol("s")));
     }
 
-    // toNumeric keeps a BigInt a BigInt while everything else becomes a number
     @Test
     public void test_to_numeric() {
         assertEquals(BigInteger.TEN, ((JsBigInt) JsCoercion.toNumeric(new JsBigInt(BigInteger.TEN), null)).getValue());
@@ -202,7 +187,6 @@ public class JsCoercionTest {
         assertEquals(1, ((JsNumber) JsCoercion.toNumeric(JsBoolean.TRUE, null)).getValue());
     }
 
-    // StringToBigInt accepts the StringIntegerLiteral grammar and reports anything else as absent
     @Test
     public void test_string_to_big_int() {
         assertEquals(BigInteger.ZERO, JsCoercion.stringToBigInt(""));

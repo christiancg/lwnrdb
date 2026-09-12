@@ -26,14 +26,17 @@ public class SimpleJsMetricsTest {
     }
 
     private static HostBindings cancelledAfter(ResourceLimits limits) {
-        return new LimitedBindings(new JsonObject(), null, null, limits, new CancellationToken() {
+        // Hoisted out of the constructor call: PMD's disambiguation pass fails on an
+        // anonymous class nested inside a call to a nested record's constructor.
+        final CancellationToken cancellation = new CancellationToken() {
             private int seen;
 
             @Override
             public boolean isCancelled() {
                 return ++seen > 20;
             }
-        });
+        };
+        return new LimitedBindings(new JsonObject(), null, null, limits, cancellation);
     }
 
     private ScriptResult run(String source) {
@@ -55,7 +58,6 @@ public class SimpleJsMetricsTest {
                 "expected " + big.instructions() + " > " + small.instructions());
     }
 
-    // An unlimited budget still reports a figure: the count is not derived from what is left.
     @Test
     public void test_unlimited_budget_still_counts_instructions() {
         final var result = run("let t = 0; for (let i = 0; i < 20; i++) { t += i; } return t;");
@@ -70,7 +72,6 @@ public class SimpleJsMetricsTest {
         assertTrue(result.getMetrics().instructions() > 0);
     }
 
-    // The holder is filled by the interpreter's finally, so an abort reports what it burned.
     @Test
     public void test_an_exhausted_instruction_budget_still_reports_metrics() {
         final var result = engine.run("while (true) {}", withLimits(new ResourceLimits(500, -1, 100)));

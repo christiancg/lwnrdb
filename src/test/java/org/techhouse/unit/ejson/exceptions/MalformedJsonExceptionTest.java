@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.exceptions.MalformedJsonException;
 
 public class MalformedJsonExceptionTest {
-    // Create exception with error message and verify message is accessible
     @Test
     public void test_exception_message_is_accessible() {
         String errorMessage = "Invalid JSON format";
@@ -17,7 +16,6 @@ public class MalformedJsonExceptionTest {
         assertEquals(errorMessage, exception.getMessage());
     }
 
-    // Create exception with null error message
     @Test
     public void test_exception_with_null_message() {
         String errorMessage = null;

@@ -18,33 +18,20 @@ import org.techhouse.utils.ReflectionUtils;
 
 public class BackgroundTaskManagerTest {
 
-    /**
-     * BackgroundTaskManager class is responsible for managing and processing the background tasks.
-     * submitBackgroundTask() method is used to submit a task in the form of Event to the task manager.
-     */
-
     @Test
     void testSubmitBackgroundTask() throws NoSuchFieldException, IllegalAccessException {
-        // setup
         var manager = new BackgroundTaskManager();
         var event = new EntityEvent(EventType.CREATED, "test", "test", new DbEntry());
 
-        // when
         manager.submitBackgroundTask(event);
 
         final var type = new ReflectionUtils.TypeToken<LinkedBlockingQueue<Event>>() {
         };
         LinkedBlockingQueue<Event> queue = TestUtils.getPrivateField(manager, "queue", type);
 
-        // then
         assertTrue(queue.contains(event), "Queue should contain the event after submission");
     }
 
-    /**
-     * Tests that the expected number of BackgroundProcessorThread are started when starting background workers.
-     * The number of BackgroundProcessorThreads to be started is retrieved from the Configuration instance.
-     * The test verifies that the execute() method of the pool is called the correct number of times.
-     */
     @Test
     void testStartBackgroundWorkers() throws NoSuchFieldException, IllegalAccessException {
         var manager = new BackgroundTaskManager();
@@ -62,11 +49,6 @@ public class BackgroundTaskManagerTest {
         verify(pool, times(3)).execute(any(Runnable.class));
     }
 
-    /**
-     * Test the startBackgroundWorkers method when the number of background processing threads is zero.
-     * The mock Configuration object should return 0 for getBackgroundProcessingThreads.
-     * It should verify that the execute method of the pool is never called.
-     */
     @Test
     void testStartBackgroundWorkersWhenZeroThreads() throws NoSuchFieldException, IllegalAccessException {
         var manager = new BackgroundTaskManager();
@@ -84,10 +66,6 @@ public class BackgroundTaskManagerTest {
         verify(pool, never()).execute(any(Runnable.class));
     }
 
-    /**
-     * stopBackgroundWorkers must shut down the running pool, drop any pending events and leave the manager
-     * reusable (a fresh pool so startBackgroundWorkers can run again).
-     */
     @Test
     void testStopBackgroundWorkersDrainsQueueAndAllowsRestart() throws Exception {
         var manager = new BackgroundTaskManager();

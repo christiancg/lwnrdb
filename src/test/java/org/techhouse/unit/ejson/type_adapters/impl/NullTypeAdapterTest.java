@@ -8,7 +8,6 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.NullTypeAdapter;
 
 public class NullTypeAdapterTest {
-    // toJson returns 'null' string for any input object
     @Test
     public void test_to_json_returns_null_string_for_regular_objects() {
         NullTypeAdapter adapter = new NullTypeAdapter();
@@ -22,7 +21,6 @@ public class NullTypeAdapterTest {
         assertEquals("null", result3);
     }
 
-    // toJson behavior with undefined or special object types
     @Test
     public void test_to_json_returns_null_for_edge_cases() {
         NullTypeAdapter adapter = new NullTypeAdapter();
@@ -36,7 +34,6 @@ public class NullTypeAdapterTest {
         assertEquals("null", resultInfinity);
     }
 
-    // Method returns string "null" when given a null input
     @Test
     public void test_null_input_returns_null_string() {
         NullTypeAdapter adapter = new NullTypeAdapter();
@@ -46,7 +43,6 @@ public class NullTypeAdapterTest {
         assertEquals("null", result);
     }
 
-    // Method behavior with undefined/empty input
     @Test
     public void test_empty_input_returns_null_string() {
         NullTypeAdapter adapter = new NullTypeAdapter();
@@ -56,7 +52,6 @@ public class NullTypeAdapterTest {
         assertEquals("null", result);
     }
 
-    // Method returns null for any JsonBaseElement input
     @Test
     public void test_returns_null_for_json_base_element() {
         NullTypeAdapter adapter = new NullTypeAdapter();
@@ -67,7 +62,6 @@ public class NullTypeAdapterTest {
         assertNull(result);
     }
 
-    // Method returns null when input is null
     @Test
     public void test_returns_null_for_null_input() {
         NullTypeAdapter adapter = new NullTypeAdapter();

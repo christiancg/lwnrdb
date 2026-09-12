@@ -13,9 +13,8 @@ import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.ScriptResult;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 
-// Every collection constructor here is fed an endless iterable, so a lost abrupt completion is an
-// infinite loop rather than a wrong answer: the wall-clock limit turns it into a ScriptTimeoutError
-// (which the assertions reject) and the JUnit timeout on a separate thread is the outer guard.
+// Each constructor is fed an endless iterable, so a lost abrupt completion is an infinite loop: the
+// wall-clock limit turns it into a ScriptTimeoutError and the JUnit timeout is the outer guard.
 @Timeout(value = 30, unit = SECONDS, threadMode = ThreadMode.SEPARATE_THREAD)
 public class IterationCloseTest {
     private static final String ENDLESS = """
@@ -51,8 +50,6 @@ public class IterationCloseTest {
                 """.formatted(statement);
     }
 
-    // IteratorStepValue marks the record done without closing it, so a `next` that throws must not be
-    // followed by a `return` call — and the throw still has to end the loop.
     @Test
     public void test_map_next_failure_propagates_without_closing() {
         final var source = """
@@ -101,7 +98,6 @@ public class IterationCloseTest {
         assertEquals("next|return#from-set", run(source));
     }
 
-    // The pending abrupt completion wins over anything the close itself throws.
     @Test
     public void test_map_set_failure_survives_a_throwing_return() {
         final var source = """
@@ -118,8 +114,6 @@ public class IterationCloseTest {
         assertEquals("next|return#from-set", run(source));
     }
 
-    // The adder is read off the receiver before the iterable is opened, so a non-callable `set` is a
-    // TypeError raised without a single `next` call.
     @Test
     public void test_map_rejects_a_non_callable_adder_before_iterating() {
         final var source = ENDLESS + "Map.prototype.set = 1;\n" + """
@@ -159,7 +153,6 @@ public class IterationCloseTest {
         assertEquals("next|return#from-add", run(source));
     }
 
-    // A primitive is not a valid weak value, so the builtin adder is the one that throws here.
     @Test
     public void test_weak_set_rejects_a_primitive_and_closes_the_iterator() {
         final var source = ENDLESS + "item = 1;\n" + """
@@ -170,7 +163,6 @@ public class IterationCloseTest {
         assertEquals("next|return#true", run(source));
     }
 
-    // Math.sumPrecise rejects a non-number without coercing it, and closes the iterator on the way out.
     @Test
     public void test_sum_precise_non_number_closes_the_iterator() {
         final var source = ENDLESS + """
@@ -198,7 +190,6 @@ public class IterationCloseTest {
         assertEquals("1|2|2|x,y", run(source));
     }
 
-    // The constructors run GetIterator, so a replaced Array.prototype[Symbol.iterator] is observed.
     @Test
     public void test_set_honours_a_patched_array_iterator() {
         final var source = """

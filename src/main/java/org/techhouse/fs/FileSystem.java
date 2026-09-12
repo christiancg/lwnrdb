@@ -6,23 +6,11 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
-import java.util.AbstractMap;
 import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
@@ -32,32 +20,18 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
-import org.techhouse.ejson.EJson;
-import org.techhouse.ejson.elements.JsonCustom;
-import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.DirectoryNotFoundException;
-import org.techhouse.ioc.IocContainer;
-import org.techhouse.log.Logger;
-import org.techhouse.utils.ReflectionUtils;
 
 public class FileSystem {
-    private static final Logger logger = Logger.logFor(FileSystem.class);
-    private final EJson eJson = IocContainer.get(EJson.class);
-    private String dbPath;
-
-    // Per-file read/write locks guaranteeing physical-I/O atomicity: a file's bytes are never read
-    // while they are being rewritten. This is the finer-grained tier below the collection-level
-    // locks in ResourceLocking, and is what makes dirty reads safe (a dirty read skips the
-    // collection lock but still serializes against the in-progress physical write of each file).
-    private static final Map<String, ReentrantReadWriteLock> fileLocks = new ConcurrentHashMap<>();
-
-    private ReentrantReadWriteLock fileLock(File file) {
-        return fileLocks.computeIfAbsent(file.getAbsolutePath(), _ -> new ReentrantReadWriteLock());
-    }
+    private final FilePaths paths = new FilePaths();
+    private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
+    private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
+    private final DocumentPageStore documentPageStore = new DocumentPageStore(paths);
+    private final PkIndexStore pkIndexStore = new PkIndexStore(paths);
 
     public void createBaseDbPath() {
-        dbPath = Configuration.getInstance().getFilePath();
-        final var directory = new File(dbPath);
+        paths.useDbPath(Configuration.getInstance().getFilePath());
+        final var directory = new File(paths.dbPath());
         if (!directory.exists()) {
             var result = directory.mkdir();
             if (!result) {
@@ -95,17 +69,15 @@ public class FileSystem {
         createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesTriggerRuns);
     }
 
-    // Create the nested admin/pages parent up front (per-collection folders below are mkdir'd one level deep).
     private void createAdminPagesFolder() {
-        final var pagesFolder = new File(dbPath + Globals.FILE_SEPARATOR + Globals.ADMIN_DB_NAME
-                + Globals.FILE_SEPARATOR + Globals.ADMIN_PAGES_FOLDER);
+        final var pagesFolder = paths.adminPagesFolder();
         if (!pagesFolder.exists() && !pagesFolder.mkdirs()) {
             throw new DirectoryNotFoundException(pagesFolder.getAbsolutePath());
         }
     }
 
     public boolean createDatabaseFolder(String dbName) {
-        final var dbFolder = new File(dbPath + Globals.FILE_SEPARATOR + dbName);
+        final var dbFolder = paths.rawDatabaseFolder(dbName);
         if (!dbFolder.exists()) {
             return dbFolder.mkdir();
         }
@@ -113,7 +85,7 @@ public class FileSystem {
     }
 
     public boolean deleteDatabase(String dbName) {
-        final var dbFolder = new File(dbPath + Globals.FILE_SEPARATOR + dbName);
+        final var dbFolder = paths.rawDatabaseFolder(dbName);
         final var fileDeletionResult = new ArrayList<Boolean>();
         if (dbFolder.exists()) {
             final var dbFolders = dbFolder.listFiles();
@@ -134,28 +106,8 @@ public class FileSystem {
         return false;
     }
 
-    // The reserved logical db name ADMIN_PAGES_DB_NAME maps to the physical admin/pages subfolder;
-    // all physical paths funnel through the three builders below, so this is the only translation point.
-    private String resolveDbPathSegment(String dbName) {
-        if (Globals.ADMIN_PAGES_DB_NAME.equals(dbName)) {
-            return Globals.ADMIN_DB_NAME + Globals.FILE_SEPARATOR + Globals.ADMIN_PAGES_FOLDER;
-        }
-        return dbName;
-    }
-
-    private File getCollectionFolder(String dbName, String collectionName) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
-                + collectionName);
-    }
-
-    private File getCollectionFile(String dbName, String collectionName, long page) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
-                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.FILE_PAGE_SEPARATOR + page
-                + Globals.DB_FILE_EXTENSION);
-    }
-
     public boolean createCollectionFile(String dbName, String collectionName) throws IOException {
-        final var collectionFile = getCollectionFile(dbName, collectionName, 0);
+        final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
         if (!collectionFolder.exists()) {
             if (collectionFolder.mkdir()) {
@@ -172,7 +124,7 @@ public class FileSystem {
     }
 
     public boolean deleteCollectionFiles(String dbName, String collectionName) {
-        final var collectionFile = getCollectionFile(dbName, collectionName, 0);
+        final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
         final var fileDeletionResult = new ArrayList<Boolean>();
         if (collectionFolder.exists()) {
@@ -185,385 +137,90 @@ public class FileSystem {
         return false;
     }
 
-    private File getIndexFile(String dbName, String collectionName, String indexName, String indexType) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
-                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR
-                + indexName + Globals.INDEX_FILE_NAME_SEPARATOR + indexType + Globals.INDEX_FILE_EXTENSION);
-    }
-
-    private File getTombstoneFile(String dbName, String collectionName) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
-                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR
-                + Globals.TOMBSTONE_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
-    }
-
-    private File getSchemaFile(String dbName, String collectionName) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
-                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR
-                + Globals.SCHEMA_FILE_NAME + Globals.SCHEMA_FILE_EXTENSION);
-    }
-
-    // Writes (create-or-replace) the collection's single JSON Schema file atomically.
     public void writeCollectionSchema(String dbName, String collName, String schemaJson) throws IOException {
-        final var file = getSchemaFile(dbName, collName);
-        final var lock = fileLock(file).writeLock();
-        lock.lock();
-        try {
-            rewriteFileAtomically(file.toPath(), List.of(schemaJson));
-        } finally {
-            lock.unlock();
-        }
+        MetadataFileStore.write(paths.schemaFile(dbName, collName), schemaJson);
     }
 
-    // Reads the collection's JSON Schema, or null when the collection has no schema.
     public String readCollectionSchema(String dbName, String collName) throws IOException {
-        final var file = getSchemaFile(dbName, collName);
-        if (!file.exists()) {
-            return null;
-        }
-        final var lock = fileLock(file).readLock();
-        lock.lock();
-        try {
-            return String.join("", Files.readAllLines(file.toPath(), StandardCharsets.UTF_8));
-        } finally {
-            lock.unlock();
-        }
+        return MetadataFileStore.read(paths.schemaFile(dbName, collName));
     }
 
-    // Deletes the collection's schema file. Returns true when a file was actually removed.
     public boolean deleteCollectionSchema(String dbName, String collName) {
-        final var file = getSchemaFile(dbName, collName);
-        final var lock = fileLock(file).writeLock();
-        lock.lock();
-        try {
-            return file.exists() && file.delete();
-        } finally {
-            lock.unlock();
-        }
+        return MetadataFileStore.delete(paths.schemaFile(dbName, collName));
     }
 
-    private File getProceduresFolder(String dbName) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
-                + Globals.PROCEDURES_FOLDER);
-    }
-
-    // The procedure name becomes a path segment here and nowhere else. RequestValidator has already
-    // matched it against the collection-name rule (3-64 alphanumerics plus '_' and '-'), so a separator,
-    // a dot or a '..' segment is unrepresentable by the time it reaches this method.
-    private File getProcedureFile(String dbName, String name) {
-        return new File(getProceduresFolder(dbName).getPath() + Globals.FILE_SEPARATOR + name
-                + Globals.PROCEDURE_FILE_EXTENSION);
-    }
-
-    // Writes (create-or-replace) one stored procedure atomically, creating the folder on first use.
     public void writeProcedure(String dbName, String name, String json) throws IOException {
-        final var folder = getProceduresFolder(dbName);
-        if (!folder.exists() && !folder.mkdirs() && !folder.exists()) {
-            throw new IOException("Could not create the procedures folder for database " + dbName);
-        }
-        final var file = getProcedureFile(dbName, name);
-        final var lock = fileLock(file).writeLock();
-        lock.lock();
-        try {
-            rewriteFileAtomically(file.toPath(), List.of(json));
-        } finally {
-            lock.unlock();
-        }
+        MetadataFileStore.ensureFolder(paths.proceduresFolder(dbName), "procedures", dbName);
+        MetadataFileStore.write(paths.procedureFile(dbName, name), json);
     }
 
-    // Reads one stored procedure, or null when the database has no procedure by that name.
     public String readProcedure(String dbName, String name) throws IOException {
-        final var file = getProcedureFile(dbName, name);
-        if (!file.exists()) {
-            return null;
-        }
-        final var lock = fileLock(file).readLock();
-        lock.lock();
-        try {
-            return String.join("", Files.readAllLines(file.toPath(), StandardCharsets.UTF_8));
-        } finally {
-            lock.unlock();
-        }
+        return MetadataFileStore.read(paths.procedureFile(dbName, name));
     }
 
-    // Deletes one stored procedure. Returns true when a file was actually removed.
     public boolean deleteProcedure(String dbName, String name) {
-        final var file = getProcedureFile(dbName, name);
-        final var lock = fileLock(file).writeLock();
-        lock.lock();
-        try {
-            return file.exists() && file.delete();
-        } finally {
-            lock.unlock();
-        }
+        return MetadataFileStore.delete(paths.procedureFile(dbName, name));
     }
 
-    // Every stored procedure name in the database, or an empty list when the folder does not exist.
     public List<String> listProcedureNames(String dbName) {
-        final var folder = getProceduresFolder(dbName);
-        final var files = folder.listFiles();
-        if (files == null) {
-            return List.of();
-        }
-        final var names = new ArrayList<String>();
-        for (final var file : files) {
-            final var fileName = file.getName();
-            if (file.isFile() && fileName.endsWith(Globals.PROCEDURE_FILE_EXTENSION)) {
-                names.add(fileName.substring(0, fileName.length() - Globals.PROCEDURE_FILE_EXTENSION.length()));
-            }
-        }
-        Collections.sort(names);
-        return names;
+        return MetadataFileStore.listNames(paths.proceduresFolder(dbName), Globals.PROCEDURE_FILE_EXTENSION);
     }
 
-    private File getSchedulesFolder(String dbName) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
-                + Globals.SCHEDULES_FOLDER);
-    }
-
-    // Same contract as getProcedureFile: the schedule name has already been matched against the
-    // collection-name rule, so it cannot contain a separator, a dot or a '..' segment.
-    private File getScheduleFile(String dbName, String name) {
-        return new File(
-                getSchedulesFolder(dbName).getPath() + Globals.FILE_SEPARATOR + name + Globals.SCHEDULE_FILE_EXTENSION);
-    }
-
-    // Writes (create-or-replace) one schedule atomically, creating the folder on first use.
     public void writeSchedule(String dbName, String name, String json) throws IOException {
-        final var folder = getSchedulesFolder(dbName);
-        if (!folder.exists() && !folder.mkdirs() && !folder.exists()) {
-            throw new IOException("Could not create the schedules folder for database " + dbName);
-        }
-        final var file = getScheduleFile(dbName, name);
-        final var lock = fileLock(file).writeLock();
-        lock.lock();
-        try {
-            rewriteFileAtomically(file.toPath(), List.of(json));
-        } finally {
-            lock.unlock();
-        }
+        MetadataFileStore.ensureFolder(paths.schedulesFolder(dbName), "schedules", dbName);
+        MetadataFileStore.write(paths.scheduleFile(dbName, name), json);
     }
 
-    // Reads one schedule, or null when the database has no schedule by that name.
     public String readSchedule(String dbName, String name) throws IOException {
-        final var file = getScheduleFile(dbName, name);
-        if (!file.exists()) {
-            return null;
-        }
-        final var lock = fileLock(file).readLock();
-        lock.lock();
-        try {
-            return String.join("", Files.readAllLines(file.toPath(), StandardCharsets.UTF_8));
-        } finally {
-            lock.unlock();
-        }
+        return MetadataFileStore.read(paths.scheduleFile(dbName, name));
     }
 
-    // Deletes one schedule. Returns true when a file was actually removed.
     public boolean deleteSchedule(String dbName, String name) {
-        final var file = getScheduleFile(dbName, name);
-        final var lock = fileLock(file).writeLock();
-        lock.lock();
-        try {
-            return file.exists() && file.delete();
-        } finally {
-            lock.unlock();
-        }
+        return MetadataFileStore.delete(paths.scheduleFile(dbName, name));
     }
 
-    // Every schedule name in the database, or an empty list when the folder does not exist.
     public List<String> listScheduleNames(String dbName) {
-        final var folder = getSchedulesFolder(dbName);
-        final var files = folder.listFiles();
-        if (files == null) {
-            return List.of();
-        }
-        final var names = new ArrayList<String>();
-        for (final var file : files) {
-            final var fileName = file.getName();
-            if (file.isFile() && fileName.endsWith(Globals.SCHEDULE_FILE_EXTENSION)) {
-                names.add(fileName.substring(0, fileName.length() - Globals.SCHEDULE_FILE_EXTENSION.length()));
-            }
-        }
-        Collections.sort(names);
-        return names;
+        return MetadataFileStore.listNames(paths.schedulesFolder(dbName), Globals.SCHEDULE_FILE_EXTENSION);
     }
 
-    private File getTriggersFile(String dbName, String collectionName) {
-        return new File(dbPath + Globals.FILE_SEPARATOR + resolveDbPathSegment(dbName) + Globals.FILE_SEPARATOR
-                + collectionName + Globals.FILE_SEPARATOR + collectionName + Globals.INDEX_FILE_NAME_SEPARATOR
-                + Globals.TRIGGERS_FILE_NAME + Globals.TRIGGERS_FILE_EXTENSION);
-    }
-
-    // Writes (create-or-replace) the collection's whole trigger list atomically.
     public void writeTriggers(String dbName, String collName, String json) throws IOException {
-        final var file = getTriggersFile(dbName, collName);
-        final var lock = fileLock(file).writeLock();
-        lock.lock();
-        try {
-            rewriteFileAtomically(file.toPath(), List.of(json));
-        } finally {
-            lock.unlock();
-        }
+        MetadataFileStore.write(paths.triggersFile(dbName, collName), json);
     }
 
-    // Reads the collection's trigger list, or null when the collection has no triggers.
     public String readTriggers(String dbName, String collName) throws IOException {
-        final var file = getTriggersFile(dbName, collName);
-        if (!file.exists()) {
-            return null;
-        }
-        final var lock = fileLock(file).readLock();
-        lock.lock();
-        try {
-            return String.join("", Files.readAllLines(file.toPath(), StandardCharsets.UTF_8));
-        } finally {
-            lock.unlock();
-        }
+        return MetadataFileStore.read(paths.triggersFile(dbName, collName));
     }
 
-    // Deletes the collection's trigger file. Returns true when a file was actually removed.
     public boolean deleteTriggers(String dbName, String collName) {
-        final var file = getTriggersFile(dbName, collName);
-        final var lock = fileLock(file).writeLock();
-        lock.lock();
-        try {
-            return file.exists() && file.delete();
-        } finally {
-            lock.unlock();
-        }
+        return MetadataFileStore.delete(paths.triggersFile(dbName, collName));
     }
 
-    // Appends a delete tombstone (id|version). The file is append-only and deduplicated on read (keeping the
-    // highest version per id); compaction/GC of old tombstones is a later-phase concern.
     public void appendTombstone(String dbName, String collName, String id, long version) throws IOException {
-        final var file = getTombstoneFile(dbName, collName);
-        final var lock = fileLock(file).writeLock();
-        lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
-            writer.append(id).append(Globals.INDEX_ENTRY_SEPARATOR).append(String.valueOf(version));
-            writer.newLine();
-        } finally {
-            lock.unlock();
-        }
+        TombstoneStore.append(paths.tombstoneFile(dbName, collName), id, version);
     }
 
-    // Reads the collection's tombstones as id -> highest deleted version. A malformed line is skipped rather
-    // than failing the whole read (mirroring the self-healing index loaders).
     public Map<String, Long> readTombstones(String dbName, String collName) throws IOException {
-        final var result = new HashMap<String, Long>();
-        final var file = getTombstoneFile(dbName, collName);
-        if (!file.exists()) {
-            return result;
-        }
-        final var lock = fileLock(file).readLock();
-        lock.lock();
-        try {
-            for (final var line : Files.readAllLines(file.toPath())) {
-                final var cleaned = line.trim();
-                final var sep = cleaned.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
-                if (sep <= 0) {
-                    continue;
-                }
-                try {
-                    result.merge(cleaned.substring(0, sep), Long.parseLong(cleaned.substring(sep + 1)), Math::max);
-                } catch (NumberFormatException ignored) {
-                    // Skip a torn/malformed tombstone line rather than failing the read.
-                }
-            }
-        } finally {
-            lock.unlock();
-        }
-        return result;
+        return TombstoneStore.read(paths.tombstoneFile(dbName, collName));
     }
 
-    // Garbage-collects the tombstone file: keeps only the highest version per id and drops any tombstone
-    // older than minVersionToKeep (an epoch-millis cutoff). This both deduplicates the append-only file and
-    // removes fully-converged deletes. A missing/empty file is left untouched.
     public void compactTombstones(String dbName, String collName, long minVersionToKeep) throws IOException {
-        final var file = getTombstoneFile(dbName, collName);
-        if (!file.exists()) {
-            return;
-        }
-        final var lock = fileLock(file).writeLock();
-        lock.lock();
-        try {
-            final var kept = new LinkedHashMap<String, Long>();
-            for (final var line : Files.readAllLines(file.toPath())) {
-                final var cleaned = line.trim();
-                final var sep = cleaned.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
-                if (sep <= 0) {
-                    continue;
-                }
-                try {
-                    final var version = Long.parseLong(cleaned.substring(sep + 1));
-                    if (version >= minVersionToKeep) {
-                        kept.merge(cleaned.substring(0, sep), version, Math::max);
-                    }
-                } catch (NumberFormatException ignored) {
-                    // Drop a torn/malformed tombstone line.
-                }
-            }
-            final var lines = new ArrayList<String>(kept.size());
-            for (final var entry : kept.entrySet()) {
-                lines.add(entry.getKey() + Globals.INDEX_ENTRY_SEPARATOR + entry.getValue());
-            }
-            rewriteFileAtomically(file.toPath(), lines);
-        } finally {
-            lock.unlock();
-        }
+        TombstoneStore.compact(paths.tombstoneFile(dbName, collName), minVersionToKeep);
+    }
+
+    public List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
+        return pkIndexStore.readWholePkIndexFile(dbName, collectionName);
+    }
+
+    public PkIndexEntry findPkIndexEntry(String dbName, String collName, String id) throws IOException {
+        return pkIndexStore.findPkIndexEntry(dbName, collName, id);
     }
 
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {
-        final var file = getCollectionFile(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(),
-                pkIndexEntry.getPage());
-        final var lock = fileLock(file).readLock();
-        lock.lock();
-        try (var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
-            return readEntryFromOpenFile(reader, pkIndexEntry);
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    private DbEntry readEntryFromOpenFile(RandomAccessFile reader, PkIndexEntry pkIndexEntry) throws IOException {
-        reader.seek(pkIndexEntry.getPosition());
-        final var entryLength = (int) pkIndexEntry.getLength();
-        byte[] buffer = new byte[entryLength];
-        reader.readFully(buffer, 0, entryLength);
-        final var strEntry = new String(buffer);
-        final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
-        final var entry = new DbEntry();
-        entry.setDatabaseName(pkIndexEntry.getDatabaseName());
-        entry.setCollectionName(pkIndexEntry.getCollectionName());
-        entry.set_id(pkIndexEntry.getValue());
-        entry.setData(jsonObject);
-        return entry;
+        return documentPageStore.getById(pkIndexEntry);
     }
 
     public List<DbEntry> getByIndexEntries(List<PkIndexEntry> entries) throws IOException {
-        final var result = new ArrayList<DbEntry>();
-        if (entries == null || entries.isEmpty()) {
-            return result;
-        }
-        final var byPage = entries.stream().collect(Collectors.groupingBy(PkIndexEntry::getPage));
-        for (var pageGroup : byPage.entrySet()) {
-            final var first = pageGroup.getValue().getFirst();
-            final var file = getCollectionFile(first.getDatabaseName(), first.getCollectionName(), pageGroup.getKey());
-            // Read the page's requested entries in ascending position order for sequential seeks.
-            final var pageEntries = pageGroup.getValue().stream()
-                    .sorted(Comparator.comparingLong(PkIndexEntry::getPosition)).toList();
-            final var lock = fileLock(file).readLock();
-            lock.lock();
-            try (var reader = new RandomAccessFile(file, Globals.R_PERMISSIONS)) {
-                for (var pkEntry : pageEntries) {
-                    result.add(readEntryFromOpenFile(reader, pkEntry));
-                }
-            } finally {
-                lock.unlock();
-            }
-        }
-        return result;
+        return documentPageStore.getByIndexEntries(entries);
     }
 
     public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName,
@@ -574,10 +231,11 @@ public class FileSystem {
         for (var groupedEntry : entrySet) {
             final var page = groupedEntry.getKey();
             final var pageEntries = groupedEntry.getValue();
-            final var file = getCollectionFile(dbName, collName, page);
-            final var lock = fileLock(file).writeLock();
+            final var file = paths.collectionPage(dbName, collName, page);
+            final var lock = FileLocks.lockFor(file).writeLock();
             lock.lock();
-            try (var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+            try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
+                    Globals.BUFFER_SIZE)) {
                 var currentOffset = file.length();
                 for (var entry : pageEntries) {
                     final var strData = entry.toFileEntry() + Globals.NEWLINE;
@@ -600,77 +258,43 @@ public class FileSystem {
                 lock.unlock();
             }
         }
-        bulkIndexNewPKValues(dbName, collName, pkEntriesToIndex);
+        pkIndexStore.bulkIndexNewPKValues(dbName, collName, pkEntriesToIndex);
         return indexEntries;
-    }
-
-    private void bulkIndexNewPKValues(String dbName, String collName, List<PkIndexEntry> pkEntries) throws IOException {
-        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
-        final var lock = fileLock(indexFile).writeLock();
-        lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
-            for (var pkEntry : pkEntries) {
-                writer.append(pkEntry.toFileEntry());
-                writer.newLine();
-            }
-        } finally {
-            lock.unlock();
-        }
     }
 
     public PkIndexEntry insertIntoCollection(DbEntry entry) throws IOException {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
         final var page = entry.getPage();
-        final var file = getCollectionFile(dbName, collName, page);
-        final var lock = fileLock(file).writeLock();
+        final var file = paths.collectionPage(dbName, collName, page);
+        final var lock = FileLocks.lockFor(file).writeLock();
         lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+        try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE)) {
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
             final var bytes = strData.getBytes(StandardCharsets.UTF_8);
             final var length = bytes.length;
             var totalFileLength = file.length();
             writer.append(strData);
             final var entryId = entry.get_id();
-            return indexNewPKValue(entry.getDatabaseName(), entry.getCollectionName(), entryId, totalFileLength, length,
-                    page, entry.getVersion());
+            return pkIndexStore.indexNewPKValue(entry.getDatabaseName(), entry.getCollectionName(), entryId,
+                    totalFileLength, length, page, entry.getVersion());
         } finally {
             lock.unlock();
         }
     }
 
-    private PkIndexEntry indexNewPKValue(String dbName, String collectionName, String value, long position, int length,
-            long page, long version) throws IOException {
-        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
-        final var lock = fileLock(indexFile).writeLock();
-        lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
-            final var indexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page, version);
-            writer.append(indexEntry.toFileEntry());
-            writer.newLine();
-            return indexEntry;
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    /**
-     * Deletes the entry from its page, compacting the survivors. Returns the {@link PkCompaction}
-     * describing the shift (so the caller can fix the in-memory PK positions via
-     * {@code Cache.shiftPkPositionsAfterCompaction}), or {@code null} when no survivor moved.
-     */
     public PkCompaction deleteFromCollection(PkIndexEntry pkIndexEntry) {
         final var dbName = pkIndexEntry.getDatabaseName();
         final var collName = pkIndexEntry.getCollectionName();
         final var page = pkIndexEntry.getPage();
-        final var file = getCollectionFile(dbName, collName, page);
-        final var lock = fileLock(file).writeLock();
+        final var file = paths.collectionPage(dbName, collName, page);
+        final var lock = FileLocks.lockFor(file).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
             final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.setLength(totalFileLength - pkIndexEntry.getLength());
-            deleteIndexValue(pkIndexEntry);
+            pkIndexStore.deleteIndexValue(pkIndexEntry);
             return compacted ? compactionFor(pkIndexEntry) : null;
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -690,18 +314,6 @@ public class FileSystem {
         }
     }
 
-    private void deleteIndexValue(PkIndexEntry pkIndexEntry) throws IOException {
-        internalUpdatePKIndex(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(), pkIndexEntry.getValue(),
-                null);
-    }
-
-    /**
-     * Shifts the entries after {@code pkIndexEntry} toward the start of the page, overwriting its
-     * slot. Returns {@code true} when entries were actually moved (so the caller must fix the
-     * in-memory PK positions of the survivors), {@code false} when there was nothing to shift — the
-     * removed entry was the last one, or its position is already past the end of the file (a stale
-     * position from a concurrent compaction/drop), in which case allocating the buffer is skipped.
-     */
     private boolean shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, long totalFileLength)
             throws IOException {
         final int otherEntriesLength = (int) (totalFileLength - pkIndexEntry.getPosition() - pkIndexEntry.getLength());
@@ -716,21 +328,12 @@ public class FileSystem {
         return true;
     }
 
-    /**
-     * Updates many entries by delegating to the single-entry {@link #updateFromCollection}, which keeps
-     * the page file and PK index file correct for each row. Earlier updates shift the file positions of
-     * later same-page entries, so this drives each {@code updateFromCollection} with a private,
-     * progressively-adjusted copy of the target's index entry (never mutating the caller's cached
-     * {@link PkIndexEntry} objects). The returned {@link BulkUpdateResult} carries the new entries plus
-     * the ordered compactions the caller must apply to fix the in-memory positions of the surviving
-     * (non-updated) entries.
-     */
     public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
             throws IOException {
         final var updated = new ArrayList<IndexedDbEntry>();
         final var compactions = new ArrayList<PkCompaction>();
-        // Private copies of the target index entries; their positions are adjusted as earlier updates
-        // compact the page, so each delegated update sees the current on-disk position.
+        // Private copies: earlier updates compact the page, so these positions are adjusted as we go
+        // rather than mutating the caller's cached entries.
         final var working = new ArrayList<PkIndexEntry>(entries.size());
         for (final var entry : entries) {
             final var idx = entry.getIndex();
@@ -752,11 +355,8 @@ public class FileSystem {
             final var compaction = result.compaction();
             if (compaction != null) {
                 compactions.add(compaction);
-                // This update relocated the row to the end and shifted later same-page entries toward
-                // the start. Apply the same shift to the still-to-be-processed working copies (so the
-                // next update sees the current on-disk position) and to the already-relocated entries
-                // from earlier iterations (so their reported new positions stay correct), but not to
-                // the row we just relocated.
+                // Apply the shift to the pending working copies and to the entries relocated by earlier
+                // iterations, but never to the row this iteration just relocated.
                 for (int j = i + 1; j < working.size(); j++) {
                     shiftIfAfter(working.get(j), compaction);
                 }
@@ -768,17 +368,12 @@ public class FileSystem {
         return new BulkUpdateResult(updated, compactions);
     }
 
-    /**
-     * Updates the entry in place, relocating it to the end of its page and compacting the survivors.
-     * Returns the new {@link PkIndexEntry} together with the {@link PkCompaction} the caller must
-     * apply to the in-memory PK positions (or a null compaction when no survivor moved).
-     */
     public UpdateResult updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
         final var dbName = entry.getDatabaseName();
         final var collName = entry.getCollectionName();
         final var page = entry.getPage();
-        final var file = getCollectionFile(dbName, collName, page);
-        final var lock = fileLock(file).writeLock();
+        final var file = paths.collectionPage(dbName, collName, page);
+        final var lock = FileLocks.lockFor(file).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
@@ -790,547 +385,64 @@ public class FileSystem {
             writer.write(bytes, 0, length);
             writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
             entry.setPreviousByteSize(pkIndexEntry.getLength());
-            final var updated = updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(), entry.get_id(),
-                    totalFileLength, length, page, entry.getVersion());
+            final var updated = pkIndexStore.updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(),
+                    entry.get_id(), totalFileLength, length, page, entry.getVersion());
             return new UpdateResult(updated, compacted ? compactionFor(pkIndexEntry) : null);
         } finally {
             lock.unlock();
         }
     }
 
-    private PkIndexEntry updateIndexValues(String dbName, String collectionName, String value, long position,
-            int length, long page, long version) throws IOException {
-        final var newIndexEntry = new PkIndexEntry(dbName, collectionName, value, position, length, page, version);
-        internalUpdatePKIndex(dbName, collectionName, value, newIndexEntry);
-        return newIndexEntry;
-    }
-
-    private void internalUpdatePKIndex(String dbName, String collectionName, String value, PkIndexEntry newPkIndexEntry)
-            throws IOException {
-        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
-        final var lock = fileLock(indexFile).writeLock();
-        lock.lock();
-        try {
-            final List<String> existingLines = indexFile.exists() ? Files.readAllLines(indexFile.toPath()) : List.of();
-            // Parse every entry, pulling out the one being updated/deleted. The remaining entries
-            // ("others") have their on-disk positions corrected per page (see reindexPks); the file is
-            // rewritten in full because the entries needing a shift are not contiguous in the
-            // id-sorted file (a same-page, later-positioned row can sort before the updated id).
-            final var others = new ArrayList<PkIndexEntry>(existingLines.size());
-            PkIndexEntry oldEntry = null;
-            for (final var line : existingLines) {
-                if (line.isBlank()) {
-                    continue;
-                }
-                final var entry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line);
-                if (entry.getValue().equals(value)) {
-                    oldEntry = entry;
-                } else {
-                    others.add(entry);
-                }
-            }
-            final var reIndexedEntries = reindexPks(oldEntry, newPkIndexEntry, others);
-            final var lines = reIndexedEntries.stream().map(PkIndexEntry::toFileEntry).toList();
-            rewriteFileAtomically(indexFile.toPath(), lines);
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    /**
-     * Recomputes the on-disk PK index after the entry identified by {@code oldEntry} is relocated
-     * (update) or removed (delete). Removing/relocating that row compacts its page, so every other
-     * entry <em>on the same page</em> whose position is past the removed slot shifts toward the start
-     * of the page by the old row's length — the same per-page rule the in-memory PK index uses
-     * ({@code UserCache.shiftPkPositionsAfterCompaction}). Entries on other pages are untouched. For
-     * an update, {@code newPkIndexEntry} carries the relocated row's page-file length as its position;
-     * subtracting the old length yields the row's new start (where {@link #updateFromCollection} wrote
-     * it). {@code newPkIndexEntry} is {@code null} for a delete. {@code oldEntry} may be {@code null}
-     * if the value was not present (defensive), in which case no shift is applied.
-     */
-    private List<PkIndexEntry> reindexPks(PkIndexEntry oldEntry, PkIndexEntry newPkIndexEntry,
-            List<PkIndexEntry> others) {
-        if (oldEntry != null) {
-            for (final var entry : others) {
-                if (entry.getPage() == oldEntry.getPage() && entry.getPosition() > oldEntry.getPosition()) {
-                    entry.setPosition(entry.getPosition() - oldEntry.getLength());
-                }
-            }
-        }
-        if (newPkIndexEntry != null) {
-            if (oldEntry != null) {
-                newPkIndexEntry.setPosition(newPkIndexEntry.getPosition() - oldEntry.getLength());
-            }
-            others.add(newPkIndexEntry);
-        }
-        others.sort(Comparator.comparing(PkIndexEntry::getValue));
-        return others;
-    }
-
     public void writeIndexFile(String dbName, String collName, String fieldName,
             Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap) {
-        for (var indexTypeList : indexEntryMap.entrySet()) {
-            final var type = IndexKind.fileLabel(indexTypeList.getKey());
-            final var indexFile = getIndexFile(dbName, collName, fieldName, type);
-            final var lock = fileLock(indexFile).writeLock();
-            lock.lock();
-            try (var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
-                var strData = indexTypeList.getValue().stream().map(FieldIndexEntry::toFileEntry)
-                        .collect(Collectors.joining(Globals.NEWLINE));
-                strData += Globals.NEWLINE;
-                writer.append(strData);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            } finally {
-                lock.unlock();
-            }
-        }
+        fieldIndexStore.writeIndexFile(dbName, collName, fieldName, indexEntryMap);
     }
 
-    // Hash index counterpart of writeIndexFile: appends the element-match entries (value = hex hash)
-    // for a single kind (object or array) to its own {coll}-{field}-Object.idx / -Array.idx file.
     public void writeHashIndexFile(String dbName, String collName, String fieldName, IndexKind kind,
             List<FieldIndexEntry<String>> entries) {
-        if (entries.isEmpty()) {
-            return;
-        }
-        final var indexFile = getIndexFile(dbName, collName, fieldName, kind.label());
-        final var lock = fileLock(indexFile).writeLock();
-        lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
-            var strData = entries.stream().map(FieldIndexEntry::toFileEntry)
-                    .collect(Collectors.joining(Globals.NEWLINE));
-            strData += Globals.NEWLINE;
-            writer.append(strData);
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        } finally {
-            lock.unlock();
-        }
+        fieldIndexStore.writeHashIndexFile(dbName, collName, fieldName, kind, entries);
     }
 
-    // Hash index counterpart of updateIndexFiles: removes then (re)writes a single hash entry in the
-    // kind-specific index file. The entry value is already the hex hash, so getStringValue/
-    // searchIndexValue locate it the same way as for scalar indexes.
     public void updateHashIndexFiles(String dbName, String collName, String fieldName, IndexKind kind,
             FieldIndexEntry<String> insertedEntry, FieldIndexEntry<String> removedEntry) throws IOException {
-        final var indexFile = getIndexFile(dbName, collName, fieldName, kind.label());
-        if (removedEntry != null) {
-            final var lock = fileLock(indexFile).writeLock();
-            lock.lock();
-            try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-                final var strWholeFile = readFully(writer);
-                final var indexOfExisting = searchIndexValue(strWholeFile, removedEntry.getValue());
-                if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
-                    if (!removedEntry.getIds().isEmpty()) {
-                        writer.writeBytes(removedEntry.toFileEntry());
-                        writer.writeBytes(Globals.NEWLINE);
-                    }
-                }
-            } finally {
-                lock.unlock();
-            }
-        }
-        if (insertedEntry != null) {
-            final var lock = fileLock(indexFile).writeLock();
-            lock.lock();
-            try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-                final var strWholeFile = readFully(writer);
-                final var indexOfExisting = searchIndexValue(strWholeFile, insertedEntry.getValue());
-                if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
-                } else {
-                    writer.seek(strWholeFile.length());
-                }
-                writer.writeBytes(insertedEntry.toFileEntry());
-                writer.writeBytes(Globals.NEWLINE);
-            } finally {
-                lock.unlock();
-            }
-        }
-    }
-
-    private int searchIndexValue(String strWholeFile, String value) {
-        int lineStart = 0;
-        while (lineStart < strWholeFile.length()) {
-            final int lineEnd = strWholeFile.indexOf(Globals.NEWLINE, lineStart);
-            final int effectiveEnd = lineEnd == -1 ? strWholeFile.length() : lineEnd;
-            final var line = strWholeFile.substring(lineStart, effectiveEnd);
-            if (!line.isBlank()) {
-                final var separatorIdx = line.indexOf(Globals.ID_SEPARATOR);
-                if (separatorIdx >= 0 && line.substring(0, separatorIdx).equals(value)) {
-                    return lineStart == 0 ? 0 : lineStart - Globals.NEWLINE_CHAR_LENGTH;
-                }
-            }
-            if (lineEnd == -1)
-                break;
-            lineStart = lineEnd + Globals.NEWLINE_CHAR_LENGTH;
-        }
-        return -1;
-    }
-
-    private <K> String getStringValue(FieldIndexEntry<K> entry) {
-        final var value = entry.getValue();
-        String strValue;
-        if (value instanceof JsonCustom<?> jsonCustom) {
-            strValue = jsonCustom.getValue();
-        } else if (value instanceof Number number) {
-            if (number.doubleValue() % 1 == 0) {
-                strValue = String.valueOf(number.longValue());
-            } else {
-                strValue = String.valueOf(number.doubleValue());
-            }
-        } else {
-            strValue = value.toString();
-        }
-        return strValue;
+        fieldIndexStore.updateHashIndexFiles(dbName, collName, fieldName, kind, insertedEntry, removedEntry);
     }
 
     public <T, K> void updateIndexFiles(String dbName, String collName, String fieldName,
             FieldIndexEntry<T> insertedEntry, FieldIndexEntry<K> removedEntry) throws IOException {
-        if (removedEntry != null) {
-            final var strIndexType = IndexKind.fileLabel(removedEntry.getValue().getClass());
-            final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
-            final var lock = fileLock(indexFile).writeLock();
-            lock.lock();
-            try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-                final var strWholeFile = readFully(writer);
-                final var strValue = getStringValue(removedEntry);
-                final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
-                if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
-                    if (!removedEntry.getIds().isEmpty()) {
-                        final var toWriteLine = removedEntry.toFileEntry();
-                        writer.writeBytes(toWriteLine);
-                        writer.writeBytes(Globals.NEWLINE);
-                    }
-                }
-            } finally {
-                lock.unlock();
-            }
-        }
-        if (insertedEntry != null) {
-            final var strIndexType = IndexKind.fileLabel(insertedEntry.getValue().getClass());
-            final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
-            final var lock = fileLock(indexFile).writeLock();
-            lock.lock();
-            try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-                final var strWholeFile = readFully(writer);
-                final var strValue = getStringValue(insertedEntry);
-                final var indexOfExisting = searchIndexValue(strWholeFile, strValue);
-                final var toWriteLine = insertedEntry.toFileEntry();
-                if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, strWholeFile, indexOfExisting);
-                } else {
-                    writer.seek(strWholeFile.length());
-                }
-                writer.writeBytes(toWriteLine);
-                writer.writeBytes(Globals.NEWLINE);
-            } finally {
-                lock.unlock();
-            }
-        }
-    }
-
-    private void shiftOtherEntries(RandomAccessFile writer, String strWholeFile, int indexOfExisting)
-            throws IOException {
-        var replacementIndex = indexOfExisting;
-        var fromExistingEntry = strWholeFile.substring(indexOfExisting);
-        if (fromExistingEntry.startsWith(Globals.NEWLINE)) {
-            fromExistingEntry = fromExistingEntry.substring(Globals.NEWLINE_CHAR_LENGTH);
-            replacementIndex += Globals.NEWLINE_CHAR_LENGTH;
-        }
-        var otherEntries = fromExistingEntry.substring(fromExistingEntry.indexOf(Globals.NEWLINE));
-        if (otherEntries.startsWith(Globals.NEWLINE)) {
-            otherEntries = otherEntries.substring(Globals.NEWLINE_CHAR_LENGTH);
-        }
-        writer.seek(replacementIndex);
-        writer.writeBytes(otherEntries);
-        writer.setLength(replacementIndex + otherEntries.length());
-    }
-
-    private String readFully(RandomAccessFile writer) throws IOException {
-        final var fileLength = (int) writer.length();
-        byte[] buffer = new byte[fileLength];
-        writer.readFully(buffer, 0, fileLength);
-        return new String(buffer);
+        fieldIndexStore.updateIndexFiles(dbName, collName, fieldName, insertedEntry, removedEntry);
     }
 
     public boolean dropIndex(String dbName, String collName, String fieldName) {
-        final var collFolder = getCollectionFolder(dbName, collName);
-        if (collFolder.exists()) {
-            final var indexFiles = collFolder.listFiles((_, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION) && name
-                    .contains(Globals.INDEX_FILE_NAME_SEPARATOR + fieldName + Globals.INDEX_FILE_NAME_SEPARATOR));
-            if (indexFiles != null) {
-                final var deleted = new ArrayList<Boolean>();
-                for (var index : indexFiles) {
-                    deleted.add(index.delete());
-                }
-                return deleted.stream().allMatch(aBoolean -> aBoolean);
-            }
-        }
-        return false;
+        return fieldIndexStore.dropIndex(dbName, collName, fieldName);
     }
 
     public ConcurrentMap<String, List<FieldIndexEntry<?>>> readAllWholeFieldIndexFiles(String dbName, String collName,
             String fieldName) {
-        final var collectionFolder = getCollectionFolder(dbName, collName);
-        if (collectionFolder.exists()) {
-            final var indexFiles = collectionFolder.listFiles((_, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION)
-                    && !name.contains(Globals.PK_FIELD) && name.contains(fieldName));
-            if (indexFiles != null) {
-                return Arrays.stream(indexFiles).map(file -> {
-                    final var lock = fileLock(file).readLock();
-                    lock.lock();
-                    try {
-                        final var fileName = file.getName();
-                        final var type = fileName.split("-")[2].split("\\.")[0];
-                        return new AbstractMap.SimpleEntry<>(type, Files.readAllLines(file.toPath()));
-                    } catch (IOException e) {
-                        return null;
-                    } finally {
-                        lock.unlock();
-                    }
-                }).filter(Objects::nonNull)
-                        .map((AbstractMap.SimpleEntry<String, List<String>> stringListSimpleEntry) -> {
-                            final var className = stringListSimpleEntry.getKey();
-                            final var clazz = ReflectionUtils.getClassFromSimpleName(className);
-                            return new AbstractMap.SimpleEntry<>(className,
-                                    stringListSimpleEntry.getValue().stream()
-                                            .map(s -> FieldIndexEntry.fromIndexFileEntry(dbName, collName, s, clazz))
-                                            .collect(Collectors.toList()));
-                        }).collect(Collectors.toConcurrentMap(AbstractMap.SimpleEntry::getKey,
-                                classListSimpleEntry -> new ArrayList<>(classListSimpleEntry.getValue())));
-            }
-        }
-        return null;
+        return fieldIndexLoader.readAllWholeFieldIndexFiles(dbName, collName, fieldName);
     }
 
     public <T> List<FieldIndexEntry<T>> readWholeFieldIndexFiles(String dbName, String collName, String fieldName,
             Class<T> indexType) throws IOException {
-        final var collectionFolder = getCollectionFolder(dbName, collName);
-        if (collectionFolder.exists()) {
-            final var strIndexType = IndexKind.fileLabel(indexType);
-            final var indexFile = getIndexFile(dbName, collName, fieldName, strIndexType);
-            if (indexFile.exists()) {
-                final var lock = fileLock(indexFile).readLock();
-                lock.lock();
-                final List<String> lines;
-                try {
-                    lines = Files.readAllLines(indexFile.toPath());
-                } finally {
-                    lock.unlock();
-                }
-                // Field index files are written non-atomically (append / in-place rewrite), so a crash
-                // mid-write can leave a torn final line. Skip-and-log malformed lines and self-heal the
-                // file, mirroring readWholePkIndexFile, instead of letting one bad line fail every read.
-                final var entries = new ArrayList<FieldIndexEntry<T>>();
-                final var keepLines = new ArrayList<String>();
-                var dropped = false;
-                for (var line : lines) {
-                    if (line.isBlank()) {
-                        continue;
-                    }
-                    try {
-                        entries.add(FieldIndexEntry.fromIndexFileEntry(dbName, collName, line, indexType));
-                        keepLines.add(line);
-                    } catch (Exception e) {
-                        dropped = true;
-                        logger.warning("Removing malformed field index entry in " + indexFile.getName() + ": "
-                                + e.getMessage());
-                    }
-                }
-                if (dropped) {
-                    rewriteFileAtomically(indexFile.toPath(), keepLines);
-                }
-                entries.sort((o1, o2) -> switch ((Object) o1.getValue()) {
-                    case Number n -> Double.compare(n.doubleValue(), ((Number) o2.getValue()).doubleValue());
-                    case Boolean b -> Boolean.compare(b, (Boolean) o2.getValue());
-                    case JsonCustom<?> c -> {
-                        final var customClass = c.getClass();
-                        //noinspection unchecked
-                        yield customClass.cast(c).compare(customClass.cast(o2.getValue()).getCustomValue());
-                    }
-                    default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
-                });
-                return entries;
-            }
-        }
-        return null;
+        return fieldIndexLoader.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType);
     }
 
-    // Hash index counterpart of readWholeFieldIndexFiles: loads every element-match entry (value =
-    // hex hash) for the given kind, sorted by hash so SearchUtils' binary search works.
     public List<FieldIndexEntry<String>> readWholeHashIndexFile(String dbName, String collName, String fieldName,
             IndexKind kind) throws IOException {
-        final var collectionFolder = getCollectionFolder(dbName, collName);
-        if (collectionFolder.exists()) {
-            final var indexFile = getIndexFile(dbName, collName, fieldName, kind.label());
-            if (indexFile.exists()) {
-                final var lock = fileLock(indexFile).readLock();
-                lock.lock();
-                final List<String> lines;
-                try {
-                    lines = Files.readAllLines(indexFile.toPath());
-                } finally {
-                    lock.unlock();
-                }
-                // Hash index files are written non-atomically, so self-heal a torn line rather than
-                // failing the whole read (see readWholeFieldIndexFiles / readWholePkIndexFile).
-                final var entries = new ArrayList<FieldIndexEntry<String>>();
-                final var keepLines = new ArrayList<String>();
-                var dropped = false;
-                for (var line : lines) {
-                    if (line.isBlank()) {
-                        continue;
-                    }
-                    try {
-                        entries.add(FieldIndexEntry.fromIndexFileEntry(dbName, collName, line, String.class));
-                        keepLines.add(line);
-                    } catch (Exception e) {
-                        dropped = true;
-                        logger.warning("Removing malformed hash index entry in " + indexFile.getName() + ": "
-                                + e.getMessage());
-                    }
-                }
-                if (dropped) {
-                    rewriteFileAtomically(indexFile.toPath(), keepLines);
-                }
-                entries.sort(Comparator.comparing(FieldIndexEntry::getValue, String::compareToIgnoreCase));
-                return entries;
-            }
-        }
-        return null;
-    }
-
-    public List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
-        final var indexFile = getIndexFile(dbName, collectionName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
-        if (!indexFile.exists()) {
-            return new ArrayList<>();
-        }
-        // Keyed by PK value, preserving first-seen order. A non-atomic write interrupted mid-rewrite can leave
-        // a torn line (handled by skip-and-log) or a duplicate line for the same id (handled by keeping the
-        // last occurrence — the freshest position). Either way we self-heal by rewriting the survivors, so a
-        // single bad/duplicate line never fails every PK-index-backed read.
-        final var byValue = new LinkedHashMap<String, PkIndexEntry>();
-        final var lineByValue = new LinkedHashMap<String, String>();
-        boolean dropped = false;
-        final var lock = fileLock(indexFile).readLock();
-        lock.lock();
-        final List<String> indexLines;
-        try {
-            indexLines = Files.readAllLines(indexFile.toPath());
-        } finally {
-            lock.unlock();
-        }
-        for (var line : indexLines) {
-            if (line.isEmpty())
-                continue;
-            try {
-                final var entry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line);
-                if (byValue.put(entry.getValue(), entry) != null) {
-                    dropped = true;
-                    logger.warning("Removing duplicate PK index entry for '" + entry.getValue() + "' in "
-                            + indexFile.getName() + ", keeping the last occurrence");
-                }
-                lineByValue.put(entry.getValue(), line);
-            } catch (Exception e) {
-                dropped = true;
-                logger.warning("Removing malformed PK index entry in " + indexFile.getName() + ": " + e.getMessage());
-            }
-        }
-        if (dropped) {
-            rewriteFileAtomically(indexFile.toPath(), new ArrayList<>(lineByValue.values()));
-        }
-        final var entries = new ArrayList<>(byValue.values());
-        entries.sort(Comparator.comparing(PkIndexEntry::getValue));
-        return entries;
+        return fieldIndexLoader.readWholeHashIndexFile(dbName, collName, fieldName, kind);
     }
 
     public Map<String, DbEntry> readWholeCollectionPage(String dbName, String collectionName, long page)
             throws IOException {
-        final var collectionFile = getCollectionFile(dbName, collectionName, page);
-        if (!collectionFile.exists()) {
-            return new HashMap<>();
-        }
-        final var result = new HashMap<String, DbEntry>();
-        final var lock = fileLock(collectionFile).readLock();
-        lock.lock();
-        final List<String> pageLines;
-        try {
-            pageLines = Files.readAllLines(collectionFile.toPath());
-        } finally {
-            lock.unlock();
-        }
-        for (var line : pageLines) {
-            if (line.isEmpty())
-                continue;
-            try {
-                final var entry = DbEntry.fromString(dbName, collectionName, line);
-                result.put(entry.get_id(), entry);
-            } catch (Exception e) {
-                // Skip-and-log only. We deliberately do NOT rewrite the .dat
-                // file here: the .idx file stores byte offsets into the .dat,
-                // so removing lines would invalidate every entry's recorded
-                // position. Compacting both atomically is a separate concern
-                // (a real compaction operation, not a read-side side effect).
-                logger.warning("Skipping malformed entry in " + collectionFile.getName() + ": " + e.getMessage());
-            }
-        }
-        return result;
-    }
-
-    private void rewriteFileAtomically(Path path, List<String> lines) throws IOException {
-        final var tmp = path.resolveSibling(path.getFileName() + ".repair");
-        Files.write(tmp, lines, StandardCharsets.UTF_8, StandardOpenOption.CREATE,
-                StandardOpenOption.TRUNCATE_EXISTING);
-        try {
-            Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-        } catch (IOException e) {
-            // ATOMIC_MOVE can fail across filesystems or on platforms that don't
-            // support it; fall back to a non-atomic move.
-            Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
-        }
+        return documentPageStore.readWholeCollectionPage(dbName, collectionName, page);
     }
 
     public Stream<Map<String, DbEntry>> streamPages(String dbName, String collName) throws IOException {
-        final var collectionFolder = getCollectionFolder(dbName, collName).toPath();
-        if (!Files.exists(collectionFolder)) {
-            return Stream.empty();
-        }
-        final var pathStream = Files.list(collectionFolder);
-        return pathStream.filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION)).map(path -> {
-            final var fileName = path.toFile().getName();
-            final var fileParts = fileName.replace(Globals.DB_FILE_EXTENSION, "").split(Globals.FILE_PAGE_SEPARATOR);
-            final var page = Long.parseLong(fileParts[fileParts.length - 1]);
-            try {
-                return readWholeCollectionPage(dbName, collName, page);
-            } catch (IOException e) {
-                throw new RuntimeException(e);
-            }
-        }).onClose(pathStream::close);
+        return documentPageStore.streamPages(dbName, collName);
     }
 
     public Stream<DbEntry> streamEntries(String dbName, String collName) throws IOException {
-        return streamPages(dbName, collName).flatMap(map -> map.values().stream());
+        return documentPageStore.streamEntries(dbName, collName);
     }
 
-    public PkIndexEntry findPkIndexEntry(String dbName, String collName, String id) throws IOException {
-        final var indexFile = getIndexFile(dbName, collName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
-        if (!indexFile.exists()) {
-            return null;
-        }
-        final var lock = fileLock(indexFile).readLock();
-        lock.lock();
-        final List<String> lines;
-        try {
-            lines = Files.readAllLines(indexFile.toPath());
-        } finally {
-            lock.unlock();
-        }
-        return lines.stream().filter(line -> !line.isEmpty())
-                .map(line -> PkIndexEntry.fromIndexFileEntry(dbName, collName, line))
-                .filter(entry -> entry.getValue().equals(id)).findFirst().orElse(null);
-    }
 }

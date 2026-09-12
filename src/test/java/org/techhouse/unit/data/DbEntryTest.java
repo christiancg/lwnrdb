@@ -8,7 +8,6 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 
 public class DbEntryTest {
-    // Successfully creates DbEntry from a valid JsonObject
     @Test
     public void test_create_db_entry_from_valid_json_object() {
         String databaseName = "testDB";
@@ -25,7 +24,6 @@ public class DbEntryTest {
         assertEquals(jsonObject, entry.getData());
     }
 
-    // Handles JsonObject without _id field
     @Test
     public void test_handle_json_object_without_id_field() {
         String databaseName = "testDB";
@@ -41,7 +39,6 @@ public class DbEntryTest {
         assertEquals(jsonObject, entry.getData());
     }
 
-    // Converts valid JSON string to DbEntry with correct fields
     @Test
     public void test_valid_json_string_conversion() {
         String databaseName = "testDB";
@@ -56,7 +53,6 @@ public class DbEntryTest {
         assertEquals("testName", entry.getData().get("name").asJsonString().getValue());
     }
 
-    // Handles JSON string without _id field gracefully
     @Test
     public void test_json_string_without_id_field() {
         String databaseName = "testDB";
@@ -71,7 +67,6 @@ public class DbEntryTest {
         assertEquals("testName", entry.getData().get("name").asJsonString().getValue());
     }
 
-    // Generates a new UUID when _id is null
     @Test
     public void test_generates_new_uuid_when_id_is_null() {
         DbEntry entry = new DbEntry();
@@ -81,7 +76,6 @@ public class DbEntryTest {
         assertTrue(fileEntry.contains(entry.get_id()));
     }
 
-    // byteSize returns the UTF-8 byte length of the file entry plus newline
     @Test
     public void test_byte_size_returns_utf8_byte_length() {
         DbEntry entry = new DbEntry();
@@ -95,7 +89,6 @@ public class DbEntryTest {
         assertTrue(size > expected.length(), "Multi-byte chars should make byte count exceed char count");
     }
 
-    // byteSize returns 0 when data is null
     @Test
     public void test_byte_size_is_zero_when_data_null() {
         DbEntry entry = new DbEntry();

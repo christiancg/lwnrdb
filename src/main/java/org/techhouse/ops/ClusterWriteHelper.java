@@ -10,18 +10,12 @@ import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveResponse;
 
-/**
- * Bridges the write handlers to the clustering layer: rejects writes this node may not coordinate, and after
- * a successful local commit replicates them to the quorum. All methods are no-ops when clustering is off or
- * this node is not the owner, so the single-node write path is unchanged.
- */
 public final class ClusterWriteHelper {
     private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
 
     private ClusterWriteHelper() {
     }
 
-    // Returns an error response if this node may not coordinate the write, or null to proceed.
     public static OperationResponse guard(OperationType type, String dbName, String collName) {
         final var guard = coordinator.guardWrite(dbName, collName);
         return switch (guard.kind()) {

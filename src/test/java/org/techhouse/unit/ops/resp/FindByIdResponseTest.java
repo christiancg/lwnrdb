@@ -9,7 +9,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.FindByIdResponse;
 
 public class FindByIdResponseTest {
-    // Create FindByIdResponse with valid JsonObject and OK status
     @Test
     public void test_create_find_by_id_response_with_valid_object() {
         JsonObject jsonObject = new JsonObject();
@@ -26,7 +25,6 @@ public class FindByIdResponseTest {
         assertTrue(response.getObject().has("name"));
     }
 
-    // Create FindByIdResponse with null JsonObject
     @Test
     public void test_create_find_by_id_response_with_null_object() {
         FindByIdResponse response = new FindByIdResponse("Not found", null);
@@ -37,7 +35,6 @@ public class FindByIdResponseTest {
         assertNull(response.getObject());
     }
 
-    // Test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         JsonObject jsonObject = new JsonObject();
@@ -46,13 +43,11 @@ public class FindByIdResponseTest {
 
         FindByIdResponse response = new FindByIdResponse("Found", jsonObject);
 
-        // Test getters
         assertEquals(OperationType.FIND_BY_ID, response.getType());
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals("Found", response.getMessage());
         assertEquals(jsonObject, response.getObject());
 
-        // Test setters
         JsonObject newJsonObject = new JsonObject();
         newJsonObject.addProperty("id", 2);
         newJsonObject.addProperty("name", "updated");

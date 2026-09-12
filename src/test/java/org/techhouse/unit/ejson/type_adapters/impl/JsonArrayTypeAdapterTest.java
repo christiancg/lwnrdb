@@ -10,7 +10,6 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.JsonArrayTypeAdapter;
 
 public class JsonArrayTypeAdapterTest {
-    // Convert empty JsonArray to JSON string returns '[]'
     @Test
     public void test_empty_json_array_conversion() {
         JsonArrayTypeAdapter adapter = new JsonArrayTypeAdapter();
@@ -21,7 +20,6 @@ public class JsonArrayTypeAdapterTest {
         assertEquals("[]", result);
     }
 
-    // Handle null JsonArray input in toJson
     @Test
     public void test_null_json_array_handling() {
         JsonArrayTypeAdapter adapter = new JsonArrayTypeAdapter();
@@ -29,7 +27,6 @@ public class JsonArrayTypeAdapterTest {
         assertThrows(NullPointerException.class, () -> adapter.toJson(null));
     }
 
-    // Handle JsonArray with null elements
     @Test
     public void test_json_array_with_null_elements() {
         new EJson();
@@ -44,7 +41,6 @@ public class JsonArrayTypeAdapterTest {
         assertEquals("[null,\"test\",null]", result);
     }
 
-    // Pass null value as input parameter
     @Test
     public void test_null_input() {
         JsonArrayTypeAdapter adapter = new JsonArrayTypeAdapter();

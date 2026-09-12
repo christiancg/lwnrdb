@@ -39,7 +39,6 @@ public class ScriptModuleTest {
         return fn.invoke(JsUndefined.getInstance(), List.of(args));
     }
 
-    // The module exposes exactly one member, importText
     @Test
     public void test_module_shape() {
         final var module = ScriptModule.create(recorder, enabled(), null);
@@ -47,7 +46,6 @@ public class ScriptModuleTest {
         assertInstanceOf(JsNativeFunction.class, module.get("importText"));
     }
 
-    // With no explicit id the module id is derived from the source text
     @Test
     public void test_default_module_id_is_content_addressed() {
         final var module = ScriptModule.create(recorder, enabled(), null);
@@ -60,7 +58,6 @@ public class ScriptModuleTest {
         assertTrue(imported.getFirst().startsWith("text:"));
     }
 
-    // An explicit second argument overrides the derived id
     @Test
     public void test_explicit_module_id() {
         final var module = ScriptModule.create(recorder, enabled(), null);
@@ -69,7 +66,6 @@ public class ScriptModuleTest {
         assertEquals("mine", ((JsString) result).getValue());
     }
 
-    // Both arguments are coerced rather than arity-checked
     @Test
     public void test_arguments_are_coerced() {
         final var module = ScriptModule.create(recorder, enabled(), null);
@@ -79,7 +75,6 @@ public class ScriptModuleTest {
         assertEquals("2|1", imported.get(1));
     }
 
-    // The capability is refused when the host has not enabled it
     @Test
     public void test_disabled_by_default() {
         final var intrinsics = new Intrinsics(null, null, null, null);
@@ -90,7 +85,6 @@ public class ScriptModuleTest {
         assertTrue(imported.isEmpty());
     }
 
-    // A null ResourceLimits is treated as "not enabled" rather than dereferenced
     @Test
     public void test_null_limits_is_disabled() {
         final var intrinsics = new Intrinsics(null, null, null, null);

@@ -25,14 +25,14 @@ public final class TypeAdapterFactory {
     public static <T> TypeAdapter<T> getAdapter(Type type) throws ClassNotFoundException {
         final var adapter = _genericTypeAdapters.get(type);
         if (adapter != null) {
-            return (TypeAdapter<T>) adapter; // Cast should always work
+            return (TypeAdapter<T>) adapter;
         } else {
             final var parameterizedType = (ParameterizedType) type;
             final var clazz = (Class<?>) parameterizedType.getRawType();
             if (Iterable.class.isAssignableFrom(clazz)) {
                 final var typeArgument1 = parameterizedType.getActualTypeArguments()[0];
                 final var typeArgument1Name = typeArgument1.getTypeName();
-                final var iterableAdapter = new IterableTypeAdapter(Class.forName(typeArgument1Name)); // This should be fine for this case
+                final var iterableAdapter = new IterableTypeAdapter(Class.forName(typeArgument1Name));
                 _genericTypeAdapters.put(type, iterableAdapter);
                 return iterableAdapter;
             }
@@ -44,15 +44,15 @@ public final class TypeAdapterFactory {
     public static <T> TypeAdapter<T> getAdapter(Class<T> type) {
         final var adapter = _adapters.get(type);
         if (adapter != null) {
-            return (TypeAdapter<T>) adapter; // Cast should always work
+            return (TypeAdapter<T>) adapter;
         } else if (type.isEnum()) {
-            final var enumAdapter = new EnumTypeAdapter(type); // this is a raw usage but should be safe as type is an enum
+            final var enumAdapter = new EnumTypeAdapter(type);
             _adapters.put(type, enumAdapter);
             return enumAdapter;
         } else if (JsonCustom.class.isAssignableFrom(type)) {
             final var customAdapter = new JsonCustomTypeAdapter();
             _adapters.put(type, customAdapter);
-            return (TypeAdapter<T>) customAdapter; // this should be a safe cast
+            return (TypeAdapter<T>) customAdapter;
         } else {
             final var newAdapter = new ReflectionTypeAdapter<>(type);
             _adapters.put(type, newAdapter);

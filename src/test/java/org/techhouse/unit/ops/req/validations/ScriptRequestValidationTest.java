@@ -17,10 +17,6 @@ import org.techhouse.ops.req.SaveTriggerRequest;
 import org.techhouse.ops.req.TestTriggerRequest;
 import org.techhouse.ops.req.validations.RequestValidator;
 
-/**
- * Shape validation for the procedure, trigger and schedule operations. A procedure name becomes a path
- * segment on disk, so the name rule is what keeps a request from naming a file outside its database.
- */
 public class ScriptRequestValidationTest {
     @Test
     public void test_save_procedure_valid() {
@@ -84,7 +80,6 @@ public class ScriptRequestValidationTest {
         assertFalse(RequestValidator.validate(request).isValid());
     }
 
-    // The run-history collection is the server's own, so a trigger may not be installed on it
     @Test
     public void test_save_trigger_rejects_a_reserved_collection() {
         final var request = new SaveTriggerRequest("myDb", "script_runs", "myTrigger", List.of("CREATED"), "myProc");
@@ -118,7 +113,6 @@ public class ScriptRequestValidationTest {
         assertFalse(RequestValidator.validate(new DeleteTriggerRequest("myDb", "myColl", null)).isValid());
     }
 
-    // Omitting the collection lists every trigger in the database
     @Test
     public void test_list_triggers_without_a_collection_is_valid() {
         assertTrue(RequestValidator.validate(new ListTriggersRequest("myDb", null)).isValid());

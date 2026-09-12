@@ -39,7 +39,6 @@ public class DisposableStackBuiltinsTest {
         return joined.toString();
     }
 
-    // deferred callbacks run in reverse registration order
     @Test
     public void test_defer_runs_in_reverse_order() {
         final var source = """
@@ -53,7 +52,6 @@ public class DisposableStackBuiltinsTest {
         assertEquals("b,a", str(source));
     }
 
-    // use returns its argument and disposes it
     @Test
     public void test_use_returns_and_disposes() {
         final var source = """
@@ -66,19 +64,16 @@ public class DisposableStackBuiltinsTest {
         assertEquals("7:d", str(source));
     }
 
-    // a nullish resource is a no-op
     @Test
     public void test_use_nullish_is_noop() {
         assertEquals(0, num("const s = new DisposableStack(); s.use(null); s.use(undefined); s.dispose(); 0"));
     }
 
-    // a non-disposable resource is rejected
     @Test
     public void test_use_non_disposable_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("new DisposableStack().use({})"));
     }
 
-    // adopt pairs a value with an explicit disposer
     @Test
     public void test_adopt() {
         final var source = """
@@ -91,7 +86,6 @@ public class DisposableStackBuiltinsTest {
         assertEquals("3:d3", str(source));
     }
 
-    // dispose is idempotent
     @Test
     public void test_dispose_is_idempotent() {
         final var source = """
@@ -105,14 +99,12 @@ public class DisposableStackBuiltinsTest {
         assertEquals(1, num(source));
     }
 
-    // the disposed getter reflects the stack's state
     @Test
     public void test_disposed_getter() {
         assertTrue(
                 bool("const s = new DisposableStack(); const before = s.disposed; s.dispose(); !before && s.disposed"));
     }
 
-    // move transfers the entries and disposes the source handle
     @Test
     public void test_move_transfers_entries() {
         final var source = """
@@ -128,7 +120,6 @@ public class DisposableStackBuiltinsTest {
         assertEquals("0:d:true", str(source));
     }
 
-    // registering on a disposed stack is a ReferenceError
     @Test
     public void test_register_after_dispose_throws() {
         assertThrows(ReferenceErrorException.class,
@@ -137,7 +128,6 @@ public class DisposableStackBuiltinsTest {
                 () -> Interpreter.run("const s = new DisposableStack(); s.dispose(); s.move();"));
     }
 
-    // two throwing disposers aggregate into a SuppressedError with the newest as error
     @Test
     public void test_suppressed_error_aggregation() {
         final var source = """
@@ -151,19 +141,16 @@ public class DisposableStackBuiltinsTest {
         assertEquals("SuppressedError:first:second", str(source));
     }
 
-    // disposeAsync resolves after every entry has run
     @Test
     public void test_dispose_async_resolves_after_entries() {
         assertEquals("b,a,done", joinArray());
     }
 
-    // the async stack exposes Symbol.asyncDispose on its prototype
     @Test
     public void test_async_stack_prototype_has_async_dispose() {
         assertTrue(bool("Symbol.asyncDispose in AsyncDisposableStack.prototype"));
     }
 
-    // a prototype method rejects a foreign receiver
     @Test
     public void test_foreign_receiver_throws() {
         assertThrows(TypeErrorException.class, () -> Interpreter.run("DisposableStack.prototype.dispose.call({})"));

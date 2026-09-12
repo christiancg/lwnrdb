@@ -27,7 +27,6 @@ public class InterpreterGeneratorTest {
                 """)).getValue();
     }
 
-    // next() drives a generator through its yields to a done result
     @Test
     public void test_generator_next_sequence() {
         final var source = """
@@ -41,13 +40,11 @@ public class InterpreterGeneratorTest {
         assertEquals("1,false|2,false|undefined,true", str(source));
     }
 
-    // a generator is consumed by for-of
     @Test
     public void test_generator_consumed_by_for_of() {
         assertEquals(6, num("function* g() { yield 1; yield 2; yield 3; } let s = 0; for (const x of g()) s += x; s"));
     }
 
-    // a value passed to next() becomes the result of the paused yield
     @Test
     public void test_generator_two_way_next_value() {
         final var source = """
@@ -59,13 +56,11 @@ public class InterpreterGeneratorTest {
         assertEquals(15, num(source));
     }
 
-    // yield* delegates to an array iterable
     @Test
     public void test_yield_delegate_array() {
         assertEquals(6, num("function* g() { yield* [1, 2, 3]; } let s = 0; for (const x of g()) s += x; s"));
     }
 
-    // yield* delegates to a generator and yields its return value
     @Test
     public void test_yield_delegate_generator_return_value() {
         final var source = """
@@ -78,7 +73,6 @@ public class InterpreterGeneratorTest {
         assertEquals(99, num(source));
     }
 
-    // return() unwinds a suspended generator, running its finally block
     @Test
     public void test_generator_return_runs_finally() {
         final var source = """
@@ -92,7 +86,6 @@ public class InterpreterGeneratorTest {
         assertEquals("cleanup|42,true", str(source));
     }
 
-    // throw() injects an error at the paused yield, catchable in the body
     @Test
     public void test_generator_throw_caught_in_body() {
         final var source = """
@@ -104,13 +97,11 @@ public class InterpreterGeneratorTest {
         assertEquals("caught:boom", str(source));
     }
 
-    // yield outside a generator is a runtime syntax error
     @Test
     public void test_yield_outside_generator_is_syntax_error() {
         assertThrows(SyntaxErrorException.class, () -> Interpreter.run("function f() { return yield 1; } f()"));
     }
 
-    // a generator declared as a class method works
     @Test
     public void test_generator_class_method() {
         final var source = """
@@ -122,13 +113,11 @@ public class InterpreterGeneratorTest {
         assertEquals(3, num(source));
     }
 
-    // an empty generator is immediately done
     @Test
     public void test_empty_generator() {
         assertEquals("undefined,true", str("function* g() {} let r = g().next(); r.value + ',' + r.done"));
     }
 
-    // Generator methods resolve through a real prototype a script can patch
     @Test
     public void test_generator_prototype_is_patchable() {
         assertEquals("object", str("function* g() { yield 1; } typeof Object.getPrototypeOf(g())"));
@@ -146,18 +135,11 @@ public class InterpreterGeneratorTest {
         assertEquals("2,4", str("function* g() { yield 1; yield 2; } g().map(x => x * 2).toArray().join(',')"));
     }
 
-    // Properties of Generator Function Instances: a generator function's own `prototype` object has
-    // no own properties at all (unlike an ordinary function, whose `prototype.constructor` is own) -
-    // the `constructor` back-link instead lives on the shared %GeneratorPrototype%.
     @Test
     public void test_generator_function_prototype_has_no_own_properties() {
         assertEquals(0, num("function* g() {} Object.getOwnPropertyNames(g.prototype).length"));
     }
 
-    // A generator instance's [[Prototype]] is its function's own `prototype` object, one level below
-    // the shared %GeneratorPrototype% - so a double Object.getPrototypeOf lands on the intrinsic that
-    // actually carries @@toStringTag "Generator", and instanceof/patching resolve through the same
-    // per-function link.
     @Test
     public void test_generator_instance_prototype_is_one_level_below_the_shared_intrinsic() {
         assertEquals("Generator", str("""

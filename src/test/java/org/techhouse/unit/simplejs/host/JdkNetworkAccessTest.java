@@ -51,7 +51,6 @@ public class JdkNetworkAccessTest {
         server.stop(0);
     }
 
-    // A real GET round-trips status, headers and body
     @Test
     public void test_get_round_trip() {
         final var network = new JdkNetworkAccess();
@@ -63,7 +62,6 @@ public class JdkNetworkAccessTest {
         assertTrue(response.bodyText().contains("\"ok\":true"));
     }
 
-    // POST forwards the method and body
     @Test
     public void test_post_forwards_body() {
         final var network = new JdkNetworkAccess();
@@ -72,7 +70,6 @@ public class JdkNetworkAccessTest {
         assertEquals("payload", lastBody[0]);
     }
 
-    // A 404 is reported as a non-OK status, not an exception
     @Test
     public void test_not_found_status() {
         final var network = new JdkNetworkAccess();
@@ -81,7 +78,6 @@ public class JdkNetworkAccessTest {
         assertEquals("Not Found", response.statusText());
     }
 
-    // A connection to a dead port throws a NetworkException
     @Test
     public void test_connection_failure_throws() {
         final var network = new JdkNetworkAccess();
@@ -89,7 +85,6 @@ public class JdkNetworkAccessTest {
                 () -> network.fetch(new FetchRequest("GET", "http://127.0.0.1:1/x", Map.of(), null, 500)));
     }
 
-    // End-to-end: a script fetches a real endpoint and parses the JSON body
     @Test
     public void test_end_to_end_script() {
         final var engine = new SimpleJs();

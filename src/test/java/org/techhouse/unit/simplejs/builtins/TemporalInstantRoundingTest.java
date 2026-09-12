@@ -6,11 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * Temporal.Instant rounds two different ways, and which one applies is not a detail: `round`/`toString` round
- * the raw epoch value as if it were positive (so `trunc` is `floor` below the epoch), while `until`/`since`
- * produce a signed Duration and round its magnitude (so `trunc` shrinks it in both directions).
- */
 public class TemporalInstantRoundingTest {
     private static final String MODES = "['ceil','floor','trunc','expand','halfCeil','halfFloor',"
             + "'halfExpand','halfTrunc','halfEven']";
@@ -23,7 +18,6 @@ public class TemporalInstantRoundingTest {
         return str("(() => { try { return String(" + expression + "); } catch (e) { return e.constructor.name; } })()");
     }
 
-    // Above the epoch the two conventions agree
     @Test
     public void test_rounding_an_instant_after_the_epoch() {
         assertEquals("06,05,05,06,06,05,06,05,06", str("""
@@ -33,7 +27,6 @@ public class TemporalInstantRoundingTest {
                 """.formatted(MODES)));
     }
 
-    // Below the epoch every mode resolves against the floor/ceiling bracket, never the magnitude
     @Test
     public void test_rounding_an_instant_before_the_epoch_rounds_as_if_positive() {
         assertEquals("55,54,54,55,55,54,55,54,54", str("""
@@ -65,7 +58,6 @@ public class TemporalInstantRoundingTest {
                 str("Temporal.Instant.from('2026-01-02T03:04:05.5Z').round('hour')" + ".toString()"));
     }
 
-    // A positive difference: trunc shrinks it, expand grows it
     @Test
     public void test_a_positive_difference_rounds_by_magnitude() {
         assertEquals("PT3S,PT2S,PT2S,PT3S,PT3S,PT2S,PT3S,PT2S,PT2S", str("""
@@ -75,7 +67,6 @@ public class TemporalInstantRoundingTest {
                 """.formatted(MODES)));
     }
 
-    // A negative difference: trunc still shrinks it, so it moves the other way than it did for `round`
     @Test
     public void test_a_negative_difference_rounds_by_magnitude() {
         assertEquals("-PT2S,-PT3S,-PT2S,-PT3S,-PT2S,-PT3S,-PT3S,-PT2S,-PT2S", str("""
@@ -112,14 +103,12 @@ public class TemporalInstantRoundingTest {
                 """));
     }
 
-    // An increment has to divide its unit evenly, or the grouping would not tile the timeline
     @Test
     public void test_an_increment_that_does_not_divide_its_unit_is_refused() {
         assertEquals("RangeError", attempt("Temporal.Instant.from('2026-01-02T03:04:05Z')"
                 + ".round({ smallestUnit: 'second', roundingIncrement: 7 })"));
     }
 
-    // An instant has no calendar, so no unit above an hour is meaningful for it
     @Test
     public void test_a_calendar_unit_is_refused() {
         assertEquals("RangeError",

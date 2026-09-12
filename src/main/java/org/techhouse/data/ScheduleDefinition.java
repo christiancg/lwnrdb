@@ -1,39 +1,30 @@
 package org.techhouse.data;
 
+import static org.techhouse.data.JsonFieldReader.longOrZero;
+import static org.techhouse.data.JsonFieldReader.stringOrNull;
+
 import java.util.Objects;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
-public class ScheduleDefinition {
-    private static final String NAME_FIELD = "name";
+public class ScheduleDefinition extends StoredDefinition {
     private static final String PROCEDURE_NAME_FIELD = "procedureName";
     private static final String CRON_FIELD = "cron";
     private static final String INTERVAL_MS_FIELD = "intervalMs";
     private static final String ARGS_FIELD = "args";
     private static final String TIMEOUT_MS_FIELD = "timeoutMs";
-    private static final String ENABLED_FIELD = "enabled";
     private static final String DEFINER_FIELD = "definer";
     private static final String DESCRIPTION_FIELD = "description";
-    private static final String VERSION_FIELD = "version";
-    private static final String CREATED_AT_FIELD = "createdAt";
-    private static final String UPDATED_AT_FIELD = "updatedAt";
-    private static final String UPDATED_BY_FIELD = "updatedBy";
 
-    private String name;
     private String procedureName;
     private String cron;
     private long intervalMs;
     private JsonObject args;
     private long timeoutMs;
-    private boolean enabled;
     private String definer;
     private String description;
-    private long version;
-    private long createdAt;
-    private long updatedAt;
-    private String updatedBy;
 
     public ScheduleDefinition() {
     }
@@ -58,7 +49,7 @@ public class ScheduleDefinition {
 
     public static ScheduleDefinition fromJsonObject(JsonObject object) {
         final var result = new ScheduleDefinition();
-        result.name = stringOrNull(object, NAME_FIELD);
+        result.readCommonFields(object);
         result.procedureName = stringOrNull(object, PROCEDURE_NAME_FIELD);
         result.cron = stringOrNull(object, CRON_FIELD);
         result.intervalMs = longOrZero(object, INTERVAL_MS_FIELD);
@@ -66,14 +57,8 @@ public class ScheduleDefinition {
                 ? object.get(ARGS_FIELD).asJsonObject()
                 : new JsonObject();
         result.timeoutMs = longOrZero(object, TIMEOUT_MS_FIELD);
-        result.enabled = !object.has(ENABLED_FIELD) || object.get(ENABLED_FIELD).isJsonNull()
-                || object.get(ENABLED_FIELD).asJsonBoolean().getValue();
         result.definer = stringOrNull(object, DEFINER_FIELD);
         result.description = stringOrNull(object, DESCRIPTION_FIELD);
-        result.version = longOrZero(object, VERSION_FIELD);
-        result.createdAt = longOrZero(object, CREATED_AT_FIELD);
-        result.updatedAt = longOrZero(object, UPDATED_AT_FIELD);
-        result.updatedBy = stringOrNull(object, UPDATED_BY_FIELD);
         return result;
     }
 
@@ -95,11 +80,7 @@ public class ScheduleDefinition {
             json.add(DESCRIPTION_FIELD, new JsonString(description));
         }
         json.add(VERSION_FIELD, new JsonNumber(version));
-        json.add(CREATED_AT_FIELD, new JsonNumber(createdAt));
-        json.add(UPDATED_AT_FIELD, new JsonNumber(updatedAt));
-        if (updatedBy != null) {
-            json.add(UPDATED_BY_FIELD, new JsonString(updatedBy));
-        }
+        writeAuditFields(json);
         return json;
     }
 
@@ -107,24 +88,6 @@ public class ScheduleDefinition {
         final var json = toJsonObject();
         json.remove(ARGS_FIELD);
         return json;
-    }
-
-    private static String stringOrNull(JsonObject object, String field) {
-        if (!object.has(field) || object.get(field).isJsonNull()) {
-            return null;
-        }
-        return object.get(field).asJsonString().getValue();
-    }
-
-    private static long longOrZero(JsonObject object, String field) {
-        if (!object.has(field) || object.get(field).isJsonNull()) {
-            return 0L;
-        }
-        return object.get(field).asJsonNumber().getValue().longValue();
-    }
-
-    public String getName() {
-        return name;
     }
 
     public String getProcedureName() {
@@ -147,32 +110,12 @@ public class ScheduleDefinition {
         return timeoutMs;
     }
 
-    public boolean isEnabled() {
-        return enabled;
-    }
-
     public String getDefiner() {
         return definer;
     }
 
     public String getDescription() {
         return description;
-    }
-
-    public long getVersion() {
-        return version;
-    }
-
-    public long getCreatedAt() {
-        return createdAt;
-    }
-
-    public long getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public String getUpdatedBy() {
-        return updatedBy;
     }
 
     @Override

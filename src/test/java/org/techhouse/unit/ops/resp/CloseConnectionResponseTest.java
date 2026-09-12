@@ -9,7 +9,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.CloseConnectionResponse;
 
 public class CloseConnectionResponseTest {
-    // Constructor creates instance with CLOSE_CONNECTION type
     @Test
     public void test_constructor_creates_instance_with_close_connection_type() {
         CloseConnectionResponse response = new CloseConnectionResponse();

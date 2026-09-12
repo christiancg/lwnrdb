@@ -10,10 +10,6 @@ import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * The reference-shaped expressions: a tagged template whose tag is a member call, `delete` against the
- * various exotic property tables, and `++`/`--` against a private or super reference.
- */
 public class DeleteUpdateAndTagTest {
     private static String str(String source) {
         return ((JsString) Interpreter.run(source)).getValue();
@@ -23,7 +19,6 @@ public class DeleteUpdateAndTagTest {
         return ((JsBoolean) Interpreter.run(source)).getValue();
     }
 
-    // A member tag is called with its object as `this`, like any other member call
     @Test
     public void test_a_member_tag_receives_its_object_as_this() {
         assertEquals("H:a|b1", str("""
@@ -46,7 +41,6 @@ public class DeleteUpdateAndTagTest {
                 """));
     }
 
-    // A tagged template may not appear in an optional chain, and that is a parse-time refusal
     @Test
     public void test_a_tagged_template_on_an_optional_chain_is_a_syntax_error() {
         final var failure = assertThrows(SyntaxErrorException.class, () -> Interpreter.run("const o = {}; o?.tag`x`"));
@@ -64,7 +58,6 @@ public class DeleteUpdateAndTagTest {
                 """));
     }
 
-    // Deleting something that is not a reference still evaluates it
     @Test
     public void test_deleting_a_call_expression_evaluates_it_and_answers_true() {
         assertEquals("true:1", str("""
@@ -85,7 +78,6 @@ public class DeleteUpdateAndTagTest {
                 """));
     }
 
-    // A generator's `prototype` is non-configurable, so the strict delete throws
     @Test
     public void test_deleting_a_generators_prototype_throws() {
         assertEquals("TypeError", str("""
@@ -95,7 +87,6 @@ public class DeleteUpdateAndTagTest {
                 """));
     }
 
-    // An arrow has no `prototype` at all, so deleting the absent property succeeds
     @Test
     public void test_deleting_an_arrows_absent_prototype_succeeds() {
         assertTrue(bool("delete (() => {}).prototype"));
@@ -128,7 +119,6 @@ public class DeleteUpdateAndTagTest {
         assertTrue(bool("const S = Symbol('s'); class C { static [S] = 1; } delete C[S]"));
     }
 
-    // Every other exotic object keeps its symbol keys in the ordinary table, so the delete lands there
     @Test
     public void test_deleting_a_symbol_key_from_a_map_reaches_its_ordinary_table() {
         assertEquals("true:absent", str("""

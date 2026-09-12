@@ -71,7 +71,6 @@ public class RunScriptResponseTest {
         assertTrue(json.contains("\"errorCode\":\"400-9\""));
     }
 
-    // A console line containing a newline must not break the line-delimited protocol
     @Test
     public void test_escapes_newlines_in_logs() {
         final var json = eJson.toJson(new RunScriptResponse("ok", new JsonNumber(1), List.of("a\nb"), false, "run-1"));

@@ -53,7 +53,6 @@ public class AdminCacheTriggerTest {
                 eJson.toJson(TriggerDefinition.toFileJson(List.of(definitions))));
     }
 
-    // The write hot path: an untriggered collection answers empty and is read from disk only once
     @Test
     public void test_get_triggers_for_returns_empty_for_untriggered_collection() throws Exception {
         assertTrue(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());

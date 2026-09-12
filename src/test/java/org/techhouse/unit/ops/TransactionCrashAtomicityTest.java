@@ -24,10 +24,6 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * A single-node commit records a durable intent marker before it applies anything, so a crash mid-commit is
- * finished at startup rather than leaving the transaction half-applied and discarding the rest.
- */
 public class TransactionCrashAtomicityTest {
     private final Cache cache = IocContainer.get(Cache.class);
 
@@ -103,8 +99,6 @@ public class TransactionCrashAtomicityTest {
         assertNotNull(undecided);
     }
 
-    // Replay rewrites the ops a crash already applied. They carry whole values, so the state converges rather
-    // than compounding - which is what makes replaying a partial commit safe.
     @Test
     public void test_replay_is_idempotent_for_already_applied_ops() throws Exception {
         final var transaction = bufferSlice("dup");
@@ -117,7 +111,6 @@ public class TransactionCrashAtomicityTest {
 
         TransactionOperationHelper.commitLocalFromDurable(txId,
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
-        // A second pass finds no slice left and must be a harmless no-op.
         TransactionOperationHelper.commitLocalFromDurable(txId,
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
 

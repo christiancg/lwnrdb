@@ -50,7 +50,6 @@ public class HostBindingsLocaleTest {
         assertEquals(Locale.getDefault(), SimpleHostBindings.empty().locale());
     }
 
-    // Date's local-time surface answers in the host's zone
     @Test
     public void test_time_zone_drives_date() {
         final var utc = new PinnedBindings(ZoneId.of("UTC"), Locale.US);
@@ -61,7 +60,6 @@ public class HostBindingsLocaleTest {
         assertEquals("-540", run(tokyo, "return String(new Date(0).getTimezoneOffset());"));
     }
 
-    // Temporal.Now reports the host's zone rather than the JVM's
     @Test
     public void test_time_zone_drives_temporal_now() {
         assertEquals("Asia/Tokyo",
@@ -69,7 +67,6 @@ public class HostBindingsLocaleTest {
         assertEquals("UTC", run(new PinnedBindings(ZoneId.of("UTC"), Locale.US), "return Temporal.Now.timeZoneId();"));
     }
 
-    // Number formatting and collation follow the host's locale
     @Test
     public void test_locale_drives_formatting_and_collation() {
         final var us = new PinnedBindings(ZoneId.of("UTC"), Locale.US);

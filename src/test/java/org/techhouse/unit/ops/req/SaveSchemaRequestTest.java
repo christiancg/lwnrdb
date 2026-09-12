@@ -8,7 +8,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.SaveSchemaRequest;
 
 public class SaveSchemaRequestTest {
-    // Constructor sets the SAVE_SCHEMA type and stores the schema
     @Test
     public void test_constructor_and_getters() {
         final var schema = new JsonObject();
@@ -20,7 +19,6 @@ public class SaveSchemaRequestTest {
         assertEquals(schema, request.getSchema());
     }
 
-    // Setter replaces the schema
     @Test
     public void test_setter() {
         final var request = new SaveSchemaRequest("testDb", "testColl", new JsonObject());

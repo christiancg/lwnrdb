@@ -67,7 +67,6 @@ public class ParserPositionTest {
         assertEquals(1, program.getBody().getFirst().getPosition().line());
     }
 
-    // The token-list entry point carries no positions, so nodes degrade to a name with no location
     @Test
     public void test_token_list_parse_leaves_positions_null() {
         final var program = Parser.parse(Lexer.lex("const a = 1;"));

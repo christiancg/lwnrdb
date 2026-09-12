@@ -33,14 +33,12 @@ public class InterpreterAsyncGeneratorTest {
                 "let out = [];\nasync function* g() {}\nasync function main() { for await (const x of g()) out.push(x); out.push('end'); }\nmain();\nout\n");
     }
 
-    // an async generator call is an object with next/return/throw methods
     @Test
     public void test_async_generator_is_object() {
         assertEquals("object", str("typeof (async function* () {})()"));
         assertEquals("function", str("typeof (async function* () {})().next"));
     }
 
-    // for-await consumes an async generator to completion
     @Test
     public void test_for_await_consumes_async_generator() {
         final var source = """
@@ -53,7 +51,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("1,2,3", joined(source));
     }
 
-    // an async generator may await between yields
     @Test
     public void test_await_between_yields() {
         final var source = """
@@ -66,7 +63,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("10,20", joined(source));
     }
 
-    // manual next() calls return promises of {value, done}
     @Test
     public void test_manual_next() {
         final var source = """
@@ -82,7 +78,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("a,false,b,true", joined(source));
     }
 
-    // for-await awaits each element of a sync iterable of promises
     @Test
     public void test_for_await_over_promise_array() {
         final var source = """
@@ -96,7 +91,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("1,2,3", joined(source));
     }
 
-    // yield* delegates to another async generator
     @Test
     public void test_async_yield_star() {
         final var source = """
@@ -110,7 +104,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("1,2,3", joined(source));
     }
 
-    // throw() injects into the generator body and is catchable
     @Test
     public void test_throw_into_async_generator() {
         final var source = """
@@ -123,7 +116,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("caught:boom,done:true", joined(source));
     }
 
-    // return() unwinds through finally and reports done
     @Test
     public void test_return_runs_finally() {
         final var source = """
@@ -136,12 +128,8 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("cleanup,r:x:true", joined(source));
     }
 
-    // Per spec, `return <expr>;` inside an async generator body must Await the expression's value
-    // before completing - a `return` of a thenable resolves to its settled value, not the raw
-    // thenable object. Regression test: this await used to be entirely missing, since by the time
-    // the completion reached the function-body runner, an explicit `return undefined;` and a bare
-    // `return;` had already collapsed into the same value with no way to tell them apart - the fix
-    // has to live in the statement evaluator itself, where the AST still distinguishes them.
+    // Regression: `return <expr>;` in an async generator must Await the value; the fix lives in the
+    // statement evaluator, where the AST still distinguishes it from a bare `return;`.
     @Test
     public void test_explicit_return_of_a_thenable_is_awaited() {
         final var source = """
@@ -154,9 +142,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("resolved-value:true", joined(source));
     }
 
-    // A bare `return;` (no argument at all) must not attempt to await anything - it settles
-    // immediately with `undefined`, exercising the argument == null branch left untouched by the
-    // fix above.
     @Test
     public void test_bare_return_with_no_argument_settles_with_undefined() {
         final var source = """
@@ -169,7 +154,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("1,done", joined(source));
     }
 
-    // an async generator class method works
     @Test
     public void test_async_generator_class_method() {
         final var source = """
@@ -182,7 +166,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("1,2", joined(source));
     }
 
-    // a rejected await inside an async generator surfaces as a rejected step
     @Test
     public void test_rejected_await_rejects_step() {
         final var source = """
@@ -194,7 +177,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("err:bad", joined(source));
     }
 
-    // for await is valid at the top level (top-level await), consuming a list of promises
     @Test
     public void test_top_level_for_await_consumes_promises() {
         final var source = """
@@ -205,20 +187,17 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("1,2", joined(source));
     }
 
-    // for await inside a plain (non-async) function is still a syntax error
     @Test
     public void test_for_await_inside_plain_function_throws() {
         assertThrows(SyntaxErrorException.class,
                 () -> Interpreter.run("function f() { for await (const x of [1]) {} } f()"));
     }
 
-    // an empty async generator completes immediately
     @Test
     public void test_empty_async_generator() {
         assertEquals("end", ((JsString) arr().get(0)).getValue());
     }
 
-    // Async generator methods resolve through a patchable prototype too
     @Test
     public void test_async_generator_prototype_is_patchable() {
         assertEquals("object", str("async function* g() { yield 1; } typeof Object.getPrototypeOf(g())"));
@@ -238,8 +217,6 @@ public class InterpreterAsyncGeneratorTest {
                 """));
     }
 
-    // GetIterator(obj, async) prefers @@asyncIterator and must not touch @@iterator at all when it
-    // is present - the corpus asserts this with a poisoned @@iterator getter
     @Test
     public void test_async_yield_star_ignores_sync_iterator_when_async_present() {
         final var source = """
@@ -259,8 +236,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("0,1", joined(source));
     }
 
-    // A present-but-non-callable @@asyncIterator is a TypeError per GetMethod, not a silent
-    // fallback to synchronous iteration
     @Test
     public void test_async_yield_star_non_callable_async_iterator_throws() {
         final var source = """
@@ -277,7 +252,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("TypeError", joined(source));
     }
 
-    // A sync-only iterable is opened through CreateAsyncFromSyncIterator, awaiting each value
     @Test
     public void test_async_yield_star_awaits_sync_iterator_values() {
         final var source = """
@@ -291,7 +265,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("a,b", joined(source));
     }
 
-    // for await applies the same GetIterator rules as async yield*
     @Test
     public void test_for_await_rejects_non_callable_async_iterator() {
         final var source = """
@@ -306,12 +279,8 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("TypeError", joined(source));
     }
 
-    // Per spec, a `yield*` return-completion into an inner async iterator that has no own `return`
-    // method must still Await the returned value when the *outer* generator is async - regardless
-    // of whether the inner iterable itself came from a sync-to-async adapter. Regression test for a
-    // bug where this await was gated on the wrong condition (fromSync instead of async), so a real
-    // async inner iterator without `return` skipped the await entirely and leaked an unresolved
-    // thenable instead of its resolved value.
+    // Regression: the yield* return-completion await was gated on fromSync instead of async, so a real
+    // async inner iterator without `return` leaked an unresolved thenable.
     @Test
     public void test_yield_star_return_without_inner_return_method_awaits_the_value() {
         final var source = """
@@ -335,7 +304,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("done-value", joined(source));
     }
 
-    // three next() calls made before any settles queue up and resolve in request order
     @Test
     public void test_request_queue_preserves_order() {
         final var source = """
@@ -353,7 +321,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("a:first,b:second,c:undefined:true", joined(source));
     }
 
-    // a next() issued from the generator's own body queues instead of deadlocking on itself
     @Test
     public void test_reentrant_next_queues_instead_of_deadlocking() {
         final var source = """
@@ -371,7 +338,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("outer:1,inner:2", joined(source));
     }
 
-    // AsyncGeneratorYield awaits its operand, so a yielded promise reaches the consumer unwrapped
     @Test
     public void test_yielded_promise_is_awaited() {
         final var source = """
@@ -384,7 +350,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("unwrapped", joined(source));
     }
 
-    // a yielded promise that rejects re-enters the body at the yield expression
     @Test
     public void test_rejected_yield_operand_throws_at_the_yield() {
         final var source = """
@@ -400,7 +365,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("caught:bad", joined(source));
     }
 
-    // return() before the body starts awaits its argument (AsyncGeneratorAwaitReturn)
     @Test
     public void test_return_at_suspended_start_awaits_its_value() {
         final var source = """
@@ -412,9 +376,8 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("done:true", joined(source));
     }
 
-    // AsyncGeneratorAwaitReturn's PromiseResolve(%Promise%, value) reads value.constructor even when
-    // value is already a promise; a poisoned accessor there must reject return()'s promise rather
-    // than being silently skipped (return() would otherwise resolve when it should reject).
+    // AsyncGeneratorAwaitReturn's PromiseResolve reads value.constructor even when value is already a
+    // promise, so a poisoned accessor there must reject return()'s promise rather than be skipped.
     @Test
     public void test_return_at_suspended_start_propagates_a_broken_promise_constructor() {
         final var source = """
@@ -431,8 +394,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("rejected:broken promise", joined(source));
     }
 
-    // The same poisoned-constructor promise, returned while suspended at a yield, is awaited before
-    // resuming the body - so the throw is injected at the yield point as a catchable exception.
     @Test
     public void test_return_at_suspended_yield_injects_the_broken_promise_error_at_the_yield() {
         final var source = """
@@ -453,7 +414,6 @@ public class InterpreterAsyncGeneratorTest {
         assertEquals("caught:broken promise", joined(source));
     }
 
-    // yield* hands a delegated value through untouched rather than awaiting it a second time
     @Test
     public void test_delegated_values_are_not_unwrapped() {
         final var source = """

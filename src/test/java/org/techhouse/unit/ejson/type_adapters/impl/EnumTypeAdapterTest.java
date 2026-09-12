@@ -14,7 +14,6 @@ public class EnumTypeAdapterTest {
         VALUE1, VALUE2, VALUE3, VALUE_ONE
     }
 
-    // Converting valid enum value to JSON string with quotes
     @Test
     public void test_valid_enum_to_json_string() {
         EnumTypeAdapter<TestEnum> adapter = new EnumTypeAdapter<>(TestEnum.class);
@@ -24,7 +23,6 @@ public class EnumTypeAdapterTest {
         assertEquals("\"VALUE1\"", result);
     }
 
-    // Handling null enum value in toJson
     @Test
     public void test_null_enum_to_json() {
         EnumTypeAdapter<TestEnum> adapter = new EnumTypeAdapter<>(TestEnum.class);
@@ -34,7 +32,6 @@ public class EnumTypeAdapterTest {
         assertEquals("\"null\"", result);
     }
 
-    // Constructor accepts valid enum class and initializes clazz field correctly
     @Test
     public void test_constructor_accepts_valid_enum_class() {
         EnumTypeAdapter<TimeUnit> adapter = new EnumTypeAdapter<>(TimeUnit.class);
@@ -45,7 +42,6 @@ public class EnumTypeAdapterTest {
         assertEquals(TimeUnit.SECONDS, result);
     }
 
-    // Convert enum value to JSON string with proper double quotes
     @Test
     public void test_enum_value_converted_to_json_string() {
         EnumTypeAdapter<TestEnum> adapter = new EnumTypeAdapter<>(TestEnum.class);
@@ -55,7 +51,6 @@ public class EnumTypeAdapterTest {
         assertEquals("\"VALUE1\"", result);
     }
 
-    // Handle null enum value input
     @Test
     public void test_null_enum_value_handling() {
         EnumTypeAdapter<TestEnum> adapter = new EnumTypeAdapter<>(TestEnum.class);
@@ -65,7 +60,6 @@ public class EnumTypeAdapterTest {
         assertEquals("\"null\"", result);
     }
 
-    // Successfully converts valid enum string value to corresponding enum constant
     @Test
     public void test_valid_enum_string_conversion() {
         EnumTypeAdapter<TestEnum> adapter = new EnumTypeAdapter<>(TestEnum.class);
@@ -77,7 +71,6 @@ public class EnumTypeAdapterTest {
         assertEquals(TestEnum.VALUE_ONE, result);
     }
 
-    // Returns null when input JsonBaseElement is not of STRING type
     @Test
     public void test_non_string_input_returns_null() {
         EnumTypeAdapter<TestEnum> adapter = new EnumTypeAdapter<>(TestEnum.class);

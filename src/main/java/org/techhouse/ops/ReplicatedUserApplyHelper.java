@@ -4,11 +4,7 @@ import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.log.Logger;
 
-/**
- * Applies a replicated admin/users mutation on this (replica) node by upserting the shipped record or deleting
- * by username. The record carries the coordinator's already-computed password hash, so all nodes store the
- * identical entry; it never re-broadcasts (only the coordinator replicates).
- */
+// The record carries the coordinator's already-computed password hash, and a replica never re-broadcasts.
 public final class ReplicatedUserApplyHelper {
     private static final Logger logger = Logger.logFor(ReplicatedUserApplyHelper.class);
 

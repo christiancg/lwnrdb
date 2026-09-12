@@ -20,11 +20,7 @@ import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 
-/**
- * Assembles the {@link AnalyzeResult} for an analyzed aggregation from the metrics gathered in the
- * {@link AnalyzeContext} plus a static inspection of the requested pipeline. The timing fields are
- * left at zero here; {@code MessageProcessor} fills them in around the processing call.
- */
+// The timing fields are left at zero here; MessageProcessor fills them in around the processing call.
 public final class AnalyzeHelper {
     private AnalyzeHelper() {
     }
@@ -99,8 +95,6 @@ public final class AnalyzeHelper {
         return false;
     }
 
-    // Collects, in pipeline order, the fields any index-capable step references, so the "no index"
-    // suggestion can name concrete candidates to index.
     private static Collection<String> collectCandidateFields(List<BaseAggregationStep> steps) {
         final var fields = new LinkedHashSet<String>();
         for (var step : steps) {

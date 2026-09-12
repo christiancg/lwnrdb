@@ -514,7 +514,7 @@ Runs a JavaScript program inside the database (see [docs/simplejs.md](docs/simpl
 - **Importing shared code**: a script may import any stored procedure of its own database with `import … from "procedures/<name>"` — a library is just a procedure that `export`s instead of returning. `SAVE_PROCEDURE` refuses an import that does not resolve (`400-18`), so libraries must be installed before their users. Only `export`ed bindings are visible, so a procedure written in the `CALL_PROCEDURE` style (a top-level `return`) imports as `undefined`.
 - **Outbound HTTP** is available and **ships open**: `scriptFetchEnabled` is on and `scriptFetchAllowlist` is `*`, which reaches internal services and the cloud metadata endpoint, not just the public internet. The server warns at every startup — **narrow it**. `fetch` stays unavailable to pipeline scripts and before-write hooks, which hold collection locks.
 - **Run history**: unless `scriptRunHistoryEnabled=false`, a finished run is recorded in the reserved `script_runs` collection of its database, queryable with an ordinary `AGGREGATE`. Ad-hoc `RUN_SCRIPT` is opt-in via `scriptRunHistoryKinds`; the collection is created lazily and refused to client writes.
-- **Errors**: `403-2` scripting disabled, `403-1` caller may not run scripts, `404-4` unknown database, `400-10` source over `scriptMaxSourceBytes`, `400-9` threw or would not parse (`message` is `"<ErrorName>: <message>"`), `400-11` instruction or depth budget, `400-12` over `scriptMaxMemoryBytes`, `400-15` result over `scriptMaxResultBytes`, `400-20` result promise never settled, `408-1` over `scriptTimeoutMs`, `408-2` cancelled, `503-6` a concurrency ceiling refused it (the `message` names which of `node`/`user`/`database`; nothing ran, so it is retryable), `409-6` sent with a transaction open.
+- **Errors**: `403-2` scripting disabled, `403-1` caller may not run scripts, `404-4` unknown database, `400-10` source over `scriptMaxSourceBytes`, `400-9` threw or would not parse (`message` is `"<ErrorName>: <message>"`), `400-11` instruction or depth budget, `400-12` over `scriptMaxMemoryBytes`, `400-15` result over `scriptMaxResultBytes`, `400-20` result promise never settled, `408-1` over `scriptTimeoutMs`, `408-2` cancelled, `503-6` a concurrency ceiling refused it (the `message` names which of `node`/`user`/`database`; nothing ran, so it is retryable), `503-7` the run was placed on another node that never reported an outcome — it is deliberately **not** re-run here, because it may already have run there, so retrying is only safe if the script is idempotent, `409-6` sent with a transaction open.
 - Under clustering the run is **placed** on a live node chosen by script load and ownership share (`scriptRoutingEnabled`, on by default); each operation it issues is then routed to its collection's owner, and `db.transaction` spans owners through the same 2PC the wire protocol uses.
 
 #### `SAVE_PROCEDURE`
@@ -940,6 +940,7 @@ Response shape:
       "waited": 7,
       "forwarded": 118,
       "forwardFallbacks": 3,
+      "outcomeUnknown": 0,
       "localityWeight": 50,
       "localityPreferred": 47,
       "cancelled": 1
@@ -1147,10 +1148,11 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `421-2` | `ERROR` | A transaction may only touch collections owned by a single node |
 | `503-1` | `ERROR` | Max number of connections reached |
 | `503-2` | `ERROR` | Cluster does not have a write quorum |
-| `503-3` | `ERROR` | Timed out waiting for the replication quorum |
+| `503-3` | `ERROR` | Timed out waiting for the replication quorum *(the local commit **stands** and anti-entropy reconciles the lagging replicas — the write happened, so this is not a "it did not apply" error; blind retries are safe for `SAVE`/`DELETE`, which are idempotent, but not for a read-modify-write script)* |
 | `503-4` | `ERROR` | The collection's owner node is unreachable |
 | `503-5` | `ERROR` | Admin coordinator is synchronizing, retry shortly |
 | `503-6` | `ERROR` | Too many scripts running, retry shortly *(the message names the scope that refused it: `node`, `user` or `database`)* |
+| `503-7` | `ERROR` | The node the script was placed on did not report an outcome; it was not run again in case it already had *(only raised when a placed script's outcome could not be established; it is never re-run locally, so whether to retry is the caller's decision)* |
 
 ### Bootstrap
 

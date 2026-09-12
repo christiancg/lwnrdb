@@ -19,18 +19,8 @@ import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
 
 /**
- * Brings the node down in an order that loses as little committed-but-unfinished work as possible.
- *
- * <p>
- * The order matters more than any individual step. New work is refused first so the queues can actually
- * reach empty; open transactions are released before the drains so a queued index event is not waiting on a
- * lock nobody will free; the background index queue is drained before the process exits because an event
- * dropped there leaves a field index stale with no in-memory pending-write overlay to compensate after the
- * restart; and the cluster is left last so peers keep routing here only while this node can still answer.
- *
- * <p>
- * Everything is bounded by {@code shutdownTimeoutMs}: a shutdown that hangs is worse than one that abandons
- * work it has already reported, and a container runtime will SIGKILL the process shortly anyway.
+ * The step order is the contract: refuse new work before draining so the queues can reach empty, release open
+ * transactions before the drains so no queued event waits on a lock nobody will free, and leave the cluster last.
  */
 public class ShutdownCoordinator {
     private final Logger logger = Logger.logFor(ShutdownCoordinator.class);
@@ -74,8 +64,7 @@ public class ShutdownCoordinator {
         });
         step("roll back open transactions", TransactionOperationHelper::rollbackOpenTransactionsAtShutdown);
         step("drain triggers", () -> triggerExecutor.drain(remaining(deadline)));
-        // After the triggers and before the background queue: a scheduled run can enqueue both trigger and
-        // index work, so draining it later would leave events nothing consumes.
+        // After the triggers and before the background queue: a scheduled run enqueues into both.
         step("drain schedules", () -> scheduleExecutor.drain(remaining(deadline)));
         step("drain background tasks", () -> backgroundTaskManager.drain(remaining(deadline)));
         step("stop listen workers", listenManager::stopWorkers);
@@ -90,8 +79,6 @@ public class ShutdownCoordinator {
         logger.info("Shutdown complete");
     }
 
-    // A step that throws must not stop the ones after it: a node that fails to drain triggers still needs its
-    // locks released and its cluster connections closed.
     private void step(String description, Runnable action) {
         try {
             action.run();
@@ -100,8 +87,6 @@ public class ShutdownCoordinator {
         }
     }
 
-    // At least a moment for each drain even when the budget is already spent, so a shutdown under a tight
-    // timeout still flushes whatever is immediately finishable instead of dropping all of it.
     private static long remaining(long deadline) {
         return Math.max(200L, deadline - System.currentTimeMillis());
     }

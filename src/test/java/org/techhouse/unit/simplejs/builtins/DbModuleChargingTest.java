@@ -18,8 +18,6 @@ import org.techhouse.simplejs.host.ScriptResult;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 import org.techhouse.unit.simplejs.host.FakeDatabaseAccess;
 
-// What the script pulls out of the database is charged against the same allocation budget as what it
-// allocates itself, so a runaway read aborts instead of materialising.
 public class DbModuleChargingTest {
     private static final String PADDING = "x".repeat(512);
 
@@ -108,7 +106,6 @@ public class DbModuleChargingTest {
         assertEquals("ScriptMemoryError", result.getErrorName());
     }
 
-    // The abort has to happen inside the conversion loop, not after the whole JS copy already exists
     @Test
     public void test_aggregate_aborts_partway_through_conversion() {
         final var database = new BigResultDatabase(500);
@@ -134,7 +131,6 @@ public class DbModuleChargingTest {
         assertEquals("ScriptMemoryError", result.getErrorName());
     }
 
-    // The argument is charged when the script builds it, never again on the way out
     @Test
     public void test_save_argument_is_not_charged_twice() {
         final var database = new BigResultDatabase(1);

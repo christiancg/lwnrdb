@@ -10,7 +10,6 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 
 public class FieldIndexEntryTest {
-    // Correctly serializes FieldIndexEntry to file entry format
     @Test
     public void test_to_file_entry_serialization() {
         Set<String> ids = new HashSet<>(Arrays.asList("id1", "id2"));
@@ -27,7 +26,6 @@ public class FieldIndexEntryTest {
         assertThrows(NullPointerException.class, () -> entry.compareTo(null));
     }
 
-    // Correctly parses a line with Double value and returns FieldIndexEntry
     @Test
     public void test_parse_double_value() {
         String databaseName = "testDB";
@@ -118,7 +116,6 @@ public class FieldIndexEntryTest {
         assertEquals(Set.of("id|one", "id|two"), parsed.getIds());
     }
 
-    // Compares two Double values correctly
     @Test
     public void test_compare_double_values() {
         FieldIndexEntry<Double> entry1 = new FieldIndexEntry<>("db", "collection", 5.5, Set.of("id1"));
@@ -128,14 +125,12 @@ public class FieldIndexEntryTest {
         assertEquals(0, entry1.compareTo(entry1.getValue()));
     }
 
-    // Throws IllegalStateException for non-JsonCustom objects in default case
     @Test
     public void test_illegal_state_exception_for_non_json_custom() {
         FieldIndexEntry<Object> entry = new FieldIndexEntry<>("db", "collection", new Object(), Set.of("id1"));
         assertThrows(IllegalStateException.class, () -> entry.compareTo(new Object()));
     }
 
-    // Test getters and setters
     @Test
     public void test_getters_and_setters() {
         final var fieldIndexEntry = new FieldIndexEntry<>("db", "collection", 5.5, Set.of("id1"));
@@ -153,7 +148,6 @@ public class FieldIndexEntryTest {
         assertEquals(Set.of("id2"), fieldIndexEntry.getIds());
     }
 
-    // compareTo with Boolean value (L53)
     @Test
     public void test_compare_to_boolean_values() {
         FieldIndexEntry<Boolean> entry = new FieldIndexEntry<>("db", "col", false, Set.of("id1"));
@@ -161,7 +155,6 @@ public class FieldIndexEntryTest {
         assertEquals(0, entry.compareTo(false));
     }
 
-    // compareTo with null value returns 0 (L55)
     @Test
     public void test_compare_to_null_value_returns_zero() {
         FieldIndexEntry<Object> entry = new FieldIndexEntry<>("db", "col", null, Set.of("id1"));

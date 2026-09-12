@@ -7,9 +7,6 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 import org.techhouse.utils.VectorUtils;
 
-// A dense vector stored as "#vector(v0,v1,...,vn)". It exposes the "nearest" ranking operator (cosine
-// top-K, for semantic search) and orders its index by a SimHash signature so similar vectors cluster,
-// enabling the approximate candidate pre-filter in VectorSimilarityIndexHelper.
 public class JsonVector extends JsonCustom<double[]> {
     public static final String CUSTOM_TYPE_NAME = "vector";
     public static final String OPERATOR_NEAREST = "nearest";
@@ -88,16 +85,6 @@ public class JsonVector extends JsonCustom<double[]> {
     }
 
     @Override
-    public Set<String> customOperatorNames() {
-        return Set.of();
-    }
-
-    @Override
-    public boolean applyCustomOperator(String operatorName, Map<String, JsonBaseElement> args) {
-        throw new UnsupportedOperationException(getCustomTypeName() + " has no predicate custom operators");
-    }
-
-    @Override
     public Set<String> customRankingOperatorNames() {
         return Set.of(OPERATOR_NEAREST);
     }
@@ -111,7 +98,6 @@ public class JsonVector extends JsonCustom<double[]> {
                 getCustomTypeName() + " does not support ranking operator " + operatorName);
     }
 
-    // Accepts a vector already parsed as a JsonVector or as a raw "#vector(...)" string.
     public static double[] toVector(JsonBaseElement element) {
         if (element instanceof JsonVector vector) {
             return vector.vector();

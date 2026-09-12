@@ -9,6 +9,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -85,11 +86,11 @@ public class MessageProcessorRunScriptTest {
     private List<String> exchange(String... requests) throws Exception {
         final var out = new ByteArrayOutputStream();
         final var message = String.join("\n", requests) + "\n";
-        final var socket = mockSocket(new ByteArrayInputStream(message.getBytes()), out);
+        final var socket = mockSocket(new ByteArrayInputStream(message.getBytes(StandardCharsets.UTF_8)), out);
         final var thread = new Thread(new MessageProcessor(socket));
         thread.start();
         thread.join(10000);
-        return List.of(out.toString().split("\n"));
+        return List.of(out.toString(StandardCharsets.UTF_8).split("\n"));
     }
 
     private static String authenticate(String username) {
@@ -129,7 +130,6 @@ public class MessageProcessorRunScriptTest {
         assertTrue(responses.get(1).contains("\"result\":42"), responses.get(1));
     }
 
-    // The run itself succeeds; the write the script attempted is what gets denied, inside the script
     @Test
     public void test_write_inside_script_is_authorized_separately() throws Exception {
         final var script = "import db from 'db';" + "try { db.save(db.name, '" + TestGlobals.COLL
@@ -146,7 +146,6 @@ public class MessageProcessorRunScriptTest {
         assertTrue(responses.get(2).contains("\"errorCode\":\"409-6\""), responses.get(2));
     }
 
-    // A multi-line source with escaped quotes and a template literal survives the line protocol
     @Test
     public void test_multiline_script_round_trips() throws Exception {
         final var script = "const name = \\\"world\\\";\\nconst greeting = `hello ${name}`;\\nreturn greeting;";

@@ -15,7 +15,6 @@ public class CallStackTest {
         return new SourcePosition(0, 1, line, column);
     }
 
-    // The innermost frame comes first, then each caller's own call site
     @Test
     public void test_captures_innermost_position_first() {
         final var stack = new CallStack();
@@ -76,7 +75,6 @@ public class CallStackTest {
         assertEquals(CallStack.TOP_LEVEL_MODULE, stack.currentModule());
     }
 
-    // A function defined in one module and called from another keeps its own module label
     @Test
     public void test_frame_uses_the_pushed_module_not_the_current_one() {
         final var stack = new CallStack();
@@ -95,7 +93,6 @@ public class CallStackTest {
         assertTrue(stack.capture(32).getFirst().startsWith(CallStack.ANONYMOUS));
     }
 
-    // A fresh stack still reports where it is, rather than nothing at all
     @Test
     public void test_fresh_stack_reports_the_top_level() {
         final var frames = new CallStack().capture(32);
@@ -104,7 +101,6 @@ public class CallStackTest {
         assertEquals(CallStack.TOP_LEVEL_MODULE, frames.getFirst());
     }
 
-    // A position is only rendered once one is known, so an unstamped node leaves the module bare
     @Test
     public void test_null_position_is_ignored() {
         final var stack = new CallStack();

@@ -30,34 +30,28 @@ public final class DatabaseStatsHelper {
     }
 
     public static OperationResponse processGetDatabaseStats() {
-        try {
-            final var stats = new JsonObject();
-            stats.add("memory", buildMemoryStats());
-            stats.add("inDoubtTransactions", buildInDoubtTransactions());
-            stats.add("triggers", buildTriggerStats());
-            stats.add("schedules", buildScheduleStats());
-            stats.add("scripts", buildScriptStats());
+        return OperationResponse.respondOrError(OperationType.GET_DATABASE_STATS, ErrorCode.ERROR_GATHERING_STATS,
+                () -> {
+                    final var stats = new JsonObject();
+                    stats.add("memory", buildMemoryStats());
+                    stats.add("inDoubtTransactions", buildInDoubtTransactions());
+                    stats.add("triggers", buildTriggerStats());
+                    stats.add("schedules", buildScheduleStats());
+                    stats.add("scripts", buildScriptStats());
 
-            final var dbNames = cache.getUserDatabaseNames();
-            final var dbArray = new JsonArray();
-            final var totals = new Totals();
-            for (var dbName : dbNames) {
-                dbArray.add(buildDatabaseStats(dbName, totals));
-            }
-            stats.add("totals", buildTotals(totals, dbNames.size()));
-            stats.add("databases", dbArray);
+                    final var dbNames = cache.getUserDatabaseNames();
+                    final var dbArray = new JsonArray();
+                    final var totals = new Totals();
+                    for (var dbName : dbNames) {
+                        dbArray.add(buildDatabaseStats(dbName, totals));
+                    }
+                    stats.add("totals", buildTotals(totals, dbNames.size()));
+                    stats.add("databases", dbArray);
 
-            return new GetDatabaseStatsResponse("Ok", stats);
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.GET_DATABASE_STATS, ErrorCode.ERROR_GATHERING_STATS);
-        }
+                    return new GetDatabaseStatsResponse("Ok", stats);
+                });
     }
 
-    // In-doubt distributed transactions still holding this node's write locks (a prepared 2PC participant
-    // whose coordinator has not yet delivered a decision), so an operator can spot them and, if needed,
-    // force a resolution with RESOLVE_TRANSACTION.
-    // A trigger runs asynchronously with no client waiting on it, so these counters are the operator's
-    // only window into whether they are running, failing or being dropped under load.
     private static JsonObject buildTriggerStats() {
         final var triggers = new JsonObject();
         triggers.addProperty("enabled", Configuration.getInstance().isTriggersEnabled());
@@ -72,15 +66,10 @@ public final class DatabaseStatsHelper {
         triggers.addProperty("beforeReplaced", BeforeHookContext.getReplaced());
         triggers.addProperty("beforeRejected", BeforeHookContext.getRejected());
         triggers.addProperty("beforeFailed", BeforeHookContext.getFailed());
-        // Runs recorded but not yet applied. A number that stays above zero while nothing is queued means
-        // runs are stranded - their node never came back, or their collection was dropped - and they will be
-        // garbage-collected after triggerRunRetentionMs rather than ever running.
         triggers.addProperty("pendingRuns", (long) pendingRunCount());
         return triggers;
     }
 
-    // Like a trigger, a scheduled run has no client waiting on it, so these counters are the operator's only
-    // window into whether jobs are firing, failing, being skipped or being dropped under load.
     private static JsonObject buildScheduleStats() {
         final var schedules = new JsonObject();
         schedules.addProperty("enabled", Configuration.getInstance().isSchedulesEnabled());
@@ -93,8 +82,6 @@ public final class DatabaseStatsHelper {
         return schedules;
     }
 
-    // Where scripts are running: this node's live count plus how often placement forwarded a run elsewhere
-    // and how often that forward failed and the run stayed here.
     private static JsonObject buildScriptStats() {
         final var scripts = new JsonObject();
         scripts.addProperty("routingEnabled", Configuration.getInstance().isScriptRoutingEnabled());
@@ -109,6 +96,7 @@ public final class DatabaseStatsHelper {
         scripts.addProperty("waited", scriptAdmission.getWaited());
         scripts.addProperty("forwarded", scriptPlacement.getForwarded());
         scripts.addProperty("forwardFallbacks", scriptPlacement.getForwardFallbacks());
+        scripts.addProperty("outcomeUnknown", scriptPlacement.getOutcomeUnknown());
         scripts.addProperty("localityWeight", (long) Configuration.getInstance().getScriptLocalityWeight());
         scripts.addProperty("localityPreferred", scriptPlacement.getLocalityPreferred());
         scripts.addProperty("cancelled", scriptRunRegistry.getCancelled());

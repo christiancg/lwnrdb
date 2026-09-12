@@ -16,8 +16,6 @@ import org.techhouse.data.Transaction;
 
 public class ClientTracker {
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
-    // Owner-side registry for forwarded transactions: edge session id -> the session running its buffered
-    // operations on a dedicated single-thread executor (see TxSession).
     private final Map<String, TxSession> txSessions = new ConcurrentHashMap<>();
     private final Configuration configuration = Configuration.getInstance();
 
@@ -35,9 +33,7 @@ public class ClientTracker {
         clients.remove(clientId);
     }
 
-    // Registers a transient, socket-less authenticated client so a forwarded/replicated admin operation can
-    // execute on this node as the original acting user (bypasses the maxConnections limit). The caller must
-    // removeById it when the operation completes.
+    // The caller must removeById this transient client when the operation completes, or it leaks.
     public UUID registerForwardedClient(String username) {
         final var clientId = UUID.randomUUID();
         final var client = new Client("forwarded");
@@ -46,9 +42,6 @@ public class ClientTracker {
         return clientId;
     }
 
-    // Resolves (creating on first use) the persistent synthetic client that runs a forwarded transaction's
-    // buffered operations on the owner. Unlike registerForwardedClient this client is retained across the
-    // session's forwarded messages and is removed only by removeTxSession (commit/rollback/reaper).
     public TxSession registerTxSession(String sessionId, String username, String edgeNodeId) {
         return txSessions.computeIfAbsent(sessionId, _ -> {
             final var id = UUID.randomUUID();

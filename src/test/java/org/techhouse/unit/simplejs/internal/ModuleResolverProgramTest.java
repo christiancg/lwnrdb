@@ -42,7 +42,6 @@ public class ModuleResolverProgramTest {
         return result.getValue().asJsonNumber().getValue().doubleValue();
     }
 
-    // A bare specifier the host resolves is imported like any other module
     @Test
     public void test_bare_specifier_resolved_by_host() {
         final var resolver = resolverOf(Map.of("lib",
@@ -54,7 +53,6 @@ public class ModuleResolverProgramTest {
         assertEquals("main", text(run(resolver, "const ns = await import('lib'); return ns.default;")));
     }
 
-    // The referrer is passed to the resolver
     @Test
     public void test_resolver_receives_referrer() {
         final var resolver = resolverOf(Map.of("lib", new ResolvedModule("pkg:lib", "export default 1;")));
@@ -62,7 +60,6 @@ public class ModuleResolverProgramTest {
         assertEquals(List.of("lib<-main"), resolved);
     }
 
-    // Two specifiers naming the same module id share one evaluation and one namespace
     @Test
     public void test_two_specifiers_same_module_id_share_instance() {
         final var database = new FakeDatabaseAccess();
@@ -78,7 +75,6 @@ public class ModuleResolverProgramTest {
         assertEquals(1, database.calls.stream().filter(call -> call.equals("delete:d/c/once")).count());
     }
 
-    // With no resolver installed an unknown specifier keeps the standalone error
     @Test
     public void test_no_resolver_keeps_cannot_find_module() {
         final var result = engine.run("""
@@ -92,7 +88,6 @@ public class ModuleResolverProgramTest {
         assertEquals("Cannot find module 'lib'", text(result));
     }
 
-    // A resolver that does not claim the specifier produces the same error
     @Test
     public void test_resolver_returning_null_is_cannot_find_module() {
         final var resolver = resolverOf(Map.of());
@@ -107,7 +102,6 @@ public class ModuleResolverProgramTest {
         assertEquals("Cannot find module 'nope'", text(result));
     }
 
-    // A resolved module reaches the same db binding as its importer
     @Test
     public void test_resolver_module_can_import_db() {
         final var database = new FakeDatabaseAccess();
@@ -122,7 +116,6 @@ public class ModuleResolverProgramTest {
         assertTrue(database.calls.contains("listDatabases"));
     }
 
-    // A resolved module that is itself malformed raises a catchable SyntaxError
     @Test
     public void test_resolved_module_syntax_error_is_catchable() {
         final var resolver = resolverOf(Map.of("bad", new ResolvedModule("pkg:bad", "let =")));
@@ -137,7 +130,6 @@ public class ModuleResolverProgramTest {
         assertEquals("SyntaxError", text(result));
     }
 
-    // A resolved module may import another resolved module
     @Test
     public void test_resolved_module_can_import_another() {
         final var resolver = resolverOf(
@@ -146,7 +138,6 @@ public class ModuleResolverProgramTest {
         assertEquals(42, number(run(resolver, "import top from 'top'; return top;")));
     }
 
-    // Two resolved modules importing each other are detected as a cycle
     @Test
     public void test_resolved_module_cycle_detected() {
         final var resolver = resolverOf(Map.of("a", new ResolvedModule("pkg:a", "import b from 'b'; export default 1;"),
@@ -162,9 +153,7 @@ public class ModuleResolverProgramTest {
         assertEquals("Circular import of module 'pkg:a'", text(result));
     }
 
-    // A named re-export takes its bindings from the named module, not from the local scope. A re-export
-    // introduces no local binding, so the assertions read the module's exports - which is what the result
-    // contract returns when a script has no top-level return.
+    // A re-export introduces no local binding, so the assertions read the module's exports rather than a local.
     @Test
     public void test_named_reexport_resolves_its_source() {
         final var resolver = resolverOf(
@@ -191,7 +180,6 @@ public class ModuleResolverProgramTest {
                 "the module's binding must win over a local of the same name");
     }
 
-    // A sourceless `export { x }` still reads the local scope
     @Test
     public void test_sourceless_named_export_still_reads_the_local_scope() {
         final var resolver = resolverOf(Map.of());
@@ -199,14 +187,12 @@ public class ModuleResolverProgramTest {
         assertEquals(7, exports.get("value").asJsonNumber().getValue().intValue());
     }
 
-    // Re-exporting from a module that cannot be resolved names the module, not a missing local
     @Test
     public void test_named_reexport_from_a_missing_module_reports_the_module() {
         final var result = run(resolverOf(Map.of()), "export { x } from 'nope';");
         assertEquals("Cannot find module 'nope'", result.getErrorMessage());
     }
 
-    // `export *` carries the named exports only - `default` is not one of them
     @Test
     public void test_export_star_does_not_reexport_default() {
         final var resolver = resolverOf(
@@ -216,9 +202,8 @@ public class ModuleResolverProgramTest {
         assertFalse(exports.has("default"), "default must not arrive as a named export: " + exports);
     }
 
-    // A re-export may name a built-in, and `default` on one means the built-in itself. The db module's
-    // members are all functions, which the host boundary cannot represent, so the assertion is that the
-    // specifier resolved at all - before the fix these were a ReferenceError about a missing local.
+    // The db module's members are all functions the host boundary cannot represent, so the assertion is that
+    // the specifier resolved at all - before the fix these were a ReferenceError about a missing local.
     @Test
     public void test_reexport_from_a_builtin() {
         final var database = new FakeDatabaseAccess();
@@ -229,7 +214,6 @@ public class ModuleResolverProgramTest {
         assertNull(defaulted.getErrorName(), defaulted.getErrorMessage());
     }
 
-    // The built-in specifiers still win over the host resolver
     @Test
     public void test_builtins_are_not_routed_to_the_resolver() {
         final var resolver = resolverOf(Map.of("args", new ResolvedModule("pkg:args", "export default 'hijacked';"),
@@ -239,24 +223,21 @@ public class ModuleResolverProgramTest {
         assertFalse(resolved.contains("args<-main"));
     }
 
-    // A built-in is the object a default import binds directly - it has no `default` member to unwrap -
-    // while a resolved module's default import binds its default export. Losing the distinction is what
-    // would make `import db from 'db'` bind a wrapper instead of the db object.
+    // A built-in is the object a default import binds directly - it has no `default` member to unwrap - while
+    // a resolved module's default import binds its default export.
     @Test
     public void test_builtin_default_import_binds_the_builtin_itself() {
         final var database = new FakeDatabaseAccess();
         final var host = ModuleHostBindings.of(resolverOf(Map.of()), ResourceLimits.unlimited(), database);
         assertEquals("function", text(engine.run("import db from 'db'; return typeof db.findById;", host)));
         assertEquals("function", text(engine.run("import * as ns from 'db'; return typeof ns.findById;", host)));
-        // The static and dynamic namespace forms agree: a built-in is wrapped either way, so `default`
-        // is present and is the built-in itself.
+        // A built-in is wrapped either way, so `default` is present and is the built-in itself.
         assertEquals("function",
                 text(engine.run("import * as ns from 'db'; return typeof ns.default.findById;", host)));
         assertEquals("function",
                 text(engine.run("const ns = await import('db'); return typeof ns.default.findById;", host)));
     }
 
-    // A resolved module with no default export binds undefined, not the namespace object
     @Test
     public void test_resolved_module_without_default_binds_undefined() {
         final var resolver = resolverOf(Map.of("named", new ResolvedModule("pkg:named", "export const a = 1;")));

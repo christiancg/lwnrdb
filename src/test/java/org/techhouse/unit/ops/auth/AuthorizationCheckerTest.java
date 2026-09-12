@@ -274,7 +274,6 @@ public class AuthorizationCheckerTest {
         assertTrue(AuthorizationChecker.check(request, user).isAllowed());
     }
 
-    // The grant is per database: it does not carry over to another one
     @Test
     public void test_run_script_denied_for_a_different_database() {
         final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
@@ -287,7 +286,6 @@ public class AuthorizationCheckerTest {
         assertFalse(AuthorizationChecker.check(request, user).isAllowed());
     }
 
-    // An explicit false is a denial, not a grant
     @Test
     public void test_run_script_denied_when_grant_is_false() {
         final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();
@@ -298,7 +296,6 @@ public class AuthorizationCheckerTest {
         assertFalse(AuthorizationChecker.check(request, user).isAllowed());
     }
 
-    // The script grant alone starts the script; what it may do is still the database/collection permissions
     @Test
     public void test_run_script_grant_does_not_imply_data_access() {
         final var scriptPerms = new HashMap<String, ScriptPermissionLevel>();

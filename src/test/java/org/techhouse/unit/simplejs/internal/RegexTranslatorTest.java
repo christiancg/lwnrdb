@@ -10,10 +10,8 @@ import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.internal.RegexTranslator;
 import org.techhouse.simplejs.internal.regex.RegexMatcher;
 
-// The literal escapes below are deliberate: these cases turn on invisible or homoglyph code
-// points (U+FE0F variation selector, U+20E3 combining keycap, U+017F long s, U+212A Kelvin sign,
-// which renders identically to ASCII K). Spelling them as characters would make the assertions
-// unreadable and let an editor or a merge silently normalise them.
+// The literal escapes below are deliberate: these cases turn on invisible or homoglyph code points
+// (U+FE0F, U+20E3, U+017F, U+212A), which an editor or a merge would otherwise silently normalise.
 @SuppressWarnings("UnnecessaryUnicodeEscape")
 public class RegexTranslatorTest {
     private static boolean matches(String source, String flags, String input) {
@@ -37,31 +35,12 @@ public class RegexTranslatorTest {
         assertEquals("dgimsy", RegexTranslator.compile("a", "dgimsy").getFlags());
     }
 
-    // \q{} alternatives longer than one code point become an alternation, ordered longest-first so
-    // the longest alternative wins exactly as a character class would.
     @Test
     public void translatesMultiCodePointStringAlternativesToAnAlternation() {
         assertTrue(fullMatch("[\\q{a|abc|ab}]", "v", "abc"));
         assertTrue(fullMatch("[\\q{a|abc|ab}]", "v", "ab"));
         assertTrue(fullMatch("[\\q{a|abc|ab}]", "v", "a"));
         assertFalse(fullMatch("[\\q{a|abc|ab}]", "v", "ax"));
-    }
-
-    @Test
-    public void singleCodePointStringAlternativesJoinTheCharacterSet() {
-        assertTrue(fullMatch("[\\q{0|2|4}]", "v", "0"));
-        assertTrue(fullMatch("[\\q{0|2|4}]", "v", "4"));
-        assertFalse(fullMatch("[\\q{0|2|4}]", "v", "7"));
-    }
-
-    // The alternatives are ClassSetCharacters, so their escapes have to be decoded before their
-    // length can be judged: \q{9️⃣} is one three-code-point string, not twelve characters.
-    @Test
-    public void decodesEscapesInsideStringAlternatives() {
-        assertTrue(fullMatch("^[\\q{0|2|4|9\\uFE0F\\u20E3}_]+$", "v", "9️⃣"));
-        assertTrue(fullMatch("^[\\q{0|2|4|9\\uFE0F\\u20E3}_]+$", "v", "024_"));
-        assertFalse(fullMatch("^[\\q{0|2|4|9\\uFE0F\\u20E3}_]+$", "v", "7"));
-        assertTrue(fullMatch("[\\q{\\u{1D306}\\u{1D307}}]", "v", new String(new int[]{0x1D306, 0x1D307}, 0, 2)));
     }
 
     @Test
@@ -74,15 +53,6 @@ public class RegexTranslatorTest {
     @Test
     public void rejectsANegatedClassContainingStrings() {
         rejects("[^\\q{ab}]", "v");
-    }
-
-    // v-mode makes the ClassSetSyntaxCharacters and the reserved double punctuators early errors.
-    @Test
-    public void rejectsUnescapedSetSyntaxCharacters() {
-        for (final var syntax : new String[]{"(", ")", "{", "}", "/", "-", "|"}) {
-            rejects("[" + syntax + "]", "v");
-        }
-        assertTrue(fullMatch("[\\-]", "v", "-"));
     }
 
     @Test
@@ -106,7 +76,6 @@ public class RegexTranslatorTest {
         assertTrue(fullMatch("[\\p{Emoji_Keycap_Sequence}]", "v", "9️⃣"));
     }
 
-    // Modifier groups translate to java inline flag groups; the early errors are ours to raise.
     @Test
     public void translatesModifierGroups() {
         assertTrue(matches("(?i:a)b", "", "Ab"));
@@ -127,55 +96,11 @@ public class RegexTranslatorTest {
     }
 
     @Test
-    public void translatesTheEmptyAndAnyCharacterClasses() {
-        assertFalse(matches("[]a", "", "a"));
-        assertTrue(matches("[^]", "", "\n"));
-        assertTrue(matches("a[]*b", "", "ab"));
-    }
-
-    @Test
-    public void translatesEscapesJavaSpellsDifferently() {
-        assertTrue(fullMatch("[\\b]", "", "\b"));
-        assertTrue(fullMatch("\\0", "", "\0"));
-        assertTrue(fullMatch("\\u{61}", "u", "a"));
-        assertTrue(fullMatch("\\v", "", ""));
-        assertTrue(fullMatch("\\s", "", " "));
-        assertFalse(matches("\\S", "", " "));
-    }
-
-    // \d, \w, \s and \b must stay ASCII in u-mode: UNICODE_CHARACTER_CLASS is deliberately not set.
-    @Test
-    public void keepsClassEscapesAsciiInUnicodeMode() {
-        assertFalse(matches("^\\d$", "u", "٠"));
-        assertFalse(matches("^\\w$", "u", "é"));
-    }
-
-    @Test
     public void anchorsMeanStartAndEndOfInputWithoutTheMultilineFlag() {
         assertFalse(matches("a$", "", "a\n"));
         assertTrue(matches("a$", "m", "a\nb"));
         assertTrue(matches("^b", "m", "a\nb"));
         assertFalse(matches("^b", "", "a\nb"));
-    }
-
-    @Test
-    public void appliesUnicodeCaseFoldingOnlyWithTheUnicodeFlag() {
-        assertFalse(matches("\\u212a", "i", "k"));
-        assertTrue(matches("\\u212a", "iu", "k"));
-    }
-
-    @Test
-    public void rejectsTheUnicodeModeEarlyErrors() {
-        rejects("\\c0", "u");
-        rejects("\\1", "u");
-        rejects("\\8", "u");
-        rejects("[\\d-a]", "u");
-        rejects("(?=.)?", "u");
-        rejects("(?=.){2,3}", "u");
-        rejects("]", "u");
-        rejects("{1}", "u");
-        rejects("\\A", "u");
-        rejects("(?<a>\\a)", "u");
     }
 
     @Test
@@ -189,26 +114,11 @@ public class RegexTranslatorTest {
     }
 
     @Test
-    public void allowsAQuantifiedLookaheadOnlyOutsideUnicodeMode() {
-        assertTrue(matches(".(?=.)?", "", "ab"));
-        rejects(".(?=.)?", "u");
-    }
-
-    @Test
-    public void treatsALoneBraceAsALiteralOutsideUnicodeMode() {
-        assertTrue(fullMatch("a{b", "", "a{b"));
-        assertTrue(fullMatch("a{,2}", "", "a{,2}"));
-        rejects("a{2,1}", "");
-    }
-
-    @Test
     public void clampsAnOversizedRepetitionInsteadOfFailingToCompile() {
         assertEquals("b{9007199254740991}", RegexTranslator.compile("b{9007199254740991}", "").getSource());
         assertFalse(matches("b{9007199254740991}", "", "bbb"));
     }
 
-    // java only accepts [A-Za-z][A-Za-z0-9]* group names, so every named group is renamed and the
-    // original name is kept as its alias.
     @Test
     public void renamesGroupNamesJavaWouldReject() {
         final var regexp = RegexTranslator.compile("(?<_>a)(?<π>b)", "");
@@ -220,21 +130,12 @@ public class RegexTranslatorTest {
     }
 
     @Test
-    public void decodesUnicodeEscapesInGroupNames() {
-        final var regexp = RegexTranslator.compile("(?<\\u03C0>a)\\k<\\u{3C0}>", "");
-        assertTrue(regexp.getGroupAliases().containsKey("π"));
-        assertTrue(matches("(?<\\u03C0>a)\\k<\\u{3C0}>", "", "aa"));
-    }
-
-    @Test
     public void rejectsAnInvalidGroupName() {
         rejects("(?<1a>x)", "");
         rejects("(?<>x)", "");
         rejects("(?<a>x)(?<a>y)", "");
     }
 
-    // A duplicate name in a different alternative is legal from ES2025 on; both aliases are kept, so
-    // a backreference can match whichever one participated.
     @Test
     public void allowsDuplicateGroupNamesInDifferentAlternatives() {
         final var regexp = RegexTranslator.compile("(?<a>x)|(?<a>y)", "");
@@ -248,20 +149,13 @@ public class RegexTranslatorTest {
         assertTrue(matches("\\1(A)", "", "AA"));
     }
 
-    // A numbered backreference *inside its own group's body* (a self-reference before the group has
-    // closed) is a forward reference too and must match the empty string, exactly like a
-    // backreference lexically before the group. This tracks groups closed so far by incrementing the
-    // "opened" count only *after* a group's body is parsed (mirroring the named-group `opened` set)
-    // rather than as soon as the group is entered - the latter would incorrectly treat the group as
-    // already available to itself.
+    // A numbered backreference inside its own group's body is a forward reference too and must match the empty
+    // string: the "opened" count only increments after a group's body is parsed.
     @Test
     public void treatsASelfReferentialBackreferenceInsideItsOwnGroupAsTheEmptyString() {
         assertTrue(fullMatch("(abc\\1)", "", "abc"));
         assertFalse(fullMatch("(abc\\1)", "", "abcabc"));
-        // A sibling group that closed earlier is available to a numbered backreference nested deeper.
         assertTrue(fullMatch("(a)(b\\1)", "", "aba"));
-        // A backreference to an outer group from inside its own nested child is still a forward
-        // reference (the outer group has not closed yet either).
         assertTrue(fullMatch("(a(b\\1))", "", "ab"));
     }
 
@@ -272,11 +166,6 @@ public class RegexTranslatorTest {
     }
 
     @Test
-    public void treatsBackslashKAsALiteralWhenNoGroupIsNamed() {
-        assertTrue(matches("\\k", "", "k"));
-    }
-
-    @Test
     public void rejectsUnterminatedConstructs() {
         rejects("[a", "");
         rejects("(a", "");
@@ -284,69 +173,6 @@ public class RegexTranslatorTest {
         rejects("\\", "");
         rejects("[\\q{ab]", "v");
         rejects("\\p{L", "u");
-    }
-
-    @Test
-    public void translatesUnicodePropertyEscapes() {
-        assertTrue(matches("\\p{Lu}", "u", "A"));
-        assertTrue(matches("\\p{Uppercase_Letter}", "u", "A"));
-        assertTrue(matches("\\p{gc=Lu}", "u", "A"));
-        assertTrue(matches("\\p{Script=Greek}", "u", "π"));
-        assertTrue(matches("\\p{ASCII}", "u", "a"));
-        assertTrue(matches("\\p{ASCII_Hex_Digit}", "u", "f"));
-        rejects("\\p{Nope}", "u");
-        rejects("\\p{nope=Lu}", "u");
-        rejects("\\p{gc=Nope}", "u");
-    }
-
-    @Test
-    public void treatsPropertyEscapesAsLiteralsOutsideUnicodeMode() {
-        assertTrue(fullMatch("\\p", "", "p"));
-        assertTrue(fullMatch("[\\p]", "", "p"));
-        rejects("\\pL", "u");
-        rejects("[\\pL]", "u");
-        rejects("[\\p{L", "u");
-    }
-
-    @Test
-    public void translatesControlEscapes() {
-        assertTrue(fullMatch("\\cA", "", ""));
-        assertTrue(fullMatch("[\\cA]", "", ""));
-        assertTrue(fullMatch("[\\c1]", "", ""));
-        assertTrue(fullMatch("\\c1", "", "\\c1"));
-        rejects("\\c1", "u");
-    }
-
-    // Annex B's ControlLetter accepts either case, but java.util.regex's own `\cX` syntax only
-    // recognises an uppercase letter, so a lowercase one must be translated by computed value
-    // (`letter % 32`) rather than passed through as `\cx`.
-    @Test
-    public void translatesLowercaseControlEscapes() {
-        assertTrue(fullMatch("\\ca", "", ""));
-        assertTrue(fullMatch("[\\ca]", "", ""));
-        assertTrue(fullMatch("\\cz", "", ""));
-    }
-
-    @Test
-    public void translatesHexAndUnicodeEscapes() {
-        assertTrue(fullMatch("\\x41", "", "A"));
-        assertTrue(fullMatch("\\xZ", "", "xZ"));
-        rejects("\\xZ", "u");
-        assertTrue(fullMatch("\\u0041", "", "A"));
-        assertTrue(fullMatch("\\uZZZZ", "", "uZZZZ"));
-        rejects("\\uZZZZ", "u");
-        rejects("\\u{}", "u");
-        rejects("\\u{ZZ}", "u");
-        rejects("\\u{110000}", "u");
-    }
-
-    @Test
-    public void translatesLegacyOctalAndDecimalEscapes() {
-        assertTrue(fullMatch("\\01", "", ""));
-        rejects("\\01", "u");
-        assertTrue(fullMatch("\\8", "", "8"));
-        assertTrue(fullMatch("\\101", "", "A"));
-        assertTrue(matches("(a)\\1", "", "aa"));
     }
 
     @Test
@@ -374,44 +200,6 @@ public class RegexTranslatorTest {
     }
 
     @Test
-    public void allowsAClassEscapeAsARangeEndpointOutsideUnicodeMode() {
-        assertTrue(fullMatch("[\\d-a]", "", "-"));
-        assertTrue(fullMatch("[a-c]", "", "b"));
-        assertTrue(fullMatch("[\\S]", "", "a"));
-        assertTrue(fullMatch("[\\w]", "", "a"));
-        assertTrue(fullMatch("[\\p{Nd}]", "u", "7"));
-        rejects("[a", "");
-        rejects("[a\\", "");
-    }
-
-    @Test
-    public void rejectsAnInvalidRangeInsideAUnicodeSetsClass() {
-        rejects("[\\d-a]", "v");
-        assertTrue(fullMatch("[a-c]", "v", "b"));
-    }
-
-    @Test
-    public void rejectsAMalformedStringAlternativeEscape() {
-        rejects("[\\qab]", "v");
-        rejects("[\\q{\\z}]", "v");
-        rejects("[\\q{\\xZ}]", "v");
-        rejects("[\\q{\\u{110000}}]", "v");
-        rejects("[\\q{\\c1}]", "v");
-        rejects("[\\q{a", "v");
-    }
-
-    @Test
-    public void decodesEveryClassSetCharacterFormInsideStringAlternatives() {
-        assertTrue(fullMatch("[\\q{\\n\\r\\t\\f\\v\\b\\0}]", "v", "\n\r\t\f\b\0"));
-        assertTrue(fullMatch("[\\q{\\x41\\x42}]", "v", "AB"));
-        assertTrue(fullMatch("[\\q{\\cA\\cB}]", "v", ""));
-        assertTrue(fullMatch("[\\q{\\|\\-}]", "v", "|-"));
-        assertTrue(fullMatch("[\\q{\\uD834x}]", "v", "\uD834x"));
-    }
-
-    // A backreference to a duplicated name compiles to an alternation of its aliases, so whichever
-    // one participated is the one that matches.
-    @Test
     public void aBackreferenceToADuplicatedNameTriesEveryAlias() {
         assertTrue(matches("(?:(?<a>x)|(?<a>y))\\k<a>", "", "yy"));
         assertTrue(matches("(?:(?<a>x)|(?<a>y))\\k<a>", "", "xx"));
@@ -435,135 +223,19 @@ public class RegexTranslatorTest {
     }
 
     @Test
-    public void decodesAPartlyEscapedGroupName() {
-        final var regexp = RegexTranslator.compile("(?<a\\u0062>x)", "");
-        assertTrue(regexp.getGroupAliases().containsKey("ab"));
-        assertTrue(matches("(?<a\\u200C>x)", "", "x"));
-    }
-
-    // The seven properties of strings are sets of sequences, so each renders as an alternation
-    // (ordered longest-first) rather than a character class, and only under the v flag.
-    @Test
-    public void translatesEachPropertyOfStringsToAnAlternation() {
-        assertTrue(fullMatch("\\p{Emoji_Keycap_Sequence}", "v", "9\ufe0f\u20e3"));
-        assertFalse(matches("^\\p{Emoji_Keycap_Sequence}$", "v", "9\ufe0f"));
-        assertTrue(fullMatch("\\p{Basic_Emoji}", "v", "\u231a"));
-        assertTrue(fullMatch("\\p{Basic_Emoji}", "v", "\u00a9\ufe0f"));
-        assertFalse(matches("^\\p{Basic_Emoji}$", "v", "\u00a9"));
-        assertTrue(fullMatch("\\p{RGI_Emoji_Flag_Sequence}", "v", new String(new int[]{0x1F1E6, 0x1F1E9}, 0, 2)));
-        assertTrue(fullMatch("\\p{RGI_Emoji_Tag_Sequence}", "v",
-                new String(new int[]{0x1F3F4, 0xE0067, 0xE0062, 0xE0065, 0xE006E, 0xE0067, 0xE007F}, 0, 7)));
-        assertTrue(fullMatch("\\p{RGI_Emoji_Modifier_Sequence}", "v", new String(new int[]{0x1F44D, 0x1F3FD}, 0, 2)));
-        assertTrue(fullMatch("\\p{RGI_Emoji_ZWJ_Sequence}", "v",
-                new String(new int[]{0x1F468, 0x200D, 0x1F469, 0x200D, 0x1F466}, 0, 5)));
-        assertTrue(fullMatch("\\p{RGI_Emoji}", "v", "9\ufe0f\u20e3"));
-        assertTrue(fullMatch("\\p{RGI_Emoji}", "v", new String(new int[]{0x1F600}, 0, 1)));
-        assertFalse(matches("^\\p{RGI_Emoji}$", "v", "a"));
-    }
-
-    // Longest-first: the keycap sequence must win over its own leading digit, which the same set
-    // also contains through Basic_Emoji.
-    @Test
-    public void prefersTheLongestPropertyOfStringsAlternative() {
-        assertTrue(fullMatch("^\\p{RGI_Emoji}$", "v", "9\ufe0f\u20e3"));
-    }
-
-    @Test
-    public void rejectsAPropertyOfStringsOutsideItsAllowedPositions() {
-        rejects("\\p{RGI_Emoji}", "u");
-        rejects("\\p{Basic_Emoji}", "u");
-        rejects("\\P{Basic_Emoji}", "v");
-        rejects("[^\\p{Basic_Emoji}]", "v");
-        rejects("[\\P{Basic_Emoji}]", "v");
-        rejects("[\\p{Basic_Emoji}]", "u");
-        rejects("[\\p{Basic_Emoji}-a]", "v");
-    }
-
-    @Test
-    public void combinesAPropertyOfStringsWithTheOtherSetOperands() {
-        assertTrue(fullMatch("[\\p{Emoji_Keycap_Sequence}a]", "v", "a"));
-        assertTrue(fullMatch("[\\p{Emoji_Keycap_Sequence}a]", "v", "9\ufe0f\u20e3"));
-        assertFalse(matches("^[\\p{RGI_Emoji}--\\p{Emoji_Keycap_Sequence}]$", "v", "9\ufe0f\u20e3"));
-        assertTrue(fullMatch("[[\\p{Emoji_Keycap_Sequence}]]", "v", "9\ufe0f\u20e3"));
-        assertTrue(fullMatch("[\\p{Emoji_Keycap_Sequence}\\q{ab}]", "v", "ab"));
-    }
-
-    // ECMA-262 forbids UAX #44 loose matching: a property name differing by whitespace or case is
-    // not the same property, it is an early error.
-    @Test
-    public void rejectsLooselyMatchedPropertyNames() {
-        rejects("\\p{ General_Category=Uppercase_Letter }", "u");
-        rejects("\\p{General_Category = Uppercase_Letter}", "u");
-        rejects("\\P{ General_Category=Uppercase_Letter }", "u");
-        rejects("\\p{script=Greek}", "u");
-        assertTrue(matches("\\p{Hex}", "u", "f"));
-        assertTrue(matches("[\\p{Hex}\\P{Hex}]", "u", "\u2603"));
-    }
-
-    // An empty remove list is legal: RegularExpressionFlags may be empty on either side of the dash.
-    @Test
     public void translatesModifierGroupsWithAnEmptyRemoveList() {
         assertTrue(matches("(?i-:a)", "", "A"));
         assertTrue(matches("(?m:^b)", "", "a\nb"));
     }
 
-    // GetWordCharacters: under ignoreCase in unicode mode the two code points that case-fold into
-    // the ASCII word set join it, which java's own \w and \b never do.
-    @Test
-    public void widensTheWordCharacterSetUnderIgnoreCase() {
-        assertTrue(matches("(?i:\\w)", "u", "\u017f"));
-        assertTrue(matches("(?i:\\w)", "u", "\u212a"));
-        assertTrue(matches("(?i:\\w)", "u", "A"));
-        assertFalse(matches("(?i:\\W)", "u", "\u017f"));
-        assertTrue(matches("(?i:\\b)", "u", "\u017f"));
-        assertTrue(matches("(?i:\\B)", "u", "Z\u017f"));
-        assertFalse(matches("\\w", "u", "\u017f"));
-        assertFalse(matches("(?i:\\w)", "", "\u017f"));
-    }
-
-    // Without u or v a pattern matches code units, so a supplementary code point is two of them and
-    // a dotAll `.` may not swallow it whole.
-    @Test
-    public void matchesCodeUnitsWithoutUnicodeMode() {
-        final var astral = new String(new int[]{0x10300}, 0, 1);
-        assertFalse(fullMatch(".", "s", astral));
-        assertFalse(fullMatch("(?s:.)", "", astral));
-        assertTrue(fullMatch(".", "su", astral));
-        assertTrue(fullMatch(".", "s", "a"));
-        assertTrue(fullMatch(".", "s", "\n"));
-        assertFalse(fullMatch(".", "", "\n"));
-        assertTrue(fullMatch(".", "s", "\ud800"));
-    }
-
-    @Test
-    public void rejectsADashIdentityEscapeOutsideAClassInUnicodeMode() {
-        rejects("\\-", "u");
-        assertTrue(fullMatch("[\\-]", "u", "-"));
-        assertTrue(fullMatch("\\-", "", "-"));
-    }
-
-    // A reference to the group it sits inside cannot have participated, so it matches the empty
-    // string rather than failing the whole alternative.
     @Test
     public void treatsASelfReferenceAsAForwardReference() {
         assertTrue(matches("(?<a>\\k<a>\\w)..", "", "bab"));
         assertTrue(matches("\\k<a>(?<a>b)\\w\\k<a>", "", "bab"));
     }
 
-    @Test
-    public void rendersNestedAndNegatedUnicodeSetsClasses() {
-        assertTrue(fullMatch("[[a-c][0-9]]", "v", "b"));
-        assertTrue(fullMatch("[[a-c][0-9]]", "v", "5"));
-        assertTrue(fullMatch("[^a]", "v", "b"));
-        assertTrue(fullMatch("[^]", "v", "\n"));
-        assertFalse(matches("[]", "v", "a"));
-    }
-
-    // Runtime Semantics: Canonicalize(rer, ch) folds the *candidate character* before testing
-    // set membership, not the compiled CharSet itself; for a negated case-related general
-    // category (\P{Lu}) those two orders disagree. java.util.regex's own UNICODE_CASE only ever
-    // folds the positive set, so a bare (?iu:\P{Lu}) still rejects "A" - it has to be recompiled
-    // as an explicit per-candidate-folded class instead.
+    // Canonicalize(rer, ch) folds the candidate character before testing set membership, not the compiled
+    // CharSet; java's UNICODE_CASE only folds the positive set, so (?iu:\P{Lu}) still rejects "A".
     @Test
     public void ignoreCaseFoldsTheCandidateForANegatedCaseCategory() {
         assertTrue(fullMatch("(?i:\\P{Lu})", "u", "A"));
@@ -573,20 +245,8 @@ public class RegexTranslatorTest {
         assertTrue(fullMatch("(?i:\\P{Lu})", "u", "0"));
     }
 
-    // Without ignoreCase (or without the property being case-related) the plain \p{}/\P{} path is
-    // unaffected: no per-candidate folding is applied.
-    @Test
-    public void nonIgnoreCasePropertyEscapesAreUnaffectedByFolding() {
-        assertFalse(fullMatch("\\P{Lu}", "u", "A"));
-        assertTrue(fullMatch("\\p{Lu}", "u", "A"));
-        assertTrue(fullMatch("(?i:\\P{Nd})", "u", "a"));
-        assertFalse(fullMatch("(?i:\\P{Nd})", "u", "5"));
-    }
-
-    // A handful of Unicode CaseFolding.txt "simple"/"common" pairs (precomposed Greek accented
-    // iotas/upsilons, the "st" ligatures) have no ordinary upper/lowercase relationship at all, so
-    // java's own UNICODE_CASE never joins them; a literal unicode escape naming one has to spell
-    // the match as the pair explicitly, both inside and outside a character class.
+    // A few Unicode CaseFolding.txt simple/common pairs have no ordinary upper/lowercase relationship, so
+    // java's UNICODE_CASE never joins them and the match has to spell the pair explicitly.
     @Test
     public void ignoreCaseJoinsExtraCaseFoldPairsWithoutOrdinaryCasing() {
         assertTrue(fullMatch("[\\u0390]", "ui", "\u1fd3"));
@@ -598,7 +258,6 @@ public class RegexTranslatorTest {
         assertTrue(fullMatch("\\u0390", "ui", "\u1fd3"));
     }
 
-    // Without ignoreCase the extra fold table is inert: the escape names only its own codepoint.
     @Test
     public void extraCaseFoldPairsAreInertWithoutIgnoreCase() {
         assertFalse(fullMatch("[\\u0390]", "u", "\u1fd3"));

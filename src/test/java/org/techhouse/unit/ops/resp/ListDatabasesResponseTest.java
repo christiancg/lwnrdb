@@ -10,7 +10,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.resp.ListDatabasesResponse;
 
 public class ListDatabasesResponseTest {
-    // Response with OK status and database list
     @Test
     public void test_response_with_ok_status_and_database_list() {
         List<String> databases = List.of("db1", "db2");
@@ -22,7 +21,6 @@ public class ListDatabasesResponseTest {
         assertEquals(databases, response.getDatabases());
     }
 
-    // Response with ERROR status and null list
     @Test
     public void test_response_with_error_status_null_list() {
         ListDatabasesResponse response = new ListDatabasesResponse("Error occurred", null);
@@ -33,7 +31,6 @@ public class ListDatabasesResponseTest {
         assertNull(response.getDatabases());
     }
 
-    // Response with OK status and empty database list
     @Test
     public void test_response_with_ok_status_and_empty_list() {
         List<String> emptyList = List.of();

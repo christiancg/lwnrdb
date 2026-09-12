@@ -48,18 +48,12 @@ public final class AggregationOperationHelper {
         return applySteps(request.getAggregationSteps(), null, request.getDatabaseName(), request.getCollectionName());
     }
 
-    // Runs the pipeline over a caller-supplied source stream (the transaction read-your-writes path)
-    // while keeping the real db/coll so JOIN steps still resolve their remote collections. Because the
-    // source stream is non-null, the index-backed source fast-paths are skipped and every step operates
-    // in memory over the overlaid documents.
     public static List<JsonObject> processAggregation(AggregateRequest request, Stream<JsonObject> source)
             throws IOException {
         return applySteps(request.getAggregationSteps(), source, request.getDatabaseName(),
                 request.getCollectionName());
     }
 
-    // The collection identifiers a request reads: the target collection plus every JOIN collection.
-    // Used by the caller to acquire read locks over the full set an aggregation touches.
     public static List<String> aggregateLockSet(AggregateRequest request) {
         final var dbName = request.getDatabaseName();
         final var identifiers = new ArrayList<String>();
@@ -74,8 +68,7 @@ public final class AggregationOperationHelper {
         return identifiers;
     }
 
-    // The context wraps the terminal operation as well as the loop: a Stream is lazy, so a SCRIPT
-    // operator's callable is invoked while resultStream.toList() runs, long after the loop has ended.
+    // A Stream is lazy, so a SCRIPT callable runs during toList(): the context must wrap the terminal op too.
     private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
             String dbName, String collName) throws IOException {
         try (var context = new PipelineScriptContext()) {
@@ -91,8 +84,6 @@ public final class AggregationOperationHelper {
             final var fastCount = CountOperatorHelper.tryIndexOnlyCount(steps, dbName, collName);
             if (fastCount != null) {
                 resultStream = Stream.of(fastCount.result());
-                // The steps up to and including the COUNT have been answered from the indexes; any
-                // steps after the COUNT still run normally on the produced {count:N} stream.
                 startIndex = fastCount.nextStepIndex();
             }
         }
@@ -113,8 +104,6 @@ public final class AggregationOperationHelper {
         }
         try {
             if (resultStream == null) {
-                // No step produced a stream (empty aggregationSteps): return the whole collection,
-                // as documented. A null collName means a step-on-stream call with no source to load.
                 if (collName == null || collName.isEmpty()) {
                     return new ArrayList<>();
                 }
@@ -170,8 +159,7 @@ public final class AggregationOperationHelper {
             }
         }
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
-        // The reassignment above defeats the IDE's consumed-stream tracking: it sees the parameter passed
-        // to initializeStreamIfNecessary and cannot tell the value read back is a different stream.
+        // The reassignment above defeats the IDE's consumed-stream tracking.
         //noinspection DataFlowIssue
         return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, groupByStep.getFieldName()))
                 .collect(Collectors
@@ -189,9 +177,6 @@ public final class AggregationOperationHelper {
                 });
     }
 
-    // Index-backed GROUP_BY: the field index already maps each value to the set of matching ids.
-    // All group IDs are collected into a single batch fetch (one cache/IO pass) rather than one
-    // getEntriesByIds call per group, then the resulting documents are bucketed by their group.
     private static Stream<JsonObject> groupByViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
             String collName, String fieldName) throws IOException {
         final var allIds = new HashSet<String>();
@@ -230,8 +215,7 @@ public final class AggregationOperationHelper {
         final var joinCollectionLocalField = joinStep.getLocalField();
         final var joinCollectionRemoteField = joinStep.getRemoteField();
         final var as = joinStep.getAsField();
-        // Blocking step (documented exception): JOIN groups the remote side in memory before the
-        // per-row attach, so the left side is materialized here to drive the remote lookup.
+        // Blocking step (documented exception): JOIN groups the remote side in memory before the per-row attach.
         final var leftEntries = resultStream.toList();
         final var joinedCollection = buildJoinLookup(dbName, joinCollectionName, joinCollectionRemoteField, leftEntries,
                 joinCollectionLocalField);
@@ -246,10 +230,6 @@ public final class AggregationOperationHelper {
         });
     }
 
-    // Builds the remote-side lookup (remote field value -> matching remote documents) for a JOIN.
-    // When the remote field is indexed, getMatchingIdsForJoin does one binary-search-backed lookup
-    // per distinct local value instead of deep-copying every index entry and doing a linear scan.
-    // Falls back to the whole-collection group when no index exists on the remote field.
     private static Map<JsonBaseElement, JsonArray> buildJoinLookup(String dbName, String joinCollectionName,
             String remoteField, List<JsonObject> leftEntries, String localField) throws IOException {
         final var localValues = new HashSet<JsonBaseElement>();
@@ -289,8 +269,6 @@ public final class AggregationOperationHelper {
         if (resultStream == null && fieldName != null && !fieldName.isBlank()) {
             final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, collName, fieldName);
             if (indexEntries != null) {
-                // The index keys are exactly the distinct values for the field, so no documents
-                // are read at all. The trailing distinct() is a cheap safety net.
                 return indexEntries.stream().map(indexEntry -> {
                     final var json = new JsonObject();
                     json.add(fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
@@ -349,10 +327,6 @@ public final class AggregationOperationHelper {
         }
     }
 
-    // Index-backed SORT: index entries are sorted with an allocation-free comparator (no JsonObject
-    // wrapper per comparison), then IDs are traversed and documents fetched lazily so a downstream
-    // LIMIT only triggers as many id-iterations and reads as it needs (e.g. SORT+LIMIT 10 stops
-    // after the first 10 ids, never traversing the remaining 8000).
     private static Stream<JsonObject> sortViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
             String collName, boolean ascending) {
         final var sortedEntries = new ArrayList<>(indexEntries);
@@ -367,9 +341,7 @@ public final class AggregationOperationHelper {
         }).filter(Objects::nonNull);
     }
 
-    // Allocation-free comparator for raw FieldIndexEntry values. Handles all stored value kinds
-    // (Number, Boolean, String, JsonCustom, JsonNull, JsonBaseElement) without creating a JsonObject
-    // wrapper per comparison, matching the sort semantics of sortFunctionAscending/Descending.
+    // Must match the sort semantics of sortFunctionAscending/Descending.
     private static int compareIndexValues(Object a, Object b, boolean ascending) {
         if (!ascending) {
             return compareIndexValues(b, a, true);
@@ -380,7 +352,7 @@ public final class AggregationOperationHelper {
             return 0;
         }
         if (aIsNull) {
-            return 1; // nulls sort last
+            return 1;
         }
         if (bIsNull) {
             return -1;

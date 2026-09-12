@@ -64,8 +64,6 @@ public class TemporalPlainYearMonthProgramTest {
                 + "Temporal.PlainYearMonth.compare(a, b) === 0 && a.equals(b)"));
     }
 
-    // Round-tripping through toString()/from() preserves the value, including the reference day for
-    // a full-date-string input
     @Test
     public void test_round_trips_through_string_form() {
         assertTrue(bool("var ym = new Temporal.PlainYearMonth(2024, 3);"
@@ -106,9 +104,6 @@ public class TemporalPlainYearMonthProgramTest {
         assertEquals("\"2024-03\"", new org.techhouse.ejson.EJson().toJson(result.getValue()));
     }
 
-    // until() rounds the 1-year-6-month calendar span down to a whole year at smallestUnit "years"
-    // (trunc keeps the odd integer part, matching the finer-grained tests in the "years"/"months"
-    // Duration.round test262 suite for the same relative-date arithmetic)
     @Test
     public void test_until_rounds_to_years() {
         assertEquals("1",

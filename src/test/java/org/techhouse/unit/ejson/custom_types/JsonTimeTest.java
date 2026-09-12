@@ -8,7 +8,6 @@ import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 
 public class JsonTimeTest {
-    // Create JsonTime with valid LocalTime object
     @Test
     public void create_json_time_with_valid_local_time() {
         LocalTime time = LocalTime.of(10, 30, 15);
@@ -16,7 +15,6 @@ public class JsonTimeTest {
         assertEquals(time, jsonTime.getCustomValue());
     }
 
-    // Constructor accepts valid time string in format 'time(HH:mm:ss)'
     @Test
     public void test_constructor_accepts_valid_time_string() {
         String validTimeStr = "#time(13:45:30)";
@@ -27,7 +25,6 @@ public class JsonTimeTest {
         assertEquals(LocalTime.of(13, 45, 30), jsonTime.getCustomValue());
     }
 
-    // Default constructor creates empty JsonTime instance
     @Test
     public void test_default_constructor_creates_empty_instance() {
         JsonTime jsonTime = new JsonTime();
@@ -36,7 +33,6 @@ public class JsonTimeTest {
         assertEquals("", jsonTime.getValue());
     }
 
-    // Default constructor creates object with null customValue
     @Test
     public void test_default_constructor_creates_null_custom_value() {
         JsonTime jsonTime = new JsonTime();
@@ -44,7 +40,6 @@ public class JsonTimeTest {
         assertNull(jsonTime.getCustomValue());
     }
 
-    // Returns string "time" when called
     @Test
     public void returns_time_string_when_called() {
         JsonTime jsonTime = new JsonTime(LocalTime.now());
@@ -54,7 +49,6 @@ public class JsonTimeTest {
         assertEquals("time", result);
     }
 
-    // Method behavior when class is subclassed
     @Test
     public void subclass_returns_same_type_name() {
         class CustomJsonTime extends JsonTime {
@@ -70,7 +64,6 @@ public class JsonTimeTest {
         assertEquals("time", result);
     }
 
-    // Compare two different times returns correct ordering (-1, 0, or 1)
     @Test
     public void test_compare_returns_correct_ordering() {
         JsonTime earlier = new JsonTime(LocalTime.of(10, 30));
@@ -81,7 +74,6 @@ public class JsonTimeTest {
         assertEquals(0, earlier.compare(earlier.getCustomValue()));
     }
 
-    // Compare with null time parameter throws NullPointerException
     @Test
     public void test_compare_with_null_throws_exception() {
         JsonTime time = new JsonTime(LocalTime.of(10, 30));
@@ -89,13 +81,11 @@ public class JsonTimeTest {
         assertThrows(NullPointerException.class, () -> time.compare(null));
     }
 
-    // Invalid format string throws WrongFormatCustomTypeException
     @Test
     public void test_invalid_format_throws_wrong_format_exception() {
         assertThrows(WrongFormatCustomTypeException.class, () -> new JsonTime("#time(not_a_time)"));
     }
 
-    // time declares no custom operators and rejects any evaluation.
     @Test
     public void test_no_custom_operators() {
         JsonTime time = new JsonTime(LocalTime.of(10, 30, 15));

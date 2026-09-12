@@ -19,7 +19,6 @@ import org.techhouse.simplejs.host.DatabaseHostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
 
 public class DatabaseHostBindingsTest {
-    // The binding pins the zone and locale from configuration, unlike SimpleHostBindings
     @Test
     public void test_reads_the_script_zone_and_locale_from_configuration() {
         final var configuration = Configuration.getInstance();
@@ -43,14 +42,12 @@ public class DatabaseHostBindingsTest {
         assertSame(limits, bindings.limits());
     }
 
-    // With no seam the readers answer the JVM defaults, which is what a null-ops getMethod sees
     @Test
     public void test_ops_readers_fall_back_to_the_jvm_defaults() {
         assertEquals(ZoneId.systemDefault(), InterpreterOps.timeZone(null));
         assertEquals(Locale.getDefault(), InterpreterOps.locale(null));
     }
 
-    // The sandbox's memory budget comes from configuration, never from the caller
     @Test
     public void test_reads_the_memory_budget_from_configuration() {
         final var configuration = Configuration.getInstance();
@@ -58,7 +55,6 @@ public class DatabaseHostBindingsTest {
         assertEquals(configuration.getScriptMaxMemoryBytes(), limits.memoryBudget());
     }
 
-    // A null id list is normalised to an empty one rather than surfacing as null
     @Test
     public void test_bulk_save_outcome_normalises_nulls() {
         final var outcome = new BulkSaveOutcome(null, null);
@@ -66,7 +62,6 @@ public class DatabaseHostBindingsTest {
         assertEquals(List.of(), outcome.updated());
     }
 
-    // fetch is unreachable unless configuration grants it, and the grant carries the allowlist with it.
     @org.junit.jupiter.api.Test
     public void test_network_is_absent_unless_script_fetch_is_enabled() throws Exception {
         final var configuration = org.techhouse.config.Configuration.getInstance();

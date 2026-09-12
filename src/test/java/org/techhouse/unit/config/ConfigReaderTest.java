@@ -43,10 +43,8 @@ public class ConfigReaderTest {
         Configuration.getInstance();
     }
 
-    // Successfully loads configuration from default file when no external file is present
     @Test
     public void test_load_configuration_from_default_file() {
-        // Arrange
         Map<String, String> expectedConfig = new HashMap<>();
         expectedConfig.put("port", "8989");
         expectedConfig.put("maxConnections", "100");
@@ -138,14 +136,11 @@ public class ConfigReaderTest {
         expectedConfig.put("aggregationScriptTimeoutMs", "2000");
         expectedConfig.put("aggregationScriptMaxSourceBytes", "16Kb");
 
-        // Act
         Map<String, String> actualConfig = ConfigReader.loadConfiguration();
 
-        // Assert
         assertEquals(expectedConfig, actualConfig);
     }
 
-    // TLS keys missing from lwnrdb.cfg fall back to the bundled defaults
     @Test
     public void test_tls_keys_fall_back_to_defaults_when_missing() throws IOException {
         String configContent = "port=8989\nmaxConnections=100\n";
@@ -163,10 +158,8 @@ public class ConfigReaderTest {
         }
     }
 
-    // Handles empty configuration files gracefully
     @Test
     public void test_handle_empty_configuration_file() {
-        // Arrange
         File configFile = new File(
                 Paths.get(".").toAbsolutePath().normalize() + Globals.FILE_SEPARATOR + Globals.FILE_CONFIG_NAME);
         try {
@@ -176,12 +169,10 @@ public class ConfigReaderTest {
                 fail("Failed to create empty configuration file for testing.");
             }
 
-            // Act
             Map<String, String> actualConfig = ConfigReader.loadConfiguration();
 
-            // Assert
             assertNotNull(actualConfig);
-            assertFalse(actualConfig.isEmpty()); //should have defaults
+            assertFalse(actualConfig.isEmpty());
         } finally {
             if (!configFile.delete()) {
                 fail("Failed to delete empty configuration file.");
@@ -189,7 +180,6 @@ public class ConfigReaderTest {
         }
     }
 
-    // Config file with a line missing '=' triggers warning branch (L74)
     @Test
     public void test_config_file_with_invalid_property_line() throws IOException {
         String configContent = "port=8989\nnot_a_valid_property\nmaxConnections=100\n";
@@ -206,7 +196,6 @@ public class ConfigReaderTest {
         }
     }
 
-    // Comment lines (starting with '#') and blank lines are ignored
     @Test
     public void test_config_file_ignores_comments_and_blank_lines() throws IOException {
         String configContent = "# this is a comment\n\nport=8989\n   # indented comment\nmaxConnections=100\n";
@@ -225,7 +214,6 @@ public class ConfigReaderTest {
         }
     }
 
-    // Values containing '=' are preserved (split with limit 2)
     @Test
     public void test_config_file_value_with_equals_sign() throws IOException {
         String configContent = "defaultAdminPassword=ab=cd=ef\n";

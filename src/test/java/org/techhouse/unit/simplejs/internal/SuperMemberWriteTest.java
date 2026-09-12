@@ -37,7 +37,6 @@ public class SuperMemberWriteTest {
                 """));
     }
 
-    // The receiver is `this`, so an inherited setter runs with the instance as its this value
     @Test
     public void test_super_assignment_runs_an_inherited_setter_on_the_instance() {
         assertEquals("7", str("""
@@ -56,9 +55,8 @@ public class SuperMemberWriteTest {
                 """));
     }
 
-    // A static method's home object is the class, so GetSuperBase() is the class's own prototype - the
-    // parent class - while the receiver is still `this`, the class the method was called on. The write
-    // therefore lands on the derived class and leaves the parent alone.
+    // A static method's home object is the class, so GetSuperBase() is the parent class while the receiver is
+    // still `this` - the write lands on the derived class and leaves the parent alone.
     @Test
     public void test_super_assignment_in_a_static_method_writes_on_the_receiving_class() {
         assertEquals("absent:5:true", str("""
@@ -73,7 +71,6 @@ public class SuperMemberWriteTest {
                 """));
     }
 
-    // The setter on the parent still runs, but with the receiving class as its `this`
     @Test
     public void test_super_assignment_in_a_static_method_runs_the_parents_setter_on_the_receiver() {
         assertEquals("Derived:absent", str("""
@@ -84,8 +81,6 @@ public class SuperMemberWriteTest {
                 """));
     }
 
-    // A non-writable property anywhere on the super base's chain refuses the write outright, rather than
-    // letting it fall through and create an own property on the receiver
     @Test
     public void test_super_assignment_to_a_non_writable_property_throws() {
         assertEquals("TypeError:absent", str("""
@@ -119,7 +114,6 @@ public class SuperMemberWriteTest {
                 """));
     }
 
-    // The refusal follows the whole chain, not just the immediate base
     @Test
     public void test_super_assignment_to_an_inherited_non_writable_property_throws() {
         assertEquals("TypeError", str("""
@@ -162,7 +156,6 @@ public class SuperMemberWriteTest {
                 """));
     }
 
-    // Freezing the base only freezes the base: a key it never had is still created on the instance
     @Test
     public void test_a_frozen_super_base_does_not_block_a_new_key_on_the_instance() {
         assertTrue(bool("""
@@ -173,7 +166,6 @@ public class SuperMemberWriteTest {
                 """));
     }
 
-    // super.n reads the prototype chain, never the instance - so the compound assignment folds undefined
     @Test
     public void test_compound_super_assignment_reads_the_prototype_not_the_instance() {
         assertTrue(bool("""
@@ -241,8 +233,6 @@ public class SuperMemberWriteTest {
                 """));
     }
 
-    // The [[Set]] runs against the super base, not `this`, so a setter writing through super does not
-    // re-enter itself - it reaches the instance, where the own accessor of the same name refuses the write
     @Test
     public void test_object_literal_setter_assigning_through_super_does_not_recurse() {
         assertEquals("TypeError", str("""

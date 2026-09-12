@@ -8,12 +8,14 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 
 public final class BeforeHookHelper {
+    private static final Logger logger = Logger.logFor(BeforeHookHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
 
     private BeforeHookHelper() {
@@ -43,26 +45,27 @@ public final class BeforeHookHelper {
         if (!created && !updated) {
             return null;
         }
-        try (var creates = BeforeHookContext.open(dbName, collName, EventType.CREATED, actingUser);
-                var updates = BeforeHookContext.open(dbName, collName, EventType.UPDATED, actingUser)) {
-            final var existingIds = new HashSet<String>();
-            cache.getPkIndexAndLoadIfNecessary(dbName, collName).forEach(entry -> existingIds.add(entry.getValue()));
-            final var objects = new ArrayList<>(request.getObjects());
-            for (var i = 0; i < objects.size(); i++) {
-                final var object = objects.get(i);
-                final var id = idOf(object);
-                final var isInsert = id == null || !existingIds.contains(id);
-                final var outcome = (isInsert ? creates : updates).apply(object, id, OperationType.BULK_SAVE);
-                if (outcome.isRejected()) {
-                    return outcome.rejection();
+        return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING, () -> {
+            try (var creates = BeforeHookContext.open(dbName, collName, EventType.CREATED, actingUser);
+                    var updates = BeforeHookContext.open(dbName, collName, EventType.UPDATED, actingUser)) {
+                final var existingIds = new HashSet<String>();
+                cache.getPkIndexAndLoadIfNecessary(dbName, collName)
+                        .forEach(entry -> existingIds.add(entry.getValue()));
+                final var objects = new ArrayList<>(request.getObjects());
+                for (var i = 0; i < objects.size(); i++) {
+                    final var object = objects.get(i);
+                    final var id = idOf(object);
+                    final var isInsert = id == null || !existingIds.contains(id);
+                    final var outcome = (isInsert ? creates : updates).apply(object, id, OperationType.BULK_SAVE);
+                    if (outcome.isRejected()) {
+                        return outcome.rejection();
+                    }
+                    objects.set(i, outcome.document());
                 }
-                objects.set(i, outcome.document());
+                request.setObjects(objects);
+                return null;
             }
-            request.setObjects(objects);
-            return null;
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING);
-        }
+        });
     }
 
     public static OperationResponse beforeDelete(DeleteRequest request, String actingUser) {
@@ -79,6 +82,7 @@ public final class BeforeHookHelper {
             }
             document = entries.getFirst().getData();
         } catch (Exception e) {
+            logger.error(OperationType.DELETE + " failed with " + ErrorCode.ERROR_DELETING.getCode(), e);
             return new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_DELETING);
         }
         try (var hooks = BeforeHookContext.open(dbName, collName, EventType.DELETED, actingUser)) {

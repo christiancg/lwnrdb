@@ -17,7 +17,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.DeleteScheduleRequest;
 import org.techhouse.ops.req.ListSchedulesRequest;
 import org.techhouse.ops.req.SaveScheduleRequest;
-import org.techhouse.ops.resp.DeleteScheduleResponse;
 import org.techhouse.ops.resp.ListSchedulesResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveScheduleResponse;
@@ -136,7 +135,7 @@ public final class ScheduleOperationHelper {
             fs.deleteSchedule(dbName, request.getName());
             cache.removeSchedule(dbName, request.getName());
             registry.reload(dbName);
-            return new DeleteScheduleResponse("Schedule deleted successfully");
+            return OperationResponse.ok(OperationType.DELETE_SCHEDULE, "Schedule deleted successfully");
         } finally {
             locks.release(dbName, Globals.SCHEDULES_FOLDER);
         }

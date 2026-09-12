@@ -20,6 +20,7 @@ public class ScriptPlacement {
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private final LongAdder forwarded = new LongAdder();
     private final LongAdder forwardFallbacks = new LongAdder();
+    private final LongAdder outcomeUnknown = new LongAdder();
     private final LongAdder localityPreferred = new LongAdder();
     private final RandomGenerator random;
 
@@ -55,12 +56,20 @@ public class ScriptPlacement {
         forwardFallbacks.increment();
     }
 
+    public void recordOutcomeUnknown() {
+        outcomeUnknown.increment();
+    }
+
     public long getForwarded() {
         return forwarded.sum();
     }
 
     public long getForwardFallbacks() {
         return forwardFallbacks.sum();
+    }
+
+    public long getOutcomeUnknown() {
+        return outcomeUnknown.sum();
     }
 
     public long getLocalityPreferred() {
@@ -111,10 +120,13 @@ public class ScriptPlacement {
 
     private NodeInfo better(NodeInfo a, NodeInfo b, Map<String, Double> shares, int weight) {
         final var winner = blended(a, b, shares, weight);
-        if (!winner.getNodeId().equals(blended(a, b, shares, 0).getNodeId())) {
+        final var loadOnly = blended(a, b, shares, 0);
+        if (winner != null && (loadOnly == null || !winner.getNodeId().equals(loadOnly.getNodeId()))) {
             localityPreferred.increment();
         }
-        return winner;
+        // A tie goes to the first sample, which betterOfTwoSamples draws uniformly: a stable node-id order
+        // would send every run on an idle cluster to the lowest id and never once to the highest.
+        return winner != null ? winner : a;
     }
 
     private static NodeInfo blended(NodeInfo a, NodeInfo b, Map<String, Double> shares, int weight) {
@@ -136,7 +148,7 @@ public class ScriptPlacement {
                 return shareA > shareB ? a : b;
             }
         }
-        return a.getNodeId().compareTo(b.getNodeId()) <= 0 ? a : b;
+        return null;
     }
 
     private static double score(NodeInfo node, Map<String, Double> shares, int weight) {

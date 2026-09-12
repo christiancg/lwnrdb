@@ -13,7 +13,6 @@ import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 import org.techhouse.utils.GeoPoint;
 
 public class JsonGeoTest {
-    // Parses a valid "#geo(lat,lng)" string into a GeoPoint.
     @Test
     public void test_parse_valid_geo() {
         final var geo = new JsonGeo("#geo(40.71,-74.0)");
@@ -23,7 +22,6 @@ public class JsonGeoTest {
         assertEquals("geo", geo.getCustomTypeName());
     }
 
-    // Builds the wire value from a GeoPoint.
     @Test
     public void test_construct_from_geo_point() {
         final var geo = new JsonGeo(new GeoPoint(1.5, 2.5));
@@ -31,20 +29,17 @@ public class JsonGeoTest {
         assertEquals("#geo(1.5,2.5)", geo.getValue());
     }
 
-    // A non-numeric coordinate is rejected.
     @Test
     public void test_parse_invalid_number_throws() {
         assertThrows(WrongFormatCustomTypeException.class, () -> new JsonGeo("#geo(abc,1.0)"));
     }
 
-    // The wrong number of coordinates is rejected.
     @Test
     public void test_parse_wrong_arity_throws() {
         assertThrows(WrongFormatCustomTypeException.class, () -> new JsonGeo("#geo(1.0)"));
         assertThrows(WrongFormatCustomTypeException.class, () -> new JsonGeo("#geo(1.0,2.0,3.0)"));
     }
 
-    // Out-of-range latitude/longitude are rejected.
     @Test
     public void test_parse_out_of_range_throws() {
         assertThrows(WrongFormatCustomTypeException.class, () -> new JsonGeo("#geo(91.0,0.0)"));
@@ -53,7 +48,6 @@ public class JsonGeoTest {
         assertThrows(WrongFormatCustomTypeException.class, () -> new JsonGeo("#geo(0.0,-181.0)"));
     }
 
-    // Default constructor yields an empty, null-valued instance (used by the factory for reflection).
     @Test
     public void test_default_constructor_is_empty() {
         final var geo = new JsonGeo();
@@ -62,7 +56,6 @@ public class JsonGeoTest {
         assertNull(geo.getCustomValue());
     }
 
-    // compare == 0 exactly for equal points and non-zero otherwise; ordering is total.
     @Test
     public void test_compare_equality_and_ordering() {
         final var a = new JsonGeo(new GeoPoint(40.0, -74.0));
@@ -72,7 +65,6 @@ public class JsonGeoTest {
         assertNotEquals(0, a.compare(new GeoPoint(40.0, -73.0)));
     }
 
-    // Nearby points share a geohash prefix (spatial clustering the index relies on).
     @Test
     public void test_geohash_prefix_clusters_nearby_points() {
         final var a = new JsonGeo(new GeoPoint(40.0000, -74.0000)).geoHash();
@@ -90,7 +82,6 @@ public class JsonGeoTest {
         assertEquals(java.util.Set.of("distance", "within"), geo.customOperatorNames());
     }
 
-    // distance operator: each comparator against a ~111km separation (1 degree of latitude).
     @Test
     public void test_distance_operator_comparators() {
         final var geo = new JsonGeo(new GeoPoint(0.0, 0.0));
@@ -105,7 +96,6 @@ public class JsonGeoTest {
         assertFalse(geo.applyCustomOperator("distance", distanceArgs(target, "EQUALS", 1000)));
     }
 
-    // The distance target may also arrive as a raw "#geo(...)" string.
     @Test
     public void test_distance_target_as_string() {
         final var geo = new JsonGeo(new GeoPoint(0.0, 0.0));
@@ -117,7 +107,6 @@ public class JsonGeoTest {
     @Test
     public void test_distance_invalid_comparator_throws() {
         final var geo = new JsonGeo(new GeoPoint(0.0, 0.0));
-        // CONTAINS is not a valid geo distance comparator, so it fails to parse.
         final var args = distanceArgs(new JsonGeo(new GeoPoint(1.0, 0.0)), "CONTAINS", 10);
 
         assertThrows(IllegalArgumentException.class, () -> geo.applyCustomOperator("distance", args));
@@ -131,7 +120,6 @@ public class JsonGeoTest {
         assertThrows(WrongFormatCustomTypeException.class, () -> geo.applyCustomOperator("distance", args));
     }
 
-    // within operator: a point inside and a point outside a unit square around the origin.
     @Test
     public void test_within_operator() {
         final var inside = new JsonGeo(new GeoPoint(0.5, 0.5));
@@ -149,7 +137,6 @@ public class JsonGeoTest {
         assertThrows(UnsupportedOperationException.class, () -> geo.applyCustomOperator("nope", Map.of()));
     }
 
-    // geo declares no ranking operators and rejects any ranking evaluation.
     @Test
     public void test_no_ranking_operators() {
         final var geo = new JsonGeo(new GeoPoint(0.0, 0.0));

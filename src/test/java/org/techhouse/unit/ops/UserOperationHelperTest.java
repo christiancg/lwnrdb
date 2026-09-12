@@ -193,7 +193,6 @@ public class UserOperationHelperTest {
         assertTrue(cache.getAdminUserEntry("scriptchanged").canRunScripts("mydb"));
     }
 
-    // A password change rebuilds the record, so it must carry the script grants over
     @Test
     public void test_set_password_preserves_script_permissions() {
         final var create = new CreateUserRequest();

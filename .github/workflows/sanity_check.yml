@@ -68,7 +68,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Lightweight functional suites — share one default-config server.
           - name: auth-api-memory
             start_server: true
             max_memory: 512mb
@@ -78,7 +77,6 @@ jobs:
               python3 test_utils/test_api_commands.py
               python3 test_utils/test_memory_limits.py
 
-          # Streaming / paged read paths.
           - name: streaming
             start_server: true
             max_memory: 512mb
@@ -88,7 +86,6 @@ jobs:
               STREAM_TEST_PAYLOAD_BYTES=512 \
               python3 test_utils/test_streaming_reads.py
 
-          # Heavy mixed workload that measures RSS via pgrep -> must be sole jar.
           - name: memory-extensive
             start_server: true
             max_memory: 512mb
@@ -99,7 +96,6 @@ jobs:
               MEM_TEST_PAYLOAD_BYTES=512 \
               python3 test_utils/test_memory_extensive.py
 
-          # Index fast-paths are only visible when reads hit disk -> caching off.
           - name: index-aggregations
             start_server: true
             max_memory: "-1"
@@ -109,7 +105,6 @@ jobs:
               INDEX_TEST_PAYLOAD_BYTES=512 \
               python3 test_utils/test_index_aggregations.py
 
-          # Listenable queries: LISTEN / STOP_LISTEN push notifications.
           - name: listen
             start_server: true
             max_memory: 512mb
@@ -117,7 +112,6 @@ jobs:
             run: |
               python3 test_utils/test_listen.py
 
-          # Per-collection JSON Schema validation: SAVE_SCHEMA / DELETE_SCHEMA + write enforcement.
           - name: schema-validation
             start_server: true
             max_memory: 512mb
@@ -125,8 +119,6 @@ jobs:
             run: |
               python3 test_utils/test_schema_validation.py
 
-          # Transactions: START/COMMIT/ROLLBACK, read-your-writes, the table lock
-          # held for the transaction's duration, and auto-rollback on disconnect.
           - name: transactions
             start_server: true
             max_memory: 512mb
@@ -134,71 +126,46 @@ jobs:
             run: |
               python3 test_utils/test_transactions.py
 
-          # Self-contained: starts/stops its own TLS server on 9443.
           - name: tls
             start_server: false
             run: |
               python3 test_utils/test_tls.py
 
-          # Self-contained: starts/stops its own 3-node cluster (client ports
-          # 8991-8993, cluster ports 9991-9993), each node in its own work dir.
           - name: clustering
             start_server: false
             run: |
               python3 test_utils/test_clustering.py
 
-          # Self-contained: RUN_SCRIPT needs a configured script sandbox the shared
-          # server does not have, and the suite restarts its own instance (port 8995)
-          # with scriptsEnabled=false to prove the master switch.
           - name: run-script
             start_server: false
             run: |
               python3 test_utils/test_run_script.py
 
-          # Self-contained for the same reason, on port 8996: procedures and triggers need
-          # both scriptsEnabled and triggersEnabled, and the suite restarts its own instance
-          # with each switch off to prove they refuse independently.
           - name: procedures-triggers
             start_server: false
             run: |
               python3 test_utils/test_procedures_triggers.py
 
-          # Self-contained for the same reason, on port 8995: schedules need both
-          # scriptsEnabled and schedulesEnabled, and the suite restarts its own instance
-          # with the switch off to prove it refuses independently.
           - name: schedules
             start_server: false
             run: |
               python3 test_utils/test_schedules.py
 
-          # Self-contained, on port 8997: the cap has to be a small known value for a
-          # burst to reach it, and the suite restarts its own instance three times -
-          # reject-immediately, absorb-by-waiting, and cap disabled as the control.
           - name: script-admission
             start_server: false
             run: |
               python3 test_utils/test_script_admission.py
 
-          # Self-contained, on port 8998: LIST_SCRIPTS / CANCEL_SCRIPT need scripts, triggers and
-          # schedules all enabled plus a deliberately generous script timeout (so a cancellation is
-          # never mistaken for a timeout), and the suite restarts its own instance to prove a
-          # cancelled trigger run is not replayed by startup recovery.
           - name: script-control
             start_server: false
             run: |
               python3 test_utils/test_script_control.py
 
-          # Self-contained, on port 8999: the SCRIPT operators inside an AGGREGATE pipeline need a
-          # deliberately tight aggregation sandbox (small budget, short deadline, small source cap) the
-          # shared server does not have, and the suite restarts its own instance with scriptsEnabled=false
-          # - the only server-side switch the feature has - to prove it refuses every scripted pipeline.
           - name: aggregation-scripts
             start_server: false
             run: |
               python3 test_utils/test_aggregation_scripts.py
 
-          # Needs a server already up (it connects + loads data, then restarts
-          # the server itself to measure cold-cache latency via pgrep).
           - name: cache-warmup-bench
             start_server: true
             max_memory: 512mb
@@ -206,7 +173,7 @@ jobs:
             run: |
               BENCH_DOCS=5000 \
               BENCH_WARM_RUNS=10 \
-              python3 test_utils/bench_cache_warmup.py
+              python3 test_utils/test_cache_warmup_bench.py
     steps:
       - uses: actions/checkout@v4
       - name: Download native binary
@@ -268,14 +235,11 @@ jobs:
           path: test262
           key: test262-${{ hashFiles('config/test262.properties') }}
       - name: Fetch corpus
-        run: python3 test_utils/test262.py --fetch
+        run: python3 test_utils/test262/test262.py --fetch
       - name: Driver self-test
-        run: python3 test_utils/test262.py --self-test
+        run: python3 test_utils/test262/test262.py --self-test
       - name: Run conformance
-        # 20s (vs the 10s local default): shared runners see CPU steal/oversubscription that can
-        # inflate a CPU-heavy-but-finite test (e.g. the decodeURI/decodeURIComponent RFC 3629
-        # combinatorial tests, ~2s warm-JVM locally) by 10x+, flagging it as a false HANG.
-        run: python3 test_utils/test262.py --gate baseline --require-corpus --timeout 20
+        run: python3 test_utils/test262/test262.py --gate baseline --require-corpus --timeout 20
       - name: Upload report
         if: always()
         uses: actions/upload-artifact@v4
@@ -284,13 +248,6 @@ jobs:
           path: test_log/test262-report.md
           retention-days: 7
 
-  # ---------------------------------------------------------------------------
-  # Single aggregate gate. This is the check required by branch protection
-  # (named "Verify" to match the existing rule): it succeeds only when the build
-  # and every integration leg succeeded, so the split pipeline still reports one
-  # green/red status to the PR. Runs even if a dependency fails (if: always())
-  # so it reports failure instead of being skipped and leaving the check pending.
-  # ---------------------------------------------------------------------------
   verify:
     name: Verify
     needs: [build, integration, test262]

@@ -2,8 +2,6 @@ package org.techhouse.cluster;
 
 import java.util.Set;
 import java.util.UUID;
-import org.techhouse.cluster.membership.MembershipService;
-import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.ownership.OwnershipManager;
@@ -19,13 +17,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.resp.OperationResponse;
 
-/**
- * Edge-side request routing: forwards a per-collection operation that this node does not own to the
- * collection's owner (the cache home / write coordinator) and relays the owner's response JSON verbatim.
- * Reads may fall back to the local (full) replica when the owner is unreachable. A script
- * (RUN_SCRIPT/CALL_PROCEDURE) has no single owner, so it is instead placed on a live node chosen by current
- * script load (see {@link ScriptPlacement}) when {@code scriptRoutingEnabled} is on.
- */
 public class ClusterRouter {
     private static final Set<OperationType> ROUTABLE = Set.of(OperationType.SAVE, OperationType.BULK_SAVE,
             OperationType.DELETE, OperationType.FIND_BY_ID, OperationType.AGGREGATE);
@@ -36,7 +27,6 @@ public class ClusterRouter {
     private final Logger logger = Logger.logFor(ClusterRouter.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
-    private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final Tx2pcCoordinator tx2pcCoordinator = IocContainer.get(Tx2pcCoordinator.class);
@@ -44,11 +34,6 @@ public class ClusterRouter {
     private final Configuration configuration = Configuration.getInstance();
     private final EJson eJson = IocContainer.get(EJson.class);
 
-    /**
-     * @return the response JSON to relay to the client when the request was forwarded to its owner, or
-     *         {@code null} when the request should be executed locally (this node owns it, clustering is
-     *         off, the operation is not per-collection, or ownership is not yet established).
-     */
     public String forward(OperationRequest request, String rawJson, boolean transactionActive, String actingUser,
             UUID clientId) {
         if (!clusterConfig.isEnabled()) {
@@ -62,7 +47,7 @@ public class ClusterRouter {
             return forwardAdmin(type, rawJson, actingUser);
         }
         if (SCRIPT_OPS.contains(type)) {
-            return forwardScript(request.getDatabaseName(), rawJson, actingUser);
+            return forwardScript(type, request.getDatabaseName(), rawJson, actingUser);
         }
         if (!ROUTABLE.contains(type)) {
             return null;
@@ -79,11 +64,6 @@ public class ClusterRouter {
         return forwardToOwner(type, rawJson, ownerAddress, null);
     }
 
-    // Routes an operation issued while a transaction is open. Each write is routed to its collection's owner
-    // (buffered locally when this node owns it, else forwarded to the owner, which becomes a 2PC participant);
-    // a read is forwarded only to an owner already holding a slice (read-your-writes), else served locally.
-    // START runs locally; COMMIT/ROLLBACK are driven by the coordinator (2PC unless a single owner is
-    // involved, which keeps the 5a fast path); any other op falls through to a local rejection.
     private String routeActiveTransaction(OperationRequest request, String rawJson, OperationType type,
             String actingUser, UUID clientId) {
         if (type == OperationType.COMMIT_TRANSACTION) {
@@ -139,7 +119,6 @@ public class ClusterRouter {
             return null;
         }
         if (!local && remotes.size() == 1) {
-            // Single remote owner: keep the 5a fast path (forward a plain COMMIT_TRANSACTION, no 2PC).
             final var response = forwardTx(rawJson, remotes.iterator().next(), OperationType.COMMIT_TRANSACTION,
                     actingUser, clientId);
             clientTracker.clearActiveTransaction(clientId);
@@ -156,9 +135,6 @@ public class ClusterRouter {
         return eJson.toJson(tx2pcCoordinator.rollback(clientId));
     }
 
-    // Rolls back a transaction whose edge connection is closing across its remote participants (and local
-    // slice). Returns true when it handled the teardown (participants existed), so the caller skips the
-    // purely-local cleanup path.
     public boolean teardownTransaction(UUID clientId) {
         if (!clusterConfig.isEnabled() || clientTracker.transactionParticipants(clientId).isEmpty()) {
             return false;
@@ -169,8 +145,7 @@ public class ClusterRouter {
 
     private String forwardTx(String rawJson, String ownerAddress, OperationType type, String actingUser,
             UUID clientId) {
-        final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_TX_REQUEST, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.FORWARD_TX_REQUEST);
         message.setForwardBody(ForwardBody.encode(rawJson));
         message.setActingUser(actingUser);
         message.setTxSessionId(clientId.toString());
@@ -192,8 +167,6 @@ public class ClusterRouter {
         return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
     }
 
-    // Admin/DDL ops are coordinated by the admin coordinator; forward them there unless we are it. The acting
-    // username travels along so the coordinator applies the op as the original user (e.g. DB owner).
     private String forwardAdmin(OperationType type, String rawJson, String actingUser) {
         if (ownershipManager.isAdminCoordinator()) {
             return null;
@@ -205,17 +178,14 @@ public class ClusterRouter {
         return forwardToOwner(type, rawJson, coordinatorAddress, actingUser);
     }
 
-    // A script is placed by load and by how much of the scoped database a node owns, not by the ownership
-    // of a single collection (see ScriptPlacement). A forward that fails falls back to local execution
-    // instead of erroring: the script would have run here before placement existed, so local is always a
-    // correct outcome and placement can never make a working call fail.
-    private String forwardScript(String databaseName, String rawJson, String actingUser) {
+    // Falling back to local execution is only correct when the target provably never got the request: any
+    // other failure may leave it still running, and a script writes, so a second run is silent corruption.
+    private String forwardScript(OperationType type, String databaseName, String rawJson, String actingUser) {
         final var target = scriptPlacement.choose(databaseName);
         if (target == null) {
             return null;
         }
-        final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_REQUEST, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.FORWARD_REQUEST);
         message.setForwardBody(ForwardBody.encode(rawJson));
         message.setActingUser(actingUser);
         // The whole script budget, not replicationAckTimeoutMs: that is sized for a single write ack and
@@ -227,19 +197,26 @@ public class ClusterRouter {
                 scriptPlacement.recordForward();
                 return ForwardBody.decode(response.getForwardBody());
             }
-            logger.warning("Node " + target.address() + " rejected a forwarded script, running it locally: "
-                    + response.getErrorMessage());
+            return outcomeUnknown(type, target, "answered " + response.getErrorMessage());
+        } catch (PeerUnreachableException e) {
+            logger.warning("Could not reach " + target.address() + " to place a script, running it locally: "
+                    + e.getMessage());
+            scriptPlacement.recordFallback();
+            return null;
         } catch (Exception e) {
-            logger.warning(
-                    "Failed to forward a script to " + target.address() + ", running it locally: " + e.getMessage());
+            return outcomeUnknown(type, target, "did not answer: " + e.getMessage());
         }
-        scriptPlacement.recordFallback();
-        return null;
+    }
+
+    private String outcomeUnknown(OperationType type, NodeInfo target, String detail) {
+        logger.warning("Script placed on " + target.address() + " " + detail
+                + "; not running it here, because it may already have run there");
+        scriptPlacement.recordOutcomeUnknown();
+        return eJson.toJson(new OperationResponse(type, ErrorCode.SCRIPT_OUTCOME_UNKNOWN));
     }
 
     private String forwardToOwner(OperationType type, String rawJson, String ownerAddress, String actingUser) {
-        final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_REQUEST, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.FORWARD_REQUEST);
         message.setForwardBody(ForwardBody.encode(rawJson));
         message.setActingUser(actingUser);
         try {

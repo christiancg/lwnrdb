@@ -30,9 +30,6 @@ import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The three surfaces end to end, through OperationProcessor, against a populated collection.
- */
 public class AggregationScriptIntegrationTest {
     private static final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
 

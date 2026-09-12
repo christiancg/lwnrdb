@@ -19,7 +19,6 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.unit.simplejs.host.FakeDatabaseAccess;
 
-// db.cursor pages a pipeline through the ordinary AGGREGATE path, so only one batch is ever in heap.
 public class DbCursorTest {
     private static final String SORT_STEP = "[{ type: 'SORT', fieldName: '_id', ascending: true }]";
 
@@ -107,7 +106,6 @@ public class DbCursorTest {
         assertEquals(3, database.pipelines.size());
     }
 
-    // A short batch ends the walk: there is no extra empty round trip
     @Test
     public void test_stops_on_a_short_batch() {
         final var database = new PagingDatabase(3);
@@ -171,7 +169,6 @@ public class DbCursorTest {
         }
     }
 
-    // A numeric string still coerces, which is what every other db argument does
     @Test
     public void test_accepts_a_numeric_string_batch_size() {
         final var database = new PagingDatabase(3);
@@ -185,7 +182,6 @@ public class DbCursorTest {
         assertEquals(1, database.pipelines.size());
     }
 
-    // Spread and the iterator helpers prove the realm prototype is linked behind %IteratorPrototype%
     @Test
     public void test_supports_spread_and_iterator_helpers() {
         final var database = new PagingDatabase(5);
@@ -213,8 +209,6 @@ public class DbCursorTest {
         assertEquals("ScriptMemoryError", result.getErrorName());
     }
 
-    // A drained batch is credited back, so a walk costs one batch of budget rather than the whole
-    // collection - which is what makes the cursor the memory-safe spelling of a big read
     @Test
     public void test_a_drained_batch_is_refunded() {
         final var database = new PagingDatabase(200);
@@ -222,9 +216,8 @@ public class DbCursorTest {
         assertEquals(200, ids(run(database, walk("{ batchSize: 5 }"), limits(65_536, 500, 5000))).size());
     }
 
-    // The reported peak is a high-water mark, not the closing balance: a fully drained walk credits
-    // almost everything back, so a peak derived at the end would read as ~0 for a walk that really did
-    // hold a batch in heap.
+    // The reported peak is a high-water mark, not the closing balance: a fully drained walk credits almost
+    // everything back, so a peak derived at the end would read as ~0.
     @Test
     public void test_peak_memory_survives_the_refund() {
         final var database = new PagingDatabase(200);
@@ -236,7 +229,6 @@ public class DbCursorTest {
         assertTrue(result.getMetrics().peakMemoryBytes() <= 65_536, "the peak may never exceed the budget");
     }
 
-    // The db failure contract still holds mid-iteration: a dropped collection is a catchable Error
     @Test
     public void test_error_from_aggregate_surfaces_as_a_catchable_error() {
         final var database = new PagingDatabase(5);
@@ -257,7 +249,6 @@ public class DbCursorTest {
         assertEquals("collection was dropped after 2", result.getValue().asJsonString().getValue());
     }
 
-    // Abandoning a cursor holds nothing server-side: the run ends with no release call of any kind
     @Test
     public void test_abandoned_cursor_leaves_no_state_behind() {
         final var database = new PagingDatabase(5);

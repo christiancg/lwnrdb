@@ -9,7 +9,6 @@ import org.techhouse.ops.req.agg.mid_operators.CastToType;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 
 public class CastMidOperatorTest {
-    // Constructor correctly sets MidOperationType.CAST as type using super()
     @Test
     public void test_constructor_sets_cast_type() {
         String fieldName = "testField";
@@ -20,7 +19,6 @@ public class CastMidOperatorTest {
         assertEquals(MidOperationType.CAST, operator.getType());
     }
 
-    // Constructor handles null fieldName parameter
     @Test
     public void test_constructor_accepts_null_field_name() {
         CastToType toType = CastToType.NUMBER;
@@ -31,7 +29,6 @@ public class CastMidOperatorTest {
         assertEquals(toType, operator.getToType());
     }
 
-    // Test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         String fieldName = "testField";
@@ -39,11 +36,9 @@ public class CastMidOperatorTest {
 
         CastMidOperator operator = new CastMidOperator(fieldName, toType);
 
-        // Test getter methods
         assertEquals("testField", operator.getFieldName());
         assertEquals(CastToType.STRING, operator.getToType());
 
-        // Test setter methods
         operator.setFieldName("newField");
         operator.setToType(CastToType.NUMBER);
 

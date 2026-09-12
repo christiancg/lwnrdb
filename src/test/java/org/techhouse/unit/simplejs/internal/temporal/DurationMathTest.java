@@ -163,8 +163,6 @@ public class DurationMathTest {
                 () -> DurationMath.roundDuration(fields, Unit.WEEK, 1, RoundingMode.TRUNC, Unit.DAY));
     }
 
-    // balanceFromTotalNanoseconds: the AddDurations shape, starting from an already-signed total
-    // rather than a fields record (see Temporal.Duration.prototype.add/subtract)
     @Test
     public void test_balance_from_total_nanoseconds_zero() {
         final var result = DurationMath.balanceFromTotalNanoseconds(java.math.BigInteger.ZERO, Unit.DAY);

@@ -89,7 +89,6 @@ public class ScheduleExecutorTest {
         assertTrue(executor.drain(5000));
         assertEquals("s", seen.getFirst());
         assertEquals(1L, executor.getFired());
-        // The next occurrence is computed before the run, so a second tick does not fire it again.
         assertTrue(entry.getNextRunAt() > System.currentTimeMillis());
     }
 
@@ -206,8 +205,6 @@ public class ScheduleExecutorTest {
         assertEquals(0, executor.getQueued());
     }
 
-    // The ticker thread itself, at a tick short enough to observe: it must both refresh the registry from
-    // disk and fire what is due without anybody calling tick() by hand.
     @Test
     public void test_the_ticker_refreshes_the_registry_and_fires_what_is_due() throws Exception {
         TestUtils.setPrivateField(configuration, "scheduleTickMs", 20L);
@@ -220,8 +217,6 @@ public class ScheduleExecutorTest {
         assertTrue(latch.await(5, TimeUnit.SECONDS));
     }
 
-    // A run that outlives the budget is abandoned rather than waited on: schedules are at-most-once, so
-    // the next occurrence simply fires normally.
     @Test
     public void test_drain_gives_up_on_a_run_that_outlives_the_budget() throws Exception {
         final var entry = register("s", true);

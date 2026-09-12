@@ -28,7 +28,6 @@ public class PromiseCapabilityProgramTest {
         assertThrows(TypeErrorException.class, () -> Interpreter.run(source));
     }
 
-    // Promise.allKeyed resolves an object of promises key by key
     @Test
     public void test_all_keyed_resolves_each_key() {
         assertEquals("1,2", joined("""
@@ -38,7 +37,6 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // Promise.allKeyed carries symbol keys onto the result object
     @Test
     public void test_all_keyed_keeps_symbol_keys() {
         assertEquals("7", joined("""
@@ -49,7 +47,6 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // Promise.allKeyed rejects with the first rejection reason
     @Test
     public void test_all_keyed_rejects() {
         assertEquals("nope", joined("""
@@ -59,7 +56,6 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // A combinator called on a primitive this is a TypeError
     @Test
     public void test_combinators_reject_a_primitive_this() {
         typeError("Promise.all.call(1, [])");
@@ -69,25 +65,21 @@ public class PromiseCapabilityProgramTest {
         typeError("Promise.race.call(1, [])");
     }
 
-    // Promise.resolve on a primitive this is a TypeError
     @Test
     public void test_resolve_rejects_a_primitive_this() {
         typeError("Promise.resolve.call(1, 2)");
     }
 
-    // Promise.try on a primitive this is a TypeError
     @Test
     public void test_try_rejects_a_primitive_this() {
         typeError("Promise.try.call(1, () => 1)");
     }
 
-    // Promise.prototype.finally on a primitive this is a TypeError
     @Test
     public void test_finally_rejects_a_primitive_this() {
         typeError("Promise.prototype.finally.call(1, () => {})");
     }
 
-    // A constructor that invokes its executor twice violates the capability protocol
     @Test
     public void test_capability_executor_runs_once() {
         typeError("""
@@ -99,7 +91,6 @@ public class PromiseCapabilityProgramTest {
                 """);
     }
 
-    // A capability executor must be handed callable resolving functions
     @Test
     public void test_capability_requires_callable_functions() {
         typeError("""
@@ -108,13 +99,11 @@ public class PromiseCapabilityProgramTest {
                 """);
     }
 
-    // Promise.prototype.then requires a promise receiver
     @Test
     public void test_then_requires_a_promise() {
         typeError("Promise.prototype.then.call({}, () => {})");
     }
 
-    // A primitive constructor property is a TypeError when the species is resolved
     @Test
     public void test_species_rejects_a_primitive_constructor() {
         typeError("""
@@ -124,7 +113,6 @@ public class PromiseCapabilityProgramTest {
                 """);
     }
 
-    // A non-constructor species is a TypeError
     @Test
     public void test_species_rejects_a_non_constructor() {
         typeError("""
@@ -134,7 +122,6 @@ public class PromiseCapabilityProgramTest {
                 """);
     }
 
-    // A subclass instance stays a subclass instance through resolve and then
     @Test
     public void test_subclass_resolve_and_then() {
         assertEquals("3,true,true", joined("""
@@ -146,13 +133,11 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // Promise.try runs its callback synchronously and resolves its value
     @Test
     public void test_try_resolves_a_value() {
         assertEquals("5", joined("let out = []; Promise.try(() => 5).then(v => out.push(v)); out"));
     }
 
-    // Promise.try turns a thrown error into a rejection
     @Test
     public void test_try_rejects_a_throw() {
         assertEquals("bad", joined("""
@@ -162,13 +147,11 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // Promise.try forwards its extra arguments to the callback
     @Test
     public void test_try_forwards_arguments() {
         assertEquals("3", joined("let out = []; Promise.try((a, b) => a + b, 1, 2).then(v => out.push(v)); out"));
     }
 
-    // Promise.withResolvers hands back the resolving functions
     @Test
     public void test_with_resolvers_resolve() {
         assertEquals("8", joined("""
@@ -180,7 +163,6 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // The reject function of withResolvers rejects the promise
     @Test
     public void test_with_resolvers_reject() {
         assertEquals("r", joined("""
@@ -192,13 +174,11 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // finally passes the fulfilment value through, discarding its own result
     @Test
     public void test_finally_passes_the_value_through() {
         assertEquals("1", joined("let out = []; Promise.resolve(1).finally(() => 99).then(v => out.push(v)); out"));
     }
 
-    // finally passes a rejection through
     @Test
     public void test_finally_passes_a_rejection_through() {
         assertEquals("x", joined("""
@@ -208,13 +188,11 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // A non-callable finally argument leaves the chain untouched
     @Test
     public void test_finally_with_a_non_callable_argument() {
         assertEquals("4", joined("let out = []; Promise.resolve(4).finally(1).then(v => out.push(v)); out"));
     }
 
-    // A throwing finally callback replaces the outcome with its error
     @Test
     public void test_finally_callback_that_throws() {
         assertEquals("f", joined("""
@@ -224,7 +202,6 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // allSettled reports the outcome of every entry
     @Test
     public void test_all_settled_reports_each_outcome() {
         assertEquals("fulfilled,rejected",
@@ -235,7 +212,6 @@ public class PromiseCapabilityProgramTest {
                         """));
     }
 
-    // any reports the first fulfilment
     @Test
     public void test_any_takes_the_first_fulfilment() {
         assertEquals("2", joined("""
@@ -245,7 +221,6 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // any over only rejections rejects with an AggregateError
     @Test
     public void test_any_aggregates_rejections() {
         assertEquals("AggregateError,a", joined("""
@@ -255,7 +230,6 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // A combinator accepts any iterable, not just arrays
     @Test
     public void test_combinators_accept_an_iterable() {
         assertEquals("1,2", joined("""
@@ -265,7 +239,6 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // An iterable whose Symbol.iterator returns a primitive rejects the combinator's promise
     @Test
     public void test_combinator_rejects_a_primitive_iterator() {
         assertEquals("TypeError", joined("""
@@ -275,7 +248,6 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // race settles with the first settled entry
     @Test
     public void test_race_takes_the_first_settlement() {
         assertEquals("1", joined("""
@@ -285,8 +257,7 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // OrdinaryCreateFromConstructor's Get(newTarget, "prototype") is observable even before the
-    // executor runs: a throwing accessor there must abort construction.
+    // OrdinaryCreateFromConstructor's Get(newTarget, "prototype") is observable before the executor runs.
     @Test
     public void test_reflect_construct_propagates_a_throwing_prototype_getter() {
         assertThrows(JsThrowException.class, () -> Interpreter.run("""
@@ -298,7 +269,6 @@ public class PromiseCapabilityProgramTest {
                 """));
     }
 
-    // The ordinary path (no newTarget.prototype override) still constructs normally.
     @Test
     public void test_reflect_construct_still_constructs_normally() {
         assertEquals("9", joined("""

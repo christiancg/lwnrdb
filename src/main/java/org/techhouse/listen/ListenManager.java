@@ -8,14 +8,13 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import org.techhouse.bckg_ops.RestartablePool;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 
 public class ListenManager {
-    private static final long SHUTDOWN_TIMEOUT_SECONDS = 3L;
     private final Logger logger = Logger.logFor(ListenManager.class);
     private final Map<UUID, ListenRegistration> registrations = new ConcurrentHashMap<>();
     private final Map<String, Set<UUID>> collectionToListens = new ConcurrentHashMap<>();
@@ -105,18 +104,10 @@ public class ListenManager {
     }
 
     public void stopWorkers() {
-        pool.shutdownNow();
-        try {
-            if (!pool.awaitTermination(SHUTDOWN_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                logger.warning("Listen workers did not terminate within the timeout; abandoning them");
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
+        pool = RestartablePool.shutdownAndReplace(pool, logger, "Listen");
         dirtyQueue.clear();
         registrations.clear();
         collectionToListens.clear();
-        pool = Executors.newVirtualThreadPerTaskExecutor();
         logger.info("Stopped listen processor worker");
     }
 

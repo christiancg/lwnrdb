@@ -11,14 +11,12 @@ import org.techhouse.ejson.internal.JsonStrings;
 // escaping range: everything below it is escaped, the space itself passes through.
 @SuppressWarnings("UnnecessaryUnicodeEscape")
 public class JsonStringsTest {
-    // The two structural characters are escaped
     @Test
     public void test_escapes_quote_and_backslash() {
         assertEquals("he said \\\"hi\\\"", JsonStrings.escape("he said \"hi\""));
         assertEquals("C:\\\\tmp", JsonStrings.escape("C:\\tmp"));
     }
 
-    // The named two-character escapes
     @Test
     public void test_escapes_named_control_characters() {
         assertEquals("\\b", JsonStrings.escape("\b"));
@@ -29,7 +27,6 @@ public class JsonStringsTest {
         assertEquals("line1\\nline2", JsonStrings.escape("line1\nline2"));
     }
 
-    // Remaining control characters become a four-hex-digit unicode escape
     @Test
     public void test_escapes_other_control_characters_as_unicode() {
         assertEquals("\\u0000", JsonStrings.escape("\u0000"));
@@ -38,7 +35,6 @@ public class JsonStringsTest {
         assertEquals("a\\u000bb", JsonStrings.escape("a\u000Bb"));
     }
 
-    // Printable ASCII and non-ASCII pass through untouched
     @Test
     public void test_passes_through_printable_characters() {
         final var plain = "plain text 123";
@@ -47,14 +43,12 @@ public class JsonStringsTest {
         assertEquals("\u0020", JsonStrings.escape("\u0020"));
     }
 
-    // Null and empty input are returned as given
     @Test
     public void test_null_and_empty_input() {
         assertNull(JsonStrings.escape(null));
         assertEquals("", JsonStrings.escape(""));
     }
 
-    // A value that needs escaping only at the end still keeps its prefix
     @Test
     public void test_escape_after_clean_prefix() {
         assertEquals("abc\\ndef", JsonStrings.escape("abc\ndef"));
@@ -69,7 +63,6 @@ public class JsonStringsTest {
         assertEquals("\\ud834\\ud834", JsonStrings.escape("\uD834\uD834"));
     }
 
-    // A well-formed surrogate pair still passes through untouched
     @Test
     public void test_keeps_surrogate_pairs() {
         final var pair = "𝄞";

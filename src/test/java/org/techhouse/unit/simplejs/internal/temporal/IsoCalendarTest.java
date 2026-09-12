@@ -206,9 +206,8 @@ public class IsoCalendarTest {
         assertEquals(0, IsoCalendar.differenceISODate(date, date, Unit.YEAR).years());
     }
 
-    // A month-end anchor day (31) whose naive calendar-month estimate overshoots once it is clamped
-    // against a shorter target month (February) forces monthDayDifference's shrink-then-verify
-    // correction loop, not just its happy-path single estimate.
+    // A month-end anchor day clamped against a shorter target month forces monthDayDifference's
+    // shrink-then-verify correction loop rather than its happy-path single estimate.
     @Test
     public void test_difference_iso_date_month_end_anchor_needs_correction() {
         final var forward = IsoCalendar.differenceISODate(new Iso8601Fields(2000, 1, 31), new Iso8601Fields(2010, 2, 1),

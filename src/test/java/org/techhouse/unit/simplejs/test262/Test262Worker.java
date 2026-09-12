@@ -17,21 +17,12 @@ import org.techhouse.simplejs.host.ResourceLimits;
 import org.techhouse.simplejs.host.ScriptResult;
 import org.techhouse.simplejs.host.SimpleHostBindings;
 
-// Job-per-line worker JVM for the test262 harness: reads one EJson job from stdin, assembles the
-// prelude + test body itself (only paths cross the pipe), runs it through SimpleJs and writes one
-// EJson result line. Driven by test_utils/test262.py, which owns batching, timeouts and the gate.
 // Deliberately not a JUnit test class — there is nothing here for surefire to run.
 public final class Test262Worker {
     // maxDepth must stay at or below 1000: at 2000 a deeply recursive test blows the JVM stack on the
     // engine's virtual thread before the depth guard fires and SimpleJs.run never returns.
     // The wall-clock deadline is deliberately disabled: it made a test near the limit pass or fail
-    // depending on machine load, so the same commit gated differently run to run. The instruction
-    // budget bounds a runaway script deterministically (tick() runs at every loop back-edge and call),
-    // and test_utils/test262.py's own per-test process timeout is the backstop for a real hang.
-    // The last flag is the strict Script parse goal: the corpus asserts the spec's Script early
-    // errors (a top-level `return`, `import`/`export`, `import.meta`, `new.target` or `super` outside
-    // function code, a top-level `using`), not the relaxed contract the database host runs with.
-    // Module-flagged tests never reach the worker - test_utils/test262.py excludes them.
+    // depending on machine load, so the same commit gated differently run to run.
     private static final ResourceLimits LIMITS = new ResourceLimits(50_000_000L, -1, 1_000, true, true);
     private static final String ASYNC_PASS = "Test262:AsyncTestComplete";
     private static final String ASYNC_FAIL_PREFIX = "Test262:AsyncTestFailure:";
@@ -109,8 +100,6 @@ public final class Test262Worker {
         return result(id, "FAIL", "", "$DONE was never called with a passing sentinel");
     }
 
-    // The prelude is byte-identical across every non-raw test, so a prelude defect shows up as a
-    // global failure rather than a flaky subset.
     private static String assemble(JsonObject job, List<String> flags) throws IOException {
         final var body = read(Path.of(string(job, "path")));
         if (flags.contains("raw")) {

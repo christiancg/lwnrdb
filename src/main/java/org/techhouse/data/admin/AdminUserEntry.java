@@ -29,8 +29,6 @@ public class AdminUserEntry extends DbEntry {
     private Set<GlobalPermissionType> globalPermissions;
     private Map<String, PermissionLevel> databasePermissions;
     private Map<String, PermissionLevel> collectionPermissions;
-    // Per-database script permission: database name -> level. NONE denies, RUN allows RUN_SCRIPT and
-    // CALL_PROCEDURE, MANAGE additionally allows installing procedures and triggers.
     private Map<String, ScriptPermissionLevel> scriptPermissions;
 
     private AdminUserEntry() {
@@ -86,8 +84,7 @@ public class AdminUserEntry extends DbEntry {
             result.collectionPermissions.put(entry.getKey(), level);
         }
 
-        // Absent in records written before per-database script permissions existed, and boolean-valued in
-        // records written before MANAGE existed - ScriptPermissionLevel.fromJson accepts both.
+        // Records predating MANAGE hold a boolean here and older ones nothing: fromJson accepts both.
         result.scriptPermissions = new HashMap<>();
         if (object.has(SCRIPT_PERMISSIONS_FIELD) && !object.get(SCRIPT_PERMISSIONS_FIELD).isJsonNull()) {
             for (final var entry : object.get(SCRIPT_PERMISSIONS_FIELD).asJsonObject().entrySet()) {
@@ -118,9 +115,7 @@ public class AdminUserEntry extends DbEntry {
         collectionPermissions.forEach((coll, level) -> collPermsObj.add(coll, new JsonString(level.name())));
         json.add(COLLECTION_PERMISSIONS_FIELD, collPermsObj);
 
-        // The string form from now on: a record read from the legacy boolean form converts on its next
-        // write. A node running a version without ScriptPermissionLevel cannot parse it - see the README
-        // upgrade note before rolling a cluster.
+        // Always written as the string form, which a node predating ScriptPermissionLevel cannot parse.
         final var scriptPermsObj = new JsonObject();
         scriptPermissions.forEach((db, level) -> scriptPermsObj.add(db, new JsonString(level.name())));
         json.add(SCRIPT_PERMISSIONS_FIELD, scriptPermsObj);

@@ -7,7 +7,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.data.Client;
 
 public class ClientTest {
-    // Instantiation of Client sets connectionTime to current time
     @Test
     public void test_connection_time_on_instantiation() {
         Client client = new Client("127.0.0.1");
@@ -16,7 +15,6 @@ public class ClientTest {
                 && client.getConnectionTime().isAfter(now.minusSeconds(1)));
     }
 
-    // Instantiation of Client sets connectionTime to current time
     @Test
     public void test_getters_and_setters() {
         Client client = new Client("127.0.0.1");
@@ -47,9 +45,6 @@ public class ClientTest {
     @Test
     public void test_equals_symmetric() {
         Client client1 = new Client("127.0.0.1");
-        // Both share same address; connectionTime will differ by tiny amount but
-        // equals checks connectionTime as well, so create them with identical state
-        // by checking only address-mismatch path
         Client clientOther = new Client("10.0.0.1");
         assertNotEquals(client1, clientOther);
     }
@@ -97,7 +92,6 @@ public class ClientTest {
     public void test_equals_includes_authenticated_username() {
         Client client1 = new Client("127.0.0.1");
         Client client2 = new Client("127.0.0.1");
-        // Force same connectionTime via reflection isn't needed — different auth username should differ
         client1.setAuthenticatedUsername("Alice");
         client2.setAuthenticatedUsername("bob");
         assertNotEquals(client1, client2);

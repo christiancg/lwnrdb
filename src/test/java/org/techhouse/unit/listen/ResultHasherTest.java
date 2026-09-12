@@ -10,7 +10,6 @@ import org.techhouse.listen.ResultHasher;
 
 public class ResultHasherTest {
 
-    // Same results produce the same hash (deterministic)
     @Test
     public void hash_sameResults_returnsSameHash() {
         final var obj = new JsonObject();
@@ -23,7 +22,6 @@ public class ResultHasherTest {
         assertEquals(hash1, hash2);
     }
 
-    // Empty results produce a non-null hash
     @Test
     public void hash_emptyResults_returnsNonNullHash() {
         final var hash = ResultHasher.hash(List.of());
@@ -32,7 +30,6 @@ public class ResultHasherTest {
         assertFalse(hash.isBlank());
     }
 
-    // Different results produce different hashes
     @Test
     public void hash_differentResults_returnsDifferentHashes() {
         final var obj1 = new JsonObject();
@@ -46,7 +43,6 @@ public class ResultHasherTest {
         assertNotEquals(hash1, hash2);
     }
 
-    // Hash is a 64-char lowercase hex string (SHA-256)
     @Test
     public void hash_returnsHexString() {
         final var hash = ResultHasher.hash(List.of());
@@ -55,7 +51,6 @@ public class ResultHasherTest {
         assertTrue(hash.matches("[0-9a-f]{64}"));
     }
 
-    // Order matters: different order → different hash
     @Test
     public void hash_differentOrder_returnsDifferentHashes() {
         final var obj1 = new JsonObject();

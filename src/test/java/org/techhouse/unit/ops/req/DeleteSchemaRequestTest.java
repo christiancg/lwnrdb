@@ -7,7 +7,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.DeleteSchemaRequest;
 
 public class DeleteSchemaRequestTest {
-    // Constructor sets the DELETE_SCHEMA type and db/collection
     @Test
     public void test_constructor_and_getters() {
         final var request = new DeleteSchemaRequest("testDb", "testColl");

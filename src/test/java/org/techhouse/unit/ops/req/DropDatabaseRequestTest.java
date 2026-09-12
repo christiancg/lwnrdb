@@ -8,7 +8,6 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.DropDatabaseRequest;
 
 public class DropDatabaseRequestTest {
-    // Create DropDatabaseRequest with valid database name
     @Test
     public void test_create_drop_database_request_with_valid_name() {
         String databaseName = "test_db";
@@ -20,7 +19,6 @@ public class DropDatabaseRequestTest {
         assertNull(request.getCollectionName());
     }
 
-    // Create DropDatabaseRequest with empty database name
     @Test
     public void test_create_drop_database_request_with_empty_name() {
         String databaseName = "";

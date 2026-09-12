@@ -8,14 +8,9 @@ import org.techhouse.ejson.internal.UnsafeAllocator;
 public class UnsafeAllocatorTest {
     @Test
     public void test_creates_simple_class() throws Exception {
+        @SuppressWarnings("unused")
         class TestClass {
-            private String testField = "initial"; // NOPMD - reflection/serialization test fixture
-            public String getTestField() {
-                return testField;
-            }
-            public void setTestField(String testField) {
-                this.testField = testField;
-            }
+            private final String testField = "initial";
         }
         final var instance = UnsafeAllocator.INSTANCE.newInstance(TestClass.class);
         assertNotNull(instance);

@@ -9,10 +9,6 @@ import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * Grammar corners the parser has to keep apart: an optional chain's reach, the object-pattern property forms,
- * the contextual keywords that are still ordinary identifiers, and the token kinds that can follow `await`.
- */
 public class SyntaxShapesTest {
     private static String str(String source) {
         return ((JsString) Interpreter.run(source)).getValue();
@@ -43,7 +39,6 @@ public class SyntaxShapesTest {
         assertEquals("zerokay", str("const { 0: x, 'k': y } = { 0: 'zero', k: 'kay' }; x + y"));
     }
 
-    // The contextual keywords are ordinary identifiers everywhere they are not doing their special job
     @Test
     public void test_contextual_keywords_are_ordinary_bindings() {
         assertEquals(21, num("""
@@ -63,13 +58,11 @@ public class SyntaxShapesTest {
         assertEquals("function", str("const g = async of => of; typeof g"));
     }
 
-    // A nullish link short-circuits the rest of the chain, including a later call
     @Test
     public void test_a_nullish_optional_chain_short_circuits_the_whole_chain() {
         assertTrue(bool());
     }
 
-    // Parenthesising ends the chain, so the call is an ordinary one on the extracted function
     @Test
     public void test_a_parenthesised_optional_link_ends_the_chain() {
         assertEquals("5:5", str("const o = { b: () => 5 }; [o?.b(), (o?.b)()].join(':')"));

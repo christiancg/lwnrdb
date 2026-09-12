@@ -7,7 +7,6 @@ import org.techhouse.simplejs.host.HostBindings;
 import org.techhouse.simplejs.host.ModuleResolver;
 import org.techhouse.simplejs.host.ResourceLimits;
 
-// A HostBindings double that exposes a ModuleResolver so module-resolution tests can supply sources.
 public record ModuleHostBindings(JsonObject args, DatabaseAccess database, Consumer<String> console,
         ResourceLimits limits, ModuleResolver moduleResolver) implements HostBindings {
 

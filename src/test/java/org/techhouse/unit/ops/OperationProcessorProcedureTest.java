@@ -118,7 +118,6 @@ public class OperationProcessorProcedureTest {
         assertNull(cache.getProcedure(dbName, "p"));
         assertTrue(fs.listProcedureNames(dbName).isEmpty());
 
-        // Re-create it: the new procedure is version 1 again and must run the new body, not the old one.
         assertEquals(OperationStatus.OK, processor.processMessage(new CreateDatabaseRequest(dbName)).getStatus());
         assertInstanceOf(SaveProcedureResponse.class,
                 processor.processMessage(new SaveProcedureRequest(dbName, "p", "return 2;")));

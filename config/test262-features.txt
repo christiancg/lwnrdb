@@ -1,5 +1,5 @@
 # Features present in the pinned corpus and already accounted for. Regenerated together with
-# the baseline: python3 test_utils/test262.py --update-baseline. A feature that appears here
+# the baseline: python3 test_utils/test262/test262.py --update-baseline. A feature that appears here
 # is measured (pass or fail); one that is deliberately not measured belongs in
 # config/test262-exclusions.txt instead. Anything missing from both is reported as an unknown
 # feature, so a corpus bump surfaces newly-added areas.

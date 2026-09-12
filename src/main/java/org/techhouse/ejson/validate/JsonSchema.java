@@ -15,8 +15,6 @@ public class JsonSchema {
         return root;
     }
 
-    // Resolves a local JSON-Pointer $ref (e.g. "#/$defs/name") against the schema document root.
-    // Only same-document fragment references are supported; anything else is an invalid schema here.
     JsonBaseElement resolveRef(String ref) {
         if (ref == null || ref.isEmpty() || ref.charAt(0) != '#') {
             throw new InvalidSchemaException("Unsupported $ref (only local '#/...' references are supported): " + ref);

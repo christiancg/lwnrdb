@@ -189,15 +189,13 @@ public class UserRequestValidationTest {
 
     @Test
     public void test_create_user_invalid_db_permission_level() {
-        // Build a raw JsonObject with an invalid PermissionLevel string to trigger the catch branch
         final var req = new CreateUserRequest();
         req.setUsername("user");
         req.setPassword("password123");
         final var rawPerms = new org.techhouse.ejson.elements.JsonObject();
         rawPerms.add("mydb", new org.techhouse.ejson.elements.JsonString("INVALID_LEVEL"));
         final var result = RequestValidator.validate(req);
-        // Baseline: valid until we actually test the raw path via reflection — use the normal path
-        assertTrue(result.isValid()); // no perms set yet, should pass
+        assertTrue(result.isValid());
     }
 
     @Test
@@ -220,7 +218,6 @@ public class UserRequestValidationTest {
 
     @Test
     public void test_set_database_owners_with_valid_owners() {
-        // Create the user in the cache first so the existence check passes
         final var cache = org.techhouse.ioc.IocContainer.get(org.techhouse.cache.Cache.class);
         final var userEntry = new org.techhouse.data.admin.AdminUserEntry("valid_owner", "hash", false,
                 new java.util.HashSet<>(), new java.util.HashMap<>(), new java.util.HashMap<>());
@@ -245,17 +242,15 @@ public class UserRequestValidationTest {
     @Test
     public void test_set_database_owners_rejects_bad_username() {
         final var req = new org.techhouse.ops.req.SetDatabaseOwnersRequest("mydb");
-        req.setOwners(java.util.List.of("ab")); // too short
+        req.setOwners(java.util.List.of("ab"));
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
     @Test
     public void test_create_user_invalid_coll_permission_level() {
-        // Build a raw JsonObject with an invalid PermissionLevel string
         final var req = new CreateUserRequest();
         req.setUsername("user");
         req.setPassword("password123");
-        // valid db key but invalid level — reaches the catch block via validateRawPermissionMaps
         final var rawCollPerms = new org.techhouse.ejson.elements.JsonObject();
         rawCollPerms.add("valid_db|valid_coll", new org.techhouse.ejson.elements.JsonString("NOT_A_VALID_LEVEL"));
         // inject via reflection to bypass the setter (which only accepts valid PermissionLevel)

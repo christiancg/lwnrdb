@@ -3,14 +3,11 @@ package org.techhouse.data;
 import java.util.Objects;
 import org.techhouse.config.Globals;
 
-public class PkIndexEntry implements Comparable<String> {
-    private String databaseName;
-    private String collectionName;
+public class PkIndexEntry extends CollectionScopedEntry implements Comparable<String> {
     private String value;
     private long position;
     private long length;
     private long page;
-    // Last-write-wins version (epoch millis), persisted as the optional trailing index column.
     private long version;
 
     public PkIndexEntry(String databaseName, String collectionName, String value, long position, long length,
@@ -20,8 +17,7 @@ public class PkIndexEntry implements Comparable<String> {
 
     public PkIndexEntry(String databaseName, String collectionName, String value, long position, long length, long page,
             long version) {
-        this.databaseName = databaseName;
-        this.collectionName = collectionName;
+        super(databaseName, collectionName);
         this.value = value;
         this.position = position;
         this.length = length;
@@ -37,8 +33,7 @@ public class PkIndexEntry implements Comparable<String> {
     public static PkIndexEntry fromIndexFileEntry(String databaseName, String collectionName, String line) {
         final var cleaned = line.trim().replace("\r", "").replace("\n", "");
         final var sep = Globals.INDEX_ENTRY_SEPARATOR;
-        // Lines are value|position|length|page|version. The value (a document id) may itself contain the
-        // separator, so parse the four fixed trailing fields from the end and take the rest as the value.
+        // A document id may itself contain the separator, so the four fixed fields are parsed from the end.
         final var lastPipe = cleaned.lastIndexOf(sep);
         final var secondLastPipe = cleaned.lastIndexOf(sep, lastPipe - 1);
         final var thirdLastPipe = cleaned.lastIndexOf(sep, secondLastPipe - 1);
@@ -48,22 +43,6 @@ public class PkIndexEntry implements Comparable<String> {
                 Long.parseLong(cleaned.substring(thirdLastPipe + sep.length(), secondLastPipe)),
                 Long.parseLong(cleaned.substring(secondLastPipe + sep.length(), lastPipe)),
                 Long.parseLong(cleaned.substring(lastPipe + sep.length())));
-    }
-
-    public String getDatabaseName() {
-        return databaseName;
-    }
-
-    public void setDatabaseName(String databaseName) {
-        this.databaseName = databaseName;
-    }
-
-    public String getCollectionName() {
-        return collectionName;
-    }
-
-    public void setCollectionName(String collectionName) {
-        this.collectionName = collectionName;
     }
 
     public String getValue() {
@@ -107,6 +86,7 @@ public class PkIndexEntry implements Comparable<String> {
     }
 
     @Override
+    @SuppressWarnings("NullableProblems")
     public int compareTo(String otherIndexValue) {
         Objects.requireNonNull(otherIndexValue);
         return value.compareTo(otherIndexValue);

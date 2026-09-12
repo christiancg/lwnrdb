@@ -1,14 +1,13 @@
 package org.techhouse.cache;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.techhouse.config.Configuration;
@@ -28,13 +27,6 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
-/**
- * Cache for admin (internal metadata) entries: databases, collections, users,
- * page metadata and the PK indexes of the admin collections. Admin entries are
- * always cached and never evicted, so this cache holds no memory-management
- * machinery. User document/index caching lives in {@link UserCache}; the two are
- * coordinated by the {@link Cache} facade.
- */
 public class AdminCache {
     private static final Logger logger = Logger.logFor(AdminCache.class);
     private static final String PROCEDURE_MISS_PREFIX = "p" + Globals.COLL_IDENTIFIER_SEPARATOR;
@@ -46,17 +38,15 @@ public class AdminCache {
     private final Map<String, AdminDbEntry> databases = new ConcurrentHashMap<>();
     private final Map<String, AdminCollEntry> collections = new ConcurrentHashMap<>();
     private final Map<String, AdminUserEntry> users = new ConcurrentHashMap<>();
-    private final Map<String, List<AdminPageEntry>> pages = new ConcurrentHashMap<>();
+    private final AdminPageCache pageCache = new AdminPageCache();
     private final Map<String, PkIndexEntry> databasesPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionsPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> usersPkIndex = new ConcurrentHashMap<>();
-    private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> collectionUsagePkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> transactionsPkIndex = new ConcurrentHashMap<>();
     private final Map<String, PkIndexEntry> triggerRunsPkIndex = new ConcurrentHashMap<>();
-    // Bounded and LRU-evicted, unlike every other map here: their contents are derived from disk and can be
-    // reloaded, while the rest of this cache is the only in-memory copy of the admin records. Misses are kept
-    // apart so a caller naming thousands of nonexistent procedures cannot evict the ones actually in use.
+    // Evictable because disk is authoritative, unlike every other map here. Misses are kept in a separate
+    // cache so a caller naming thousands of nonexistent procedures cannot evict the ones in use.
     private final BoundedLruCache<JsonObject> collectionSchemas = new BoundedLruCache<>(Integer.MAX_VALUE,
             configuration.getMetadataCacheMaxBytes() / 3, schema -> (long) eJson.toJson(schema).length() * 2L);
     private final BoundedLruCache<ProcedureDefinition> procedures = new BoundedLruCache<>(Integer.MAX_VALUE,
@@ -69,63 +59,35 @@ public class AdminCache {
             definition -> (long) eJson.toJson(definition.toJsonObject()).length() * 2L);
     private final BoundedLruCache<Boolean> metadataMisses = new BoundedLruCache<>(
             configuration.getMetadataCacheMaxEntries(), 0L, _ -> 1L);
+    private final DefinitionCache<JsonObject> schemaCache = new DefinitionCache<>(() -> collectionSchemas,
+            () -> metadataMisses, SCHEMA_MISS_PREFIX, this::loadSchemaUncached);
+    private final DefinitionCache<ProcedureDefinition> procedureCache = new DefinitionCache<>(() -> procedures,
+            () -> metadataMisses, PROCEDURE_MISS_PREFIX, this::loadProcedureUncached);
+    private final DefinitionCache<ScheduleDefinition> scheduleCache = new DefinitionCache<>(() -> schedules,
+            () -> metadataMisses, SCHEDULE_MISS_PREFIX, this::loadScheduleUncached);
 
     public void loadAdminData() throws IOException {
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME);
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-        loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-        final var pkIndexCollectionUsageEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_COLLECTION_USAGE_NAME);
-        final var pkIndexCollectionUsageEntriesMap = pkIndexCollectionUsageEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
-        collectionUsagePkIndex.putAll(pkIndexCollectionUsageEntriesMap);
-        final var pkIndexTransactionEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
-        final var pkIndexTransactionEntriesMap = pkIndexTransactionEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
-        transactionsPkIndex.putAll(pkIndexTransactionEntriesMap);
-        final var pkIndexTriggerRunEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
-        triggerRunsPkIndex.putAll(pkIndexTriggerRunEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry)));
-        final var pkIndexAdminDbEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        final var pkIndexAdminDbEntriesMap = pkIndexAdminDbEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
-        databasesPkIndex.putAll(pkIndexAdminDbEntriesMap);
-        final var pkIndexAdminCollEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-        final var pkIndexAdminCollEntriesMap = pkIndexAdminCollEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
-        collectionsPkIndex.putAll(pkIndexAdminCollEntriesMap);
-        final var pkIndexAdminUserEntries = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME,
-                Globals.ADMIN_USERS_COLLECTION_NAME);
-        final var pkIndexAdminUserEntriesMap = pkIndexAdminUserEntries.stream()
-                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry));
-        usersPkIndex.putAll(pkIndexAdminUserEntriesMap);
-        if (!pkIndexAdminDbEntriesMap.isEmpty()) {
-            final var adminDatabasesColl = readWholeAdminCollection(Globals.ADMIN_DATABASES_COLLECTION_NAME);
-            loadAdminEntries(adminDatabasesColl, Globals.ADMIN_DATABASES_COLLECTION_NAME, AdminDbEntry::fromJsonObject,
-                    databases);
+        for (var collName : List.of(Globals.ADMIN_DATABASES_COLLECTION_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
+                Globals.ADMIN_USERS_COLLECTION_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
+                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME)) {
+            pageCache.loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, collName);
         }
-        if (!pkIndexAdminCollEntries.isEmpty()) {
-            final var adminCollectionsColl = readWholeAdminCollection(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
-            loadAdminEntries(adminCollectionsColl, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
-                    AdminCollEntry::fromJsonObject, collections);
-        }
-        if (!pkIndexAdminUserEntriesMap.isEmpty()) {
-            final var adminUsersColl = readWholeAdminCollection(Globals.ADMIN_USERS_COLLECTION_NAME);
-            loadAdminEntries(adminUsersColl, Globals.ADMIN_USERS_COLLECTION_NAME, AdminUserEntry::fromJsonObject,
-                    users);
-        }
+        loadPkIndexInto(Globals.ADMIN_COLLECTION_USAGE_NAME, collectionUsagePkIndex);
+        loadPkIndexInto(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, transactionsPkIndex);
+        loadPkIndexInto(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, triggerRunsPkIndex);
+        loadPkIndexInto(Globals.ADMIN_DATABASES_COLLECTION_NAME, databasesPkIndex);
+        loadPkIndexInto(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, collectionsPkIndex);
+        loadPkIndexInto(Globals.ADMIN_USERS_COLLECTION_NAME, usersPkIndex);
+        loadAdminCollection(Globals.ADMIN_DATABASES_COLLECTION_NAME, databasesPkIndex, AdminDbEntry::fromJsonObject,
+                databases);
+        loadAdminCollection(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, collectionsPkIndex,
+                AdminCollEntry::fromJsonObject, collections);
+        loadAdminCollection(Globals.ADMIN_USERS_COLLECTION_NAME, usersPkIndex, AdminUserEntry::fromJsonObject, users);
         for (var collEntry : collections.values()) {
             final var parts = collEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
             if (parts.length < 2)
                 continue;
-            loadAdminPagesForCollection(parts[0], parts[1]);
+            pageCache.loadAdminPagesForCollection(parts[0], parts[1]);
         }
     }
 
@@ -141,36 +103,17 @@ public class AdminCache {
         }
     }
 
-    private void loadAdminPagesForCollection(String dbName, String collName) throws IOException {
-        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
-        final var collId = Cache.getCollectionIdentifier(dbName, collName);
-        final var pkIdx = fs.readWholePkIndexFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
-        // The PK index loaded here belongs to pagesCollName (the file on disk that holds the
-        // AdminPageEntries for `collName`). It must be keyed by (admin_pages, pagesCollName) because
-        // that's where insertAdminPages / updateTouchedPagesInFileSystem look it up.
-        pagesPkIndexes.put(Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, pagesCollName),
-                new ArrayList<>(pkIdx));
-        final var pageEntries = new ArrayList<AdminPageEntry>();
-        try (var pagesStream = fs.streamPages(Globals.ADMIN_PAGES_DB_NAME, pagesCollName)) {
-            pagesStream.forEach(map -> map.values().stream()
-                    .map(e -> AdminPageEntry.fromJsonObject(dbName, collName, e.getData())).forEach(pageEntries::add));
-        }
-        pages.put(collId, pageEntries);
-        rebuildInMemoryPagesFromPkIndex(pagesCollName, pkIdx);
+    private void loadPkIndexInto(String collName, Map<String, PkIndexEntry> target) throws IOException {
+        target.putAll(fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, collName).stream()
+                .collect(Collectors.toConcurrentMap(PkIndexEntry::getValue, indexEntry -> indexEntry)));
     }
 
-    private void rebuildInMemoryPagesFromPkIndex(String collName, List<PkIndexEntry> pkIdx) {
-        final var byPage = pkIdx.stream().collect(Collectors.groupingBy(PkIndexEntry::getPage));
-        final var entries = new ArrayList<AdminPageEntry>();
-        for (var e : byPage.entrySet()) {
-            final var pageNum = e.getKey();
-            final var pkList = e.getValue();
-            final var entry = new AdminPageEntry(Globals.ADMIN_PAGES_DB_NAME, collName, pageNum);
-            entry.setEntryCount(pkList.size());
-            entry.setPageSize(pkList.stream().mapToLong(PkIndexEntry::getLength).sum());
-            entries.add(entry);
+    private <T extends DbEntry> void loadAdminCollection(String collName, Map<String, PkIndexEntry> pkIndex,
+            Function<JsonObject, T> factory, Map<String, T> target) throws IOException {
+        if (pkIndex.isEmpty()) {
+            return;
         }
-        pages.put(Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, collName), entries);
+        loadAdminEntries(readWholeAdminCollection(collName), collName, factory, target);
     }
 
     private Map<String, DbEntry> readWholeAdminCollection(String collName) throws IOException {
@@ -179,6 +122,60 @@ public class AdminCache {
             pagesStream.forEach(result::putAll);
         }
         return result;
+    }
+
+    public List<AdminPageEntry> getAdminPageEntries(String dbName, String collName) {
+        return pageCache.getAdminPageEntries(dbName, collName);
+    }
+
+    public AdminPageEntry getAdminPageEntry(String dbName, String collName, long page) {
+        return pageCache.getAdminPageEntry(dbName, collName, page);
+    }
+
+    public void putAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
+        pageCache.putAdminPageEntries(dbName, collName, adminPageEntries);
+    }
+
+    public void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
+        pageCache.addAdminPageEntries(dbName, collName, adminPageEntry);
+    }
+
+    public void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
+        pageCache.updatePageSizeInMemory(dbName, collName, page, bytesDelta);
+    }
+
+    public List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
+        return pageCache.getAdminPagePkIndexes(dbName, collName);
+    }
+
+    public void shiftPkPositionsAfterCompaction(String collName, long page, long removedPosition, long removedLength) {
+        final Collection<PkIndexEntry> entries = switch (collName) {
+            case Globals.ADMIN_DATABASES_COLLECTION_NAME -> databasesPkIndex.values();
+            case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> collectionsPkIndex.values();
+            case Globals.ADMIN_USERS_COLLECTION_NAME -> usersPkIndex.values();
+            case Globals.ADMIN_COLLECTION_USAGE_NAME -> collectionUsagePkIndex.values();
+            case Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME -> transactionsPkIndex.values();
+            case Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME -> triggerRunsPkIndex.values();
+            case null, default -> pageCache.pkIndexesForPagesCollection(collName);
+        };
+        for (final var entry : entries) {
+            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
+                entry.setPosition(entry.getPosition() - removedLength);
+            }
+        }
+    }
+
+    public void removeAdminPageEntries(String dbName, String collName) {
+        pageCache.removeAdminPageEntries(dbName, collName);
+    }
+
+    public long selectPageForInsert(String dbName, String collName, int entryByteSize) {
+        return pageCache.selectPageForInsert(dbName, collName, entryByteSize);
+    }
+
+    public long selectPageForInsert(String dbName, String collName, int entryByteSize,
+            Map<Long, Long> pendingBytesByPage) {
+        return pageCache.selectPageForInsert(dbName, collName, entryByteSize, pendingBytesByPage);
     }
 
     public PkIndexEntry getPkIndexAdminDbEntry(String dbName) {
@@ -219,80 +216,6 @@ public class AdminCache {
         return collections.get(Cache.getCollectionIdentifier(dbName, collName));
     }
 
-    public List<AdminPageEntry> getAdminPageEntries(String dbName, String collName) {
-        return pages.get(Cache.getCollectionIdentifier(dbName, collName));
-    }
-
-    public AdminPageEntry getAdminPageEntry(String dbName, String collName, long page) {
-        final var entries = pages.get(Cache.getCollectionIdentifier(dbName, collName));
-        if (entries == null)
-            return null;
-        return entries.stream().filter(p -> p.getPage() == page).findFirst().orElse(null);
-    }
-
-    public void putAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
-        pages.put(Cache.getCollectionIdentifier(dbName, collName), adminPageEntries);
-    }
-
-    public void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
-        pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>())
-                .add(adminPageEntry);
-    }
-
-    public void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
-        final var pageEntries = pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
-                _ -> new ArrayList<>());
-        final var existing = pageEntries.stream().filter(p -> p.getPage() == page).findFirst();
-        if (existing.isPresent()) {
-            existing.get().setPageSize(existing.get().getPageSize() + bytesDelta);
-            existing.get().setEntryCount(existing.get().getEntryCount() + 1);
-        } else {
-            final var newEntry = new AdminPageEntry(dbName, collName, page);
-            newEntry.setPageSize(bytesDelta);
-            newEntry.setEntryCount(1);
-            pageEntries.add(newEntry);
-        }
-    }
-
-    public List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
-        return pagesPkIndexes.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>());
-    }
-
-    /**
-     * Keeps the cached admin PK index positions consistent after a single-entry page compaction on
-     * the given admin collection, dispatching to the matching PK structure (databases, collections,
-     * users, collection_usage, or a page-metadata collection). Every cached entry on {@code page}
-     * whose position is greater than {@code removedPosition} shifted toward the start of the file by
-     * {@code removedLength}; entries are mutated in place.
-     */
-    public void shiftPkPositionsAfterCompaction(String collName, long page, long removedPosition, long removedLength) {
-        final Collection<PkIndexEntry> entries;
-        switch (collName) {
-            case Globals.ADMIN_DATABASES_COLLECTION_NAME -> entries = databasesPkIndex.values();
-            case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> entries = collectionsPkIndex.values();
-            case Globals.ADMIN_USERS_COLLECTION_NAME -> entries = usersPkIndex.values();
-            case Globals.ADMIN_COLLECTION_USAGE_NAME -> entries = collectionUsagePkIndex.values();
-            case Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME -> entries = transactionsPkIndex.values();
-            case Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME -> entries = triggerRunsPkIndex.values();
-            case null, default -> {
-                final var list = pagesPkIndexes
-                        .get(Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, collName));
-                entries = list != null ? list : List.of();
-            }
-        }
-        for (final var entry : entries) {
-            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
-                entry.setPosition(entry.getPosition() - removedLength);
-            }
-        }
-    }
-
-    public void removeAdminPageEntries(String dbName, String collName) {
-        final var collId = Cache.getCollectionIdentifier(dbName, collName);
-        pages.remove(collId);
-        pagesPkIndexes.remove(collId);
-    }
-
     public void putAdminDbEntry(AdminDbEntry dbEntry, PkIndexEntry indexEntry) {
         databases.put(dbEntry.get_id(), dbEntry);
         databasesPkIndex.put(dbEntry.get_id(), indexEntry);
@@ -314,68 +237,22 @@ public class AdminCache {
         collectionsPkIndex.remove(collIdentifier);
     }
 
-    public long selectPageForInsert(String dbName, String collName, int entryByteSize) {
-        return selectPageForInsert(dbName, collName, entryByteSize, Map.of());
-    }
-
-    public long selectPageForInsert(String dbName, String collName, int entryByteSize,
-            Map<Long, Long> pendingPageBytes) {
-        final var maxPageBytes = configuration.getMaxPageSize();
-        final var pageEntries = pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
-                _ -> new ArrayList<>());
-        // First-fit must also consider pages allocated earlier in the same in-flight batch (present
-        // only in pendingPageBytes, not yet committed to pageEntries) — otherwise a single bulk insert
-        // into a fresh collection scatters every entry onto its own new page.
-        final var committedSizeByPage = pageEntries.stream()
-                .collect(Collectors.toMap(AdminPageEntry::getPage, AdminPageEntry::getPageSize));
-        final var candidatePages = new TreeSet<>(committedSizeByPage.keySet());
-        candidatePages.addAll(pendingPageBytes.keySet());
-        for (final long page : candidatePages) {
-            final var effectiveSize = committedSizeByPage.getOrDefault(page, 0L)
-                    + pendingPageBytes.getOrDefault(page, 0L);
-            if (effectiveSize + entryByteSize <= maxPageBytes) {
-                return page;
-            }
-        }
-        final var maxKnownPage = pageEntries.stream().mapToLong(AdminPageEntry::getPage).max().orElse(-1L);
-        final var maxPendingPage = pendingPageBytes.keySet().stream().mapToLong(Long::longValue).max().orElse(-1L);
-        return Math.max(maxKnownPage, maxPendingPage) + 1L;
-    }
-
     public boolean hasIndex(String dbName, String collName, String fieldName) {
         return getIndexesForCollection(dbName, collName).contains(fieldName);
     }
 
     public Set<String> getIndexesForCollection(String dbName, String collName) {
         final var collection = collections.get(Cache.getCollectionIdentifier(dbName, collName));
-        // The collection may have been dropped while a background index event for it was still
-        // queued. Treat a missing collection as "no indexes" so background maintenance becomes a
-        // clean no-op (and hasIndex returns false) instead of throwing.
+        // A collection dropped while a background index event was queued must read as "no indexes"
+        // rather than throw, so that event becomes a clean no-op.
         if (collection == null) {
             return Set.of();
         }
         return collection.getIndexes();
     }
 
-    // Returns the collection's cached JSON Schema, or null when the collection has none. Loads lazily
-    // from disk on first access and negatively caches absence (NO_SCHEMA), so an unconstrained
-    // collection is only read from disk once.
     public JsonObject getCollectionSchema(String dbName, String collName) {
-        final var id = Cache.getCollectionIdentifier(dbName, collName);
-        final var cached = collectionSchemas.get(id);
-        if (cached != null) {
-            return cached;
-        }
-        if (metadataMisses.get(schemaMissKey(id)) != null) {
-            return null;
-        }
-        final var loaded = loadSchemaUncached(dbName, collName);
-        if (loaded == null) {
-            metadataMisses.put(schemaMissKey(id), Boolean.TRUE);
-        } else {
-            collectionSchemas.put(id, loaded);
-        }
-        return loaded;
+        return schemaCache.get(dbName, collName);
     }
 
     public JsonObject loadSchemaUncached(String dbName, String collName) {
@@ -393,43 +270,19 @@ public class AdminCache {
     }
 
     public void putCollectionSchema(String dbName, String collName, JsonObject schema) {
-        final var id = Cache.getCollectionIdentifier(dbName, collName);
-        metadataMisses.remove(schemaMissKey(id));
-        collectionSchemas.put(id, schema);
+        schemaCache.put(Cache.getCollectionIdentifier(dbName, collName), schema);
     }
 
     public void removeCollectionSchema(String dbName, String collName) {
-        final var id = Cache.getCollectionIdentifier(dbName, collName);
-        collectionSchemas.remove(id);
-        metadataMisses.remove(schemaMissKey(id));
+        schemaCache.remove(Cache.getCollectionIdentifier(dbName, collName));
     }
 
     public void removeCollectionSchemasForDatabase(String dbName) {
-        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        collectionSchemas.removeIf(id -> id.startsWith(prefix));
-        metadataMisses.removeIf(id -> id.startsWith(SCHEMA_MISS_PREFIX + prefix));
+        schemaCache.removeForDatabase(dbName);
     }
 
-    // Returns the database's cached procedure, or null when it has none by that name. Loads lazily from
-    // disk on first access and remembers absence in the separate miss cache, so a database with no
-    // procedures - or a misspelled name called in a loop - is only read from disk once. Same contract as
-    // getCollectionSchema, and the reason loadAdminData does not have to load procedures at startup.
     public ProcedureDefinition getProcedure(String dbName, String name) {
-        final var id = Cache.getCollectionIdentifier(dbName, name);
-        final var cached = procedures.get(id);
-        if (cached != null) {
-            return cached;
-        }
-        if (metadataMisses.get(procedureMissKey(id)) != null) {
-            return null;
-        }
-        final var loaded = loadProcedureUncached(dbName, name);
-        if (loaded == null) {
-            metadataMisses.put(procedureMissKey(id), Boolean.TRUE);
-        } else {
-            procedures.put(id, loaded);
-        }
-        return loaded;
+        return procedureCache.get(dbName, name);
     }
 
     public ProcedureDefinition loadProcedureUncached(String dbName, String name) {
@@ -447,42 +300,19 @@ public class AdminCache {
     }
 
     public void putProcedure(String dbName, ProcedureDefinition definition) {
-        final var id = Cache.getCollectionIdentifier(dbName, definition.getName());
-        metadataMisses.remove(procedureMissKey(id));
-        procedures.put(id, definition);
+        procedureCache.put(Cache.getCollectionIdentifier(dbName, definition.getName()), definition);
     }
 
     public void removeProcedure(String dbName, String name) {
-        final var id = Cache.getCollectionIdentifier(dbName, name);
-        procedures.remove(id);
-        metadataMisses.remove(procedureMissKey(id));
+        procedureCache.remove(Cache.getCollectionIdentifier(dbName, name));
     }
 
     public void removeProceduresForDatabase(String dbName) {
-        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        procedures.removeIf(id -> id.startsWith(prefix));
-        metadataMisses.removeIf(id -> id.startsWith(PROCEDURE_MISS_PREFIX + prefix));
+        procedureCache.removeForDatabase(dbName);
     }
 
-    // Returns the database's cached schedule, or null when it has none by that name. Same lazy-load and
-    // negative-caching contract as getProcedure, which is why loadAdminData does not read schedules at
-    // startup either - ScheduleRegistry walks them once when the feature is on.
     public ScheduleDefinition getSchedule(String dbName, String name) {
-        final var id = Cache.getCollectionIdentifier(dbName, name);
-        final var cached = schedules.get(id);
-        if (cached != null) {
-            return cached;
-        }
-        if (metadataMisses.get(scheduleMissKey(id)) != null) {
-            return null;
-        }
-        final var loaded = loadScheduleUncached(dbName, name);
-        if (loaded == null) {
-            metadataMisses.put(scheduleMissKey(id), Boolean.TRUE);
-        } else {
-            schedules.put(id, loaded);
-        }
-        return loaded;
+        return scheduleCache.get(dbName, name);
     }
 
     public ScheduleDefinition loadScheduleUncached(String dbName, String name) {
@@ -500,31 +330,23 @@ public class AdminCache {
     }
 
     public void putSchedule(String dbName, ScheduleDefinition definition) {
-        final var id = Cache.getCollectionIdentifier(dbName, definition.getName());
-        metadataMisses.remove(scheduleMissKey(id));
-        schedules.put(id, definition);
+        scheduleCache.put(Cache.getCollectionIdentifier(dbName, definition.getName()), definition);
     }
 
     public void removeSchedule(String dbName, String name) {
-        final var id = Cache.getCollectionIdentifier(dbName, name);
-        schedules.remove(id);
-        metadataMisses.remove(scheduleMissKey(id));
+        scheduleCache.remove(Cache.getCollectionIdentifier(dbName, name));
     }
 
     public void removeSchedulesForDatabase(String dbName) {
-        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        schedules.removeIf(id -> id.startsWith(prefix));
-        metadataMisses.removeIf(id -> id.startsWith(SCHEDULE_MISS_PREFIX + prefix));
+        scheduleCache.removeForDatabase(dbName);
     }
 
     public void removeSchedulesMatching(Predicate<String> keyMatches) {
-        schedules.removeIf(keyMatches);
+        scheduleCache.removeIf(keyMatches);
     }
 
-    // Every trigger on the collection, empty when it has none. The cache key is db|coll, so the write
-    // path's lookup is a single map get and an untriggered collection is read from disk once and then
-    // answered from the negative cache - the hot-path contract SchemaValidationHelper.check already
-    // relies on for every SAVE. An empty list doubles as the negative-cache sentinel.
+    // An empty list doubles as the negative-cache sentinel, so an untriggered collection is read from
+    // disk once rather than on every SAVE.
     public List<TriggerDefinition> getTriggersFor(String dbName, String collName) {
         final var id = Cache.getCollectionIdentifier(dbName, collName);
         var cached = triggers.get(id);
@@ -562,9 +384,8 @@ public class AdminCache {
         triggers.removeIf(id -> id.startsWith(prefix));
     }
 
-    // Drops the trigger lists whose db|coll key matches, leaving no entry behind: TriggerDispatcher looks the
-    // list up again when it runs a queued event, so a removed key reloads from disk while a cached empty list
-    // would make an already-queued trigger silently not fire.
+    // Must leave no entry behind: a cached empty list would make an already-queued trigger silently
+    // not fire when TriggerDispatcher looks the list up again.
     public void removeTriggersMatching(Predicate<String> keyMatches) {
         triggers.removeIf(keyMatches);
     }
@@ -573,18 +394,6 @@ public class AdminCache {
         return new MetadataCacheStats(procedures.bytes(), procedures.size(), triggers.bytes(), triggers.size(),
                 collectionSchemas.bytes(), collectionSchemas.size(), schedules.bytes(), schedules.size(),
                 metadataMisses.size());
-    }
-
-    private static String procedureMissKey(String id) {
-        return PROCEDURE_MISS_PREFIX + id;
-    }
-
-    private static String schemaMissKey(String id) {
-        return SCHEMA_MISS_PREFIX + id;
-    }
-
-    private static String scheduleMissKey(String id) {
-        return SCHEDULE_MISS_PREFIX + id;
     }
 
     public AdminUserEntry getAdminUserEntry(String username) {

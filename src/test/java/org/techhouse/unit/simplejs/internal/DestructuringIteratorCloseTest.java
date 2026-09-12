@@ -28,31 +28,26 @@ public class DestructuringIteratorCloseTest {
         return ((JsString) Interpreter.run(source)).getValue();
     }
 
-    // a pattern that stops before the iterator is exhausted closes it
     @Test
     public void test_array_pattern_closes_unexhausted_iterator() {
         assertEquals(1, num(ITERABLE + "let [a] = iterable; closed"));
     }
 
-    // an exhausted iterator is not closed a second time
     @Test
     public void test_array_pattern_does_not_close_exhausted_iterator() {
         assertEquals(0, num(ITERABLE + "let [a, b, c, d] = iterable; closed"));
     }
 
-    // a rest element exhausts the iterator, so there is nothing left to close
     @Test
     public void test_rest_element_does_not_close() {
         assertEquals(0, num(ITERABLE + "let [a, ...rest] = iterable; closed"));
     }
 
-    // an empty pattern still closes the iterator it opened
     @Test
     public void test_empty_pattern_closes_iterator() {
         assertEquals(1, num(ITERABLE + "let [] = iterable; closed"));
     }
 
-    // a throwing binding target closes the iterator and the original error is the one that escapes
     @Test
     public void test_throwing_target_closes_and_keeps_the_original_error() {
         final var source = """
@@ -74,7 +69,6 @@ public class DestructuringIteratorCloseTest {
         assertEquals("return#from-target", str(source));
     }
 
-    // closing under a normal completion reports a non-object return result as a TypeError
     @Test
     public void test_non_object_return_result_is_a_type_error() {
         final var source = """
@@ -92,7 +86,6 @@ public class DestructuringIteratorCloseTest {
         assertEquals("true", str(source));
     }
 
-    // a for-of body that throws closes the loop's iterator
     @Test
     public void test_for_of_body_throw_closes_iterator() {
         final var source = ITERABLE + """
@@ -102,7 +95,6 @@ public class DestructuringIteratorCloseTest {
         assertEquals(1, num(source));
     }
 
-    // a for-of body that breaks closes the loop's iterator
     @Test
     public void test_for_of_break_closes_iterator() {
         assertEquals(1, num(ITERABLE + "for (const x of iterable) { break; } closed"));

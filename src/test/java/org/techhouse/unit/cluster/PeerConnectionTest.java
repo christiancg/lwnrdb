@@ -1,6 +1,7 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -78,24 +79,23 @@ public class PeerConnectionTest {
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
             final var writer = new BufferedWriter(
                     new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
-            final var request = eJson.fromJson(reader.readLine(), ClusterMessage.class);
+            final var line = reader.readLine();
+            assertNotNull(line, "peer closed before sending a request");
+            final var request = eJson.fromJson(line, ClusterMessage.class);
             final var response = new ClusterMessage(request.getCorrelationId(), ClusterMessageType.GOSSIP_ACK, "s",
                     null, null);
             writer.write(eJson.toJson(response));
             writer.newLine();
             writer.flush();
         } catch (Exception ignored) {
-            // test helper, nothing to do
         }
     }
 
     private void acceptAndHold(ServerSocket listener) {
         try (var socket = listener.accept()) {
-            // Keep the connection open (no response) so the client's request times out.
             socket.setKeepAlive(true);
             Thread.sleep(1500);
         } catch (Exception ignored) {
-            // test helper, nothing to do
         }
     }
 
@@ -103,7 +103,6 @@ public class PeerConnectionTest {
         try {
             listener.accept().close();
         } catch (Exception ignored) {
-            // test helper, nothing to do
         }
     }
 }

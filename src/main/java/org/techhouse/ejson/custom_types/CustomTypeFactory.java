@@ -2,6 +2,7 @@ package org.techhouse.ejson.custom_types;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.function.Predicate;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.exceptions.BadImplementationCustomTypeException;
@@ -26,30 +27,20 @@ public final class CustomTypeFactory {
         return _customTypes;
     }
 
-    // True when some registered custom type declares a predicate or ranking operator with this name.
-    // Used to validate CUSTOM operators in requests.
     public static boolean isKnownCustomOperator(String operatorName) {
-        for (var aClass : _customTypes.values()) {
-            try {
-                final var instance = aClass.getConstructor().newInstance();
-                if (instance.customOperatorNames().contains(operatorName)
-                        || instance.customRankingOperatorNames().contains(operatorName)) {
-                    return true;
-                }
-            } catch (Exception ex) {
-                throw new BadImplementationCustomTypeException(aClass.getName(), ex);
-            }
-        }
-        return false;
+        return anyRegisteredType(instance -> instance.customOperatorNames().contains(operatorName)
+                || instance.customRankingOperatorNames().contains(operatorName));
     }
 
-    // True when the operator name is a ranking (top-K) operator; the FILTER step routes these to its
-    // score-and-keep-top-K path instead of the predicate path.
+    // FILTER picks the top-K path off the name alone, so no type may reuse a predicate operator's name.
     public static boolean isRankingOperator(String operatorName) {
+        return anyRegisteredType(instance -> instance.customRankingOperatorNames().contains(operatorName));
+    }
+
+    private static boolean anyRegisteredType(Predicate<JsonCustom<?>> predicate) {
         for (var aClass : _customTypes.values()) {
             try {
-                final var instance = aClass.getConstructor().newInstance();
-                if (instance.customRankingOperatorNames().contains(operatorName)) {
+                if (predicate.test(aClass.getConstructor().newInstance())) {
                     return true;
                 }
             } catch (Exception ex) {

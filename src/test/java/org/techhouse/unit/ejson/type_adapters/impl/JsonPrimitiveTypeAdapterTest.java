@@ -17,7 +17,6 @@ public class JsonPrimitiveTypeAdapterTest {
         new EJson();
     }
 
-    // Convert JsonPrimitive boolean value to JSON string
     @Test
     public void test_boolean_primitive_to_json() {
         JsonPrimitiveTypeAdapter adapter = new JsonPrimitiveTypeAdapter();
@@ -29,7 +28,6 @@ public class JsonPrimitiveTypeAdapterTest {
         assertEquals("true", result);
     }
 
-    // Convert JsonPrimitive with string value to JSON string
     @Test
     public void test_json_primitive_string_value_conversion() {
         JsonPrimitiveTypeAdapter adapter = new JsonPrimitiveTypeAdapter();
@@ -40,7 +38,6 @@ public class JsonPrimitiveTypeAdapterTest {
         assertEquals("\"test\"", result);
     }
 
-    // Handle null JsonPrimitive value
     @Test
     public void test_null_json_primitive_handling() {
         JsonPrimitiveTypeAdapter adapter = new JsonPrimitiveTypeAdapter();
@@ -51,7 +48,6 @@ public class JsonPrimitiveTypeAdapterTest {
         assertEquals("null", result);
     }
 
-    // Converting JsonBoolean element returns correct JsonPrimitive
     @Test
     public void test_boolean_element_converts_to_primitive() {
         JsonPrimitiveTypeAdapter adapter = new JsonPrimitiveTypeAdapter();
@@ -64,7 +60,6 @@ public class JsonPrimitiveTypeAdapterTest {
         assertEquals(true, result.getValue());
     }
 
-    // Passing null as input value
     @Test
     public void test_null_input_returns_null() {
         JsonPrimitiveTypeAdapter adapter = new JsonPrimitiveTypeAdapter();

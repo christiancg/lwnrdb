@@ -59,7 +59,6 @@ public class Tx2pcLogTest {
     public void test_garbage_collect_outcomes_drops_aged_keeps_recent() throws Exception {
         final var dtxId = "cccc3333-0000-0000-0000-000000000000";
         Tx2pcLog.recordOutcome(dtxId, true);
-        // A retention far in the future keeps it; a negative retention (cutoff in the future) drops it.
         Tx2pcLog.garbageCollectOutcomes(Long.MAX_VALUE / 2);
         assertTrue(Tx2pcLog.outcomeDtxIds().contains(dtxId));
         Tx2pcLog.garbageCollectOutcomes(-1000L);

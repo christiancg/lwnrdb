@@ -8,7 +8,6 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.BooleanTypeAdapter;
 
 public class BooleanTypeAdapterTest {
-    // Converting true boolean value to JSON string returns "true"
     @Test
     public void test_true_false_value_converts_to_json_string() {
         BooleanTypeAdapter adapter = new BooleanTypeAdapter();
@@ -18,7 +17,6 @@ public class BooleanTypeAdapterTest {
         assertEquals("false", resultFalse);
     }
 
-    // Converting null boolean value to JSON string
     @Test
     public void test_null_value_converts_to_json_string() {
         BooleanTypeAdapter adapter = new BooleanTypeAdapter();
@@ -26,7 +24,6 @@ public class BooleanTypeAdapterTest {
         assertThrows(NullPointerException.class, () -> adapter.toJson(null));
     }
 
-    // Convert JsonBoolean element to Boolean value
     @Test
     public void test_convert_json_boolean_to_boolean() {
         BooleanTypeAdapter adapter = new BooleanTypeAdapter();
@@ -37,7 +34,6 @@ public class BooleanTypeAdapterTest {
         assertEquals(true, result);
     }
 
-    // Convert JsonString element with 'true' value to Boolean
     @Test
     public void test_convert_json_string_true_to_boolean() {
         JsonString jsonString = new JsonString("true");

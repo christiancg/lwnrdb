@@ -41,14 +41,9 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The exactly-once guarantee: a trigger's effects and the consumption of its pending-run record commit
- * together, so a replay after a crash cannot apply a non-idempotent trigger twice.
- */
 public class TriggerExactlyOnceTest {
     private static final Configuration configuration = Configuration.getInstance();
     private static final String COUNTER_COLL = "counters";
-    // The definer owns the database, so the trigger's own writes are authorized wherever they land.
     private static final String DEFINER = "trigger-owner";
 
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
@@ -170,8 +165,6 @@ public class TriggerExactlyOnceTest {
                 "the pending run should still be on disk while the run has not applied");
     }
 
-    // The inventory case. A trigger that increments a counter is run, then replayed the way recovery would
-    // after a crash. The counter must end at one.
     @Test
     public void test_counter_trigger_applied_once_across_crash_replay() throws Exception {
         installProcedure("increment", """
@@ -193,7 +186,6 @@ public class TriggerExactlyOnceTest {
         assertTrue(TriggerRunLog.recordIdsFor(runId).isEmpty(),
                 "a run that applied must leave no record behind to replay");
 
-        // Recovery only re-queues what is still pending, so the applied run is not replayed at all.
         captured.clear();
         TriggerRunRecovery.recoverLocal();
         sleep(50);
@@ -201,7 +193,6 @@ public class TriggerExactlyOnceTest {
         assertEquals(1L, counterValue(), "the counter must not advance twice");
     }
 
-    // The other half of the guarantee: a run whose effects never committed is still pending and does replay.
     @Test
     public void test_a_run_that_never_applied_is_replayed() throws Exception {
         installProcedure("noop2", "export default 1;");
@@ -219,7 +210,6 @@ public class TriggerExactlyOnceTest {
         assertEquals(event.getRunId(), captured.getFirst().getRunId());
     }
 
-    // A deterministically failing script must be terminal, not replayed at every restart forever. With
     // triggerMaxAttempts=1 the first failure is already the last, so the run is dead-lettered: its record is
     // kept as evidence for an operator but is never replayed, which is the property that matters.
     @Test
@@ -247,9 +237,6 @@ public class TriggerExactlyOnceTest {
         assertTrue(captured.isEmpty(), "a dead-lettered run must not be replayed by startup recovery");
     }
 
-    // With attempts left the record survives as PENDING so the retry can replay it; once they are spent it
-    // becomes a dead letter, which is retained for an operator and never replayed by recovery. Bounded
-    // either way - which is the property the terminal-consume rule was protecting.
     @Test
     public void test_script_error_retries_then_dead_letters() throws Exception {
         TestUtils.setPrivateField(configuration, "triggerMaxAttempts", 2);

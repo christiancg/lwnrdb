@@ -9,7 +9,6 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.type_adapters.impl.NumberTypeAdapter;
 
 public class NumberTypeAdapterTest {
-    // Convert integer numbers to JSON string representation without decimal points
     @Test
     public void test_integer_number_converts_to_json_without_decimals() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();
@@ -18,7 +17,6 @@ public class NumberTypeAdapterTest {
         assertEquals("42", result);
     }
 
-    // Handle null input value in toJson method
     @Test
     public void test_null_input_converts_to_null_string() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();
@@ -27,7 +25,6 @@ public class NumberTypeAdapterTest {
         assertEquals("null", result);
     }
 
-    // Convert integer number to JSON string representation
     @Test
     public void test_integer_to_json_string() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();
@@ -36,7 +33,6 @@ public class NumberTypeAdapterTest {
         assertEquals("42", result);
     }
 
-    // Handle null input by returning "null" string
     @Test
     public void test_null_input_returns_null_string() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();
@@ -44,7 +40,6 @@ public class NumberTypeAdapterTest {
         assertEquals("null", result);
     }
 
-    // A double past the long range keeps its digits instead of clamping to Long.MAX_VALUE
     @Test
     public void test_large_double_is_not_clamped() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();
@@ -52,7 +47,6 @@ public class NumberTypeAdapterTest {
         assertEquals("1e+21", adapter.toJson(1e21));
     }
 
-    // A small double uses the JS exponential form rather than the Java one
     @Test
     public void test_small_double_uses_js_form() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();
@@ -60,7 +54,6 @@ public class NumberTypeAdapterTest {
         assertEquals("0.000001", adapter.toJson(1e-6));
     }
 
-    // Integral boxed types render their exact digits, past the double precision limit
     @Test
     public void test_long_keeps_exact_digits() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();
@@ -70,7 +63,6 @@ public class NumberTypeAdapterTest {
         assertEquals("1.50", adapter.toJson(new java.math.BigDecimal("1.50")));
     }
 
-    // Ordinary doubles keep their existing rendering
     @Test
     public void test_integral_double_unchanged() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();
@@ -80,7 +72,6 @@ public class NumberTypeAdapterTest {
         assertEquals("0", adapter.toJson(-0.0));
     }
 
-    // Input JsonNumber returns its numeric value
     @Test
     public void test_json_number_returns_numeric_value() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();
@@ -91,7 +82,6 @@ public class NumberTypeAdapterTest {
         assertEquals(42, result.intValue());
     }
 
-    // Input non-NUMBER JsonType returns null
     @Test
     public void test_non_number_type_returns_null() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();

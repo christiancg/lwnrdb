@@ -141,7 +141,6 @@ public class MembershipServiceTest {
         assertEquals(0, service.getSelf().getScriptLoad());
     }
 
-    // Peers filter placement on these two, so they must ride the same gossip round as the heartbeat.
     @Test
     public void test_gossip_carries_the_admin_catch_up_state() throws Exception {
         final var adminEpoch = IocContainer.get(AdminEpoch.class);

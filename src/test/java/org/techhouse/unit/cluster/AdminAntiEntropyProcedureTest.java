@@ -65,9 +65,12 @@ public class AdminAntiEntropyProcedureTest {
     }
 
     private static void conform(AdminAntiEntropyService target, AdminSnapshotPayload snapshot) throws Exception {
-        final var method = AdminAntiEntropyService.class.getDeclaredMethod("conform", AdminSnapshotPayload.class);
+        final var conformerField = AdminAntiEntropyService.class.getDeclaredField("conformer");
+        conformerField.setAccessible(true);
+        final var conformer = conformerField.get(target);
+        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class);
         method.setAccessible(true);
-        method.invoke(target, snapshot);
+        method.invoke(conformer, snapshot);
     }
 
     private AdminSnapshotPayload snapshotWithout() {
@@ -110,7 +113,6 @@ public class AdminAntiEntropyProcedureTest {
         assertFalse(snapshot.getTriggers().has(TestGlobals.DB + "|" + TestGlobals.COLL));
     }
 
-    // A peer on an older version omits the field entirely; it must read as empty rather than null
     @Test
     public void test_snapshot_from_older_peer_without_the_fields_deserializes() {
         final var legacy = new AdminSnapshotPayload();
@@ -129,7 +131,6 @@ public class AdminAntiEntropyProcedureTest {
     public void test_conform_writes_a_missing_procedure() throws Exception {
         writeProcedure("fromPeer", 5L, "return 5;");
         final var snapshot = service.buildSnapshot();
-        // Wipe locally, then conform: the snapshot must put it back.
         fs.deleteProcedure(TestGlobals.DB, "fromPeer");
         cache.removeProceduresForDatabase(TestGlobals.DB);
         assertNull(cache.getProcedure(TestGlobals.DB, "fromPeer"));
@@ -177,7 +178,6 @@ public class AdminAntiEntropyProcedureTest {
         assertTrue(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
     }
 
-    // The periodic sweep runs the same reconciliation, so conforming an already-matching state is a no-op
     @Test
     public void test_conform_is_idempotent() throws Exception {
         writeProcedure("recalc", 1L, "return 1;");

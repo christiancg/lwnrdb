@@ -8,7 +8,6 @@ import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.data.DbEntry;
 
 public class BulkEntityEventTest {
-    // Creating a BulkEntityEvent with valid dbName, collName, and non-empty lists of DbEntry
     @Test
     public void test_bulk_entity_event_with_valid_entries() {
         String dbName = "testDB";
@@ -26,7 +25,6 @@ public class BulkEntityEventTest {
         assertEquals(updatedEntries, event.getUpdatedEntries());
     }
 
-    // Creating a BulkEntityEvent with empty lists for insertedEntries and updatedEntries
     @Test
     public void test_bulk_entity_event_with_empty_entries() {
         String dbName = "testDB";
@@ -42,7 +40,6 @@ public class BulkEntityEventTest {
         assertTrue(event.getUpdatedEntries().isEmpty());
     }
 
-    // Test getters and setters
     @Test
     public void test_getters() {
         List<DbEntry> insertedEntries = List.of();
@@ -55,7 +52,6 @@ public class BulkEntityEventTest {
         assertEquals(updatedEntries, event.getUpdatedEntries());
     }
 
-    // Test hashcode and equals
     @Test
     public void test_equals_and_hashCode() {
         List<DbEntry> insertedEntries = List.of();

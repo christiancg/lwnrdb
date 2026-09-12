@@ -125,7 +125,6 @@ public class TestTriggerOperationTest {
         assertNull(tested.getDocument());
     }
 
-    // A rejecting hook names where it broke, which is the point of a dry run.
     @Test
     public void test_a_rejection_carries_a_stack() throws Exception {
         install("veto", "export default (d) => { throw new Error('boom'); };", TriggerDefinition.TIMING_BEFORE);

@@ -8,8 +8,6 @@ import org.techhouse.log.Logger;
 public class BackgroundProcessorThread implements Runnable {
     private final Logger logger = Logger.logFor(BackgroundProcessorThread.class);
     private final LinkedBlockingQueue<Event> queue;
-    // Counts events taken but not yet finished, so a shutdown drain can tell an empty queue apart from an
-    // empty queue with work still in flight.
     private final AtomicInteger inFlight;
     private final IdleSignal idleSignal;
 

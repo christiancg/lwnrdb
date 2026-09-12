@@ -104,7 +104,6 @@
                             <version>4.33</version>
                             <file>${project.basedir}/config/eclipse-format.xml</file>
                         </eclipse>
-                        <!-- Lets a declaration table (see config/ConfigKey.java) stay one row per line. -->
                         <toggleOffOn/>
                         <removeUnusedImports/>
                         <importOrder/>
@@ -172,10 +171,7 @@
                         <ruleset>${project.basedir}/config/pmd-ruleset.xml</ruleset>
                     </rulesets>
                     <includeTests>true</includeTests>
-                    <!-- CPD ratchet: nothing in the tree shares a block this large today, so the
-                         build fails the moment a bigger one appears. Lower it as the remaining
-                         test-fixture duplication goes. -->
-                    <minimumTokens>500</minimumTokens>
+                    <minimumTokens>310</minimumTokens>
                     <printFailingErrors>true</printFailingErrors>
                     <failOnViolation>true</failOnViolation>
                     <linkXRef>false</linkXRef>
@@ -214,6 +210,7 @@
                 <configuration>
                     <effort>Max</effort>
                     <threshold>Medium</threshold>
+                    <includeTests>true</includeTests>
                     <failOnError>true</failOnError>
                     <excludeFilterFile>${project.basedir}/config/spotbugs-exclude.xml</excludeFilterFile>
                 </configuration>
@@ -237,7 +234,6 @@
                             <goal>prepare-agent</goal>
                         </goals>
                     </execution>
-                    <!-- attached to Maven test phase -->
                     <execution>
                         <id>report</id>
                         <phase>test</phase>

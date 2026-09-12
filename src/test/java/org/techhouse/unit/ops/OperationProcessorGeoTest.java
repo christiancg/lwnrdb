@@ -26,8 +26,6 @@ import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-// End-to-end coverage of the geo custom operators through the full SAVE / AGGREGATE pipeline, with and
-// without a field index (which drives the geohash spatial pre-filter in GeoSpatialIndexHelper).
 public class OperationProcessorGeoTest {
     final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
 
@@ -43,7 +41,6 @@ public class OperationProcessorGeoTest {
         TestUtils.standardTearDown();
     }
 
-    // distance SMALLER_THAN over a scanned (un-indexed) collection returns only the near points.
     @Test
     public void test_distance_filter_without_index() {
         final var coll = "geoDistScan";
@@ -55,7 +52,6 @@ public class OperationProcessorGeoTest {
         assertEquals(List.of("close", "near"), sortedIds(response.getResults()));
     }
 
-    // The same query over an indexed collection returns the same result and reports the index as used.
     @Test
     public void test_distance_filter_with_index_reports_index_used() {
         final var coll = "geoDistIdx";
@@ -90,7 +86,6 @@ public class OperationProcessorGeoTest {
         assertFalse(response.getAnalyzeResult().isIndexUsed());
     }
 
-    // within a polygon around the city returns only the enclosed points (index-backed).
     @Test
     public void test_within_filter_with_index() {
         final var coll = "geoWithin";
@@ -102,7 +97,6 @@ public class OperationProcessorGeoTest {
         assertEquals(List.of("close", "near"), sortedIds(response.getResults()));
     }
 
-    // COUNT after a geo filter falls back to the document-reading count and returns the right number.
     @Test
     public void test_count_after_distance_filter() {
         final var coll = "geoCount";
@@ -117,7 +111,6 @@ public class OperationProcessorGeoTest {
         assertEquals(2, response.getResults().getFirst().get("count").asJsonNumber().getValue().intValue());
     }
 
-    // Three points: two within ~140 m of (40.0,-74.0) and one far away (Los Angeles).
     private void seedCity(String coll) {
         processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, coll));
         saveGeo(coll, "near", "#geo(40.0,-74.0)");

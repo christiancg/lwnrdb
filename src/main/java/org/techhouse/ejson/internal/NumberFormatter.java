@@ -61,11 +61,8 @@ public final class NumberFormatter {
         return mantissa + 'e' + (exponent < 0 ? "-" : "+") + Math.abs(exponent);
     }
 
-    /*
-     * Double.toString is shortest-round-trip for normal values, but not for subnormals (it renders
-     * Double.MIN_VALUE as 4.9E-324 where the spec's shortest digit string is 5). Only those pay for
-     * the round-trip search.
-     */
+    // Double.toString is shortest-round-trip for normal values but not for subnormals (Double.MIN_VALUE
+    // renders as 4.9E-324 where the spec's shortest digit string is 5), so only those search.
     private static BigDecimal shortestDecimal(final double magnitude) {
         final var exact = new BigDecimal(Double.toString(magnitude)).stripTrailingZeros();
         if (magnitude >= Double.MIN_NORMAL) {

@@ -1,27 +1,21 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.techhouse.test.ClusterTestHarness.SECRET;
+import static org.techhouse.test.ClusterTestHarness.node;
 
 import java.util.List;
-import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.ClusterRouter;
-import org.techhouse.cluster.ClusterServer;
-import org.techhouse.cluster.MembershipView;
-import org.techhouse.cluster.NodeAddress;
-import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
-import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
-import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -37,30 +31,18 @@ import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class ClusterRouterIntegrationTest {
-    private static final String SECRET = "s";
-    private final Configuration config = Configuration.getInstance();
+    private final ClusterTestHarness cluster = new ClusterTestHarness();
     private final ClusterRouter router = IocContainer.get(ClusterRouter.class);
-    private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final EJson eJson = IocContainer.get(EJson.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
-    private ClusterServer server;
-    private int serverPort;
-    private boolean origEnabled;
-    private String origSecret;
-    private boolean origTls;
-    private long origAck;
-    private int origExpected;
-
-    private static NodeInfo node(String id, int port) {
-        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
-    }
 
     private static JsonObject doc(String id) {
         final var object = new JsonObject();
@@ -72,48 +54,14 @@ public class ClusterRouterIntegrationTest {
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
-        origEnabled = config.isClusterEnabled();
-        origSecret = config.getClusterSecret();
-        origTls = config.isClusterTlsEnabled();
-        origAck = config.getReplicationAckTimeoutMs();
-        origExpected = config.getClusterExpectedSize();
-        TestUtils.setPrivateField(config, "clusterEnabled", true);
-        TestUtils.setPrivateField(config, "clusterSecret", SECRET);
-        TestUtils.setPrivateField(config, "clusterTlsEnabled", false);
-        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 1500L);
-        server = new ClusterServer(0, "127.0.0.1", null);
-        server.start();
-        serverPort = server.getPort();
+        cluster.start();
     }
 
     @AfterEach
     public void tearDown() throws Exception {
-        pool.closeAll();
-        server.stop();
-        TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
-        TestUtils.setPrivateField(config, "clusterSecret", origSecret);
-        TestUtils.setPrivateField(config, "clusterTlsEnabled", origTls);
-        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origAck);
-        TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
-        ownership.setSelfNodeId(null);
-        ownership.onMembershipChanged(new MembershipView(List.of()));
-        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(membershipService, "self", null);
+        cluster.stop();
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
-    }
-
-    private void configureMembership(int expectedSize, NodeInfo self, NodeInfo... others) throws Exception {
-        TestUtils.setPrivateField(config, "clusterExpectedSize", expectedSize);
-        final var members = new ConcurrentHashMap<String, NodeInfo>();
-        members.put(self.getNodeId(), self);
-        for (final var other : others) {
-            members.put(other.getNodeId(), other);
-        }
-        TestUtils.setPrivateField(membershipService, "members", members);
-        TestUtils.setPrivateField(membershipService, "self", self);
-        ownership.setSelfNodeId(self.getNodeId());
-        ownership.onMembershipChanged(membershipService.membershipView());
     }
 
     private String collectionOwnedByOther() {
@@ -144,11 +92,9 @@ public class ClusterRouterIntegrationTest {
         return eJson.toJson(request);
     }
 
-    // The forward ships the caller's own pipeline JSON, which is what lets a polymorphic operator - a
-    // SCRIPT one included - survive the trip and be re-parsed on the owner.
     @Test
     public void test_forwarded_aggregate_runs_the_script_on_the_owner() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", serverPort));
+        cluster.configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
         ReplicatedApplyHelper.apply(
@@ -177,7 +123,7 @@ public class ClusterRouterIntegrationTest {
 
     @Test
     public void test_router_forwards_read_to_owner() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", serverPort));
+        cluster.configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
         ReplicatedApplyHelper
@@ -193,7 +139,7 @@ public class ClusterRouterIntegrationTest {
 
     @Test
     public void test_router_executes_locally_when_self_owns() throws Exception {
-        configureMembership(1, node("self", serverPort));
+        cluster.configureMembership(1, node("self", cluster.serverPort()));
         final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setObject(doc("local"));
         assertNull(router.forward(request, rawSave(TestGlobals.COLL, "local"), false, null, null));
@@ -201,7 +147,7 @@ public class ClusterRouterIntegrationTest {
 
     @Test
     public void test_read_falls_back_to_local_when_owner_unreachable() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", 1));
+        cluster.configureMembership(2, node("self", 19990), node("other", 1));
         final var coll = collectionOwnedByOther();
         final var request = new FindByIdRequest(TestGlobals.DB, coll);
         request.set_id("x");
@@ -210,7 +156,7 @@ public class ClusterRouterIntegrationTest {
 
     @Test
     public void test_write_errors_when_owner_unreachable() throws Exception {
-        configureMembership(2, node("self", 19990), node("other", 1));
+        cluster.configureMembership(2, node("self", 19990), node("other", 1));
         final var coll = collectionOwnedByOther();
         final var request = new SaveRequest(TestGlobals.DB, coll);
         request.setObject(doc("y"));
@@ -221,10 +167,10 @@ public class ClusterRouterIntegrationTest {
 
     @Test
     public void test_forward_request_handler_executes_write_on_owner() throws Exception {
-        configureMembership(1, node("self", serverPort));
+        cluster.configureMembership(1, node("self", cluster.serverPort()));
         final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_REQUEST, SECRET, null, null);
         message.setForwardBody(ForwardBody.encode(rawSave(TestGlobals.COLL, "h1")));
-        final var response = pool.request(new NodeAddress("127.0.0.1", serverPort), message, 3000);
+        final var response = pool.request(cluster.serverAddress(), message, 3000);
 
         assertEquals(ClusterMessageType.FORWARD_RESPONSE, response.getType());
         assertTrue(ForwardBody.decode(response.getForwardBody()).contains("h1"));

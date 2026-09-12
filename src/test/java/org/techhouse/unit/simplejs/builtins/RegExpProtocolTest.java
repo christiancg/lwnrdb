@@ -6,11 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.simplejs.internal.Interpreter;
 import org.techhouse.simplejs.values.JsString;
 
-/**
- * The abstract operations behind the RegExp methods are deliberately generic: RegExpExec dispatches through
- * the receiver's own `exec`, SpeciesConstructor builds the matcher `matchAll` iterates with, and `flags` is
- * derived rather than the literal flag text - so overriding any of them changes what the string methods do.
- */
 public class RegExpProtocolTest {
     private static String str(String source) {
         return ((JsString) Interpreter.run(source)).getValue();
@@ -20,7 +15,6 @@ public class RegExpProtocolTest {
         return str("(() => { try { return String(" + expression + "); } catch (e) { return e.constructor.name; } })()");
     }
 
-    // `flags` is derived, so toString always reports the canonical dgimsuvy order
     @Test
     public void test_to_string_reports_canonical_flag_order() {
         assertEquals("/a/gimsuy", str("/a/yusmig.toString()"));
@@ -47,7 +41,6 @@ public class RegExpProtocolTest {
                 """));
     }
 
-    // SpeciesConstructor: matchAll builds its matcher from the receiver's constructor
     @Test
     public void test_match_all_iterates_through_a_subclass_matcher() {
         assertEquals("2", str("class MyRe extends RegExp {} [...'aa'.matchAll(new MyRe('a', 'g'))].length + ''"));

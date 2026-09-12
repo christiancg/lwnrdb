@@ -24,9 +24,7 @@ public final class DeleteOperationHelper {
     private DeleteOperationHelper() {
     }
 
-    // Executes a single DELETE against the real collection. The caller must already hold the collection
-    // write lock (the normal DELETE handler acquires it; a transaction commit already holds it). Shared
-    // by the normal write path and the transaction-commit replay so their behaviour cannot drift.
+    // The caller must already hold the collection write lock.
     public static OperationResponse executeDelete(DeleteRequest deleteRequest) throws Exception {
         final var dbName = deleteRequest.getDatabaseName();
         final var collName = deleteRequest.getCollectionName();
@@ -41,9 +39,8 @@ public final class DeleteOperationHelper {
             primaryKeyIndex.remove(idxEntry);
             primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
             cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
-            // Mark pending until the async index removal completes: the field index still maps the
-            // value to this id, so index-only reads that don't re-fetch the document (COUNT, DISTINCT)
-            // would otherwise count/surface the deleted doc. The DELETED event clears it.
+            // Pending until the async DELETED event clears it: the field index still maps the value to
+            // this id, so index-only reads (COUNT, DISTINCT) would otherwise surface the deleted doc.
             pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
             taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
             listenManager.markDirty(dbName, collName);

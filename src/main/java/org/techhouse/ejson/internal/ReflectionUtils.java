@@ -51,12 +51,18 @@ public class ReflectionUtils {
         }
     }
 
+    // Static fields are skipped: including them would put every `public static final` on the wire and
+    // then try to assign them back from the document.
     private static <T> Field[] internalGetFields(Class<T> tClass) {
-        final var fieldList = List.of(tClass.getDeclaredFields());
-        fieldList.forEach(field -> field.setAccessible(true));
-        final List<Field> fields = new ArrayList<>(fieldList);
+        final List<Field> fields = new ArrayList<>();
+        for (final var field : tClass.getDeclaredFields()) {
+            if (!Modifier.isStatic(field.getModifiers())) {
+                field.setAccessible(true);
+                fields.add(field);
+            }
+        }
         final var superClass = tClass.getSuperclass();
-        if (!superClass.equals(Object.class)) {
+        if (!superClass.equals(Object.class) && !superClass.equals(Record.class)) {
             fields.addAll(List.of(getFields(superClass)));
         }
         return fields.toArray(Field[]::new);
@@ -112,6 +118,40 @@ public class ReflectionUtils {
         }
     }
 
+    public static <T> T createRecordInstance(Class<T> tClass, JsonObject parsed) throws Exception {
+        final var components = tClass.getRecordComponents();
+        final var componentTypes = new Class<?>[components.length];
+        final var arguments = new Object[components.length];
+        for (var i = 0; i < components.length; i++) {
+            final var componentType = components[i].getType();
+            componentTypes[i] = componentType;
+            final var name = components[i].getName();
+            final var value = parsed.has(name)
+                    ? cast(componentType, parsed.get(name), components[i].getGenericType())
+                    : null;
+            arguments[i] = value == null ? defaultComponentValue(componentType) : value;
+        }
+        final var constructor = tClass.getDeclaredConstructor(componentTypes);
+        constructor.setAccessible(true);
+        return tClass.cast(constructor.newInstance(arguments));
+    }
+
+    private static Object defaultComponentValue(Class<?> componentType) {
+        if (!componentType.isPrimitive()) {
+            return null;
+        }
+        return switch (componentType.getName()) {
+            case "boolean" -> false;
+            case "char" -> '\0';
+            case "byte" -> (byte) 0;
+            case "short" -> (short) 0;
+            case "int" -> 0;
+            case "long" -> 0L;
+            case "float" -> 0.0f;
+            default -> 0.0d;
+        };
+    }
+
     public static <T> T cast(Class<T> parameterType, JsonBaseElement fieldValue, Type genericType) throws Exception {
         final var jsonType = fieldValue.getJsonType();
         if (jsonType == JsonBaseElement.JsonType.NULL) {
@@ -123,7 +163,7 @@ public class ReflectionUtils {
             case BOOLEAN -> fieldValue.asJsonBoolean().getValue();
             case STRING, CUSTOM -> fieldValue.asJsonString().getValue();
             case NUMBER -> fieldValue.asJsonNumber().getValue();
-            case SYNTAX -> null; // should never come here
+            case SYNTAX -> null;
             default -> throw new IllegalStateException("Unexpected value: " + jsonType);
         };
         if (parameterType.isEnum() && jsonValue instanceof String) {
@@ -165,8 +205,8 @@ public class ReflectionUtils {
         return parameterType.cast(jsonValue);
     }
 
-    // A primitive field is set reflectively, which only unboxes — the box has to already match the
-    // field's type, so a double-valued number reaching a long field must be narrowed here.
+    // Reflective field set only unboxes, so the box must already match the field's type: a double-valued
+    // number reaching a long field has to be narrowed here.
     private static Object toPrimitiveValue(Class<?> parameterType, Object jsonValue) {
         if (!(jsonValue instanceof Number number)) {
             return jsonValue;

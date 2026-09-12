@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
+import java.util.function.ToIntBiFunction;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.data.FieldIndexEntry;
@@ -19,10 +20,10 @@ public final class SearchUtils {
         return switch (operatorType) {
             case EQUALS -> findingEquals(entries, value);
             case NOT_EQUALS -> findingNotEquals(entries, value);
-            case GREATER_THAN -> findingGreaterThan(entries, value);
-            case GREATER_THAN_EQUALS -> findingGreaterThanEquals(entries, value);
-            case SMALLER_THAN -> findingLessThan(entries, value);
-            case SMALLER_THAN_EQUALS -> findingLessThanEquals(entries, value);
+            case GREATER_THAN -> findingRange(entries, value, GreaterSmallerEqualsType.GREATER_THAN);
+            case GREATER_THAN_EQUALS -> findingRange(entries, value, GreaterSmallerEqualsType.GREATER_THAN_EQUALS);
+            case SMALLER_THAN -> findingRange(entries, value, GreaterSmallerEqualsType.SMALLER_THAN);
+            case SMALLER_THAN_EQUALS -> findingRange(entries, value, GreaterSmallerEqualsType.SMALLER_THAN_EQUALS);
             case IN, NOT_IN -> throw new UnsupportedOperationException();
             case CONTAINS -> findingContains(entries, value);
         };
@@ -62,76 +63,87 @@ public final class SearchUtils {
                 .toList();
     }
 
-    private static <T> Set<String> findingGreaterThan(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Number n) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), n.doubleValue(),
-                    GreaterSmallerEqualsType.GREATER_THAN);
-            if (index >= 0) {
-                return toIdSet(entries, index, entries.size());
-            }
-        } else if (value instanceof JsonCustom<?> as) {
-            //noinspection unchecked
-            int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
-                    GreaterSmallerEqualsType.GREATER_THAN);
-            if (index >= 0) {
-                return toIdSet(entries, index, entries.size());
-            }
+    private static <T> Set<String> findingRange(List<FieldIndexEntry<T>> entries, T value,
+            GreaterSmallerEqualsType type) {
+        final int index = boundaryIndex(entries, value, type);
+        if (index < 0) {
+            return Set.of();
         }
-        return Set.of();
+        return type == GreaterSmallerEqualsType.GREATER_THAN || type == GreaterSmallerEqualsType.GREATER_THAN_EQUALS
+                ? toIdSet(entries, index, entries.size())
+                : toIdSet(entries, 0, index + 1);
     }
 
-    private static <T> Set<String> findingGreaterThanEquals(List<FieldIndexEntry<T>> entries, T value) {
+    private static <T> int boundaryIndex(List<FieldIndexEntry<T>> entries, T value, GreaterSmallerEqualsType type) {
         if (value instanceof Number n) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), n.doubleValue(),
-                    GreaterSmallerEqualsType.GREATER_THAN_EQUALS);
-            if (index >= 0) {
-                return toIdSet(entries, index, entries.size());
-            }
-        } else if (value instanceof JsonCustom<?> as) {
-            //noinspection unchecked
-            int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
-                    GreaterSmallerEqualsType.GREATER_THAN_EQUALS);
-            if (index >= 0) {
-                return toIdSet(entries, index, entries.size());
-            }
+            return binarySearchBoundary(castToDoubleList(entries), n.doubleValue(), type, Double::compareTo);
         }
-        return Set.of();
+        if (value instanceof JsonCustom<?> as) {
+            @SuppressWarnings("unchecked")
+            final var customEntries = (List<FieldIndexEntry<JsonCustom<Object>>>) (List<?>) castToJsonCustomList(
+                    entries, as.getClass());
+            @SuppressWarnings("unchecked")
+            final var target = (JsonCustom<Object>) as;
+            return binarySearchBoundary(customEntries, target, type,
+                    (entryValue, operand) -> entryValue.compare(operand.getCustomValue()));
+        }
+        return -1;
     }
 
-    private static <T> Set<String> findingLessThan(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Number n) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), n.doubleValue(),
-                    GreaterSmallerEqualsType.SMALLER_THAN);
-            if (index >= 0) {
-                return toIdSet(entries, 0, ++index);
+    // Relies on the entries being sorted by value, which FieldIndexLoader guarantees.
+    private static <V> int binarySearchBoundary(List<FieldIndexEntry<V>> entries, V value,
+            GreaterSmallerEqualsType type, ToIntBiFunction<V, V> compare) {
+        int start = 0;
+        int end = entries.size() - 1;
+        if (end == 0) {
+            return -1;
+        }
+        switch (type) {
+            case SMALLER_THAN -> {
+                if (compare.applyAsInt(entries.get(end).getValue(), value) < 0) {
+                    return end;
+                }
             }
-        } else if (value instanceof JsonCustom<?> as) {
-            //noinspection unchecked
-            int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
-                    GreaterSmallerEqualsType.SMALLER_THAN);
-            if (index >= 0) {
-                return toIdSet(entries, 0, ++index);
+            case SMALLER_THAN_EQUALS -> {
+                if (compare.applyAsInt(entries.get(end).getValue(), value) <= 0) {
+                    return end;
+                }
+            }
+            case GREATER_THAN -> {
+                if (compare.applyAsInt(entries.get(start).getValue(), value) > 0) {
+                    return start;
+                }
+            }
+            case GREATER_THAN_EQUALS -> {
+                if (compare.applyAsInt(entries.get(start).getValue(), value) >= 0) {
+                    return start;
+                }
+            }
+            default -> {
             }
         }
-        return Set.of();
-    }
-
-    private static <T> Set<String> findingLessThanEquals(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof Number n) {
-            int index = internalGreaterSmallerEquals(castToDoubleList(entries), n.doubleValue(),
-                    GreaterSmallerEqualsType.SMALLER_THAN_EQUALS);
-            if (index >= 0) {
-                return toIdSet(entries, 0, ++index);
-            }
-        } else if (value instanceof JsonCustom<?> as) {
-            //noinspection unchecked
-            int index = internalGreaterSmallerEquals(castToJsonCustomList(entries, as.getClass()), as,
-                    GreaterSmallerEqualsType.SMALLER_THAN_EQUALS);
-            if (index >= 0) {
-                return toIdSet(entries, 0, ++index);
+        final var searchingSmaller = type == GreaterSmallerEqualsType.SMALLER_THAN
+                || type == GreaterSmallerEqualsType.SMALLER_THAN_EQUALS;
+        int ans = -1;
+        while (start <= end) {
+            final int mid = (start + end) / 2;
+            final int cmp = compare.applyAsInt(entries.get(mid).getValue(), value);
+            final boolean overshot = searchingSmaller
+                    ? (type == GreaterSmallerEqualsType.SMALLER_THAN ? cmp >= 0 : cmp > 0)
+                    : (type == GreaterSmallerEqualsType.GREATER_THAN ? cmp <= 0 : cmp < 0);
+            if (searchingSmaller == overshot) {
+                end = mid - 1;
+                if (!searchingSmaller) {
+                    ans = mid;
+                }
+            } else {
+                start = mid + 1;
+                if (searchingSmaller) {
+                    ans = mid;
+                }
             }
         }
-        return Set.of();
+        return ans;
     }
 
     private static <T> Set<String> toIdSet(List<FieldIndexEntry<T>> entries, int start, int foundIndex) {
@@ -167,141 +179,7 @@ public final class SearchUtils {
         return Set.of();
     }
 
-    private static <T extends JsonCustom<K>, K> int internalGreaterSmallerEquals(List<FieldIndexEntry<T>> entries,
-            JsonCustom<K> value, GreaterSmallerEqualsType type) {
-        int start = 0;
-        int end = entries.size() - 1;
-        // Minimum size of the array should be 1
-        if (end == 0) {
-            return -1;
-        }
-        // If target lies beyond the max element, then the index of strictly smaller
-        // value than target should be (end - 1)
-        switch (type) {
-            case SMALLER_THAN -> {
-                var entry = entries.get(end);
-                if (value.compare(entry.getValue().getCustomValue()) > 0) {
-                    return end;
-                }
-            }
-            case SMALLER_THAN_EQUALS -> {
-                var entry = entries.get(end);
-                if (value.compare(entry.getValue().getCustomValue()) >= 0) {
-                    return end;
-                }
-            }
-            case GREATER_THAN -> {
-                var entry = entries.get(start);
-                if (value.compare(entry.getValue().getCustomValue()) < 0) {
-                    return start;
-                }
-            }
-            case GREATER_THAN_EQUALS -> {
-                var entry = entries.get(start);
-                if (value.compare(entry.getValue().getCustomValue()) <= 0) {
-                    return start;
-                }
-            }
-            default -> {
-            }
-        }
-        int ans = -1;
-        if (type == GreaterSmallerEqualsType.SMALLER_THAN || type == GreaterSmallerEqualsType.SMALLER_THAN_EQUALS) {
-            while (start <= end) {
-                int mid = (start + end) / 2; // Move to the left side if the target is smaller
-                final var midValue = entries.get(mid).getValue();
-                if (type == GreaterSmallerEqualsType.SMALLER_THAN && midValue.compare(value.getCustomValue()) >= 0
-                        || midValue.compare(value.getCustomValue()) > 0) {
-                    end = mid - 1;
-                } else { // Move right side
-                    ans = mid;
-                    start = mid + 1;
-                }
-            }
-        } else {
-            while (start <= end) {
-                int mid = (start + end) / 2;
-                final var midValue = entries.get(mid).getValue();
-                // Move to right side if target is greater.
-                if (type == GreaterSmallerEqualsType.GREATER_THAN && midValue.compare(value.getCustomValue()) <= 0
-                        || midValue.compare(value.getCustomValue()) < 0) {
-                    start = mid + 1;
-                } else { // Move left side.
-                    ans = mid;
-                    end = mid - 1;
-                }
-            }
-        }
-        return ans;
-    }
-
-    private static int internalGreaterSmallerEquals(List<FieldIndexEntry<Double>> entries, Double value,
-            GreaterSmallerEqualsType type) {
-        int start = 0;
-        int end = entries.size() - 1;
-        // Minimum size of the array should be 1
-        if (end == 0) {
-            return -1;
-        }
-        // If target lies beyond the max element, then the index of strictly smaller
-        // value than target should be (end - 1)
-        switch (type) {
-            case SMALLER_THAN -> {
-                var entry = entries.get(end);
-                if (value > entry.getValue()) {
-                    return end;
-                }
-            }
-            case SMALLER_THAN_EQUALS -> {
-                var entry = entries.get(end);
-                if (value >= entry.getValue()) {
-                    return end;
-                }
-            }
-            case GREATER_THAN -> {
-                var entry = entries.get(start);
-                if (value < entry.getValue()) {
-                    return start;
-                }
-            }
-            case GREATER_THAN_EQUALS -> {
-                var entry = entries.get(start);
-                if (value <= entry.getValue()) {
-                    return start;
-                }
-            }
-            default -> {
-            }
-        }
-        int ans = -1;
-        if (type == GreaterSmallerEqualsType.SMALLER_THAN || type == GreaterSmallerEqualsType.SMALLER_THAN_EQUALS) {
-            while (start <= end) {
-                int mid = (start + end) / 2; // Move to the left side if the target is smaller
-                final var midValue = entries.get(mid).getValue();
-                if (type == GreaterSmallerEqualsType.SMALLER_THAN && midValue >= value || midValue > value) {
-                    end = mid - 1;
-                } else { // Move right side
-                    ans = mid;
-                    start = mid + 1;
-                }
-            }
-        } else {
-            while (start <= end) {
-                int mid = (start + end) / 2;
-                final var midValue = entries.get(mid).getValue();
-                // Move to right side if target is greater.
-                if (type == GreaterSmallerEqualsType.GREATER_THAN && midValue <= value || midValue < value) {
-                    start = mid + 1;
-                } else { // Move left side.
-                    ans = mid;
-                    end = mid - 1;
-                }
-            }
-        }
-        return ans;
-    }
-
     private enum GreaterSmallerEqualsType {
-        GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS,
+        GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS
     }
 }

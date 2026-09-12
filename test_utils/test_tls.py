@@ -19,14 +19,14 @@ The server lifecycle is managed via a tracked subprocess handle (not pgrep), so
 stopping it never touches an unrelated LWNRDB process.
 """
 
-import json
 import os
 import socket
 import ssl
-import subprocess
 import sys
 import tempfile
-import time
+
+import base_utils as bu
+from base_utils import Conn, check, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("TLS_TEST_PORT", "9443"))
@@ -34,61 +34,8 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 KEYSTORE_PASSWORD = "changeit"
 
-PASS = "\033[92mPASS\033[0m"
-FAIL = "\033[91mFAIL\033[0m"
 
-failures = 0
-
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-# Server launch is configurable: by default the suite runs against the JAR, but
-# setting LWNRDB_SERVER_BIN to a path (e.g. the GraalVM native executable) makes
-# it launch that binary instead. Native images honor -Xmx as a runtime arg.
-SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
-
-
-def server_argv(xmx: str):
-    if SERVER_BIN:
-        return [SERVER_BIN, f"-Xmx{xmx}"]
-    return ["java", f"-Xmx{xmx}", "-jar", os.path.join(REPO_ROOT, JAR)]
-
-
-# ── reporting helpers (mirrors the other suites) ────────────────────────────
-
-def section(title: str):
-    print(f"\n{'─' * 60}")
-    print(f"  {title}")
-    print(f"{'─' * 60}")
-
-
-def check(label: str, ok: bool, detail: str = ""):
-    global failures
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    if detail:
-        print(f"         {detail}")
-    if not ok:
-        failures += 1
-
-
-def check_status(label: str, response: dict, expected_status: str):
-    actual = response.get("status")
-    check(label, actual == expected_status,
-          f"expected={expected_status}  got={actual}  msg={response.get('message', '')!r}")
-
-
-# ── protocol helper ─────────────────────────────────────────────────────────
-
-def send(s, f, payload: dict) -> dict:
-    try:
-        s.sendall((json.dumps(payload) + "\n").encode())
-    except (BrokenPipeError, OSError):
-        return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-    raw = f.readline().decode().strip()
-    if not raw:
-        return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-    return json.loads(raw)
+bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
 
 # ── TLS client helpers ──────────────────────────────────────────────────────
@@ -125,49 +72,6 @@ def write_config(work_dir: str):
         fp.write(cfg)
 
 
-def port_open() -> bool:
-    try:
-        with socket.create_connection((HOST, PORT), timeout=0.5):
-            return True
-    except OSError:
-        return False
-
-
-def start_server(work_dir: str, log_path: str):
-    log = open(log_path, "ab")
-    proc = subprocess.Popen(server_argv("512m"),
-                            stdout=log, stderr=log, cwd=work_dir)
-    deadline = time.time() + 60.0
-    while time.time() < deadline:
-        if port_open():
-            # Give the accept loop a beat to be fully ready for handshakes.
-            time.sleep(0.5)
-            return proc
-        if proc.poll() is not None:
-            break
-        time.sleep(0.2)
-    _dump_log(log_path)
-    proc.kill()
-    raise RuntimeError("TLS server did not come up in time")
-
-
-def stop_server(proc):
-    if proc is None:
-        return
-    proc.terminate()
-    try:
-        proc.wait(timeout=30)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-
-
-def _dump_log(log_path: str):
-    try:
-        with open(log_path, "rb") as fp:
-            tail = fp.read()[-4000:].decode(errors="replace")
-        print(f"--- server log tail ---\n{tail}\n--- end ---", file=sys.stderr)
-    except OSError:
-        pass
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -220,36 +124,33 @@ def test_tls_roundtrip():
               peer_cert is not None and len(peer_cert) > 0,
               f"cipher={s.cipher()[0] if s.cipher() else 'none'}")
 
-        f = s.makefile("rb")
-        check_status("AUTHENTICATE as admin over TLS",
-                     send(s, f, {"type": "AUTHENTICATE",
-                                 "username": ADMIN_USERNAME, "password": ADMIN_PASSWORD}),
-                     "OK")
+        c = Conn(sock=s)
+        check_status("AUTHENTICATE as admin over TLS", c.authenticate(), "OK")
         check_status("CREATE_DATABASE over TLS",
-                     send(s, f, {"type": "CREATE_DATABASE", "databaseName": "tls_db"}),
+                     c.send({"type": "CREATE_DATABASE", "databaseName": "tls_db"}),
                      "OK")
         check_status("CREATE_COLLECTION over TLS",
-                     send(s, f, {"type": "CREATE_COLLECTION",
-                                 "databaseName": "tls_db", "collectionName": "items"}),
+                     c.send({"type": "CREATE_COLLECTION",
+                             "databaseName": "tls_db", "collectionName": "items"}),
                      "OK")
         check_status("SAVE over TLS",
-                     send(s, f, {"type": "SAVE", "databaseName": "tls_db", "collectionName": "items",
-                                 "object": {"_id": "doc1", "value": 42}}),
+                     c.send({"type": "SAVE", "databaseName": "tls_db", "collectionName": "items",
+                             "object": {"_id": "doc1", "value": 42}}),
                      "OK")
         check_status("FIND_BY_ID over TLS",
-                     send(s, f, {"type": "FIND_BY_ID", "databaseName": "tls_db",
-                                 "collectionName": "items", "_id": "doc1"}),
+                     c.send({"type": "FIND_BY_ID", "databaseName": "tls_db",
+                             "collectionName": "items", "_id": "doc1"}),
                      "OK")
         check_status("AGGREGATE (COUNT) over TLS",
-                     send(s, f, {"type": "AGGREGATE", "databaseName": "tls_db", "collectionName": "items",
-                                 "aggregationSteps": [{"type": "COUNT"}]}),
+                     c.send({"type": "AGGREGATE", "databaseName": "tls_db", "collectionName": "items",
+                             "aggregationSteps": [{"type": "COUNT"}]}),
                      "OK")
         check_status("DELETE over TLS",
-                     send(s, f, {"type": "DELETE", "databaseName": "tls_db",
-                                 "collectionName": "items", "_id": "doc1"}),
+                     c.send({"type": "DELETE", "databaseName": "tls_db",
+                             "collectionName": "items", "_id": "doc1"}),
                      "OK")
         check_status("DROP_DATABASE over TLS (cleanup)",
-                     send(s, f, {"type": "DROP_DATABASE", "databaseName": "tls_db"}),
+                     c.send({"type": "DROP_DATABASE", "databaseName": "tls_db"}),
                      "OK")
     finally:
         s.close()
@@ -277,8 +178,7 @@ def test_plaintext_rejected():
     survived = False
     try:
         with tls_socket(verify=False) as s:
-            f = s.makefile("rb")
-            r = send(s, f, {"type": "LIST_DATABASES"})
+            r = Conn(sock=s).send({"type": "LIST_DATABASES"})
             survived = r.get("status") == "OK"
     except OSError:
         survived = False
@@ -290,20 +190,10 @@ def test_plaintext_rejected():
 # ══════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═" * 60)
-    print("  LWNRDB — TLS / secure connections test suite")
-    print("═" * 60)
+    bu.banner("TLS / secure connections test suite")
 
-    if SERVER_BIN:
-        if not os.path.isfile(SERVER_BIN):
-            print(f"\n[ERROR] Server binary not found at {SERVER_BIN} (LWNRDB_SERVER_BIN). "
-                  f"Build it first: mvn -Pnative package -DskipTests\n")
-            sys.exit(1)
-    else:
-        jar = os.path.join(REPO_ROOT, JAR)
-        if not os.path.isfile(jar):
-            print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
-            sys.exit(1)
+    if not bu.server_binary_ready():
+        sys.exit(1)
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-tls-")
     log_path = os.path.join(work_dir, "server.log")
@@ -313,23 +203,15 @@ def main():
 
     proc = None
     try:
-        proc = start_server(work_dir, log_path)
+        proc = bu.start_server(work_dir, log_path)
         test_keystore_generated(work_dir, log_path)
         test_self_signed_is_untrusted()
         test_tls_roundtrip()
         test_plaintext_rejected()
     finally:
-        stop_server(proc)
+        bu.stop_server(proc, wait_for_port=False)
 
-    print("\n" + "═" * 60)
-    if failures == 0:
-        print("  \033[92mAll checks passed.\033[0m")
-    else:
-        print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
-        _dump_log(log_path)
-    print("═" * 60 + "\n")
-
-    sys.exit(0 if failures == 0 else 1)
+    bu.summary(on_failure=lambda: bu.dump_log(log_path))
 
 
 if __name__ == "__main__":

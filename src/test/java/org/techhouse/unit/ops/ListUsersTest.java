@@ -23,7 +23,6 @@ public class ListUsersTest {
     @BeforeAll
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
-        // Create some test users
         createUser("Alice", true);
         createUser("bob", false);
         createUser("charlie", false);
@@ -160,7 +159,6 @@ public class ListUsersTest {
         final var msg = "{\"type\":\"LIST_USERS\",\"aggregationSteps\":[" + "{\"type\":\"SKIP\",\"skip\":1}" + "]}";
         final var req = (ListUsersRequest) RequestParser.parseRequest(msg);
         final var resp = (ListUsersResponse) processor.processMessage(req);
-        // at least 3 users created; skipping 1 should still return some
         assertEquals(OperationStatus.OK, resp.getStatus());
     }
 

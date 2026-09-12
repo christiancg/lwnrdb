@@ -113,7 +113,6 @@ public class TriggerOperationHelperTest {
         assertTrue(response.getMessage().contains("document"));
     }
 
-    // A trigger pointing at nothing is a configuration error, not a run-time surprise
     @Test
     public void test_save_rejects_missing_procedure() throws Exception {
         final var request = new SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "t", List.of("CREATED"),
@@ -165,7 +164,6 @@ public class TriggerOperationHelperTest {
         assertEquals(ACTOR, cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst().getDefiner());
     }
 
-    // An edit must not leave a trigger running with a previous installer's authority
     @Test
     public void test_re_save_re_stamps_definer() throws Exception {
         save(request("audit"));
@@ -173,7 +171,6 @@ public class TriggerOperationHelperTest {
         assertEquals("bob", cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst().getDefiner());
     }
 
-    // Two nodes must never disagree about a trigger's definer
     @Test
     public void test_definer_is_stamped_on_the_request_for_deterministic_re_execution() throws Exception {
         final var request = request("audit");
@@ -181,7 +178,6 @@ public class TriggerOperationHelperTest {
         assertEquals(ACTOR, request.getStampedDefiner());
         assertEquals(1L, request.getStampedVersion());
         assertTrue(request.getStampedUpdatedAt() > 0);
-        // Re-executing the stamped request on a "peer" writes the same record, including the definer.
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
         TriggerOperationHelper.executeSave(request, "peer-has-no-acting-user");
         final var replicated = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();

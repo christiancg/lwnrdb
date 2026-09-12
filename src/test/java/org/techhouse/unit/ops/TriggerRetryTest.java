@@ -24,11 +24,6 @@ import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-/**
- * The retry/dead-letter state machine as it is recorded, and the operator surface over it. The dispatcher's
- * own decisions are exercised end-to-end in {@code TriggerExactlyOnceTest}; this covers the record and the
- * resolution.
- */
 public class TriggerRetryTest {
     private static final Configuration configuration = Configuration.getInstance();
 
@@ -122,7 +117,6 @@ public class TriggerRetryTest {
         assertEquals(List.of("doc1"), entry.getIds());
     }
 
-    // A dead letter is waiting for a human, so the pending clock must not sweep it away first.
     @Test
     public void test_the_two_retentions_apply_to_the_two_states() throws Exception {
         final var pendingRun = recordRun("t4");
@@ -164,8 +158,6 @@ public class TriggerRetryTest {
         assertNull(firstChunk(runId));
     }
 
-    // The operator has decided the cause is fixed, so the exhausted count must not dead-letter it again on
-    // the first failure.
     @Test
     public void test_replay_resets_the_attempt_count_and_status() throws Exception {
         final var runId = recordRun("t9", EventType.DELETED);
@@ -199,7 +191,6 @@ public class TriggerRetryTest {
         assertEquals(0L, org.techhouse.ops.TriggerDispatcher.backoffFor(1));
     }
 
-    // The wire surface over the same state: the operations an operator actually issues.
     @Test
     public void test_list_trigger_runs_operation_reports_the_rows() {
         final var runId = recordRun("t10");
@@ -241,8 +232,6 @@ public class TriggerRetryTest {
         assertNull(firstChunk(runId));
     }
 
-    // An id nobody holds is not an error: the operator asked every member and none answered - the
-    // treatment CANCEL_SCRIPT gives an already-finished run.
     @Test
     public void test_resolve_trigger_run_operation_reports_an_unknown_run_as_unresolved() {
         final var request = new ResolveTriggerRunRequest();
@@ -256,8 +245,6 @@ public class TriggerRetryTest {
         assertFalse(response.isResolved());
     }
 
-    // With the run log off there are no records to report or act on, and neither surface may pretend
-    // otherwise.
     @Test
     public void test_the_operator_surface_is_empty_when_the_run_log_is_disabled() throws Exception {
         final var runId = recordRun("t14");
@@ -270,8 +257,6 @@ public class TriggerRetryTest {
         assertNotNull(firstChunk(runId), "the record itself is untouched");
     }
 
-    // A CREATED run replays by re-reading its documents, so a run whose documents are gone can never apply
-    // and is discarded rather than left for an operator to retry forever.
     @Test
     public void test_replaying_a_run_whose_documents_are_gone_discards_it() throws Exception {
         final var runId = recordRun("t15", EventType.CREATED);
@@ -281,8 +266,6 @@ public class TriggerRetryTest {
         assertNull(firstChunk(runId));
     }
 
-    // Reached from a peer as well as from the validated wire request, so an unrecognised decision must be
-    // refused rather than silently replaying.
     @Test
     public void test_an_unknown_decision_is_refused() throws Exception {
         final var runId = recordRun("t16");

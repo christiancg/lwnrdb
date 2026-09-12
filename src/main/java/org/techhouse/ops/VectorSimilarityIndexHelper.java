@@ -15,10 +15,8 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.utils.VectorUtils;
 
-// Approximate (ANN) candidate pre-filter for the vector "nearest" operator: it scans the neighbourhood
-// of the query's SimHash signature in the signature-sorted index and returns candidate ids, which the
-// caller re-scores exactly. Being locality-sensitive but not exact, it may miss matches outside the
-// scanned neighbourhood; an "exact" operator (candidateIds returns null) forces a full scan instead.
+// Locality-sensitive (ANN) pre-filter: it may miss matches outside the scanned neighbourhood, so the
+// caller re-scores candidates exactly; an "exact" operator returns null here and forces a full scan.
 public final class VectorSimilarityIndexHelper {
     private VectorSimilarityIndexHelper() {
     }
@@ -27,11 +25,9 @@ public final class VectorSimilarityIndexHelper {
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
-    // Gather this many candidates per K (with a floor) so the exact re-score has enough to choose from.
     private static final int CANDIDATE_MULTIPLIER = 10;
     private static final int MIN_CANDIDATES = 100;
 
-    // Null when not index-accelerable (not nearest, an exact query, or no index) so the caller scans.
     public static Set<String> candidateIds(CustomOperator operator, String dbName, String collName) throws IOException {
         if (!JsonVector.OPERATOR_NEAREST.equals(operator.getCustomOperatorName()) || isExact(operator)) {
             return null;
@@ -67,7 +63,6 @@ public final class VectorSimilarityIndexHelper {
         return candidates;
     }
 
-    // Expands outward from the query's insertion point until `budget` ids are gathered.
     private static Set<String> collectNeighbourhood(List<FieldIndexEntry<JsonVector>> entries, double[] query,
             int budget) {
         final var querySignature = VectorUtils.simHash(query, JsonVector.SIMHASH_BITS);
@@ -91,7 +86,6 @@ public final class VectorSimilarityIndexHelper {
         return ids;
     }
 
-    // First entry whose signature is >= the query signature (binary search over the sorted list).
     private static int lowerBound(List<FieldIndexEntry<JsonVector>> entries, String signature) {
         var lo = 0;
         var hi = entries.size();

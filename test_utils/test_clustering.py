@@ -39,9 +39,6 @@ point of clustering is that any node serves any request transparently):
   * node rejoin (restart it, the cluster serves consistent data again).
 """
 
-from __future__ import annotations
-
-import json
 import os
 import socket
 import subprocess
@@ -50,6 +47,9 @@ import tempfile
 import threading
 import time
 from collections.abc import Callable
+
+import base_utils as bu
+from base_utils import Conn, check, check_code, check_field, check_status, section
 
 HOST = "127.0.0.1"
 BASE_CLIENT_PORT = int(os.environ.get("CLUSTER_TEST_CLIENT_PORT", "8991"))
@@ -60,144 +60,29 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 CLUSTER_SECRET = "integration-cluster-secret"
 
-PASS = "\033[92mPASS\033[0m"
-FAIL = "\033[91mFAIL\033[0m"
+# Kept as a constant because a test has to reason in gossip rounds: a dead node's NodeInfo stays
+# frozen at whatever it last published, and how long that takes to happen is this interval.
+GOSSIP_INTERVAL_S = 0.5
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-
-# Server launch is configurable: by default the suite runs against the JAR, but
-# setting LWNRDB_SERVER_BIN to a path (e.g. the GraalVM native executable) makes
-# it launch that binary instead. Native images honor -Xmx as a runtime arg.
-SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
+# How the crash-during-placement test fills the short window between killing a node and the driver
+# dropping it: concurrent connections, for long enough to cover suspectTimeoutMs several times over.
+HAMMER_CONNECTIONS = 4
+HAMMER_SECONDS = 5.0
 
 
-def server_argv(xmx: str):
-    if SERVER_BIN:
-        return [SERVER_BIN, f"-Xmx{xmx}"]
-    return ["java", f"-Xmx{xmx}", "-jar", os.path.join(REPO_ROOT, JAR)]
+bu.configure(host=HOST, port=BASE_CLIENT_PORT,
+             username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
-failures = 0
 nodes: list["Node"] = []
 
-
-# ── reporting helpers (mirror the other suites) ──────────────────────────────
-
-def section(title: str):
-    print(f"\n{'─' * 60}")
-    print(f"  {title}")
-    print(f"{'─' * 60}")
-
-
-def check(label: str, response: dict, expected_status: str):
-    global failures
-    actual = response.get("status")
-    ok = actual == expected_status
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    print(f"         expected={expected_status}  got={actual}  msg={response.get('message', '')!r}")
-    if not ok:
-        failures += 1
-
-
-def check_true(label: str, ok: bool, detail: str = ""):
-    global failures
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    if detail:
-        print(f"         {detail}")
-    if not ok:
-        failures += 1
-
-
-def check_code(label: str, response: dict, expected_status: str, expected_code: str):
-    global failures
-    actual_status = response.get("status")
-    actual_code = response.get("errorCode")
-    ok = actual_status == expected_status and actual_code == expected_code
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    print(f"         expected={expected_status}/{expected_code}  "
-          f"got={actual_status}/{actual_code}  msg={response.get('message', '')!r}")
-    if not ok:
-        failures += 1
-
-
-def _dig(obj, path: str):
-    cur = obj
-    for part in path.split("."):
-        if cur is None:
-            return None
-        if part.isdigit() and isinstance(cur, list):
-            idx = int(part)
-            cur = cur[idx] if 0 <= idx < len(cur) else None
-        elif isinstance(cur, dict):
-            cur = cur.get(part)
-        else:
-            return None
-    return cur
-
-
-def check_field(label: str, response: dict, path: str, expected):
-    global failures
-    actual = _dig(response, path)
-    ok = actual == expected
-    icon = PASS if ok else FAIL
-    print(f"  [{icon}] {label}")
-    print(f"         path={path}  expected={expected!r}  got={actual!r}")
-    if not ok:
-        failures += 1
 
 
 # ── protocol helper ──────────────────────────────────────────────────────────
 
-def send(s, f, payload: dict) -> dict:
-    try:
-        s.sendall((json.dumps(payload) + "\n").encode())
-    except (BrokenPipeError, OSError):
-        return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-    try:
-        raw = f.readline().decode().strip()
-    except (OSError, ConnectionError):
-        return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-    if not raw:
-        return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return {"status": "ERROR", "message": raw}
-
-
-class Conn:
-    """A single client connection to a node (by client port)."""
-
-    def __init__(self, port: int):
-        self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.s.settimeout(20)
-        self.s.connect((HOST, port))
-        self.f = self.s.makefile("rb")
-
-    def __enter__(self):
-        return self.s, self.f
-
-    def __exit__(self, *_):
-        self.close()
-
-    def close(self):
-        try:
-            self.f.close()
-        except OSError:
-            pass
-        try:
-            self.s.close()
-        except OSError:
-            pass
-
-
 def authed(port: int) -> Conn:
     """Open a connection to the given client port and authenticate as admin."""
-    conn = Conn(port)
-    r = send(conn.s, conn.f, {"type": "AUTHENTICATE",
+    conn = Conn(port=port)
+    r = conn.send({"type": "AUTHENTICATE",
                               "username": ADMIN_USERNAME, "password": ADMIN_PASSWORD})
     if r.get("status") != "OK":
         conn.close()
@@ -210,7 +95,7 @@ def authed(port: int) -> Conn:
 def op(port: int, payload: dict) -> dict:
     conn = authed(port)
     try:
-        return send(conn.s, conn.f, payload)
+        return conn.send(payload)
     finally:
         conn.close()
 
@@ -273,7 +158,7 @@ def ids_of(response) -> list:
 def run_script(port, script, db=None, conn=None) -> dict:
     payload = {"type": "RUN_SCRIPT", "databaseName": db or DB, "script": script}
     if conn is not None:
-        return send(conn.s, conn.f, payload)
+        return conn.send(payload)
     return op(port, payload)
 
 
@@ -302,8 +187,8 @@ class BackgroundRun:
     def _run(self, port, script, db):
         conn = authed(port)
         try:
-            self.response = send(conn.s, conn.f,
-                                 {"type": "RUN_SCRIPT", "databaseName": db or DB, "script": script})
+            self.response = conn.send(
+                {"type": "RUN_SCRIPT", "databaseName": db or DB, "script": script})
         finally:
             conn.close()
 
@@ -320,12 +205,18 @@ def cancel_script(port, run_id) -> dict:
     return op(port, {"type": "CANCEL_SCRIPT", "runId": run_id})
 
 
-def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.0):
+def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.0,
+                    min_rounds: int = 3):
     """Repeat attempt(round) until at least one of its runs was forwarded, or time runs out.
 
     Absorbs both the placement randomness (two random samples per run) and the gossip lag right
     after a DDL: a peer is skipped until it reports an admin epoch at least as high as this node's,
     which takes up to one gossipIntervalMs to propagate.
+
+    min_rounds is what makes that meaningful on a loaded runner. Placement is sampled per round, so
+    a single round proves nothing about randomness; when one attempt happens to outlast the whole
+    wall-clock budget, a purely time-bounded loop would give up after that one sample and report a
+    placement failure that never had a second chance.
     """
     deadline = time.time() + timeout_s
     round_no = 0
@@ -334,9 +225,30 @@ def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.
         results = attempt(round_no)
         delta = script_stats(port).get("forwarded", 0) - before
         round_no += 1
-        if delta > 0 or time.time() >= deadline:
+        if delta > 0 or (round_no >= min_rounds and time.time() >= deadline):
             return results, delta
         time.sleep(0.3)
+
+
+def wait_until_forwarding_is_live(port, timeout_s: float = 60.0) -> bool:
+    """Block until a run submitted to `port` is actually forwarded to some peer.
+
+    ScriptPlacement.eligibleMembers() skips any peer whose gossiped admin epoch trails this
+    node's, so for up to a gossip round after a DDL every peer is ineligible and every run stays
+    local. A test that needs to observe forwarding has to wait that out first, or it measures the
+    epoch lag instead of the behaviour it is asserting.
+    """
+    conn = authed(port)
+    try:
+        def _forwards_at_least_once():
+            before = script_stats(port).get("forwarded", 0)
+            for _ in range(15):
+                run_script(None, "return 1 + 1;", conn=conn)
+            return script_stats(port).get("forwarded", 0) > before
+
+        return wait_until(_forwards_at_least_once, timeout_s=timeout_s, interval_s=0.5)
+    finally:
+        conn.close()
 
 
 def until_locality_preferred(port, attempt: Callable[[int], list], timeout_s: float = 25.0):
@@ -392,7 +304,7 @@ def all_nodes_see(db, coll, _id, expected_value, field="v", ports=None, timeout_
     def _seen():
         for p in ports:
             r = find_by_id(p, db, coll, _id)
-            if r.get("status") != "OK" or _dig(r, f"object.{field}") != expected_value:
+            if r.get("status") != "OK" or bu.dig(r, f"object.{field}") != expected_value:
                 return False
         return True
 
@@ -460,7 +372,7 @@ class Node:
             f"clusterSeeds={seeds}\n"
             "clusterExpectedSize=3\n"
             f"clusterSecret={CLUSTER_SECRET}\n"
-            "gossipIntervalMs=500\n"
+            f"gossipIntervalMs={int(GOSSIP_INTERVAL_S * 1000)}\n"
             "suspectTimeoutMs=2000\n"
             "deadTimeoutMs=4000\n"
             "replicationAckTimeoutMs=5000\n"
@@ -495,7 +407,7 @@ class Node:
     def start(self):
         log = open(self.log_path, "ab")
         self.proc = subprocess.Popen(
-            server_argv("512m"),
+            bu.server_argv("512m"),
             stdout=log, stderr=log, cwd=self.work_dir)
         deadline = time.time() + 60.0
         while time.time() < deadline:
@@ -535,13 +447,20 @@ class Node:
                 self.proc.kill()
         self.alive = False
 
-    def dump_log(self):
+    def dump_log(self, tail_bytes: int = 4000):
         try:
             with open(self.log_path, "rb") as fp:
-                tail = fp.read()[-4000:].decode(errors="replace")
+                tail = fp.read()[-tail_bytes:].decode(errors="replace")
             print(f"--- node-{self.index} log tail ---\n{tail}\n--- end ---", file=sys.stderr)
         except OSError:
             pass
+
+
+def dump_all_logs(tail_bytes: int = 20000):
+    """Print every node's log tail. The server mirrors each log entry to stdout and the suite
+    redirects that into server.log, so this is the whole operational log, not just startup."""
+    for n in nodes:
+        n.dump_log(tail_bytes)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -556,40 +475,40 @@ def test_formation_and_quorum_writes():
     section("Cluster formation + synchronous quorum writes")
 
     p0 = nodes[0].client_port
-    check("CREATE_DATABASE on the seed node commits under quorum", create_db(p0, DB), "OK")
-    check("CREATE_COLLECTION commits under quorum", create_coll(p0, DB, "docs"), "OK")
+    check_status("CREATE_DATABASE on the seed node commits under quorum", create_db(p0, DB), "OK")
+    check_status("CREATE_COLLECTION commits under quorum", create_coll(p0, DB, "docs"), "OK")
     r = save(p0, DB, "docs", {"_id": "q1", "v": 1})
-    check("SAVE reaches the replication quorum (not 503-2/503-3)", r, "OK")
+    check_status("SAVE reaches the replication quorum (not 503-2/503-3)", r, "OK")
 
 
 def test_ddl_replication():
     section("DDL replication — CREATE/DROP propagate to every node")
 
     # Create a database + collection on node-1; it must appear on all nodes.
-    check("CREATE_DATABASE via node-1", create_db(nodes[1].client_port, "ddl_repl_db"), "OK")
-    check("CREATE_COLLECTION via node-1", create_coll(nodes[1].client_port, "ddl_repl_db", "widgets"), "OK")
+    check_status("CREATE_DATABASE via node-1", create_db(nodes[1].client_port, "ddl_repl_db"), "OK")
+    check_status("CREATE_COLLECTION via node-1", create_coll(nodes[1].client_port, "ddl_repl_db", "widgets"), "OK")
 
     seen_db = wait_until(
         lambda: all("ddl_repl_db" in (list_databases(p).get("databases") or []) for p in all_ports()),
         timeout_s=15.0)
-    check_true("new database is listed on every node", seen_db)
+    check("new database is listed on every node", seen_db)
 
     seen_coll = wait_until(
         lambda: all("widgets" in (list_collections(p, "ddl_repl_db").get("collections") or [])
                     for p in all_ports()),
         timeout_s=15.0)
-    check_true("new collection is listed on every node", seen_coll)
+    check("new collection is listed on every node", seen_coll)
 
     # A duplicate CREATE routed through a different node still conflicts (shared metadata).
     check_code("duplicate CREATE_DATABASE via node-2 conflicts (409-2)",
                create_db(nodes[2].client_port, "ddl_repl_db"), "ERROR", "409-2")
 
     # DROP replicates too.
-    check("DROP_DATABASE via node-2", drop_db(nodes[2].client_port, "ddl_repl_db"), "OK")
+    check_status("DROP_DATABASE via node-2", drop_db(nodes[2].client_port, "ddl_repl_db"), "OK")
     dropped = wait_until(
         lambda: all("ddl_repl_db" not in (list_databases(p).get("databases") or []) for p in all_ports()),
         timeout_s=15.0)
-    check_true("dropped database disappears from every node", dropped)
+    check("dropped database disappears from every node", dropped)
 
 
 def test_write_replication_and_read_routing():
@@ -601,8 +520,8 @@ def test_write_replication_and_read_routing():
     for i in range(NODE_COUNT):
         _id = f"w{i}"
         r = save(nodes[i].client_port, DB, "routed", {"_id": _id, "v": i * 10})
-        check(f"SAVE via node-{i} commits", r, "OK")
-        check_true(f"doc written via node-{i} is visible on every node",
+        check_status(f"SAVE via node-{i} commits", r, "OK")
+        check(f"doc written via node-{i} is visible on every node",
                    all_nodes_see(DB, "routed", _id, i * 10),
                    detail=f"_id={_id}")
 
@@ -618,22 +537,22 @@ def test_bulk_delete_and_upsert():
 
     r = bulk_save(nodes[1].client_port, DB, "bulk",
                   [{"_id": "b1", "v": 1}, {"_id": "b2", "v": 2}, {"_id": "b3", "v": 3}])
-    check("BULK_SAVE via node-1 commits", r, "OK")
-    check_true("all bulk docs are visible on every node",
+    check_status("BULK_SAVE via node-1 commits", r, "OK")
+    check("all bulk docs are visible on every node",
                all_nodes_see(DB, "bulk", "b1", 1) and all_nodes_see(DB, "bulk", "b2", 2)
                and all_nodes_see(DB, "bulk", "b3", 3))
 
     # Upsert (same _id) via a different node overwrites, and the new value replicates.
-    check("upsert b1 via node-2", save(nodes[2].client_port, DB, "bulk", {"_id": "b1", "v": 99}), "OK")
-    check_true("upserted value is visible on every node", all_nodes_see(DB, "bulk", "b1", 99))
+    check_status("upsert b1 via node-2", save(nodes[2].client_port, DB, "bulk", {"_id": "b1", "v": 99}), "OK")
+    check("upserted value is visible on every node", all_nodes_see(DB, "bulk", "b1", 99))
 
     # DELETE via yet another node removes it everywhere (tombstone → no resurrection).
-    check("DELETE b2 via node-0", delete(nodes[0].client_port, DB, "bulk", "b2"), "OK")
+    check_status("DELETE b2 via node-0", delete(nodes[0].client_port, DB, "bulk", "b2"), "OK")
 
     def _gone():
         return all(find_by_id(p, DB, "bulk", "b2").get("status") == "NOT_FOUND" for p in all_ports())
 
-    check_true("deleted doc is NOT_FOUND on every node", wait_until(_gone, timeout_s=15.0))
+    check("deleted doc is NOT_FOUND on every node", wait_until(_gone, timeout_s=15.0))
 
 
 def test_index_replication():
@@ -642,14 +561,14 @@ def test_index_replication():
     create_coll(nodes[0].client_port, DB, "indexed")
     bulk_save(nodes[0].client_port, DB, "indexed",
               [{"_id": "e1", "email": "a@x.io"}, {"_id": "e2", "email": "b@x.io"}])
-    check("CREATE_INDEX via node-1", create_index(nodes[1].client_port, DB, "indexed", "email"), "OK")
+    check_status("CREATE_INDEX via node-1", create_index(nodes[1].client_port, DB, "indexed", "email"), "OK")
 
     # The index shows up in GET_DATABASE_STATS on every node.
     def _indexed_everywhere():
         for p in all_ports():
             r = op(p, {"type": "GET_DATABASE_STATS"})
             found = False
-            for d in _dig(r, "stats.databases") or []:
+            for d in bu.dig(r, "stats.databases") or []:
                 if d.get("name") != DB:
                     continue
                 for c in d.get("collections") or []:
@@ -659,14 +578,14 @@ def test_index_replication():
                 return False
         return True
 
-    check_true("email index is registered on every node", wait_until(_indexed_everywhere, timeout_s=20.0))
+    check("email index is registered on every node", wait_until(_indexed_everywhere, timeout_s=20.0))
 
     # Index-backed query returns the right result from every node.
     def _query_ok():
         return all(ids_of(aggregate(p, DB, "indexed", [filter_step("email", "EQUALS", "a@x.io")])) == ["e1"]
                    for p in all_ports())
 
-    check_true("index-backed query is correct on every node", wait_until(_query_ok, timeout_s=15.0))
+    check("index-backed query is correct on every node", wait_until(_query_ok, timeout_s=15.0))
 
 
 def test_user_and_permission_replication():
@@ -677,14 +596,14 @@ def test_user_and_permission_replication():
         "type": "CREATE_USER", "username": "cluster_reader", "password": "cluster_reader1234",
         "admin": False, "globalPermissions": [], "databasePermissions": {DB: "READ"},
         "collectionPermissions": {}})
-    check("CREATE_USER via node-0", r, "OK")
+    check_status("CREATE_USER via node-0", r, "OK")
 
     # The user (same salted hash on every node) authenticates on all nodes.
     def _auth_everywhere():
         for p in all_ports():
-            c = Conn(p)
+            c = Conn(port=p)
             try:
-                a = send(c.s, c.f, {"type": "AUTHENTICATE",
+                a = c.send({"type": "AUTHENTICATE",
                                     "username": "cluster_reader", "password": "cluster_reader1234"})
                 if a.get("status") != "OK":
                     return False
@@ -692,20 +611,20 @@ def test_user_and_permission_replication():
                 c.close()
         return True
 
-    check_true("replicated user authenticates on every node", wait_until(_auth_everywhere, timeout_s=15.0))
+    check("replicated user authenticates on every node", wait_until(_auth_everywhere, timeout_s=15.0))
 
     # Permissions replicate too: the read-only user cannot write on any node.
     for i in range(NODE_COUNT):
-        c = Conn(nodes[i].client_port)
+        c = Conn(port=nodes[i].client_port)
         try:
-            send(c.s, c.f, {"type": "AUTHENTICATE",
+            c.send({"type": "AUTHENTICATE",
                             "username": "cluster_reader", "password": "cluster_reader1234"})
-            w = send(c.s, c.f, {"type": "SAVE", "databaseName": DB, "collectionName": "routed",
+            w = c.send({"type": "SAVE", "databaseName": DB, "collectionName": "routed",
                                 "object": {"_id": "nope", "v": 0}})
             check_code(f"read-only user SAVE via node-{i} is forbidden (403-1)", w, "FORBIDDEN", "403-1")
-            rd = send(c.s, c.f, {"type": "AGGREGATE", "databaseName": DB, "collectionName": "routed",
+            rd = c.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "routed",
                                  "aggregationSteps": [{"type": "COUNT"}]})
-            check(f"read-only user can still read via node-{i}", rd, "OK")
+            check_status(f"read-only user can still read via node-{i}", rd, "OK")
         finally:
             c.close()
 
@@ -720,34 +639,34 @@ def test_single_node_transaction():
     # Commit path via node-1, with read-your-writes inside the transaction.
     conn = authed(nodes[1].client_port)
     try:
-        check("START_TRANSACTION via node-1", send(conn.s, conn.f, {"type": "START_TRANSACTION"}), "OK")
-        check("buffered SAVE inside txn", send(conn.s, conn.f, {
+        check_status("START_TRANSACTION via node-1", conn.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("buffered SAVE inside txn", conn.send({
             "type": "SAVE", "databaseName": DB, "collectionName": "txn",
             "object": {"_id": "t1", "v": 7}}), "OK")
-        ryw = send(conn.s, conn.f, {"type": "FIND_BY_ID", "databaseName": DB,
+        ryw = conn.send({"type": "FIND_BY_ID", "databaseName": DB,
                                     "collectionName": "txn", "_id": "t1"})
         check_field("read-your-writes sees the buffered doc", ryw, "object.v", 7)
-        check("COMMIT_TRANSACTION", send(conn.s, conn.f, {"type": "COMMIT_TRANSACTION"}), "OK")
+        check_status("COMMIT_TRANSACTION", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
     finally:
         conn.close()
 
-    check_true("committed txn doc is visible on every node", all_nodes_see(DB, "txn", "t1", 7))
+    check("committed txn doc is visible on every node", all_nodes_see(DB, "txn", "t1", 7))
 
     # Rollback path via node-2 discards the buffered write cluster-wide.
     conn = authed(nodes[2].client_port)
     try:
-        check("START_TRANSACTION via node-2", send(conn.s, conn.f, {"type": "START_TRANSACTION"}), "OK")
-        check("buffered SAVE inside txn", send(conn.s, conn.f, {
+        check_status("START_TRANSACTION via node-2", conn.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("buffered SAVE inside txn", conn.send({
             "type": "SAVE", "databaseName": DB, "collectionName": "txn",
             "object": {"_id": "t2", "v": 8}}), "OK")
-        check("ROLLBACK_TRANSACTION", send(conn.s, conn.f, {"type": "ROLLBACK_TRANSACTION"}), "OK")
+        check_status("ROLLBACK_TRANSACTION", conn.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
     finally:
         conn.close()
 
     def _rolled_back():
         return all(find_by_id(p, DB, "txn", "t2").get("status") == "NOT_FOUND" for p in all_ports())
 
-    check_true("rolled-back doc never appears on any node", wait_until(_rolled_back, timeout_s=10.0))
+    check("rolled-back doc never appears on any node", wait_until(_rolled_back, timeout_s=10.0))
 
 
 def test_multi_collection_transaction():
@@ -761,28 +680,28 @@ def test_multi_collection_transaction():
 
     conn = authed(nodes[0].client_port)
     try:
-        check("START_TRANSACTION (multi-collection)", send(conn.s, conn.f, {"type": "START_TRANSACTION"}), "OK")
+        check_status("START_TRANSACTION (multi-collection)", conn.send({"type": "START_TRANSACTION"}), "OK")
         for c in mc:
-            r = send(conn.s, conn.f, {"type": "SAVE", "databaseName": DB, "collectionName": c,
+            r = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": c,
                                       "object": {"_id": "x", "v": 5}})
-            check(f"buffered SAVE into {c}", r, "OK")
-        check("COMMIT spans all involved owners atomically",
-              send(conn.s, conn.f, {"type": "COMMIT_TRANSACTION"}), "OK")
+            check_status(f"buffered SAVE into {c}", r, "OK")
+        check_status("COMMIT spans all involved owners atomically",
+              conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
     finally:
         conn.close()
 
     for c in mc:
-        check_true(f"committed doc in {c} is visible on every node",
+        check(f"committed doc in {c} is visible on every node",
                    all_nodes_see(DB, c, "x", 5), detail=f"collection={c}")
 
     # Atomic rollback across all collections.
     conn = authed(nodes[0].client_port)
     try:
-        check("START_TRANSACTION (rollback)", send(conn.s, conn.f, {"type": "START_TRANSACTION"}), "OK")
+        check_status("START_TRANSACTION (rollback)", conn.send({"type": "START_TRANSACTION"}), "OK")
         for c in mc:
-            send(conn.s, conn.f, {"type": "SAVE", "databaseName": DB, "collectionName": c,
+            conn.send({"type": "SAVE", "databaseName": DB, "collectionName": c,
                                   "object": {"_id": "y", "v": 6}})
-        check("ROLLBACK_TRANSACTION", send(conn.s, conn.f, {"type": "ROLLBACK_TRANSACTION"}), "OK")
+        check_status("ROLLBACK_TRANSACTION", conn.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
     finally:
         conn.close()
 
@@ -793,7 +712,7 @@ def test_multi_collection_transaction():
                     return False
         return True
 
-    check_true("rolled-back multi-collection write appears nowhere", wait_until(_none_have_y, timeout_s=10.0))
+    check("rolled-back multi-collection write appears nowhere", wait_until(_none_have_y, timeout_s=10.0))
 
 
 def test_admin_transaction_ops():
@@ -801,12 +720,12 @@ def test_admin_transaction_ops():
 
     for i in range(NODE_COUNT):
         r = op(nodes[i].client_port, {"type": "LIST_TRANSACTIONS"})
-        check(f"LIST_TRANSACTIONS via node-{i} returns OK", r, "OK")
-        check_true(f"no in-doubt transactions in steady state (node-{i})",
+        check_status(f"LIST_TRANSACTIONS via node-{i} returns OK", r, "OK")
+        check(f"no in-doubt transactions in steady state (node-{i})",
                    (r.get("transactions") or []) == [], detail=f"transactions={r.get('transactions')!r}")
 
     r = op(nodes[0].client_port, {"type": "GET_DATABASE_STATS"})
-    check("GET_DATABASE_STATS returns OK", r, "OK")
+    check_status("GET_DATABASE_STATS returns OK", r, "OK")
     check_field("in-doubt transaction count is zero", r, "stats.inDoubtTransactions.count", 0)
 
 
@@ -814,7 +733,7 @@ def test_script_placement_forwards_runs():
     section("Script node selection — a run is placed on a node chosen by script load")
 
     for i in (0, 1):
-        check_true(f"node-{i} reports script routing enabled",
+        check(f"node-{i} reports script routing enabled",
                    script_stats(nodes[i].client_port).get("routingEnabled") is True,
                    detail=f"scripts={script_stats(nodes[i].client_port)!r}")
 
@@ -830,27 +749,27 @@ def test_script_placement_forwards_runs():
     results, forwarded = until_forwarded(nodes[0].client_port, _batch)
     after = script_stats(nodes[0].client_port)
 
-    check_true("every placed run returned OK", all(r.get("status") == "OK" for r in results),
+    check("every placed run returned OK", all(r.get("status") == "OK" for r in results),
                detail=f"statuses={sorted({r.get('status') for r in results})}")
-    check_true("every placed run returned the script's value",
+    check("every placed run returned the script's value",
                all(r.get("result") == 2 for r in results),
                detail=f"results={sorted({repr(r.get('result')) for r in results})}")
     # A forward means that run's interpreter CPU was spent on another node. Which node ran a given
     # script is deliberately not observable from a client (nothing exposes node identity to a
     # script), so the edge's own counter is the assertion.
-    check_true("placement moved runs off the receiving node", forwarded > 0,
+    check("placement moved runs off the receiving node", forwarded > 0,
                detail=f"forwarded delta={forwarded}")
     fallbacks = after.get("forwardFallbacks", 0) - before.get("forwardFallbacks", 0)
-    check_true("no forward failed while every node was up", fallbacks == 0,
+    check("no forward failed while every node was up", fallbacks == 0,
                detail=f"forwardFallbacks delta={fallbacks}")
-    check_true("the edge is idle again once the runs are done",
+    check("the edge is idle again once the runs are done",
                after.get("running") == 0, detail=f"running={after.get('running')!r}")
 
 
 def test_forwarded_script_reads_and_writes():
     section("Script node selection — a forwarded script still reads and writes correctly")
 
-    check("CREATE_COLLECTION for the script data", create_coll(nodes[0].client_port, DB, "scripted"), "OK")
+    check_status("CREATE_COLLECTION for the script data", create_coll(nodes[0].client_port, DB, "scripted"), "OK")
     script = ('import db from "db";\n'
               'import args from "args";\n'
               'db.save(db.name, "scripted", { _id: args.id, v: 7 });\n'
@@ -865,7 +784,7 @@ def test_forwarded_script_reads_and_writes():
             out = []
             for i in range(8):
                 doc_id = f"scripted-{round_no}-{i}"
-                out.append(send(conn.s, conn.f, {"type": "RUN_SCRIPT", "databaseName": DB,
+                out.append(conn.send({"type": "RUN_SCRIPT", "databaseName": DB,
                                                  "script": script, "args": {"id": doc_id}}))
                 written.append(doc_id)
             return out
@@ -875,12 +794,12 @@ def test_forwarded_script_reads_and_writes():
     results, forwarded = until_forwarded(nodes[0].client_port, _batch)
 
     for doc_id, r in zip(written, results):
-        check(f"a placed script writes and reads back {doc_id}", r, "OK")
-        check_true(f"{doc_id} read back its own write", r.get("result") == 7,
+        check_status(f"a placed script writes and reads back {doc_id}", r, "OK")
+        check(f"{doc_id} read back its own write", r.get("result") == 7,
                    detail=f"result={r.get('result')!r}")
-    check_true("at least one of those runs was forwarded", forwarded > 0)
+    check("at least one of those runs was forwarded", forwarded > 0)
     for doc_id in written:
-        check_true(f"{doc_id} is visible from every node",
+        check(f"{doc_id} is visible from every node",
                    all_nodes_see(DB, "scripted", doc_id, 7, ports=all_ports(), timeout_s=15.0))
 
 
@@ -901,18 +820,18 @@ def test_forwarded_script_relays_its_stack():
     def _batch(round_no):
         conn = authed(nodes[0].client_port)
         try:
-            return [send(conn.s, conn.f, {"type": "RUN_SCRIPT", "databaseName": DB, "script": script})
+            return [conn.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": script})
                     for _ in range(8)]
         finally:
             conn.close()
 
     results, forwarded = until_forwarded(nodes[0].client_port, _batch)
-    check_true("at least one failing run was forwarded", forwarded > 0)
+    check("at least one failing run was forwarded", forwarded > 0)
     for response in results:
         stack = response.get("stack")
-        check_true("the failure carries its frames", isinstance(stack, list) and len(stack) >= 3,
+        check("the failure carries its frames", isinstance(stack, list) and len(stack) >= 3,
                    detail=f"stack={stack!r}")
-        check_true("the innermost frame survived the relay",
+        check("the innermost frame survived the relay",
                    bool(stack) and stack[0].startswith("inner ("), detail=f"stack={stack!r}")
 
 
@@ -925,22 +844,22 @@ def test_forwarded_script_preserves_the_acting_user():
     denied = {"type": "CREATE_USER", "username": "cluster_script_denied", "password": "cluster_script1234",
               "admin": False, "globalPermissions": [], "databasePermissions": {DB: "READ_WRITE"},
               "collectionPermissions": {}, "scriptPermissions": {}}
-    check("CREATE_USER with a per-database RUN grant", op(nodes[0].client_port, granted), "OK")
-    check("CREATE_USER without a grant", op(nodes[0].client_port, denied), "OK")
+    check_status("CREATE_USER with a per-database RUN grant", op(nodes[0].client_port, granted), "OK")
+    check_status("CREATE_USER without a grant", op(nodes[0].client_port, denied), "OK")
 
     def _granted_can_run():
-        c = Conn(nodes[0].client_port)
+        c = Conn(port=nodes[0].client_port)
         try:
-            a = send(c.s, c.f, {"type": "AUTHENTICATE", "username": "cluster_script_user",
+            a = c.send({"type": "AUTHENTICATE", "username": "cluster_script_user",
                                 "password": "cluster_script1234"})
             if a.get("status") != "OK":
                 return False
-            return send(c.s, c.f, {"type": "RUN_SCRIPT", "databaseName": DB,
+            return c.send({"type": "RUN_SCRIPT", "databaseName": DB,
                                    "script": "return 1;"}).get("status") == "OK"
         finally:
             c.close()
 
-    check_true("the granted user's script runs (the record replicated)",
+    check("the granted user's script runs (the record replicated)",
                wait_until(_granted_can_run, timeout_s=15.0))
 
     script = ('import db from "db";\n'
@@ -948,36 +867,36 @@ def test_forwarded_script_preserves_the_acting_user():
               'return db.findById(db.name, "scripted", "as-user").v;')
 
     def _batch(_round):
-        c = Conn(nodes[0].client_port)
+        c = Conn(port=nodes[0].client_port)
         try:
-            send(c.s, c.f, {"type": "AUTHENTICATE", "username": "cluster_script_user",
+            c.send({"type": "AUTHENTICATE", "username": "cluster_script_user",
                             "password": "cluster_script1234"})
-            return [send(c.s, c.f, {"type": "RUN_SCRIPT", "databaseName": DB, "script": script})
+            return [c.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": script})
                     for _ in range(12)]
         finally:
             c.close()
 
     results, forwarded = until_forwarded(nodes[0].client_port, _batch)
 
-    check_true("a non-admin's forwarded script runs with its own authority",
+    check("a non-admin's forwarded script runs with its own authority",
                all(r.get("status") == "OK" and r.get("result") == 7 for r in results),
                detail=f"responses={[(r.get('status'), r.get('result'), r.get('message')) for r in results][:3]}")
-    check_true("at least one of those runs was forwarded", forwarded > 0)
+    check("at least one of those runs was forwarded", forwarded > 0)
 
     # A caller without the grant is refused at the edge, before any placement happens.
     before = script_stats(nodes[0].client_port)
-    c = Conn(nodes[0].client_port)
+    c = Conn(port=nodes[0].client_port)
     try:
-        send(c.s, c.f, {"type": "AUTHENTICATE", "username": "cluster_script_denied",
+        c.send({"type": "AUTHENTICATE", "username": "cluster_script_denied",
                         "password": "cluster_script1234"})
         for _ in range(5):
             check_code("a caller without the grant is refused",
-                       send(c.s, c.f, {"type": "RUN_SCRIPT", "databaseName": DB, "script": "return 1;"}),
+                       c.send({"type": "RUN_SCRIPT", "databaseName": DB, "script": "return 1;"}),
                        "FORBIDDEN", "403-1")
     finally:
         c.close()
     after = script_stats(nodes[0].client_port)
-    check_true("a refused call is never forwarded",
+    check("a refused call is never forwarded",
                after.get("forwarded", 0) == before.get("forwarded", 0),
                detail=f"forwarded {before.get('forwarded')} -> {after.get('forwarded')}")
 
@@ -992,17 +911,27 @@ def test_long_forwarded_script_is_not_cut_off():
     # waiting only the ack timeout would answer 503-4 while the target was still running. Placement
     # is random (two samples), so the runs are fired as a concurrent burst and the burst is retried
     # until at least one of them was actually forwarded.
+    #
+    # Driven from node-1: that "random two samples" only holds on the load-only node. node-0 runs
+    # scriptLocalityWeight=100, where the blend follows collection ownership, so a burst there can
+    # legitimately stay local for every round and the forward this test needs never happens.
+    driver = nodes[1].client_port
     script = 'export default new Promise(r => setTimeout(() => r("slept"), 6000));'
 
     def _batch(_round):
-        out = burst(nodes[0].client_port, script, 9)
-        check_true("every long script returned its result",
+        out = burst(driver, script, 9)
+        check("every long script returned its result",
                    all(r.get("status") == "OK" and r.get("result") == "slept" for r in out),
                    detail=f"responses={[(r.get('status'), r.get('result'), r.get('message')) for r in out][:3]}")
         return out
 
-    _, forwarded = until_forwarded(nodes[0].client_port, _batch, timeout_s=30.0)
-    check_true("a long script outliving the ack timeout was forwarded and still answered",
+    # Wait out the admin-epoch lag on cheap runs first. until_forwarded's rounds cost 6s each here,
+    # so a cold start burns most of its budget proving nothing about the long-script path.
+    check("forwarding is live before the long runs",
+               wait_until_forwarding_is_live(driver, timeout_s=60.0))
+
+    _, forwarded = until_forwarded(driver, _batch, timeout_s=45.0)
+    check("a long script outliving the ack timeout was forwarded and still answered",
                forwarded > 0, detail="no concurrent long run was forwarded")
 
 
@@ -1014,7 +943,7 @@ def test_script_control_is_cluster_wide():
     runner_node = nodes[2]
     observer_ports = [nodes[0].client_port, nodes[1].client_port]
     # Start from a quiet cluster so the run under test is the only one in flight.
-    check_true("no script is running anywhere before the test",
+    check("no script is running anywhere before the test",
                wait_until(lambda: all(not list_scripts(p) for p in all_ports()), timeout_s=30.0),
                detail=f"listing={list_scripts(nodes[0].client_port)!r}")
     # Comfortably inside scriptTimeoutMs (20s), so a cancellation can never be mistaken for a timeout.
@@ -1033,48 +962,48 @@ def test_script_control_is_cluster_wide():
 
     row = wait_until(lambda: _row_on_the_runner(nodes[0].client_port) is not None, timeout_s=15.0) \
         and _row_on_the_runner(nodes[0].client_port)
-    check_true("node-0 sees a run it is not executing", bool(row),
+    check("node-0 sees a run it is not executing", bool(row),
                detail=f"node-0 listing={list_scripts(nodes[0].client_port)!r}")
     if not row:
         background.join(30.0)
         return
-    check_true("the row names the node actually executing the run",
+    check("the row names the node actually executing the run",
                row.get("node") == expected_node,
                detail=f"expected node={expected_node!r} got={row.get('node')!r}")
-    check_true("and it is not the node answering the listing",
+    check("and it is not the node answering the listing",
                row.get("node") != f"{HOST}:{nodes[0].cluster_port}")
-    check_true("the row carries the run's kind and database",
+    check("the row carries the run's kind and database",
                row.get("kind") == "RUN_SCRIPT" and row.get("database") == DB,
                detail=f"row={row!r}")
     # Every live member sees the same run: the listing is a cluster-wide view, not a local one.
     for port in observer_ports:
         rows = list_scripts(port)
-        check_true(f"the run is visible from the node on port {port}",
+        check(f"the run is visible from the node on port {port}",
                    any(r.get("runId") == row["runId"] and r.get("node") == expected_node for r in rows),
                    detail=f"got {rows!r}")
 
     response = cancel_script(nodes[0].client_port, row["runId"])
-    check("CANCEL_SCRIPT from another node succeeds", response, "OK")
+    check_status("CANCEL_SCRIPT from another node succeeds", response, "OK")
     check_field("it reports the run as cancelled", response, "cancelled", True)
 
-    check_true("the cancelled run returned to its caller", background.join(30.0))
+    check("the cancelled run returned to its caller", background.join(30.0))
     check_code("the caller on the executing node receives 408-2",
                background.response or {}, "ERROR", "408-2")
     check_field("the caller's runId is the one the other node listed",
                 background.response or {}, "runId", row["runId"])
 
     for port in all_ports():
-        check_true(f"the cancelled run leaves the listing on port {port}",
+        check(f"the cancelled run leaves the listing on port {port}",
                    wait_until(lambda p=port: not any(r.get("runId") == row["runId"]
                                                      for r in list_scripts(p)), timeout_s=30.0),
                    detail=f"still listed: {list_scripts(port)!r}")
 
     # No live node is running it, so the fan-out answers false rather than failing.
     unknown = cancel_script(nodes[1].client_port, "00000000-0000-0000-0000-000000000000")
-    check("cancelling an unknown run anywhere is still OK", unknown, "OK")
+    check_status("cancelling an unknown run anywhere is still OK", unknown, "OK")
     check_field("and reports cancelled:false", unknown, "cancelled", False)
 
-    check_true("every node reports itself idle again",
+    check("every node reports itself idle again",
                wait_until(lambda: all(script_stats(p).get("running") == 0 for p in all_ports()),
                           timeout_s=30.0))
 
@@ -1083,36 +1012,95 @@ def test_script_placement_falls_back_when_the_target_dies():
     section("Script node selection — an unreachable target falls back to local execution")
 
     victim = nodes[2]
+    # Driven from node-1, not node-0: node-0 runs scriptLocalityWeight=100, so its placement follows
+    # collection ownership and only reaches node-2 when node-2 happens to own part of DB. node-1 is
+    # the load-only node, which makes every peer a fair candidate and the crash below observable.
+    driver = nodes[1].client_port
+
+    # Precondition, not decoration: a peer is skipped until its gossiped admin epoch catches up with
+    # the driver's, so straight after the preceding tests' DDL every peer is ineligible and every run
+    # stays local. Killing node-2 in that state produces no failed forward to count, however long we
+    # wait. Gate on forwarding being live rather than on catching node-2 in the listing: which peer a
+    # given run lands on is random, and a 2s run is easy to miss between two polls.
+    check("forwarding is live before the crash",
+               wait_until_forwarding_is_live(driver, timeout_s=60.0))
+
+    # Kill the victim only once the driver's view of it is idle. A dead node's gossiped NodeInfo freezes
+    # at its last published values, and placement scores a node by its load ratio: a victim frozen at one
+    # running script scores below every live node sitting at zero, so placement would never sample it
+    # again and the failed forward this test is about could not happen. So: confirm it is idle, let a
+    # full gossip round carry that to the driver, confirm it stayed idle, then kill immediately. The
+    # second confirmation is the point - a single straggler completing during the wait re-arms exactly
+    # the condition being avoided, and only a check adjacent to the kill catches that.
+    def _victim_idle():
+        return script_stats(victim.client_port).get("running", 0) == 0
+
+    before = script_stats(driver).get("forwardFallbacks", 0)
+    check("the victim is idle before the crash", wait_until(_victim_idle, timeout_s=15.0))
+    time.sleep(2 * GOSSIP_INTERVAL_S)
+    check("the victim stayed idle for a full gossip round", _victim_idle())
+
     print(f"  Killing node-{victim.index} (hard crash) ...")
     victim.kill()
 
-    before = script_stats(nodes[0].client_port)
-    deadline = time.time() + 8.0
+    # Only now drive the runs, and drive them from several connections at once. The window is the one
+    # thing this test cannot widen: the driver keeps the victim in its placement set only until the
+    # failure detector gives up on it, suspectTimeoutMs after the last successful gossip. Placement
+    # picks one of two random samples, so any single run reaches the victim only some of the time, and
+    # one connection issuing them one after another fits too few tries into that window to be sure of
+    # landing on it. Concurrent connections raise the count inside the same window rather than
+    # stretching the window, which is what turns "usually observed" into "observed".
+    stop = threading.Event()
     statuses = set()
-    fallbacks = 0
-    conn = authed(nodes[0].client_port)
-    try:
-        while time.time() < deadline:
-            statuses.add(run_script(None, "return 1 + 1;", conn=conn).get("status"))
-            fallbacks = script_stats(nodes[0].client_port).get("forwardFallbacks", 0) \
-                - before.get("forwardFallbacks", 0)
-            if fallbacks > 0:
-                break
-    finally:
-        conn.close()
 
-    check_true("scripts keep succeeding while a placement target is down", statuses == {"OK"},
+    def hammer():
+        conn = authed(driver)
+        try:
+            while not stop.is_set():
+                statuses.add(run_script(None, "return 1 + 1;", conn=conn).get("status"))
+                # Throttled on purpose: the point is only to keep runs flowing across the crash, and a
+                # flat-out loop buries a 512m node under thousands of runs and OOMs it. ~20/s per
+                # connection, so ~HAMMER_CONNECTIONS x that in total, is more than enough.
+                stop.wait(0.05)
+        finally:
+            conn.close()
+
+    workers = [threading.Thread(target=hammer, daemon=True) for _ in range(HAMMER_CONNECTIONS)]
+    for worker in workers:
+        worker.start()
+
+    # Two waits, because the traffic and the observation need different budgets. The victim is out of
+    # the placement set within a second or two, so traffic past HAMMER_SECONDS cannot produce a new
+    # failed forward and would only pile runs onto the surviving nodes. The count itself can lag well
+    # behind: a forward that dies mid-request waits out scriptTimeoutMs + replicationAckTimeoutMs
+    # before it throws, and the fallback is only recorded then - so keep watching after traffic stops.
+    fell_back = wait_until(
+        lambda: script_stats(driver).get("forwardFallbacks", 0) > before,
+        timeout_s=HAMMER_SECONDS)
+    stop.set()
+    for worker in workers:
+        worker.join(60.0)
+    if not fell_back:
+        fell_back = wait_until(
+            lambda: script_stats(driver).get("forwardFallbacks", 0) > before,
+            timeout_s=30.0)
+    fallbacks = script_stats(driver).get("forwardFallbacks", 0) - before
+
+    check("scripts keep succeeding while a placement target is down", statuses == {"OK"},
                detail=f"statuses={sorted(statuses)}")
-    check_true("a failed forward is counted and the run stays local", fallbacks > 0,
+    check("a failed forward is counted and the run stays local", fell_back,
                detail=f"forwardFallbacks delta={fallbacks}")
 
-    # Whatever the timing, the calls after the node is declared dead must all succeed.
+    # Whatever the timing, the calls after the node is declared dead must all succeed. Checked on
+    # node-0, which has not been driving traffic and so has yet to discover the crash: its first
+    # forward to node-2 can burn the whole scriptTimeoutMs + replicationAckTimeoutMs budget before
+    # falling back, so the window has to be wide enough for one such stall plus a retry.
     def _all_ok():
         return all(run_script(nodes[0].client_port, "return 1 + 1;").get("status") == "OK"
                    for _ in range(5))
 
-    check_true("scripts still succeed once the dead node leaves the view",
-               wait_until(_all_ok, timeout_s=20.0, interval_s=1.0))
+    check("scripts still succeed once the dead node leaves the view",
+               wait_until(_all_ok, timeout_s=120.0, interval_s=1.0))
 
     print(f"  Restarting node-{victim.index} ...")
     victim.start()
@@ -1123,7 +1111,7 @@ def test_script_routing_disabled_stays_local():
     section("Script node selection — routing off keeps every run on the receiving node")
 
     stats = script_stats(nodes[2].client_port)
-    check_true("node-2 reports script routing disabled", stats.get("routingEnabled") is False,
+    check("node-2 reports script routing disabled", stats.get("routingEnabled") is False,
                detail=f"scripts={stats!r}")
 
     before = script_stats(nodes[2].client_port)
@@ -1134,20 +1122,20 @@ def test_script_routing_disabled_stays_local():
         conn.close()
     after = script_stats(nodes[2].client_port)
 
-    check_true("every run on the routing-disabled node returned OK",
+    check("every run on the routing-disabled node returned OK",
                all(r.get("status") == "OK" and r.get("result") == 2 for r in results),
                detail=f"statuses={sorted({r.get('status') for r in results})}")
-    check_true("nothing was forwarded", after.get("forwarded", 0) == before.get("forwarded", 0),
+    check("nothing was forwarded", after.get("forwarded", 0) == before.get("forwarded", 0),
                detail=f"forwarded {before.get('forwarded')} -> {after.get('forwarded')}")
-    check_true("nothing fell back either (no forward was attempted)",
+    check("nothing fell back either (no forward was attempted)",
                after.get("forwardFallbacks", 0) == before.get("forwardFallbacks", 0))
 
 
 def _locality_db_ready():
-    check("CREATE_DATABASE for the locality database", create_db(nodes[0].client_port, LOCALITY_DB), "OK")
-    check("CREATE_COLLECTION for the locality database",
+    check_status("CREATE_DATABASE for the locality database", create_db(nodes[0].client_port, LOCALITY_DB), "OK")
+    check_status("CREATE_COLLECTION for the locality database",
           create_coll(nodes[0].client_port, LOCALITY_DB, "only"), "OK")
-    check("SAVE the locality document",
+    check_status("SAVE the locality document",
           save(nodes[0].client_port, LOCALITY_DB, "only", {"_id": "l1", "v": 9}), "OK")
 
 
@@ -1156,7 +1144,7 @@ def test_script_placement_prefers_the_collection_owner():
 
     _locality_db_ready()
     stats = script_stats(nodes[0].client_port)
-    check_true("node-0 reports the locality weight it was configured with",
+    check("node-0 reports the locality weight it was configured with",
                stats.get("localityWeight") == 100, detail=f"scripts={stats!r}")
 
     before = script_stats(nodes[0].client_port)
@@ -1174,18 +1162,18 @@ def test_script_placement_prefers_the_collection_owner():
     results, preferred = until_locality_preferred(nodes[0].client_port, _batch)
     after = script_stats(nodes[0].client_port)
 
-    check_true("every placed run returned OK", all(r.get("status") == "OK" for r in results),
+    check("every placed run returned OK", all(r.get("status") == "OK" for r in results),
                detail=f"statuses={sorted({r.get('status') for r in results})}")
-    check_true("every placed run returned the script's value", all(r.get("result") == 9 for r in results),
+    check("every placed run returned the script's value", all(r.get("result") == 9 for r in results),
                detail=f"results={sorted({repr(r.get('result')) for r in results})}")
     # Not `forwarded`: locality can make the *receiving* node win, in which case the run stays here,
     # choose() answers null and `forwarded` never moves — the best possible outcome, zero round trips.
     # localityPreferred is incremented inside the comparison, before the self-check, so it counts both
     # "moved the run to the owner" and "kept the run on the owner". It is the only sound lever here.
-    check_true("the ownership share changed placement decisions", preferred > 0,
+    check("the ownership share changed placement decisions", preferred > 0,
                detail=f"localityPreferred delta={preferred}")
     fallbacks = after.get("forwardFallbacks", 0) - before.get("forwardFallbacks", 0)
-    check_true("no forward failed while every node was up", fallbacks == 0,
+    check("no forward failed while every node was up", fallbacks == 0,
                detail=f"forwardFallbacks delta={fallbacks}")
 
 
@@ -1193,7 +1181,7 @@ def test_script_placement_locality_weight_zero_is_load_only():
     section("Script node selection — scriptLocalityWeight=0 places purely by load")
 
     stats = script_stats(nodes[1].client_port)
-    check_true("node-1 reports locality weighting turned off",
+    check("node-1 reports locality weighting turned off",
                stats.get("localityWeight") == 0, detail=f"scripts={stats!r}")
 
     before = script_stats(nodes[1].client_port)
@@ -1210,14 +1198,14 @@ def test_script_placement_locality_weight_zero_is_load_only():
     results, forwarded = until_forwarded(nodes[1].client_port, _batch)
     after = script_stats(nodes[1].client_port)
 
-    check_true("every placed run returned OK", all(r.get("status") == "OK" for r in results),
+    check("every placed run returned OK", all(r.get("status") == "OK" for r in results),
                detail=f"statuses={sorted({r.get('status') for r in results})}")
-    check_true("every placed run returned the script's value", all(r.get("result") == 9 for r in results),
+    check("every placed run returned the script's value", all(r.get("result") == 9 for r in results),
                detail=f"results={sorted({repr(r.get('result')) for r in results})}")
-    check_true("routing is still fully active at weight 0", forwarded > 0,
+    check("routing is still fully active at weight 0", forwarded > 0,
                detail=f"forwarded delta={forwarded}")
     preferred = after.get("localityPreferred", 0) - before.get("localityPreferred", 0)
-    check_true("locality changed nothing at weight 0", preferred == 0,
+    check("locality changed nothing at weight 0", preferred == 0,
                detail=f"localityPreferred delta={preferred}")
 
 
@@ -1242,10 +1230,10 @@ def test_node_failure_quorum_maintained():
         return all_nodes_see(DB, "after_fail", "f1", 111, ports=all_ports(), timeout_s=1.0)
 
     ok = wait_until(_write_read_ok, timeout_s=30.0, interval_s=1.0)
-    check_true("with one node down the surviving majority still commits + serves reads", ok)
+    check("with one node down the surviving majority still commits + serves reads", ok)
 
     # A previously-written doc is still readable from the survivors.
-    check_true("pre-failure data still readable from the survivors",
+    check("pre-failure data still readable from the survivors",
                all_nodes_see(DB, "routed", "w0", 0, ports=all_ports(), timeout_s=15.0))
 
 
@@ -1265,7 +1253,7 @@ def test_node_rejoin():
             return False
         return all_nodes_see(DB, "routed", "rejoin", v, ports=all_ports(), timeout_s=2.0)
 
-    check_true("rejoined node serves consistent reads and the cluster is healthy",
+    check("rejoined node serves consistent reads and the cluster is healthy",
                wait_until(_rejoined, timeout_s=45.0, interval_s=1.0))
 
 
@@ -1305,7 +1293,7 @@ def schedule_names(port, db=SCHEDULE_DB) -> list:
 
 def fire_count(port, coll, db=SCHEDULE_DB) -> int:
     r = aggregate(port, db, coll, [{"type": "COUNT"}])
-    value = _dig(r, "results.0.count")
+    value = bu.dig(r, "results.0.count")
     return int(value) if value is not None else 0
 
 
@@ -1315,14 +1303,14 @@ def test_before_hook_runs_on_the_owner():
     # The case that cannot be caught on one node: ClusterRouter forwards the raw request JSON, so a hook
     # wired at the edge instead of the owner would ship an unmodified document and pass every
     # single-node test. Writing through a node that does not own the collection is what proves it.
-    check("CREATE_COLLECTION for the hooked data", create_coll(nodes[0].client_port, DB, "hooked"), "OK")
+    check_status("CREATE_COLLECTION for the hooked data", create_coll(nodes[0].client_port, DB, "hooked"), "OK")
 
     conn = authed(nodes[0].client_port)
     try:
-        check("install the hook procedure", send(conn.s, conn.f, {
+        check_status("install the hook procedure", conn.send({
             "type": "SAVE_PROCEDURE", "databaseName": DB, "name": "hookcalc",
             "script": "export default (doc) => ({ ...doc, v: doc.v * 2, hooked: true });"}), "OK")
-        check("install the before trigger", send(conn.s, conn.f, {
+        check_status("install the before trigger", conn.send({
             "type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": "hooked", "name": "double",
             "events": ["CREATED", "UPDATED"], "procedureName": "hookcalc", "timing": "before"}), "OK")
     finally:
@@ -1333,18 +1321,18 @@ def test_before_hook_runs_on_the_owner():
     for i in range(NODE_COUNT):
         _id = f"h{i}"
         r = save(nodes[i].client_port, DB, "hooked", {"_id": _id, "v": 5})
-        check(f"SAVE via node-{i} commits", r, "OK")
-        check_true(f"the hook ran for a write entering at node-{i}",
+        check_status(f"SAVE via node-{i} commits", r, "OK")
+        check(f"the hook ran for a write entering at node-{i}",
                    all_nodes_see(DB, "hooked", _id, 10),
                    detail=f"_id={_id} should have been doubled by the owner's before hook")
 
     # A veto must travel back to the edge as the owner's own error, not be swallowed by the forward.
     conn = authed(nodes[0].client_port)
     try:
-        check("install a vetoing hook", send(conn.s, conn.f, {
+        check_status("install a vetoing hook", conn.send({
             "type": "SAVE_PROCEDURE", "databaseName": DB, "name": "hookveto",
             "script": "export default (doc) => { throw new Error('refused by the owner'); };"}), "OK")
-        check("point the trigger at it", send(conn.s, conn.f, {
+        check_status("point the trigger at it", conn.send({
             "type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": "hooked", "name": "double",
             "events": ["CREATED", "UPDATED"], "procedureName": "hookveto", "timing": "before"}), "OK")
     finally:
@@ -1352,13 +1340,13 @@ def test_before_hook_runs_on_the_owner():
 
     for i in range(NODE_COUNT):
         r = save(nodes[i].client_port, DB, "hooked", {"_id": f"hv{i}", "v": 1})
-        check_true(f"a veto reaches the client that wrote via node-{i}",
+        check(f"a veto reaches the client that wrote via node-{i}",
                    r.get("errorCode") == "400-21",
                    detail=f"got {r}")
 
     conn = authed(nodes[0].client_port)
     try:
-        send(conn.s, conn.f, {"type": "DELETE_TRIGGER", "databaseName": DB,
+        conn.send({"type": "DELETE_TRIGGER", "databaseName": DB,
                               "collectionName": "hooked", "name": "double"})
     finally:
         conn.close()
@@ -1367,33 +1355,33 @@ def test_before_hook_runs_on_the_owner():
 def test_schedule_replication_and_single_firing():
     section("Scheduled procedures — DDL replicates, and a schedule fires on exactly one node")
 
-    check("store the marker procedure", op(nodes[0].client_port, {
+    check_status("store the marker procedure", op(nodes[0].client_port, {
         "type": "SAVE_PROCEDURE", "databaseName": SCHEDULE_DB, "name": SCHEDULE_PROC,
         "script": SCHEDULE_SOURCE}), "OK")
     create_coll(nodes[0].client_port, SCHEDULE_DB, "sched_marks")
-    check("save a schedule via node-0", save_schedule(nodes[0].client_port, "clustered", "sched_marks"), "OK")
+    check_status("save a schedule via node-0", save_schedule(nodes[0].client_port, "clustered", "sched_marks"), "OK")
 
-    check_true("the schedule is listed on every node",
+    check("the schedule is listed on every node",
                wait_until(lambda: all("clustered" in schedule_names(n.client_port) for n in nodes if n.alive),
                           timeout_s=20.0),
                detail=str([schedule_names(n.client_port) for n in nodes if n.alive]))
 
     # One owner means roughly one firing per interval. Three would mean the ring guard is not working,
     # so the assertion is deliberately about the rate, not about an exact count.
-    check_true("the schedule starts firing",
+    check("the schedule starts firing",
                wait_until(lambda: fire_count(nodes[0].client_port, "sched_marks") >= 1, timeout_s=20.0))
     before = fire_count(nodes[0].client_port, "sched_marks")
     window = 6.0
     time.sleep(window)
     delta = fire_count(nodes[0].client_port, "sched_marks") - before
     expected = window / 1.0
-    check_true("it fires at the single-owner rate, not once per node",
+    check("it fires at the single-owner rate, not once per node",
                1 <= delta <= expected * 1.7,
                detail=f"{delta} firings in {window}s (one owner would be about {expected:.0f}, "
                       f"three would be about {expected * 3:.0f})")
 
-    check("delete the schedule", delete_schedule(nodes[0].client_port, "clustered"), "OK")
-    check_true("the deletion replicates to every node",
+    check_status("delete the schedule", delete_schedule(nodes[0].client_port, "clustered"), "OK")
+    check("the deletion replicates to every node",
                wait_until(lambda: all("clustered" not in schedule_names(n.client_port)
                                       for n in nodes if n.alive), timeout_s=20.0))
 
@@ -1406,12 +1394,12 @@ def test_schedule_failover():
     names = [f"failover{i}" for i in range(6)]
     for name in names:
         create_coll(nodes[0].client_port, SCHEDULE_DB, name)
-        check(f"save {name}", save_schedule(nodes[0].client_port, name, name), "OK")
+        check_status(f"save {name}", save_schedule(nodes[0].client_port, name, name), "OK")
 
     def _all_firing():
         return all(fire_count(nodes[0].client_port, name) >= 1 for name in names)
 
-    check_true("every schedule fires from a surviving node after the owner died",
+    check("every schedule fires from a surviving node after the owner died",
                wait_until(_all_firing, timeout_s=60.0, interval_s=1.0),
                detail=str({name: fire_count(nodes[0].client_port, name) for name in names}))
 
@@ -1420,7 +1408,7 @@ def test_schedule_failover():
 
     # Installed while node-2 is down, so the rejoin test can prove the admin snapshot carries it.
     create_coll(nodes[0].client_port, SCHEDULE_DB, "while_down")
-    check("save a schedule while one node is down",
+    check_status("save a schedule while one node is down",
           save_schedule(nodes[0].client_port, "whileDown", "while_down"), "OK")
 
 
@@ -1428,7 +1416,7 @@ def test_schedule_rejoin_catch_up():
     section("Scheduled procedures — a rejoining node picks up what it missed")
 
     rejoiner = nodes[2]
-    check_true("the rejoined node knows the schedule saved while it was down",
+    check("the rejoined node knows the schedule saved while it was down",
                wait_until(lambda: "whileDown" in schedule_names(rejoiner.client_port), timeout_s=60.0,
                           interval_s=1.0),
                detail=str(schedule_names(rejoiner.client_port)))
@@ -1440,19 +1428,10 @@ def test_schedule_rejoin_catch_up():
 # ══════════════════════════════════════════════════════════════════════════
 
 def main():
-    print("\n" + "═" * 60)
-    print("  LWNRDB — Clustering (multi-node) integration suite")
-    print("═" * 60)
+    bu.banner("Clustering (multi-node) integration suite")
 
-    if SERVER_BIN:
-        if not os.path.isfile(SERVER_BIN):
-            print(f"\n[ERROR] Server binary not found at {SERVER_BIN} (LWNRDB_SERVER_BIN).\n")
-            sys.exit(1)
-    else:
-        jar = os.path.join(REPO_ROOT, JAR)
-        if not os.path.isfile(jar):
-            print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
-            sys.exit(1)
+    if not bu.server_binary_ready():
+        sys.exit(1)
 
     base_dir = tempfile.mkdtemp(prefix="lwnrdb-cluster-")
     print(f"  Base working dir: {base_dir}")
@@ -1502,20 +1481,15 @@ def main():
         drop_db(nodes[0].client_port, DB)
         drop_db(nodes[0].client_port, CANARY_DB)
         drop_db(nodes[0].client_port, LOCALITY_DB)
+    except BaseException:
+        print("\n[ERROR] the suite raised - dumping node logs", file=sys.stderr)
+        dump_all_logs()
+        raise
     finally:
         for n in nodes:
             n.stop()
 
-    print("\n" + "═" * 60)
-    if failures == 0:
-        print("  \033[92mAll checks passed.\033[0m")
-    else:
-        print(f"  \033[91m{failures} check(s) FAILED.\033[0m")
-        for n in nodes:
-            n.dump_log()
-    print("═" * 60 + "\n")
-
-    sys.exit(0 if failures == 0 else 1)
+    bu.summary(on_failure=dump_all_logs)
 
 
 if __name__ == "__main__":

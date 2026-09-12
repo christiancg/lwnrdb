@@ -96,8 +96,6 @@ public class GeoUtilsTest {
         final var prefixes = GeoUtils.coveringGeohashPrefixes(bbox);
 
         assertFalse(prefixes.isEmpty());
-        // Every point inside the box — including points close to the max edges and off the grid — must
-        // be covered by at least one returned prefix, so the index range scan cannot miss a candidate.
         // The fine, non-grid-aligned sampling deliberately probes the max-edge band a naive grid misses.
         final var latSpan = bbox.maxLat() - bbox.minLat();
         final var lngSpan = bbox.maxLng() - bbox.minLng();

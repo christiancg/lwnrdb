@@ -25,7 +25,6 @@ public class JsOperatorsTest {
         return ((JsBoolean) value).getValue();
     }
 
-    // Numeric arithmetic operators produce the expected results
     @Test
     public void test_arithmetic() {
         assertEquals(5, num(JsOperators.binary("+", new JsNumber(2), new JsNumber(3))));
@@ -38,14 +37,12 @@ public class JsOperatorsTest {
         assertTrue(Double.isNaN(num(JsOperators.binary("/", new JsNumber(0), new JsNumber(0)))));
     }
 
-    // The + operator concatenates when either operand is a string
     @Test
     public void test_string_concat() {
         assertEquals("ab", ((JsString) JsOperators.binary("+", new JsString("a"), new JsString("b"))).getValue());
         assertEquals("a1", ((JsString) JsOperators.binary("+", new JsString("a"), new JsNumber(1))).getValue());
     }
 
-    // Bitwise operators coerce to 32-bit integers, with an unsigned right shift
     @Test
     public void test_bitwise() {
         assertEquals(1, num(JsOperators.binary("&", new JsNumber(5), new JsNumber(3))));
@@ -56,7 +53,6 @@ public class JsOperatorsTest {
         assertEquals(4294967295.0, num(JsOperators.binary(">>>", new JsNumber(-1), new JsNumber(0))));
     }
 
-    // Relational operators compare numbers and strings, NaN is unordered
     @Test
     public void test_relational() {
         assertTrue(bool(JsOperators.binary("<", new JsNumber(1), new JsNumber(2))));
@@ -66,7 +62,6 @@ public class JsOperatorsTest {
         assertTrue(bool(JsOperators.binary(">", new JsBigInt(BigInteger.TWO), new JsNumber(1))));
     }
 
-    // Loose equality applies type coercion, strict equality does not
     @Test
     public void test_equality() {
         assertTrue(bool(JsOperators.binary("==", new JsNumber(1), new JsString("1"))));
@@ -81,7 +76,6 @@ public class JsOperatorsTest {
         assertFalse(bool(JsOperators.binary("==", JsNull.getInstance(), new JsNumber(0))));
     }
 
-    // BigInt arithmetic stays exact, mixing with numbers throws
     @Test
     public void test_bigint() {
         assertEquals(BigInteger.valueOf(3),
@@ -93,7 +87,6 @@ public class JsOperatorsTest {
                 () -> JsOperators.binary("/", new JsBigInt(BigInteger.ONE), new JsBigInt(BigInteger.ZERO)));
     }
 
-    // Unary operators negate, coerce, and report types
     @Test
     public void test_unary() {
         assertTrue(bool(JsOperators.unary("!", new JsNumber(0))));
@@ -104,7 +97,6 @@ public class JsOperatorsTest {
         assertInstanceOf(JsUndefined.class, JsOperators.unary("void", new JsNumber(1)));
     }
 
-    // delta increments and decrements numbers and BigInts
     @Test
     public void test_delta() {
         assertEquals(6, num(JsOperators.delta(new JsNumber(5), true)));
@@ -122,7 +114,6 @@ public class JsOperatorsTest {
         return new JsBigInt(BigInteger.valueOf(value));
     }
 
-    // BigInt arithmetic operators other than + stay exact
     @Test
     public void test_bigint_arithmetic() {
         assertEquals(BigInteger.valueOf(7), big(JsOperators.binary("-", bi(10), bi(3))));
@@ -134,7 +125,6 @@ public class JsOperatorsTest {
         assertThrows(TypeErrorException.class, () -> JsOperators.binary("-", bi(1), new JsNumber(1)));
     }
 
-    // BigInt bitwise operators map onto BigInteger, unsigned shift is unsupported
     @Test
     public void test_bigint_bitwise() {
         assertEquals(BigInteger.valueOf(2), big(JsOperators.binary("&", bi(6), bi(3))));
@@ -145,7 +135,6 @@ public class JsOperatorsTest {
         assertThrows(TypeErrorException.class, () -> JsOperators.binary(">>>", bi(1), bi(1)));
     }
 
-    // BigInt comparisons work directly and against numbers, NaN stays unordered
     @Test
     public void test_bigint_relational_and_equality() {
         assertTrue(bool(JsOperators.binary("<", bi(1), bi(2))));
@@ -157,14 +146,12 @@ public class JsOperatorsTest {
         assertFalse(bool(JsOperators.binary("==", bi(1), new JsString("x"))));
     }
 
-    // Unary negation and bitwise-not have dedicated BigInt paths
     @Test
     public void test_unary_bigint() {
         assertEquals(BigInteger.valueOf(-5), big(JsOperators.unary("-", bi(5))));
         assertEquals(BigInteger.valueOf(-6), big(JsOperators.unary("~", bi(5))));
     }
 
-    // Bitwise operands past the long range wrap modulo 2^32 instead of saturating
     @Test
     public void test_bitwise_large_operands() {
         assertEquals(-559939584, num(JsOperators.binary("|", new JsNumber(1e21), new JsNumber(0))));
@@ -174,14 +161,12 @@ public class JsOperatorsTest {
         assertEquals(0, num(JsOperators.binary("|", new JsNumber(Double.POSITIVE_INFINITY), new JsNumber(0))));
     }
 
-    // Unknown operators are rejected by both binary and unary dispatch
     @Test
     public void test_unknown_operators_throw() {
         assertThrows(TypeErrorException.class, () -> JsOperators.binary("bogus", new JsNumber(1), new JsNumber(2)));
         assertThrows(TypeErrorException.class, () -> JsOperators.unary("bogus", new JsNumber(1)));
     }
 
-    // A BigInt against an unparseable string is unordered, so every relational operator is false
     @Test
     public void test_bigint_against_incomparable_string() {
         assertFalse(bool(JsOperators.binary(">=", bi(1), new JsString("0."))));
@@ -192,7 +177,6 @@ public class JsOperatorsTest {
         assertTrue(bool(JsOperators.binary(">", new JsString("0x10"), bi(15))));
     }
 
-    // A BigInt against a non-finite number compares against the infinity, not as unordered
     @Test
     public void test_bigint_against_non_finite() {
         assertTrue(bool(JsOperators.binary(">", new JsNumber(Double.POSITIVE_INFINITY), bi(1))));
@@ -202,7 +186,6 @@ public class JsOperatorsTest {
         assertFalse(bool(JsOperators.binary(">", new JsNumber(Double.NaN), bi(0))));
     }
 
-    // A BigInt against a huge number compares exactly rather than through a double round-trip
     @Test
     public void test_bigint_against_number_extremes() {
         final var big = new BigInteger("9007199254740992");
@@ -213,7 +196,6 @@ public class JsOperatorsTest {
         assertTrue(bool(JsOperators.binary("==", bi(0), new JsString(""))));
     }
 
-    // Signed zeroes are equal, so neither is strictly less than the other
     @Test
     public void test_signed_zero_relational() {
         assertFalse(bool(JsOperators.binary(">", new JsNumber(0d), new JsNumber(-0d))));
@@ -221,7 +203,6 @@ public class JsOperatorsTest {
         assertTrue(bool(JsOperators.binary(">=", new JsNumber(0d), new JsNumber(-0d))));
     }
 
-    // Two objects are compared by identity, never coerced
     @Test
     public void test_loose_equals_two_objects() {
         final var object = new JsObject();
@@ -229,7 +210,6 @@ public class JsOperatorsTest {
         assertFalse(bool(JsOperators.binary("==", object, new JsObject())));
     }
 
-    // A wrapped BigInt reaches the BigInt arithmetic path instead of the mixed-type rejection
     @Test
     public void test_wrapped_bigint_arithmetic() {
         final var wrapper = new JsObject();

@@ -28,34 +28,29 @@ public class InterpreterTimerTest {
         return ((JsNumber) array.get(index)).getValue();
     }
 
-    // setTimeout runs its callback during the drain
     @Test
     public void test_set_timeout_runs_callback() {
         final var out = arr("let out = []; setTimeout(() => out.push(1), 0); out");
         assertEquals(1, num(out, 0));
     }
 
-    // extra args passed to setTimeout are forwarded to the callback
     @Test
     public void test_set_timeout_passes_extra_args() {
         final var out = arr("let out = []; setTimeout((a, b) => out.push(a + b), 0, 2, 3); out");
         assertEquals(5, num(out, 0));
     }
 
-    // setTimeout returns a numeric id
     @Test
     public void test_timeout_returns_numeric_id() {
         assertEquals("number", str());
     }
 
-    // clearTimeout cancels a pending timer
     @Test
     public void test_clear_timeout_cancels() {
         final var out = arr("let out = []; let id = setTimeout(() => out.push(1), 0); clearTimeout(id); out");
         assertTrue(out.getElements().isEmpty());
     }
 
-    // a promise reaction runs before a zero-delay timer
     @Test
     public void test_ordering_promise_before_timeout() {
         final var source = """
@@ -69,7 +64,6 @@ public class InterpreterTimerTest {
         assertEquals("t", ((JsString) out.get(1)).getValue());
     }
 
-    // timeouts fire in delay order regardless of scheduling order
     @Test
     public void test_timeouts_fire_in_delay_order() {
         final var source = """
@@ -83,7 +77,6 @@ public class InterpreterTimerTest {
         assertEquals(2, num(out, 1));
     }
 
-    // setInterval reschedules and stops when cleared from the callback
     @Test
     public void test_set_interval_and_clear() {
         final var source = """
@@ -101,7 +94,6 @@ public class InterpreterTimerTest {
         assertEquals(3, num(out, 2));
     }
 
-    // an async body may await inside a timer callback and still land its result
     @Test
     public void test_await_inside_timer_callback() {
         final var source = """
@@ -114,7 +106,6 @@ public class InterpreterTimerTest {
         assertEquals(42, num(arr(source), 0));
     }
 
-    // a non-function callback raises a TypeError
     @Test
     public void test_non_function_callback_throws() {
         try {
@@ -125,7 +116,6 @@ public class InterpreterTimerTest {
         }
     }
 
-    // an uncaught throw in a timer callback does not abort the script
     @Test
     public void test_callback_error_does_not_abort_script() {
         final var source = """
@@ -138,7 +128,6 @@ public class InterpreterTimerTest {
         assertEquals(1, num(out, 0));
     }
 
-    // a timer whose delay exceeds the wall-clock budget times out the script
     @Test
     public void test_timer_respects_wall_clock_deadline() {
         final var engine = new SimpleJs();

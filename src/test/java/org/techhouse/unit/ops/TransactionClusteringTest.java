@@ -171,7 +171,6 @@ public class TransactionClusteringTest {
 
     @Test
     public void test_commit_without_quorum_aborts() throws Exception {
-        // Three expected nodes but only one alive: no write quorum.
         configureMembership(3, node("self", 5000));
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
@@ -193,7 +192,6 @@ public class TransactionClusteringTest {
         processor.processMessage(saveRequest("timed-out"), clientId);
         final var response = processor.processMessage(new CommitTransactionRequest(), clientId);
         assertEquals("503-3", response.getErrorCode());
-        // The local commit stands even when replication timed out.
         assertEquals(OperationStatus.OK, findStatus("timed-out"));
     }
 
@@ -209,7 +207,6 @@ public class TransactionClusteringTest {
         }).get();
         assertFalse(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL), "lock should be held by the session");
 
-        // A membership view that no longer contains the originating edge node triggers a reap.
         TransactionOperationHelper.reapTransactionsForDeparted(new MembershipView(List.of(node("self", 5000))));
 
         assertTrue(clientTracker.txSessionsSnapshot().isEmpty());

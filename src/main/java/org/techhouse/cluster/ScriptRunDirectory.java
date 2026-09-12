@@ -3,7 +3,6 @@ package org.techhouse.cluster;
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.cluster.membership.MembershipService;
-import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.RunningScript;
 import org.techhouse.config.Globals;
@@ -39,10 +38,7 @@ public class ScriptRunDirectory {
             return rows;
         }
         final var self = membershipService.getSelf();
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (self != null && member.getNodeId().equals(self.getNodeId())) {
-                continue;
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
             final var memberAddress = member.address().toString();
             for (final var run : requestListScripts(member.address())) {
                 rows.add(toJson(run, memberAddress, now));
@@ -60,10 +56,7 @@ public class ScriptRunDirectory {
         }
         final var self = membershipService.getSelf();
         var cancelled = false;
-        for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (self != null && member.getNodeId().equals(self.getNodeId())) {
-                continue;
-            }
+        for (final var member : membershipService.membershipView().peers(self)) {
             cancelled |= requestCancel(member.address(), runId);
         }
         return cancelled;
@@ -88,8 +81,7 @@ public class ScriptRunDirectory {
     }
 
     private List<RunningScript> requestListScripts(NodeAddress address) {
-        final var message = new ClusterMessage(null, ClusterMessageType.LIST_SCRIPTS, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.LIST_SCRIPTS);
         try {
             final var response = pool.request(address, message, clusterConfig.replicationAckTimeoutMs());
             if (response.getType() == ClusterMessageType.LIST_SCRIPTS_ACK && response.getRunningScripts() != null) {
@@ -103,8 +95,7 @@ public class ScriptRunDirectory {
     }
 
     private boolean requestCancel(NodeAddress address, String runId) {
-        final var message = new ClusterMessage(null, ClusterMessageType.CANCEL_SCRIPT, clusterConfig.secret(),
-                membershipService.getSelf(), null);
+        final var message = PeerRequest.message(ClusterMessageType.CANCEL_SCRIPT);
         message.setCancelRunId(runId);
         try {
             final var response = pool.request(address, message, clusterConfig.replicationAckTimeoutMs());

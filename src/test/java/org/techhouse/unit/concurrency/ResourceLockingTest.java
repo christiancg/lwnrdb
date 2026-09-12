@@ -2,8 +2,10 @@ package org.techhouse.unit.concurrency;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.jupiter.api.AfterEach;
@@ -28,7 +30,6 @@ public class ResourceLockingTest {
         return TestUtils.getPrivateField(rl, "locks", type);
     }
 
-    // A write lock is held exclusively: a reader on another thread blocks until the writer releases.
     @Test
     public void test_write_lock_blocks_reader_until_released() throws Exception {
         final var rl = new ResourceLocking();
@@ -39,7 +40,6 @@ public class ResourceLockingTest {
                 rl.lockRead("db", "coll");
                 acquired.set(true);
             } catch (InterruptedException ignored) {
-                // test thread interrupted while blocked; acquired stays false
             }
         });
         reader.start();
@@ -50,7 +50,6 @@ public class ResourceLockingTest {
         assertTrue(acquired.get(), "reader must proceed once the writer releases");
     }
 
-    // Multiple readers share the lock: a second reader is not blocked by the first.
     @Test
     public void test_multiple_readers_proceed_concurrently() throws Exception {
         final var rl = new ResourceLocking();
@@ -62,7 +61,6 @@ public class ResourceLockingTest {
                 acquired.set(true);
                 rl.releaseRead("db", "coll");
             } catch (InterruptedException ignored) {
-                // test thread interrupted while blocked; acquired stays false
             }
         });
         reader.start();
@@ -71,7 +69,6 @@ public class ResourceLockingTest {
         rl.releaseRead("db", "coll");
     }
 
-    // A read lock held by another thread blocks a writer (tryLockWrite fails), then succeeds once free.
     @Test
     public void test_read_lock_excludes_writer() throws Exception {
         final var rl = new ResourceLocking();
@@ -84,7 +81,6 @@ public class ResourceLockingTest {
                 release.await();
                 rl.releaseRead("db", "coll");
             } catch (InterruptedException ignored) {
-                // test thread interrupted while awaiting release; nothing to clean up
             }
         });
         reader.start();
@@ -173,6 +169,47 @@ public class ResourceLockingTest {
         rl.removeLock("db", "coll");
         final var identifier = Cache.getCollectionIdentifier("db", "coll");
         assertFalse(locks(rl).containsKey(identifier));
+    }
+
+    // An interrupted read-lock acquisition has to release the locks it already took: the caller only
+    // ever releases the returned list, so anything still held would be stranded for good.
+    @Test
+    public void test_interrupted_read_lock_acquisition_releases_what_it_took() throws Exception {
+        final var rl = new ResourceLocking();
+        final var first = Cache.getCollectionIdentifier("db", "aColl");
+        final var second = Cache.getCollectionIdentifier("db", "bColl");
+        final var writerHolds = new CountDownLatch(1);
+        final var writerMayRelease = new CountDownLatch(1);
+        final var writer = new Thread(() -> {
+            try {
+                rl.lockWrite(second);
+                writerHolds.countDown();
+                writerMayRelease.await();
+                rl.releaseWrite(second);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        writer.start();
+        assertTrue(writerHolds.await(5, TimeUnit.SECONDS));
+        final var blockedOnSecond = locks(rl).get(second);
+        final var reader = Thread.currentThread();
+        final var interrupter = new Thread(() -> {
+            final var deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (!blockedOnSecond.hasQueuedThreads() && System.nanoTime() < deadline) {
+                Thread.onSpinWait();
+            }
+            reader.interrupt();
+        });
+        interrupter.start();
+
+        assertThrows(InterruptedException.class, () -> rl.acquireReadLocks(false, List.of(second, first)));
+        assertFalse(Thread.interrupted());
+        assertEquals(0, locks(rl).get(first).getReadLockCount());
+
+        writerMayRelease.countDown();
+        writer.join();
+        interrupter.join();
     }
 
     @Test

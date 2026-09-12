@@ -12,19 +12,14 @@ import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.SetPasswordRequest;
-import org.techhouse.ops.resp.AuthenticateResponse;
-import org.techhouse.ops.resp.ChangePermissionsResponse;
-import org.techhouse.ops.resp.CreateUserResponse;
-import org.techhouse.ops.resp.DeleteUserResponse;
 import org.techhouse.ops.resp.OperationResponse;
-import org.techhouse.ops.resp.SetPasswordResponse;
 
 public class UserOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
 
     public static OperationResponse processAuthenticate(AuthenticateRequest request, UUID clientId) {
-        try {
+        return OperationResponse.respondOrError(OperationType.AUTHENTICATE, ErrorCode.AUTHENTICATION_ERROR, () -> {
             final var username = request.getUsername();
             final var password = request.getPassword();
             final var user = cache.getAdminUserEntry(username);
@@ -34,10 +29,8 @@ public class UserOperationHelper {
             }
 
             clientTracker.setAuthenticatedUser(clientId, username);
-            return new AuthenticateResponse("Authenticated");
-        } catch (Exception e) {
-            return new OperationResponse(OperationType.AUTHENTICATE, ErrorCode.AUTHENTICATION_ERROR);
-        }
+            return OperationResponse.ok(OperationType.AUTHENTICATE, "Authenticated");
+        });
     }
 
     public static OperationResponse processCreateUser(CreateUserRequest request) {
@@ -53,7 +46,7 @@ public class UserOperationHelper {
                     request.getCollectionPermissions(), request.getScriptPermissions());
 
             AdminOperationHelper.saveUserEntry(userEntry);
-            return new CreateUserResponse("User created successfully");
+            return OperationResponse.ok(OperationType.CREATE_USER, "User created successfully");
         } catch (IOException | InterruptedException e) {
             return new OperationResponse(OperationType.CREATE_USER, ErrorCode.ERROR_CREATING_USER);
         }
@@ -74,7 +67,7 @@ public class UserOperationHelper {
             }
 
             AdminOperationHelper.deleteUserEntry(username);
-            return new DeleteUserResponse("User deleted successfully");
+            return OperationResponse.ok(OperationType.DELETE_USER, "User deleted successfully");
         } catch (IOException | InterruptedException e) {
             return new OperationResponse(OperationType.DELETE_USER, ErrorCode.ERROR_DELETING_USER);
         }
@@ -105,7 +98,7 @@ public class UserOperationHelper {
                     target.getGlobalPermissions(), target.getDatabasePermissions(), target.getCollectionPermissions(),
                     target.getScriptPermissions());
             AdminOperationHelper.saveUserEntry(updated);
-            return new SetPasswordResponse("Password changed successfully");
+            return OperationResponse.ok(OperationType.SET_PASSWORD, "Password changed successfully");
         } catch (IOException | InterruptedException e) {
             return new OperationResponse(OperationType.SET_PASSWORD, ErrorCode.ERROR_CHANGING_PASSWORD);
         }
@@ -133,7 +126,7 @@ public class UserOperationHelper {
                     request.getCollectionPermissions(), request.getScriptPermissions());
 
             AdminOperationHelper.saveUserEntry(updatedUser);
-            return new ChangePermissionsResponse("Permissions changed successfully");
+            return OperationResponse.ok(OperationType.CHANGE_PERMISSIONS, "Permissions changed successfully");
         } catch (IOException | InterruptedException e) {
             return new OperationResponse(OperationType.CHANGE_PERMISSIONS, ErrorCode.ERROR_CHANGING_PERMISSIONS);
         }

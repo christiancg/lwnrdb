@@ -2,13 +2,6 @@ package org.techhouse.analyze;
 
 import java.util.List;
 
-/**
- * Serialized payload for AGGREGATE analyze mode. A plain public-field DTO so the EJson reflection
- * serializer emits it like the other response DTOs. The timing fields
- * ({@code startTime}/{@code endTime}/{@code durationMillis}) are set by {@code MessageProcessor}
- * around the processing call; the remaining fields are populated by {@code AnalyzeHelper} from the
- * {@link AnalyzeContext} gathered during the pipeline run.
- */
 public class AnalyzeResult {
     public long startTime;
     public long endTime;

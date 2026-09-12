@@ -15,11 +15,11 @@ import org.techhouse.ejson.elements.JsonSyntaxToken;
 import org.techhouse.ejson.internal.ReflectionUtils;
 
 public class ReflectionUtilsTest {
-    // Get and set field values for accessible class fields
     @Test
     public void test_get_set_field_values() throws IllegalAccessException {
+        @SuppressWarnings("unused")
         class TestClass {
-            private final String testField = "initial"; // NOPMD - reflection/serialization test fixture
+            private final String testField = "initial";
         }
 
         TestClass instance = new TestClass();
@@ -33,17 +33,11 @@ public class ReflectionUtilsTest {
         assertEquals("updated", updatedValue);
     }
 
-    // Access private fields and constructors by setting accessible flag
     @Test
     public void test_access_private_members() {
+        @SuppressWarnings("unused")
         final class PrivateClass {
-            private String privateField = "initial"; // NOPMD - reflection/serialization test fixture
-            public String getPrivateField() {
-                return privateField;
-            }
-            public void setPrivateField(String privateField) {
-                this.privateField = privateField;
-            }
+            private final String privateField = "initial";
         }
         Constructor<?>[] constructors = ReflectionUtils.getConstructors(PrivateClass.class);
         Field[] fields = ReflectionUtils.getFields(PrivateClass.class);
@@ -60,7 +54,6 @@ public class ReflectionUtilsTest {
         public String publicField;
     }
 
-    // Get value of public field from instance
     @Test
     public void test_get_public_field_value() throws IllegalAccessException, NoSuchFieldException {
         TestClass testObj = new TestClass();
@@ -71,7 +64,6 @@ public class ReflectionUtilsTest {
         assertEquals("test value", result);
     }
 
-    // Get value from null instance
     @Test
     public void test_get_field_value_null_instance() throws NoSuchFieldException {
         Field field = TestClass.class.getField("publicField");
@@ -79,7 +71,6 @@ public class ReflectionUtilsTest {
         assertThrows(NullPointerException.class, () -> ReflectionUtils.getFieldValue(field, null));
     }
 
-    // Set public field value for instance with matching field type
     @Test
     public void test_set_public_field_value_with_matching_type() throws IllegalAccessException, NoSuchFieldException {
         TestClass testObj = new TestClass();
@@ -90,7 +81,6 @@ public class ReflectionUtilsTest {
         assertEquals(newValue, testObj.publicField);
     }
 
-    // Set field value with null instance parameter
     @Test
     public void test_set_field_value_with_null_instance() throws NoSuchFieldException {
         Field field = TestClass.class.getField("publicField");
@@ -98,45 +88,36 @@ public class ReflectionUtilsTest {
         assertThrows(NullPointerException.class, () -> ReflectionUtils.setFieldValue(field, null, newValue));
     }
 
-    // Returns cached fields when class exists in classSpecifications map
     @Test
     public void test_returns_cached_fields_when_class_exists() {
-        // First call to populate cache
         Field[] fields1 = ReflectionUtils.getFields(JsonString.class);
 
-        // Second call should return cached fields
         Field[] fields2 = ReflectionUtils.getFields(JsonString.class);
 
         assertNotNull(fields2);
         assertArrayEquals(fields1, fields2);
     }
 
-    // Pass null as tClass parameter
     @Test
     public void test_null_class_parameter() {
         assertThrows(NullPointerException.class, () -> ReflectionUtils.getFields(null));
     }
 
-    // Returns cached constructors when class exists in classSpecifications map
     @Test
     public void test_returns_cached_constructors_when_class_exists() {
-        // First call to populate cache
         Constructor<?>[] firstCall = ReflectionUtils.getConstructors(JsonString.class);
 
-        // Second call should return cached constructors
         Constructor<?>[] secondCall = ReflectionUtils.getConstructors(JsonString.class);
 
         assertNotNull(secondCall);
         assertArrayEquals(firstCall, secondCall);
     }
 
-    // Passing null as tClass parameter
     @Test
     public void test_throws_exception_when_null_class() {
         assertThrows(NullPointerException.class, () -> ReflectionUtils.getConstructors(null));
     }
 
-    // Create instance using public no-args constructor
     @Test
     public void test_create_instance_with_public_no_args_constructor() throws Exception {
         class TestClass {
@@ -153,7 +134,6 @@ public class ReflectionUtilsTest {
         assertInstanceOf(TestClass.class, result);
     }
 
-    // Handle class with no public constructors
     @Test
     public void test_create_instance_with_no_public_constructors() {
         final class TestClass {
@@ -169,7 +149,6 @@ public class ReflectionUtilsTest {
         });
     }
 
-    // Handle invalid enum values
     @Test
     public void test_cast_invalid_enum_value() {
         JsonString invalidEnumValue = new JsonString("INVALID_VALUE");
@@ -181,41 +160,35 @@ public class ReflectionUtilsTest {
         VALUE1, VALUE2
     }
 
-    // cast with NULL json type returns null
     @Test
     public void test_cast_null_json_type_returns_null() throws Exception {
         assertNull(cast(String.class, JsonNull.INSTANCE, null));
     }
 
-    // cast NUMBER to Integer performs intValue() conversion (L140)
     @Test
     public void test_cast_number_to_integer() throws Exception {
         JsonNumber num = new JsonNumber(42.7);
         assertEquals(Integer.valueOf(42), cast(Integer.class, num, null));
     }
 
-    // cast NUMBER to Double performs doubleValue() conversion (L142)
     @Test
     public void test_cast_number_to_double() throws Exception {
         JsonNumber num = new JsonNumber(3.14);
         assertEquals(Double.valueOf(3.14), cast(Double.class, num, null));
     }
 
-    // cast NUMBER to Float performs floatValue() conversion (L144)
     @Test
     public void test_cast_number_to_float() throws Exception {
         JsonNumber num = new JsonNumber(1.5);
         assertEquals(Float.valueOf(1.5f), cast(Float.class, num, null));
     }
 
-    // cast NUMBER to Long performs longValue() conversion (L146)
     @Test
     public void test_cast_number_to_long() throws Exception {
         JsonNumber num = new JsonNumber(100.9);
         assertEquals(Long.valueOf(100L), cast(Long.class, num, null));
     }
 
-    // cast to a primitive target narrows the parsed number to the field's own box type
     @Test
     public void test_cast_number_to_primitive_targets() throws Exception {
         JsonNumber large = new JsonNumber("10000000000");
@@ -229,13 +202,11 @@ public class ReflectionUtilsTest {
         assertEquals(Byte.valueOf((byte) 100), cast(byte.class, num, null));
     }
 
-    // cast to a primitive target leaves a non-numeric value untouched
     @Test
     public void test_cast_non_number_to_primitive_is_unchanged() throws Exception {
         assertEquals(Boolean.TRUE, cast(boolean.class, new org.techhouse.ejson.elements.JsonBoolean(true), null));
     }
 
-    // cast with SYNTAX json type returns null (L118)
     @Test
     public void test_cast_syntax_token_returns_null() throws Exception {
         assertNull(cast(String.class, JsonSyntaxToken.COMMA, null));

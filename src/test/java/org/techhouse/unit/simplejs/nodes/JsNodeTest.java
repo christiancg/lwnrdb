@@ -81,7 +81,6 @@ import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.nodes.YieldExpression;
 
 public class JsNodeTest {
-    // Each node subclass reports the matching NodeType
     @Test
     public void test_get_type_for_each_subclass() {
         final var id = new Identifier("x");
@@ -170,7 +169,6 @@ public class JsNodeTest {
         assertEquals(NodeType.EXPORT_ALL_DECLARATION, new ExportAllDeclaration(id, src, List.of()).getType());
     }
 
-    // Node getters expose the values passed to the constructor
     @Test
     public void test_node_getters() {
         final var id = new Identifier("name");

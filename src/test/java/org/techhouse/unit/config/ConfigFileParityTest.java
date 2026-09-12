@@ -9,9 +9,6 @@ import java.util.Map;
 import java.util.TreeMap;
 import org.junit.jupiter.api.Test;
 
-// lwnrdb.cfg carries only this deployment's overrides; default.cfg is the packaged fallback and the
-// documented reference. A key here that default.cfg does not declare, or one whose value silently
-// disagrees for no reason, is what would change what an untouched deployment runs on.
 public class ConfigFileParityTest {
 
     @Test

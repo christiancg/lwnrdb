@@ -3,8 +3,6 @@ package org.techhouse.config;
 import java.util.Arrays;
 import java.util.List;
 
-// The one place a configuration key is declared: its name, type, shipped default and validation
-// rule. Parsing, defaults, validation and the missing-key warning all read this table.
 public enum ConfigKey {
     // @formatter:off
     PORT("port", ValueType.INT, "8989", Rule.range(1, 65535)),

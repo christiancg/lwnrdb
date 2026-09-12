@@ -21,8 +21,6 @@ public final class ValidationResult {
         return new ValidationResult(false, errorMessage, ErrorCode.VALIDATION_ERROR);
     }
 
-    // A rejection the caller already has a dedicated code for, so the client sees the same code the
-    // equivalent RUN_SCRIPT rejection would have returned rather than a generic validation error.
     public static ValidationResult fail(ErrorCode errorCode, String errorMessage) {
         return new ValidationResult(false, errorMessage, errorCode);
     }

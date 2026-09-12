@@ -23,7 +23,9 @@ public class PeerConnectionPool {
         final var connection = getOrCreate(address);
         try {
             return connection.sendRequest(message, timeoutMs);
-        } catch (IOException | TimeoutException | InterruptedException e) {
+        } catch (IOException e) {
+            // Only a transport failure condemns the socket, never a timeout: every peer shares one connection,
+            // so dropping it would fail the concurrent gossip and replication riding on it and cost the quorum.
             drop(address, connection);
             throw e;
         }
@@ -39,8 +41,14 @@ public class PeerConnectionPool {
             // Connect with a bounded timeout so a hanging connect to one peer (e.g. a black-holed host)
             // holds the pool lock for at most replicationAckTimeoutMs instead of the OS default.
             final var socket = socketFactory().createSocket();
-            socket.connect(new InetSocketAddress(address.getHost(), address.getPort()),
-                    (int) clusterConfig.replicationAckTimeoutMs());
+            try {
+                socket.connect(new InetSocketAddress(address.getHost(), address.getPort()),
+                        (int) clusterConfig.replicationAckTimeoutMs());
+            } catch (IOException e) {
+                // Distinct from every later failure: nothing was written, so the peer cannot have acted on
+                // this request. Callers that would otherwise have to assume the worst rely on the difference.
+                throw new PeerUnreachableException("Could not connect to " + address, e);
+            }
             connection = new PeerConnection(socket);
             connections.put(address, connection);
             return connection;

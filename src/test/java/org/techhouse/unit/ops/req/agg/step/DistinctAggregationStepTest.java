@@ -8,7 +8,6 @@ import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
 
 public class DistinctAggregationStepTest {
-    // Constructor sets AggregationStepType to DISTINCT
     @Test
     public void test_constructor_sets_distinct_type() {
         String fieldName = "testField";
@@ -17,7 +16,6 @@ public class DistinctAggregationStepTest {
         assertEquals(AggregationStepType.DISTINCT, step.getType());
     }
 
-    // Constructor handles null fieldName parameter
     @Test
     public void test_constructor_accepts_null_field_name() {
         DistinctAggregationStep step = new DistinctAggregationStep(null);
@@ -26,16 +24,13 @@ public class DistinctAggregationStepTest {
         assertEquals(AggregationStepType.DISTINCT, step.getType());
     }
 
-    // test getters and setters provided by lombok
     @Test
     public void test_getters_and_setters() {
         String initialFieldName = "initialField";
         DistinctAggregationStep step = new DistinctAggregationStep(initialFieldName);
 
-        // Test getter
         assertEquals(initialFieldName, step.getFieldName());
 
-        // Test setter
         String newFieldName = "newField";
         step.setFieldName(newFieldName);
         assertEquals(newFieldName, step.getFieldName());

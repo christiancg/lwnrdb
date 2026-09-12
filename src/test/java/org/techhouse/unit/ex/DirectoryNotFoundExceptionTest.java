@@ -6,7 +6,6 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ex.DirectoryNotFoundException;
 
 public class DirectoryNotFoundExceptionTest {
-    // Create exception with valid directory path string
     @Test
     public void test_create_exception_with_valid_directory_path() {
         String directoryPath = "/some/test/path";
@@ -15,7 +14,6 @@ public class DirectoryNotFoundExceptionTest {
         assertEquals("The specified directory couldn't be found or created: /some/test/path", exception.getMessage());
     }
 
-    // Create exception with empty directory string
     @Test
     public void test_create_exception_with_empty_directory() {
         String emptyDirectory = "";

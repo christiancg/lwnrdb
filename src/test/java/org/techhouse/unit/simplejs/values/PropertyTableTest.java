@@ -43,7 +43,6 @@ import org.techhouse.simplejs.values.PropertyTable;
 public class PropertyTableTest {
     private static final JsObject.PropertyFlags HIDDEN = new JsObject.PropertyFlags(false, false, false);
 
-    // set followed by setFlags preserves the flags the key was given
     @Test
     public void test_data_property_round_trips_flags() {
         final var table = new PropertyTable();
@@ -55,7 +54,6 @@ public class PropertyTableTest {
         assertTrue(table.isNotConfigurable("a"));
     }
 
-    // the descriptor map is sparse: an absent entry means all-true
     @Test
     public void test_absent_descriptor_defaults_to_all_true() {
         final var table = new PropertyTable();
@@ -64,7 +62,6 @@ public class PropertyTableTest {
         assertEquals(JsObject.PropertyFlags.DEFAULT, table.getFlags("a"));
     }
 
-    // OrdinaryOwnPropertyKeys: canonical array indices ascending, then insertion order
     @Test
     public void test_key_order_is_canonical_index_then_insertion() {
         final var table = new PropertyTable();
@@ -75,7 +72,6 @@ public class PropertyTableTest {
         assertEquals(List.of("0", "2", "b", "a"), List.copyOf(table.keys()));
     }
 
-    // an internal set must not install a data property that shadows an existing accessor
     @Test
     public void test_accessor_key_is_not_shadowed_by_internal_set() {
         final var table = new PropertyTable();
@@ -87,7 +83,6 @@ public class PropertyTableTest {
         assertFalse(table.has("a"));
     }
 
-    // a symbol accessor is registered as an own symbol key
     @Test
     public void test_symbol_accessor_is_visible_to_symbol_keys() {
         final var table = new PropertyTable();
@@ -112,9 +107,6 @@ public class PropertyTableTest {
         assertTrue(table.keys().contains("prop"));
     }
 
-    // Converting a no-sides accessor back into a data property (clearAccessor, mirroring
-    // OrdinaryProperties' data-branch) must drop the accessor registration, or hasAccessor would
-    // keep reporting true for what is now a plain data property.
     @Test
     public void test_clear_accessor_drops_the_no_sides_marker() {
         final var table = new PropertyTable();
@@ -125,8 +117,6 @@ public class PropertyTableTest {
         assertTrue(table.has("prop"));
     }
 
-    // delete() must purge the no-sides accessor marker the same way it purges a real getter/setter,
-    // or a deleted-then-recreated data property at the same key would still read as an accessor.
     @Test
     public void test_delete_purges_the_no_sides_accessor_marker() {
         final var table = new PropertyTable();
@@ -135,8 +125,6 @@ public class PropertyTableTest {
         assertFalse(table.hasAccessor("prop"));
     }
 
-    // The symbol-keyed path mirrors the string-keyed one: {get: undefined, set: undefined} on a
-    // symbol key is a real accessor too, and clearSymbolAccessor/isNotDeleteSymbol must both drop it.
     @Test
     public void test_symbol_accessor_with_both_sides_null_is_a_genuine_accessor() {
         final var table = new PropertyTable();
@@ -159,7 +147,6 @@ public class PropertyTableTest {
         assertFalse(table.hasSymbolAccessor(symbol));
     }
 
-    // a non-writable key rejects a write and a non-extensible table rejects a new key
     @Test
     public void test_non_writable_write_and_new_key_on_non_extensible_are_rejected() {
         final var table = new PropertyTable();
@@ -172,7 +159,6 @@ public class PropertyTableTest {
         assertFalse(table.has("b"));
     }
 
-    // an empty non-extensible table is both sealed and frozen
     @Test
     public void test_freeze_seal_prevent_extensions_interact() {
         final var empty = new PropertyTable();
@@ -191,7 +177,6 @@ public class PropertyTableTest {
         assertFalse(table.set("a", new JsNumber(2)));
     }
 
-    // a non-configurable key rejects delete; a configurable one drops value, flags and accessors
     @Test
     public void test_delete_honours_configurable() {
         final var table = new PropertyTable();
@@ -205,7 +190,6 @@ public class PropertyTableTest {
         assertNull(table.getAccessorGetter("a"));
     }
 
-    // symbol data properties carry their own flags and honour configurable on delete
     @Test
     public void test_symbol_flags_and_delete() {
         final var table = new PropertyTable();
@@ -219,8 +203,6 @@ public class PropertyTableTest {
         assertFalse(table.symbolKeys().contains(symbol));
     }
 
-    // Every value type that carries a table, so the extensibility default is asserted for all of them
-    // at once rather than being inferred from one representative.
     private static Map<String, JsValue> tableOwningTypes() {
         final var buffer = new JsArrayBuffer(8);
         final Map<String, JsValue> types = new LinkedHashMap<>();
@@ -244,8 +226,6 @@ public class PropertyTableTest {
         return types;
     }
 
-    // A freshly built value of every table-owning type is extensible even though nothing has been
-    // written to its table yet - the integrity-level checks read extensibility before any key.
     @Test
     public void test_untouched_table_is_extensible_on_every_owning_type() {
         final var types = tableOwningTypes();
@@ -254,13 +234,11 @@ public class PropertyTableTest {
             assertNotNull(entry.getValue().ownProperties(), entry.getKey());
             assertTrue(entry.getValue().isExtensible(), entry.getKey());
             assertTrue(entry.getValue().ownProperties().isExtensible(), entry.getKey());
-            // Nothing has been sealed, so no type reports itself sealed or frozen out of the box.
             assertFalse(entry.getValue().ownProperties().isSealed(), entry.getKey());
             assertFalse(entry.getValue().ownProperties().isFrozen(), entry.getKey());
         }
     }
 
-    // Primitives answer a null table, which is what identifies them at every property choke point.
     @Test
     public void test_primitives_have_no_table_and_are_not_extensible() {
         for (final var primitive : List.of(new JsNumber(1), new JsString("s"), JsBoolean.TRUE,
@@ -287,8 +265,6 @@ public class PropertyTableTest {
         assertFalse(frozen.getFlags("a").configurable());
     }
 
-    // An extensible table is never sealed or frozen whatever its keys say, which is why the
-    // extensibility test precedes the property walk.
     @Test
     public void test_extensible_table_is_never_sealed_or_frozen() {
         final var table = new PropertyTable();
@@ -299,7 +275,6 @@ public class PropertyTableTest {
         assertFalse(table.isFrozen());
     }
 
-    // freeze reaches symbol keys too, so a frozen object refuses o[sym] = v.
     @Test
     public void test_freeze_covers_symbol_keys() {
         final var table = new PropertyTable();
@@ -311,7 +286,6 @@ public class PropertyTableTest {
         assertFalse(table.setSymbol(symbol, new JsNumber(2)));
     }
 
-    // Symbol-keyed flags round-trip through the descriptor protocol exactly as string-keyed ones do.
     @Test
     public void test_symbol_flags_round_trip_through_descriptors() {
         final var object = new JsObject();
@@ -327,8 +301,6 @@ public class PropertyTableTest {
         assertEquals("v", ((JsString) object.getSymbol(symbol)).getValue());
     }
 
-    // A builtin's statics, plus its length/name metadata, are real own keys - the integrity-level
-    // property walk has to have something to inspect for Object.isFrozen(Object) to answer false.
     @Test
     public void test_native_function_statics_and_metadata_are_own_keys() {
         final var fn = new JsNativeFunction("f", (_, _) -> JsUndefined.getInstance());
@@ -341,8 +313,6 @@ public class PropertyTableTest {
         assertTrue(fn.ownProperties().getFlags("helper").configurable());
     }
 
-    // Object.isFrozen/isSealed answer from extensibility first, so a builtin - extensible, with own
-    // statics - is neither, and Object.isExtensible agrees with them.
     @Test
     public void test_builtins_are_extensible_and_never_frozen() {
         for (final var target : List.of("Object", "Math", "Date", "globalThis", "Array.prototype")) {
@@ -352,7 +322,6 @@ public class PropertyTableTest {
         }
     }
 
-    // A primitive is trivially frozen and sealed, and the integrity-level setters return it unchanged.
     @Test
     public void test_integrity_level_of_a_primitive() {
         assertSame(JsBoolean.TRUE, Interpreter.run("Object.isFrozen(1)"));
@@ -362,8 +331,6 @@ public class PropertyTableTest {
         assertSame(JsBoolean.TRUE, Interpreter.run("Object.preventExtensions(1) === 1"));
     }
 
-    // seal/freeze run through [[DefineOwnProperty]], so they reach an exotic key set: a Date's own
-    // properties, a function's statics and an array's indices plus its length are all covered.
     @Test
     public void test_integrity_level_reaches_exotic_receivers() {
         assertSame(JsBoolean.TRUE, Interpreter
@@ -375,8 +342,6 @@ public class PropertyTableTest {
                         + " && !Object.getOwnPropertyDescriptor(a, 'length').writable"));
         assertSame(JsBoolean.TRUE,
                 Interpreter.run("const m = new Map(); m.x = 1; Object.freeze(m); Object.isFrozen(m)"));
-        // An empty non-extensible object has nothing left to mutate; an array still owns a writable
-        // length, so preventExtensions alone does not freeze it.
         assertSame(JsBoolean.TRUE, Interpreter.run("Object.isFrozen(Object.preventExtensions({}))"));
         assertSame(JsBoolean.FALSE, Interpreter.run("Object.isFrozen(Object.preventExtensions([]))"));
         assertSame(JsBoolean.TRUE, Interpreter.run("Object.isFrozen(Object.freeze([]))"));

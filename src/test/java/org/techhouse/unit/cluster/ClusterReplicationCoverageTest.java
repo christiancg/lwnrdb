@@ -32,9 +32,8 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 /**
- * Deterministic coverage of the coordinator/replicator paths using a single-node cluster: with no peers the
- * required-ack count is zero, so replication completes immediately without spawning any network threads —
- * covering the happy paths reliably regardless of CI scheduling.
+ * Single-node cluster: with no peers the required-ack count is zero, so replication completes without
+ * spawning network threads - covering the happy paths reliably regardless of CI scheduling.
  */
 public class ClusterReplicationCoverageTest {
     private final Configuration config = Configuration.getInstance();
@@ -63,7 +62,6 @@ public class ClusterReplicationCoverageTest {
         origExpected = config.getClusterExpectedSize();
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "clusterExpectedSize", 1);
-        // Single-node cluster: self owns every collection and is the admin coordinator.
         final var members = new ConcurrentHashMap<String, NodeInfo>();
         final var self = new NodeInfo("self", "127.0.0.1", 19990, NodeState.ALIVE, 1L, 1L);
         members.put("self", self);

@@ -3,11 +3,6 @@ package org.techhouse.cluster.msg;
 import java.util.List;
 import org.techhouse.ejson.elements.JsonObject;
 
-/**
- * Carrier for the anti-entropy exchange. A {@code DIGEST} request sets {@code dbName}/{@code collName}; its
- * {@code DIGEST_ACK} reply fills {@code digest}. A {@code PULL} request additionally sets {@code ids}; its
- * {@code PULL_ACK} reply fills {@code documents} and their aligned {@code versions}.
- */
 public class AntiEntropyPayload {
     private String dbName;
     private String collName;

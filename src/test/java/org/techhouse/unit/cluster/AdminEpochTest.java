@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.Objects;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -52,7 +53,7 @@ public class AdminEpochTest {
 
     @Test
     public void test_load_reads_persisted_value() throws Exception {
-        Files.createDirectories(epochPath().getParent());
+        Files.createDirectories(Objects.requireNonNull(epochPath().getParent()));
         Files.writeString(epochPath(), "42", StandardCharsets.UTF_8);
         adminEpoch.load();
         assertEquals(42L, adminEpoch.current());
@@ -66,7 +67,7 @@ public class AdminEpochTest {
 
     @Test
     public void test_load_ignores_malformed_content() throws Exception {
-        Files.createDirectories(epochPath().getParent());
+        Files.createDirectories(Objects.requireNonNull(epochPath().getParent()));
         Files.writeString(epochPath(), "not-a-number", StandardCharsets.UTF_8);
         adminEpoch.load();
         assertEquals(0L, adminEpoch.current());
@@ -74,8 +75,6 @@ public class AdminEpochTest {
 
     @Test
     public void test_bump_survives_unwritable_path() throws Exception {
-        // Point filePath at a regular file so creating the cluster directory (and persisting) fails; the
-        // in-memory epoch still advances (best-effort persistence).
         final var config = Configuration.getInstance();
         final var original = config.getFilePath();
         final var blocker = Paths.get(original, "blocker-file");

@@ -6,9 +6,6 @@ import org.techhouse.ops.req.agg.BaseAggregationStep;
 
 public class AggregateRequest extends OperationRequest {
     private List<BaseAggregationStep> aggregationSteps;
-    // Opt-in explain/analyze: when true the response carries an analyzeResult object describing how
-    // the query ran (timing, index usage, documents scanned, locks acquired) plus suggestions.
-    // Defaults to false, in which case the response is unchanged.
     private boolean analyze;
 
     public AggregateRequest(String databaseName, String collectionName) {

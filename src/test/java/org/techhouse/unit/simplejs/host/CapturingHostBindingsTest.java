@@ -32,7 +32,6 @@ public class CapturingHostBindingsTest {
                 (_, _) -> new ResolvedModule("id", "src"), null, ZoneId.of("UTC"), Locale.FRANCE, true);
     }
 
-    // Every non-console member is delegated to the wrapped bindings unchanged
     @Test
     public void test_delegates_every_other_member() {
         final var delegate = bindings(null);
@@ -48,7 +47,6 @@ public class CapturingHostBindingsTest {
         assertEquals(Locale.FRANCE, wrapped.locale());
     }
 
-    // With no host sink the console is the capture itself
     @Test
     public void test_console_with_no_host_sink_is_the_capture() {
         final var capture = new ConsoleCapture(10, 100);
@@ -58,7 +56,6 @@ public class CapturingHostBindingsTest {
         assertEquals(List.of("a"), capture.lines());
     }
 
-    // With a host sink the console tees into both destinations
     @Test
     public void test_console_tees_into_both() {
         final var sink = new ArrayList<String>();
