@@ -50,7 +50,7 @@ JSON socket protocol — optionally [TLS](#tls--secure-connections). On top of t
 | Integrity | [per-collection JSON Schema](#schema-validation), [transactions](#transactions), [users and permissions](#users--permissions) |
 | Scripting | a built-in JS engine — [ad-hoc scripts](#run_script), [stored procedures](#save_procedure), [triggers](#save_trigger) (after and before the write), [scheduled procedures](#save_schedule), [pipeline operators](#script-operators-simplejs-in-the-pipeline), and shared code via `import … from "procedures/<name>"`. See [docs/simplejs.md](docs/simplejs.md) |
 | Clustering | fully-replicated nodes, no master, per-collection ownership, quorum writes, anti-entropy, cross-node transactions and script placement. See [docs/clustering.md](docs/clustering.md) |
-| Operations | [`GET_DATABASE_STATS`](#get_database_stats-admin-only), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown |
+| Operations | [`GET_DATABASE_STATS`](#get_database_stats-admin-only), [`REINDEX`](#reindex), [standardized error codes](#error-codes), memory-bounded caching, graceful shutdown, shipped as a GraalVM native executable |
 
 **Known non-goals.** No compound indexes (a pipeline uses as many single-field indexes as
 apply), no sharding (every node holds a complete copy), no compression, and no attempt to
@@ -1443,13 +1443,16 @@ To auto-format your changes before committing:
 mvn spotless:apply
 ```
 
-> **Build JDK: JDK 26 or newer is required** (matching the project's compiler
-> target and CI); `mvn verify` fails on anything older. The floor is not
+> **Build JDK: JDK 25, and only 25** (matching the project's compiler target and
+> CI); `mvn verify` fails on anything else, newer included. The pin is not
 > arbitrary: the SimpleJS regex engine resolves `\p{...}` property escapes
-> against the JDK's own Unicode data, so an older JDK ships an older UCD and the
-> same script answers differently — including between two nodes of one cluster.
-> The Eclipse JDT formatter is used instead of Google/Palantir formatters
-> specifically because the latter rely on `javac` internals that are
+> against the JDK's own Unicode data, so a different JDK ships a different UCD
+> and the same script answers differently — including between two nodes of one
+> cluster. It is 25 rather than the newest JDK because the shipped artifact is
+> the GraalVM native executable and GraalVM has no JDK 26 release; the eight
+> `language/identifiers/*-unicode-17.0.0*` test262 cases are excluded for that
+> reason. The Eclipse JDT formatter is used instead of Google/Palantir
+> formatters specifically because the latter rely on `javac` internals that are
 > incompatible with recent JDKs.
 
 The linter rulesets are deliberately curated rather than using defaults: they

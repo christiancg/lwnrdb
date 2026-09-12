@@ -59,10 +59,9 @@ OTHER_DB = "script_other_db"
 COLL = "docs"
 COLL2 = "more"
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = bu.REPO_ROOT
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
+
 
 # Sandbox for phase 1. Tight enough that every limit is reachable, loose enough that a
 # legitimate script on a slow shared runner never trips one by accident.
@@ -1336,9 +1335,7 @@ def cleanup(conn: Conn):
 def main():
     bu.banner("RUN_SCRIPT (SimpleJS over the wire) test suite")
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
+    if not bu.server_binary_ready():
         sys.exit(1)
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-runscript-")

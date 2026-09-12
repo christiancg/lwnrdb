@@ -50,6 +50,14 @@ PORT = 8989
 USERNAME = "admin"
 PASSWORD = "administrator"
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+JAR = os.path.join(REPO_ROOT, "target", "lwnrdb-1.0-SNAPSHOT.jar")
+
+# Server launch is configurable: by default the suites run against the jar, but
+# setting LWNRDB_SERVER_BIN to a path (e.g. the GraalVM native executable) makes
+# them launch that binary instead. SERVER_PROC_PATTERN is what a pgrep/pkill-based
+# suite matches on.
+SERVER_BIN = os.environ.get("LWNRDB_SERVER_BIN")
+SERVER_PROC_PATTERN = SERVER_BIN or JAR
 
 
 def configure(host: Optional[str] = None, port: Optional[int] = None,
@@ -293,14 +301,35 @@ def dump_log(log_path: str, tail_bytes: int = 4000) -> None:
         pass
 
 
+def server_argv(xmx: str = "512m", jar: Optional[str] = None) -> list:
+    """The command line that launches a server: the native binary when
+    LWNRDB_SERVER_BIN points at one, the shaded jar otherwise. Native images
+    honor -Xmx as a runtime arg."""
+    if SERVER_BIN:
+        return [SERVER_BIN, f"-Xmx{xmx}"]
+    return ["java", f"-Xmx{xmx}", "-jar", jar or JAR]
+
+
+def server_binary_ready() -> bool:
+    """Preflight: whatever `server_argv` would launch actually exists."""
+    if SERVER_BIN:
+        if os.path.isfile(SERVER_BIN):
+            return True
+        print(f"server binary not found at {SERVER_BIN} (LWNRDB_SERVER_BIN); "
+              f"run `mvn -Pnative package -DskipTests` first", file=sys.stderr)
+        return False
+    if os.path.isfile(JAR):
+        return True
+    print(f"jar not found at {JAR}; run `mvn clean package -DskipTests` first", file=sys.stderr)
+    return False
+
+
 def start_server(work_dir: str, log_path: str, jar: Optional[str] = None,
                  xmx: str = "512m", host: Optional[str] = None,
                  port: Optional[int] = None, settle: float = 0.5):
     """Launch a server in `work_dir` and wait for its client port to accept."""
-    jar = jar or os.path.join(REPO_ROOT, "target", "lwnrdb-1.0-SNAPSHOT.jar")
     log = open(log_path, "ab")
-    proc = subprocess.Popen(["java", f"-Xmx{xmx}", "-jar", jar],
-                            stdout=log, stderr=log, cwd=work_dir)
+    proc = subprocess.Popen(server_argv(xmx, jar), stdout=log, stderr=log, cwd=work_dir)
     deadline = time.time() + 60.0
     while time.time() < deadline:
         if port_open(host, port):
