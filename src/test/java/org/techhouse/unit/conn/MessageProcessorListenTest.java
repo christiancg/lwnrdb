@@ -8,6 +8,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import org.junit.jupiter.api.AfterEach;
@@ -45,12 +46,12 @@ public class MessageProcessorListenTest {
 
     private String runMessages(String messages) throws Exception {
         final var out = new ByteArrayOutputStream();
-        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes()), out);
+        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
         final var mp = new MessageProcessor(socket);
         final var t = new Thread(mp);
         t.start();
         t.join(3000);
-        return out.toString();
+        return out.toString(StandardCharsets.UTF_8);
     }
 
     private void createListenAdmin(String username) {
@@ -122,12 +123,12 @@ public class MessageProcessorListenTest {
         final var listenMsg = "{\"type\":\"AUTHENTICATE\",\"username\":\"listen_stop_admin\",\"password\":\"password123\"}\n"
                 + "{\"type\":\"LISTEN\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
                 + TestGlobals.COLL + "\",\"aggregationSteps\":[]}\n";
-        final var socket = mockSocket(new ByteArrayInputStream(listenMsg.getBytes()), out);
+        final var socket = mockSocket(new ByteArrayInputStream(listenMsg.getBytes(StandardCharsets.UTF_8)), out);
         final var mp = new MessageProcessor(socket);
         final var t = new Thread(mp);
         t.start();
         t.join(3000);
-        final var listenResponse = out.toString();
+        final var listenResponse = out.toString(StandardCharsets.UTF_8);
 
         assertTrue(listenResponse.contains("listenId"), "LISTEN response must contain listenId");
     }

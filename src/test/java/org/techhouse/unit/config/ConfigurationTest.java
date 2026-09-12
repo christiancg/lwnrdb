@@ -7,6 +7,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -76,7 +77,7 @@ public class ConfigurationTest {
 
     private File getFile() throws IOException {
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, StandardCharsets.UTF_8, true))) {
             writer.write("port=1111");
             writer.newLine();
             writer.write("maxConnections=1");
@@ -99,7 +100,7 @@ public class ConfigurationTest {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, StandardCharsets.UTF_8, true))) {
             writer.write("defaultAdminUsername=admin_user");
             writer.newLine();
             writer.write("defaultAdminPassword=secret_pass");
@@ -166,7 +167,7 @@ public class ConfigurationTest {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, StandardCharsets.UTF_8, true))) {
             writer.write("maxMemory=512Mb");
             writer.newLine();
         }
@@ -204,7 +205,7 @@ public class ConfigurationTest {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, StandardCharsets.UTF_8, true))) {
             writer.write("maxMemory=-1");
             writer.newLine();
         }
@@ -251,7 +252,7 @@ public class ConfigurationTest {
         final var configInstance = Configuration.getInstance();
         TestUtils.setPrivateField(configInstance, "port", 0);
         final var newConfigFile = new File(Globals.FILE_CONFIG_NAME);
-        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, true))) {
+        try (var writer = new BufferedWriter(new FileWriter(newConfigFile, StandardCharsets.UTF_8, true))) {
             writer.write("maxMemory=nonsense");
             writer.newLine();
         }

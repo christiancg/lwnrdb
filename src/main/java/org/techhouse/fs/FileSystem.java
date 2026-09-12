@@ -234,7 +234,8 @@ public class FileSystem {
             final var file = paths.collectionPage(dbName, collName, page);
             final var lock = FileLocks.lockFor(file).writeLock();
             lock.lock();
-            try (var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+            try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
+                    Globals.BUFFER_SIZE)) {
                 var currentOffset = file.length();
                 for (var entry : pageEntries) {
                     final var strData = entry.toFileEntry() + Globals.NEWLINE;
@@ -268,7 +269,7 @@ public class FileSystem {
         final var file = paths.collectionPage(dbName, collName, page);
         final var lock = FileLocks.lockFor(file).writeLock();
         lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+        try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE)) {
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
             final var bytes = strData.getBytes(StandardCharsets.UTF_8);
             final var length = bytes.length;

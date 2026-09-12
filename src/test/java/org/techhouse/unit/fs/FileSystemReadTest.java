@@ -315,4 +315,37 @@ public class FileSystemReadTest {
                 + "-" + indexEntry.getPage() + Globals.DB_FILE_EXTENSION);
         assertEquals(1, java.nio.file.Files.readAllLines(page.toPath()).size());
     }
+
+    @Test
+    public void test_multibyte_document_length_matches_the_indexed_utf8_byte_length() throws Exception {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        fileSystem.createBaseDbPath();
+        fileSystem.createAdminDatabase();
+        fileSystem.createDatabaseFolder(TestGlobals.DB);
+        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+
+        final var id = "utf1";
+        final var value = "café 日本語 🙂";
+        JsonObject data = new JsonObject();
+        data.addProperty("text", value);
+        data.addProperty(Globals.PK_FIELD, id);
+        DbEntry entry = new DbEntry();
+        entry.setDatabaseName(TestGlobals.DB);
+        entry.setCollectionName(TestGlobals.COLL);
+        entry.setData(data);
+        entry.set_id(id);
+
+        PkIndexEntry indexEntry = fileSystem.insertIntoCollection(entry);
+        DbEntry read = fileSystem.getById(indexEntry);
+        assertEquals(value, read.getData().get("text").asJsonString().getValue());
+
+        // Only control characters, quotes, backslashes and lone surrogates are escaped, so a page
+        // holds these characters raw and multi-byte. The length the PK index records is the UTF-8
+        // byte length, so the page must be written as UTF-8 or readFully overruns the entry.
+        File page = new File(TestGlobals.PATH + '/' + TestGlobals.DB + '/' + TestGlobals.COLL + '/' + TestGlobals.COLL
+                + "-" + indexEntry.getPage() + Globals.DB_FILE_EXTENSION);
+        assertEquals(page.length(), indexEntry.getLength());
+        assertEquals(entry.toFileEntry() + Globals.NEWLINE, Files.readString(page.toPath(), StandardCharsets.UTF_8));
+    }
 }

@@ -97,6 +97,7 @@
          a shared MessageDigest field would be a concurrency bug in the object and
          array hash indexes. -->
     <rule ref="category/java/bestpractices.xml/UseStandardCharsets"/>
+    <rule ref="category/java/bestpractices.xml/RelianceOnDefaultCharset"/>
     <rule ref="category/java/bestpractices.xml/AvoidMessageDigestField"/>
     <rule ref="category/java/bestpractices.xml/AvoidStringBufferField"/>
     <rule ref="category/java/bestpractices.xml/UseTryWithResources"/>

@@ -4,6 +4,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -19,7 +20,7 @@ final class TombstoneStore {
     static void append(File file, String id, long version) throws IOException {
         final var lock = FileLocks.lockFor(file).writeLock();
         lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(file, true), Globals.BUFFER_SIZE)) {
+        try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE)) {
             writer.append(id).append(Globals.INDEX_ENTRY_SEPARATOR).append(String.valueOf(version));
             writer.newLine();
         } finally {
@@ -66,7 +67,7 @@ final class TombstoneStore {
     }
 
     private static void forEachEntry(File file, ObjLongConsumer<String> consumer) throws IOException {
-        for (final var line : Files.readAllLines(file.toPath())) {
+        for (final var line : Files.readAllLines(file.toPath(), StandardCharsets.UTF_8)) {
             final var cleaned = line.trim();
             final var sep = cleaned.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
             if (sep <= 0) {

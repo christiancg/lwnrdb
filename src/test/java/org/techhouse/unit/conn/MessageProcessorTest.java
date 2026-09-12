@@ -10,6 +10,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import org.junit.jupiter.api.AfterEach;
@@ -57,7 +58,8 @@ public class MessageProcessorTest {
 
     @Test
     public void test_handles_null_or_blank_messages() throws Exception {
-        Socket mockSocket = mockSocket(new ByteArrayInputStream("".getBytes()), new ByteArrayOutputStream());
+        Socket mockSocket = mockSocket(new ByteArrayInputStream("".getBytes(StandardCharsets.UTF_8)),
+                new ByteArrayOutputStream());
         MessageProcessor messageProcessor = new MessageProcessor(mockSocket);
         Thread thread = new Thread(messageProcessor);
         thread.start();
@@ -69,14 +71,14 @@ public class MessageProcessorTest {
     public void test_valid_message_is_processed_and_response_written() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String msg = "{\"type\":\"LIST_DATABASES\"}\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
         t.start();
         t.join(3000);
 
-        String response = out.toString();
+        String response = out.toString(StandardCharsets.UTF_8);
         assertTrue(response.contains("LIST_DATABASES"), "Response should echo operation type");
         assertTrue(response.contains("OK"), "Response should indicate success");
     }
@@ -85,7 +87,7 @@ public class MessageProcessorTest {
     public void test_close_connection_message_exits_loop() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String msg = "{\"type\":\"CLOSE_CONNECTION\"}\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -93,21 +95,21 @@ public class MessageProcessorTest {
         t.join(3000);
 
         assertFalse(t.isAlive(), "Thread should have exited after CLOSE_CONNECTION");
-        assertTrue(out.toString().contains("CLOSE_CONNECTION"));
+        assertTrue(out.toString(StandardCharsets.UTF_8).contains("CLOSE_CONNECTION"));
     }
 
     @Test
     public void test_invalid_json_responds_with_exception_message() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String msg = "not_valid_json\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
         t.start();
         t.join(3000);
 
-        String response = out.toString();
+        String response = out.toString(StandardCharsets.UTF_8);
         assertFalse(response.isEmpty(), "An error response should have been written");
     }
 
@@ -120,14 +122,14 @@ public class MessageProcessorTest {
             TestUtils.setPrivateField(config, "maxConnections", -1);
 
             ByteArrayOutputStream out = new ByteArrayOutputStream();
-            Socket socket = mockSocket(new ByteArrayInputStream("".getBytes()), out);
+            Socket socket = mockSocket(new ByteArrayInputStream("".getBytes(StandardCharsets.UTF_8)), out);
 
             MessageProcessor mp = new MessageProcessor(socket);
             Thread t = new Thread(mp);
             t.start();
             t.join(3000);
 
-            String response = out.toString();
+            String response = out.toString(StandardCharsets.UTF_8);
             assertTrue(response.contains("CLOSE_CONNECTION"), "Should send CLOSE_CONNECTION on max connections");
             assertTrue(response.contains("ERROR"), "Should include ERROR status");
         } finally {
@@ -140,14 +142,14 @@ public class MessageProcessorTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         // SAVE with a 2-char databaseName violates the naming rule
         String msg = "{\"type\":\"SAVE\",\"databaseName\":\"ab\",\"collectionName\":\"myColl\",\"object\":{}}\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
         t.start();
         t.join(3000);
 
-        String response = out.toString();
+        String response = out.toString(StandardCharsets.UTF_8);
         assertTrue(response.contains("ERROR"), "Validation failure should return ERROR status");
         assertTrue(response.contains("SAVE"), "Response type should echo the operation type");
     }
@@ -156,14 +158,14 @@ public class MessageProcessorTest {
     public void test_unauthenticated_request_returns_unauthenticated() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         String msg = "{\"type\":\"SAVE\",\"databaseName\":\"testDb\",\"collectionName\":\"testColl\",\"object\":{}}\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
         t.start();
         t.join(3000);
 
-        String response = out.toString();
+        String response = out.toString(StandardCharsets.UTF_8);
         assertTrue(response.contains("UNAUTHENTICATED"), "Should return UNAUTHENTICATED for protected op");
     }
 
@@ -183,14 +185,14 @@ public class MessageProcessorTest {
                 {"type":"AUTHENTICATE","username":"msg_proce_admin","password":"password123"}
                 {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{"name":"test"}}
                 """;
-        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
         t.start();
         t.join(3000);
 
-        String response = out.toString();
+        String response = out.toString(StandardCharsets.UTF_8);
         assertTrue(response.contains("AUTHENTICATE"), "Should include AUTHENTICATE response");
         assertTrue(response.contains("SAVE"), "Should include SAVE response");
     }
@@ -211,7 +213,7 @@ public class MessageProcessorTest {
                 {"type":"AUTHENTICATE","username":"msg_closer","password":"password123"}
                 {"type":"CLOSE_CONNECTION"}
                 """;
-        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
@@ -237,14 +239,14 @@ public class MessageProcessorTest {
                 {"type":"AUTHENTICATE","username":"noPermsUser","password":"password123"}
                 {"type":"SAVE","databaseName":"testDb","collectionName":"testColl","object":{}}
                 """;
-        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes()), out);
+        Socket socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);
         t.start();
         t.join(3000);
 
-        String response = out.toString();
+        String response = out.toString(StandardCharsets.UTF_8);
         assertTrue(response.contains("FORBIDDEN"), "Should return FORBIDDEN for unauthorized op");
     }
 
@@ -261,12 +263,12 @@ public class MessageProcessorTest {
 
     private String runMessages(String messages) throws Exception {
         final var out = new ByteArrayOutputStream();
-        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes()), out);
+        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
         final var mp = new MessageProcessor(socket);
         final var t = new Thread(mp);
         t.start();
         t.join(3000);
-        return out.toString();
+        return out.toString(StandardCharsets.UTF_8);
     }
 
     @Test
@@ -404,7 +406,7 @@ public class MessageProcessorTest {
         OutputStream throwingOut = mock(OutputStream.class);
         doThrow(new IOException("write failed")).when(throwingOut).write(any(byte[].class), anyInt(), anyInt());
         String msg = "{\"type\":\"LIST_DATABASES\"}\n";
-        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes()), throwingOut);
+        Socket socket = mockSocket(new ByteArrayInputStream(msg.getBytes(StandardCharsets.UTF_8)), throwingOut);
 
         MessageProcessor mp = new MessageProcessor(socket);
         Thread t = new Thread(mp);

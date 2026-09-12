@@ -9,6 +9,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -85,11 +86,11 @@ public class MessageProcessorRunScriptTest {
     private List<String> exchange(String... requests) throws Exception {
         final var out = new ByteArrayOutputStream();
         final var message = String.join("\n", requests) + "\n";
-        final var socket = mockSocket(new ByteArrayInputStream(message.getBytes()), out);
+        final var socket = mockSocket(new ByteArrayInputStream(message.getBytes(StandardCharsets.UTF_8)), out);
         final var thread = new Thread(new MessageProcessor(socket));
         thread.start();
         thread.join(10000);
-        return List.of(out.toString().split("\n"));
+        return List.of(out.toString(StandardCharsets.UTF_8).split("\n"));
     }
 
     private static String authenticate(String username) {

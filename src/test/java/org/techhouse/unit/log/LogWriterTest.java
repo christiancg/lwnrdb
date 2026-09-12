@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
@@ -71,11 +72,11 @@ public class LogWriterTest {
         TestUtils.setPrivateField(config, "logPath", testLogPath);
 
         ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-        System.setOut(new PrintStream(outputStream));
+        System.setOut(new PrintStream(outputStream, true, StandardCharsets.UTF_8));
 
         LogWriter.createLogPathAndRemoveOldFiles();
 
-        assertTrue(outputStream.toString().contains("Error creating log directory"));
+        assertTrue(outputStream.toString(StandardCharsets.UTF_8).contains("Error creating log directory"));
 
         System.setOut(System.out);
     }

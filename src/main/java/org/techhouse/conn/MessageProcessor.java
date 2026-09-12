@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.util.UUID;
 import javax.net.ssl.SSLException;
 import org.techhouse.cache.Cache;
@@ -46,8 +47,10 @@ public class MessageProcessor implements Runnable {
     @Override
     public void run() {
         try (socket) {
-            final var reader = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-            final var writer = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
+            final var reader = new BufferedReader(
+                    new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
+            final var writer = new BufferedWriter(
+                    new OutputStreamWriter(socket.getOutputStream(), StandardCharsets.UTF_8));
             if (clientId != null) {
                 clientTracker.registerWriter(clientId, writer);
                 final var writerLock = clientTracker.getWriterLock(clientId);

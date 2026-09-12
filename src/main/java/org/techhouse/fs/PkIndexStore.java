@@ -4,6 +4,7 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -29,7 +30,8 @@ final class PkIndexStore {
     private void appendEntries(File indexFile, List<PkIndexEntry> pkEntries) throws IOException {
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
+        try (var writer = new BufferedWriter(new FileWriter(indexFile, StandardCharsets.UTF_8, true),
+                Globals.BUFFER_SIZE)) {
             for (var pkEntry : pkEntries) {
                 writer.append(pkEntry.toFileEntry());
                 writer.newLine();
@@ -64,7 +66,9 @@ final class PkIndexStore {
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
         try {
-            final List<String> existingLines = indexFile.exists() ? Files.readAllLines(indexFile.toPath()) : List.of();
+            final List<String> existingLines = indexFile.exists()
+                    ? Files.readAllLines(indexFile.toPath(), StandardCharsets.UTF_8)
+                    : List.of();
             // Rewritten in full because the entries needing a position shift are not contiguous in the
             // id-sorted file: a same-page, later-positioned row can sort before the updated id.
             final var others = new ArrayList<PkIndexEntry>(existingLines.size());
@@ -125,7 +129,7 @@ final class PkIndexStore {
         lock.lock();
         final List<String> indexLines;
         try {
-            indexLines = Files.readAllLines(indexFile.toPath());
+            indexLines = Files.readAllLines(indexFile.toPath(), StandardCharsets.UTF_8);
         } finally {
             lock.unlock();
         }
@@ -162,7 +166,7 @@ final class PkIndexStore {
         lock.lock();
         final List<String> lines;
         try {
-            lines = Files.readAllLines(indexFile.toPath());
+            lines = Files.readAllLines(indexFile.toPath(), StandardCharsets.UTF_8);
         } finally {
             lock.unlock();
         }

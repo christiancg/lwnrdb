@@ -2,6 +2,7 @@ package org.techhouse.fs;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -113,7 +114,7 @@ final class DocumentPageStore {
         final var entryLength = (int) pkIndexEntry.getLength();
         byte[] buffer = new byte[entryLength];
         reader.readFully(buffer, 0, entryLength);
-        final var strEntry = new String(buffer);
+        final var strEntry = new String(buffer, StandardCharsets.UTF_8);
         final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
         final var entry = new DbEntry();
         entry.setDatabaseName(pkIndexEntry.getDatabaseName());

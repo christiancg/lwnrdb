@@ -5,6 +5,7 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -83,7 +84,8 @@ final class FieldIndexStore {
     private void appendEntries(File indexFile, List<? extends FieldIndexEntry<?>> entries) {
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(indexFile, true), Globals.BUFFER_SIZE)) {
+        try (var writer = new BufferedWriter(new FileWriter(indexFile, StandardCharsets.UTF_8, true),
+                Globals.BUFFER_SIZE)) {
             var strData = entries.stream().map(FieldIndexEntry::toFileEntry)
                     .collect(Collectors.joining(Globals.NEWLINE));
             strData += Globals.NEWLINE;
@@ -188,6 +190,6 @@ final class FieldIndexStore {
         final var fileLength = (int) writer.length();
         byte[] buffer = new byte[fileLength];
         writer.readFully(buffer, 0, fileLength);
-        return new String(buffer);
+        return new String(buffer, StandardCharsets.UTF_8);
     }
 }
