@@ -28,10 +28,22 @@ public final class JsonUtils {
         return compareAtPath(o1, o2, fieldName, JsonUtils::descendingPrimitives);
     }
 
+    public static int compareSortKeysAscending(JsonBaseElement o1Field, JsonBaseElement o2Field) {
+        return compareResolved(o1Field, o2Field, JsonUtils::ascendingPrimitives);
+    }
+
+    public static int compareSortKeysDescending(JsonBaseElement o1Field, JsonBaseElement o2Field) {
+        return compareResolved(o1Field, o2Field, JsonUtils::descendingPrimitives);
+    }
+
     private static int compareAtPath(JsonObject o1, JsonObject o2, String fieldName,
             ToIntBiFunction<JsonPrimitive<?>, JsonPrimitive<?>> comparePrimitives) {
-        final var o1Field = JsonUtils.getFromPath(o1, fieldName);
-        final var o2Field = JsonUtils.getFromPath(o2, fieldName);
+        return compareResolved(JsonUtils.getFromPath(o1, fieldName), JsonUtils.getFromPath(o2, fieldName),
+                comparePrimitives);
+    }
+
+    private static int compareResolved(JsonBaseElement o1Field, JsonBaseElement o2Field,
+            ToIntBiFunction<JsonPrimitive<?>, JsonPrimitive<?>> comparePrimitives) {
         if (o1Field == JsonNull.INSTANCE && o2Field == JsonNull.INSTANCE) {
             return 0;
         }

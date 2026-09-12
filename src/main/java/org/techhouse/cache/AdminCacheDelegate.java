@@ -71,12 +71,12 @@ interface AdminCacheDelegate {
         return adminCache().getAdminPageEntry(dbName, collName, page);
     }
 
-    default void putAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
-        adminCache().putAdminPageEntries(dbName, collName, adminPageEntries);
-    }
-
     default void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
         adminCache().addAdminPageEntries(dbName, collName, adminPageEntry);
+    }
+
+    default void addAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
+        adminCache().addAdminPageEntries(dbName, collName, adminPageEntries);
     }
 
     default void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {

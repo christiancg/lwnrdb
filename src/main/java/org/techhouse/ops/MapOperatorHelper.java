@@ -1,7 +1,5 @@
 package org.techhouse.ops;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.BiPredicate;
 import org.techhouse.config.Globals;
@@ -52,7 +50,7 @@ public final class MapOperatorHelper {
         return switch (condition.getType()) {
             case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) condition, toMap, context);
             case FIELD -> processFieldOperator((FieldOperator) condition, toMap);
-            case CUSTOM -> processCustomOperator((CustomOperator) condition, toMap);
+            case CUSTOM -> processCustomOperator((CustomOperator) condition, toMap, context);
             case SCRIPT -> processScriptOperator((ScriptOperator) condition, toMap, context);
         };
     }
@@ -62,40 +60,35 @@ public final class MapOperatorHelper {
         return FilterOperatorHelper.testScript(operator, toMap, context);
     }
 
-    private static boolean processCustomOperator(CustomOperator operator, JsonObject toMap) {
-        return FilterOperatorHelper.getCustomTester(operator).test(toMap, operator.getField());
+    private static boolean processCustomOperator(CustomOperator operator, JsonObject toMap,
+            PipelineScriptContext context) {
+        final var tester = context != null
+                ? context.customTesterFor(operator)
+                : FilterOperatorHelper.getCustomTester(operator);
+        return tester.test(toMap, operator.getField());
     }
 
     private static boolean processConjunctionOperator(ConjunctionOperator operator, JsonObject toMap,
             PipelineScriptContext context) {
-        List<Boolean> combinationResult = new ArrayList<>();
-        for (var step : operator.getOperators()) {
-            final var partialResults = switch (step.getType()) {
+        final var steps = operator.getOperators();
+        var trueCount = 0;
+        for (var step : steps) {
+            final var partialResult = switch (step.getType()) {
                 case CONJUNCTION -> processConjunctionOperator((ConjunctionOperator) step, toMap, context);
                 case FIELD -> processFieldOperator((FieldOperator) step, toMap);
-                case CUSTOM -> processCustomOperator((CustomOperator) step, toMap);
+                case CUSTOM -> processCustomOperator((CustomOperator) step, toMap, context);
                 case SCRIPT -> processScriptOperator((ScriptOperator) step, toMap, context);
             };
-            combinationResult.add(partialResults);
+            if (partialResult) {
+                trueCount++;
+            }
         }
         return switch (operator.getConjunctionType()) {
-            case AND -> andConjunction(combinationResult);
-            case OR -> orConjunction(combinationResult);
-            case XOR -> xorConjunction(combinationResult);
+            case AND -> trueCount == steps.size();
+            case OR -> trueCount > 0;
+            case XOR -> trueCount == 1;
             case NOR, NAND -> false;
         };
-    }
-
-    private static Boolean xorConjunction(List<Boolean> combinationResult) {
-        return combinationResult.stream().filter(aBoolean -> aBoolean).count() == 1;
-    }
-
-    private static Boolean andConjunction(List<Boolean> combinationResult) {
-        return combinationResult.stream().filter(aBoolean -> aBoolean).count() == combinationResult.size();
-    }
-
-    private static Boolean orConjunction(List<Boolean> combinationResult) {
-        return combinationResult.stream().filter(aBoolean -> aBoolean).findFirst().orElse(false);
     }
 
     private static boolean processFieldOperator(FieldOperator operator, JsonObject toMap) {

@@ -39,6 +39,9 @@ final class FieldIndexLoader {
             String label, Function<String, FieldIndexEntry<T>> parser, Comparator<FieldIndexEntry<T>> order)
             throws IOException {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, indexTypeLabel);
+        if (!indexFile.exists()) {
+            return null;
+        }
         final var lines = FileLocks.readAllLinesIfExists(indexFile);
         if (lines == null) {
             return null;
@@ -73,7 +76,7 @@ final class FieldIndexLoader {
             case JsonCustom<?> c -> {
                 final var customClass = c.getClass();
                 //noinspection unchecked
-                yield customClass.cast(c).compare(customClass.cast(o2.getValue()).getCustomValue());
+                yield customClass.cast(c).compareToCustom(customClass.cast(o2.getValue()));
             }
             default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
         };

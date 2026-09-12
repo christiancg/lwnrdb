@@ -35,6 +35,11 @@ public class IndexHelper {
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
     private static final IndexKind[] HASH_INDEX_KINDS = {IndexKind.OBJECT, IndexKind.ARRAY};
 
+    public static List<String> getSortedIdsForField(String dbName, String collName, String fieldName,
+            java.util.Comparator<FieldIndexEntry<?>> order, long maxIds) throws IOException {
+        return IndexEntryReader.sortedIdsForField(dbName, collName, fieldName, order, maxIds);
+    }
+
     public static List<FieldIndexEntry<?>> getIndexEntriesForField(String dbName, String collName, String fieldName)
             throws IOException {
         return IndexEntryReader.getIndexEntriesForField(dbName, collName, fieldName);

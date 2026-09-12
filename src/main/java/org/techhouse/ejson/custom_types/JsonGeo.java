@@ -61,9 +61,19 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
     public Integer compare(GeoPoint another) {
         final var byHash = geoHash()
                 .compareTo(GeoUtils.geoHash(another.lat(), another.lng(), GEO_HASH_ORDER_PRECISION));
-        if (byHash != 0) {
-            return byHash;
+        return byHash != 0 ? byHash : compareByCoordinates(another);
+    }
+
+    @Override
+    public Integer compareToCustom(JsonCustom<GeoPoint> another) {
+        if (another instanceof JsonGeo otherGeo) {
+            final var byHash = geoHash().compareTo(otherGeo.geoHash());
+            return byHash != 0 ? byHash : compareByCoordinates(otherGeo.customValue);
         }
+        return compare(another.getCustomValue());
+    }
+
+    private int compareByCoordinates(GeoPoint another) {
         final var byLat = Double.compare(customValue.lat(), another.lat());
         if (byLat != 0) {
             return byLat;

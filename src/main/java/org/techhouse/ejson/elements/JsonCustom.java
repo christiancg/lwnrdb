@@ -17,7 +17,7 @@ public abstract class JsonCustom<T> extends JsonString {
     }
 
     public JsonCustom(String strValue) {
-        if (strValue == null || !matchesCustomFormat(strValue)) {
+        if (!matchesCustomFormat(strValue)) {
             throw new WrongFormatCustomTypeException(getClass().getName());
         }
         this.value = strValue;
@@ -38,6 +38,10 @@ public abstract class JsonCustom<T> extends JsonString {
     public abstract String getCustomTypeName();
     protected abstract T parse() throws WrongFormatCustomTypeException;
     public abstract Integer compare(T another);
+
+    public Integer compareToCustom(JsonCustom<T> another) {
+        return compare(another.getCustomValue());
+    }
 
     public Set<String> customOperatorNames() {
         return Set.of();

@@ -2,6 +2,7 @@ package org.techhouse.ops.index;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -80,6 +81,69 @@ public final class IndexEntryReader {
         }
         recordAnalyzeIndexUse(dbName, collName, fieldName);
         return combined;
+    }
+
+    public static List<String> sortedIdsForField(String dbName, String collName, String fieldName,
+            Comparator<FieldIndexEntry<?>> order, long maxIds) throws IOException {
+        if (cache.hasNoIndex(dbName, collName, fieldName)
+                || !PendingWriteReconciler.pendingIds(dbName, collName).isEmpty()) {
+            return null;
+        }
+        final List<FieldIndexEntry<?>> entries = new ArrayList<>();
+        try {
+            rl.lockIndexRead(dbName, collName, fieldName);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("Interrupted while acquiring index read lock", e);
+        }
+        final List<String> ordered;
+        try {
+            for (var kind : HASH_INDEX_KINDS) {
+                if (cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind) != null) {
+                    return null;
+                }
+            }
+            addCachedEntriesOfType(entries, dbName, collName, fieldName, Number.class);
+            addCachedEntriesOfType(entries, dbName, collName, fieldName, Boolean.class);
+            addCachedEntriesOfType(entries, dbName, collName, fieldName, String.class);
+            for (var customType : CustomTypeFactory.getCustomTypes().values()) {
+                addCachedEntriesOfType(entries, dbName, collName, fieldName, customType);
+            }
+            if (entries.isEmpty()) {
+                return null;
+            }
+            entries.sort(order);
+            ordered = collectIds(entries, maxIds);
+        } finally {
+            rl.releaseIndexRead(dbName, collName, fieldName);
+        }
+        if (!PendingWriteReconciler.pendingIds(dbName, collName).isEmpty()) {
+            return null;
+        }
+        if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
+            cache.recordFieldIndexAccess(dbName, collName, fieldName);
+        }
+        recordAnalyzeIndexUse(dbName, collName, fieldName);
+        return ordered;
+    }
+
+    private static List<String> collectIds(List<FieldIndexEntry<?>> entries, long maxIds) {
+        final var ordered = new ArrayList<String>();
+        for (final var entry : entries) {
+            ordered.addAll(entry.getIds());
+            if (ordered.size() >= maxIds) {
+                break;
+            }
+        }
+        return ordered;
+    }
+
+    private static void addCachedEntriesOfType(List<FieldIndexEntry<?>> entries, String dbName, String collName,
+            String fieldName, Class<?> type) throws IOException {
+        final var cached = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type);
+        if (cached != null) {
+            entries.addAll(cached);
+        }
     }
 
     private static void recordAnalyzeIndexUse(String dbName, String collName, String fieldName) {

@@ -9,8 +9,6 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -114,17 +112,17 @@ public class UserCache {
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
         return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType),
-                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType), indexType::cast);
+                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType));
     }
 
     public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, IndexKind kind) throws IOException {
         return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, kind.label()),
-                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind), value -> (String) value);
+                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind));
     }
 
     private <T> List<FieldIndexEntry<T>> loadIndex(String dbName, String collName, String indexIdentifier,
-            IndexLoader<T> loader, Function<Object, T> cast) throws IOException {
+            IndexLoader<T> loader) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         var index = fieldIndexMap.get(collectionIdentifier);
         if (index == null || !index.containsKey(indexIdentifier)) {
@@ -145,8 +143,9 @@ public class UserCache {
         if (existingIndex == null) {
             return null;
         }
-        return existingIndex.stream().map(entry -> new FieldIndexEntry<>(entry.getDatabaseName(),
-                entry.getCollectionName(), cast.apply(entry.getValue()), entry.getIds())).collect(Collectors.toList());
+        @SuppressWarnings("unchecked")
+        final var typed = (List<FieldIndexEntry<T>>) (List<?>) existingIndex;
+        return typed;
     }
 
     private interface IndexLoader<T> {

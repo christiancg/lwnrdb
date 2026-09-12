@@ -91,19 +91,24 @@ public class FilterOperatorHelper {
 
     private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
         return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
-                .collect(Collectors.groupingBy(jsonObject -> {
-                    final var id = jsonObject.get(Globals.PK_FIELD);
-                    if (id == null) {
-                        throw new IllegalStateException("Document missing _id in conjunction grouping");
-                    }
-                    return id;
-                })).entrySet().stream()
-                .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == matches)
-                .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream()).distinct();
+                .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
+                .filter(matching -> matching.size() == matches).map(List::getFirst);
+    }
+
+    private static JsonBaseElement conjunctionKey(JsonObject jsonObject) {
+        final var id = jsonObject.get(Globals.PK_FIELD);
+        if (id == null) {
+            throw new IllegalStateException("Document missing _id in conjunction grouping");
+        }
+        return id;
     }
 
     private static Stream<JsonObject> orConjunction(List<Stream<JsonObject>> combinationResult) {
-        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).distinct();
+        final var seen = new HashSet<>();
+        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).filter(jsonObject -> {
+            final var id = jsonObject.get(Globals.PK_FIELD);
+            return seen.add(id != null ? id : jsonObject);
+        });
     }
 
     private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined,
@@ -112,14 +117,9 @@ public class FilterOperatorHelper {
             // Blocking step (documented exception): NOR/NAND must diff against the full collection.
             resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
         }
-        return Stream.concat(resultStream, combined).collect(Collectors.groupingBy(jsonObject -> {
-            final var id = jsonObject.get(Globals.PK_FIELD);
-            if (id == null) {
-                throw new IllegalStateException("Document missing _id in conjunction grouping");
-            }
-            return id;
-        })).entrySet().stream().filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
-                .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream());
+        return Stream.concat(resultStream, combined)
+                .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
+                .filter(matching -> matching.size() == 1).map(List::getFirst);
     }
 
     private static Stream<JsonObject> processFieldOperator(FieldOperator operator, Stream<JsonObject> resultStream,
