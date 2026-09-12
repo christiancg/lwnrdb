@@ -3,7 +3,6 @@ package org.techhouse.ejson.validate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -144,7 +143,7 @@ public class MetaSchemaValidator {
         }
         for (final var entry : value.asJsonObject().entrySet()) {
             try {
-                Pattern.compile(entry.getKey());
+                SchemaPatterns.compile(entry.getKey());
             } catch (PatternSyntaxException e) {
                 errors.add(at(path) + ": invalid regular expression key '" + entry.getKey() + "'");
             }
@@ -234,7 +233,7 @@ public class MetaSchemaValidator {
         }
         if (SchemaKeywords.PATTERN.equals(keyword)) {
             try {
-                Pattern.compile(value.asJsonString().getValue());
+                SchemaPatterns.compile(value.asJsonString().getValue());
             } catch (PatternSyntaxException e) {
                 errors.add(at(path) + ": invalid regular expression");
             }

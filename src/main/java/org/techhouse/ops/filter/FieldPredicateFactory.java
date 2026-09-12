@@ -21,11 +21,11 @@ public final class FieldPredicateFactory {
 
     public static BiPredicate<JsonObject, String> getTester(FieldOperator operator, FieldOperatorType operation) {
         return (JsonObject toTest, String fieldName) -> {
-            if (!JsonUtils.hasInPath(toTest, fieldName)) {
+            final var toTestElement = JsonUtils.resolvePath(toTest, fieldName);
+            if (toTestElement == null) {
                 return false;
             }
             final var operatorElement = operator.getValue();
-            final var toTestElement = JsonUtils.getFromPath(toTest, fieldName);
             if (operatorElement.isJsonPrimitive()) {
                 return primitiveOperandMatches(operatorElement, toTestElement, operation);
             }

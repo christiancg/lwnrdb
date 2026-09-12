@@ -23,11 +23,6 @@
     </Match>
 
     <Match>
-        <Class name="org.techhouse.ejson.internal.LinkedTreeMap"/>
-        <Bug pattern="SE_BAD_FIELD,NP_LOAD_OF_KNOWN_NULL_VALUE"/>
-    </Match>
-
-    <Match>
         <Or>
             <Class name="org.techhouse.data.auth.PasswordHasher"/>
             <Class name="org.techhouse.utils.VectorUtils"/>

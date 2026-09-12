@@ -9,17 +9,24 @@ public class JsonArrayTypeAdapter implements TypeAdapter<JsonArray> {
 
     @Override
     public String toJson(JsonArray value) {
+        final var out = new StringBuilder();
+        toJson(value, out);
+        return out.toString();
+    }
+
+    @Override
+    public void toJson(JsonArray value, StringBuilder out) {
         final var elementAdapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);
-        final var builder = new StringBuilder("[");
+        out.append('[');
         var first = true;
         for (final var element : value) {
             if (!first) {
-                builder.append(',');
+                out.append(',');
             }
             first = false;
-            builder.append(elementAdapter.toJson(element));
+            elementAdapter.toJson(element, out);
         }
-        return builder.append(']').toString();
+        out.append(']');
     }
 
     @Override

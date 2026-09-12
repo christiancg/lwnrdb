@@ -96,10 +96,10 @@ public final class IndexEntryReader {
         final var byValue = new HashMap<JsonBaseElement, FieldIndexEntry<JsonBaseElement>>();
         for (var doc : docs) {
             final var data = doc.getData();
-            if (!JsonUtils.hasInPath(data, fieldName)) {
+            final var value = JsonUtils.resolvePath(data, fieldName);
+            if (value == null) {
                 continue;
             }
-            final var value = JsonUtils.getFromPath(data, fieldName);
             if (!value.isJsonObject() && !value.isJsonArray()) {
                 continue;
             }
@@ -135,10 +135,10 @@ public final class IndexEntryReader {
         }
         for (var dbEntry : PendingWriteReconciler.pendingDocuments(dbName, collName, pendingIds)) {
             final var data = dbEntry.getData();
-            if (!JsonUtils.hasInPath(data, fieldName)) {
+            final var element = JsonUtils.resolvePath(data, fieldName);
+            if (element == null) {
                 continue;
             }
-            final var element = JsonUtils.getFromPath(data, fieldName);
             if (!element.isJsonPrimitive() && !element.isJsonNull()) {
                 return false;
             }
@@ -205,7 +205,10 @@ public final class IndexEntryReader {
         if (pendingIds.isEmpty()) {
             return matchingIds;
         }
-        return PendingWriteReconciler.correctIds(matchingIds, dbName, collName, pendingIds, fieldName, (data,
-                field) -> JsonUtils.hasInPath(data, field) && localValues.contains(JsonUtils.getFromPath(data, field)));
+        return PendingWriteReconciler.correctIds(matchingIds, dbName, collName, pendingIds, fieldName,
+                (data, field) -> {
+                    final var resolved = JsonUtils.resolvePath(data, field);
+                    return resolved != null && localValues.contains(resolved);
+                });
     }
 }

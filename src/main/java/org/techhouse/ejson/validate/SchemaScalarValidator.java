@@ -1,7 +1,6 @@
 package org.techhouse.ejson.validate;
 
 import java.util.List;
-import java.util.regex.Pattern;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
@@ -20,7 +19,7 @@ class SchemaScalarValidator {
                     + " characters");
         }
         final var pattern = obj.get(SchemaKeywords.PATTERN);
-        if (pattern != null && !Pattern.compile(pattern.asJsonString().getValue()).matcher(value).find()) {
+        if (pattern != null && !SchemaPatterns.compile(pattern.asJsonString().getValue()).matcher(value).find()) {
             errors.add(SchemaValidator.at(path) + ": string does not match the required pattern");
         }
     }

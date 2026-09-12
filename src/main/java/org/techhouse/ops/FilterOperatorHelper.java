@@ -197,10 +197,7 @@ public class FilterOperatorHelper {
             args.put(entry.getKey(), entry.getValue());
         }
         return (JsonObject toTest, String fieldName) -> {
-            if (!JsonUtils.hasInPath(toTest, fieldName)) {
-                return false;
-            }
-            final var element = JsonUtils.getFromPath(toTest, fieldName);
+            final var element = JsonUtils.resolvePath(toTest, fieldName);
             if (element == null || !element.isJsonCustom()) {
                 return false;
             }
@@ -259,10 +256,7 @@ public class FilterOperatorHelper {
 
     private static Double scoreDocument(JsonObject document, String fieldName, String operatorName,
             Map<String, JsonBaseElement> args) {
-        if (!JsonUtils.hasInPath(document, fieldName)) {
-            return null;
-        }
-        final var element = JsonUtils.getFromPath(document, fieldName);
+        final var element = JsonUtils.resolvePath(document, fieldName);
         if (element == null || !element.isJsonCustom()) {
             return null;
         }
