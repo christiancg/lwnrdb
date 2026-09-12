@@ -7,7 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
@@ -27,8 +32,13 @@ import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
 import org.techhouse.simplejs.internal.JsCoercion;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.test.TestGlobals;
+import org.techhouse.test.TestUtils;
 
 public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
+    private static final String SLEEPING_SCRIPT = "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"" + TestGlobals.DB
+            + "\",\"script\":\"export default new Promise(r => " + "setTimeout(() => r(1), 2000));\"}";
+    private static final String RUN_41_PLUS_1 = "{\"type\":\"RUN_SCRIPT\",\"databaseName\":\"" + TestGlobals.DB
+            + "\",\"script\":\"return 41 + 1;\"}";
     private String collectionOwnedBySelf() {
         for (var i = 0; i < 500; i++) {
             final var coll = "script-local-" + i;
@@ -202,8 +212,7 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
         assertTrue(response.contains("hello"), response);
     }
 
-    // A 503-6 is a real response, so it is relayed rather than retried here. forwardScript's fallback is
-    // deliberately generous - a transport failure runs the script locally - and falling back on a capacity
+    // A 503-6 is a real response, so it is relayed rather than retried here. Falling back on a capacity
     // rejection would let the cluster route around the very cap protecting the target node.
     @Test
     public void test_forwarded_script_rejection_is_relayed_not_retried_locally() throws Exception {
@@ -233,5 +242,93 @@ public class ScriptForwardingIntegrationTest extends ScriptClusterTestBase {
     @Test
     public void test_unreadable_owner_response_becomes_a_script_error() {
         assertThrows(RuntimeException.class, () -> ResponseParser.parseResponse("not json"));
+    }
+
+    // The one failure that proves the target never saw the request, so running it here cannot duplicate it.
+    @Test
+    public void test_a_target_that_cannot_be_connected_to_runs_the_script_here() throws Exception {
+        final int deadPort;
+        try (var closed = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            deadPort = closed.getLocalPort();
+        }
+        routeScriptsTo(deadPort);
+        final var fallbacksBefore = scriptPlacement.getForwardFallbacks();
+        final var unknownBefore = scriptPlacement.getOutcomeUnknown();
+
+        assertNull(router.forward(RequestParser.parseRequest(RUN_41_PLUS_1), RUN_41_PLUS_1, false, ADMIN, null),
+                "an unreachable target must hand the script back for local execution");
+        assertEquals(fallbacksBefore + 1, scriptPlacement.getForwardFallbacks());
+        assertEquals(unknownBefore, scriptPlacement.getOutcomeUnknown());
+    }
+
+    // The target took the request and never answered, so it may be running the script right now. Running it
+    // here as well would apply its writes twice - an inventory decrement on both nodes, with nothing left
+    // afterwards to show it happened - so the caller is told the outcome is unknown instead.
+    @Test
+    public void test_a_target_that_never_answers_is_not_retried_here() throws Exception {
+        final var origScriptTimeout = config.getScriptTimeoutMs();
+        try (var silent = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            routeScriptsTo(silent.getLocalPort());
+            // The forward waits scriptTimeoutMs + replicationAckTimeoutMs; shorten it so the test does not.
+            TestUtils.setPrivateField(config, "scriptTimeoutMs", 300L);
+            final var fallbacksBefore = scriptPlacement.getForwardFallbacks();
+            final var unknownBefore = scriptPlacement.getOutcomeUnknown();
+
+            final var response = router.forward(RequestParser.parseRequest(RUN_41_PLUS_1), RUN_41_PLUS_1, false, ADMIN,
+                    null);
+
+            assertNotNull(response, "an unknown outcome must be reported, not silently retried");
+            assertTrue(response.contains(ErrorCode.SCRIPT_OUTCOME_UNKNOWN.getCode()), response);
+            assertFalse(response.contains("\"result\":42"), "the script was run a second time here: " + response);
+            assertEquals(fallbacksBefore, scriptPlacement.getForwardFallbacks());
+            assertEquals(unknownBefore + 1, scriptPlacement.getOutcomeUnknown());
+        } finally {
+            TestUtils.setPrivateField(config, "scriptTimeoutMs", origScriptTimeout);
+        }
+    }
+
+    // Forwarded scripts used to serialise: a peer gets one connection and the handler answered one request
+    // at a time, so N concurrent forwards cost N x their duration however idle the target was. That defeats
+    // the point of placement - forwarding was slower than staying local - and pushed the later ones past the
+    // forward budget, where the coordinator gave up and ran them a second time here.
+    //
+    // Proven through the concurrency cap rather than by timing or polling: with room for exactly one script
+    // and no queue wait, a second one arriving while the first still holds the permit is refused outright.
+    // Handled one at a time the first would have finished and released before the second was even read, so
+    // both would succeed - the refusal only exists if the target had both in flight together.
+    @Test
+    public void test_concurrent_forwarded_scripts_run_at_the_same_time_on_the_target() throws Exception {
+        enableScriptRouting();
+        final var admission = IocContainer.get(ScriptAdmission.class);
+        admission.reconfigure(1, 0L);
+        final var responses = new CopyOnWriteArrayList<String>();
+        final var done = new CountDownLatch(2);
+        try {
+            for (var i = 0; i < 2; i++) {
+                Thread.ofVirtual().start(() -> {
+                    try {
+                        responses.add(String.valueOf(router.forward(RequestParser.parseRequest(SLEEPING_SCRIPT),
+                                SLEEPING_SCRIPT, false, ADMIN, null)));
+                    } finally {
+                        done.countDown();
+                    }
+                });
+            }
+            assertTrue(done.await(30, TimeUnit.SECONDS), "both forwards must answer");
+        } finally {
+            admission.reconfigure(0, 0L);
+        }
+
+        final var refused = responses.stream().filter(r -> r.contains(ErrorCode.SCRIPT_CONCURRENCY_LIMIT.getCode()))
+                .count();
+        assertEquals(1, refused, () -> "the target ran them one after another rather than together: " + responses);
+    }
+
+    // Self carries a load the peer does not, so placement always picks the peer.
+    private void routeScriptsTo(int peerPort) throws Exception {
+        configureMembership(2, node("self", 19990, 9), node("target", peerPort, 0));
+        TestUtils.setPrivateField(config, "scriptsEnabled", true);
+        TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
+        TestUtils.setPrivateField(config, "scriptLocalityWeight", 0);
     }
 }

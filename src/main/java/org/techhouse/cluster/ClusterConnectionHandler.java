@@ -49,11 +49,14 @@ public class ClusterConnectionHandler implements Runnable {
 
     @Override
     public void run() {
-        // Single-threaded, so the requests handed to it stay in arrival order; virtual, so a blocked handler
-        // costs no platform thread. Declared after the socket so it closes first: close() drains what is
-        // queued, and draining while the socket is still open is what lets those answers still be written.
-        // A replicated write must not be dropped because the peer hung up.
-        try (socket; var ordered = Executors.newSingleThreadExecutor(Thread.ofVirtual().factory())) {
+        // Two lanes, both virtual so a blocked handler costs no platform thread: one single-threaded, which
+        // is what keeps the requests handed to it in arrival order, and one unbounded for those ordered
+        // against nothing. Both are declared after the socket so both close first - close() drains what is
+        // outstanding, and draining while the socket is still open is what lets those answers still be
+        // written. A replicated write must not be dropped because the peer hung up.
+        try (socket;
+                var concurrent = Executors.newVirtualThreadPerTaskExecutor();
+                var ordered = Executors.newSingleThreadExecutor(Thread.ofVirtual().factory())) {
             final var reader = new BufferedReader(
                     new InputStreamReader(socket.getInputStream(), StandardCharsets.UTF_8));
             final var writer = new BufferedWriter(
@@ -70,17 +73,8 @@ public class ClusterConnectionHandler implements Runnable {
                 if (request == null) {
                     continue;
                 }
-                if (request.getType() == ClusterMessageType.GOSSIP) {
-                    // Gossip alone is allowed to overtake. A peer sends everything over one connection, and
-                    // handling a request on this thread stopped the loop reading the next one, so a slow
-                    // request - a replicated write waiting on a collection lock, say - held up whatever the
-                    // peer sent after it until each timed out at replicationAckTimeoutMs. When the casualty
-                    // was gossip the peer stopped looking alive, and aliveCount() is what write quorum is
-                    // measured from, so an unrelated slow write cost the cluster its quorum. Overtaking is
-                    // safe for gossip precisely because it is ordered against nothing: it merges per node id
-                    // under ConcurrentHashMap.compute, which already runs concurrently for every other
-                    // peer's connection.
-                    Thread.ofVirtual().start(() -> respondSafely(writer, writerLock, request));
+                if (mayOvertake(request.getType())) {
+                    concurrent.execute(() -> respondSafely(writer, writerLock, request));
                 } else {
                     // Everything else keeps the order the peer sent it in - replication correctness rests on
                     // it - but on a single worker rather than on this thread, so that reading the next
@@ -93,6 +87,19 @@ public class ClusterConnectionHandler implements Runnable {
         } catch (IOException e) {
             logger.warning("Cluster connection error: " + e.getMessage());
         }
+    }
+
+    // What may be answered out of order, because it is ordered against nothing else the peer sent.
+    //
+    // Gossip merges per node id under ConcurrentHashMap.compute, which already runs concurrently for every
+    // other peer's connection. A forwarded client request is an independent operation: two clients' writes
+    // have no order between them, and one client's are already sequential because it waits for each answer.
+    //
+    // The rest must keep the order the peer sent it in. Replication especially: ReplicatedApplyHelper does
+    // not compare versions before applying, so this connection is the only thing sequencing one
+    // coordinator's writes to a document.
+    private static boolean mayOvertake(ClusterMessageType type) {
+        return type == ClusterMessageType.GOSSIP || type == ClusterMessageType.FORWARD_REQUEST;
     }
 
     private void respond(BufferedWriter writer, ReentrantLock writerLock, ClusterMessage request) throws IOException {

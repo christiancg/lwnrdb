@@ -165,11 +165,17 @@ epoch propagates; and an older node reporting no epoch reads as `0` and is never
 once this node's epoch is non-zero — the safe direction, and a reason to roll the whole
 cluster promptly. This node itself is always a candidate.
 
-**Failure is always local execution.** A forward that fails (unreachable target, timeout,
-`ERROR` reply) falls back to running here, which is what would have happened before
-placement existed — so placement can never make a working call fail. A `503-6` from the
-chosen node is **not** such a failure: it is a real response and is relayed verbatim, since
-falling back would route around the very cap protecting the target. A forwarded script is
+**A script runs at most once.** Only one failure falls back to running here: the target
+could not be *connected to*, which proves the request never went on the wire. Every other
+failure — a timeout, a reset mid-request, an `ERROR` reply (which the peer also sends when
+its handler threw partway through) — leaves the target possibly still executing, and
+running the script here as well would apply its writes twice. A duplicated inventory
+decrement is a wrong answer no later read can detect, so those answer `503-7` instead and
+leave retrying to the caller, who alone knows whether the script is idempotent. The two
+outcomes are counted apart in `GET_DATABASE_STATS`: `forwardFallbacks` ran the work exactly
+once somewhere, `outcomeUnknown` may have run it on the target and reported nothing. A
+`503-6` from the chosen node is neither: it is a real response and is relayed verbatim,
+since falling back would route around the very cap protecting the target. A forwarded script is
 given the whole script budget, so the forward waits `scriptTimeoutMs +
 replicationAckTimeoutMs` rather than the ack timeout sized for a single write. No loop is
 possible: the target runs the script through `OperationProcessor` directly.
@@ -204,8 +210,8 @@ reachable again. The count `LIST_SCRIPTS` reports and the load placement acts on
 the same registry, so they cannot disagree.
 
 `GET_DATABASE_STATS` reports placement per node under `scripts`: `routingEnabled`,
-`running`, `forwarded`, `forwardFallbacks`, `localityWeight`, `localityPreferred` and
-`cancelled`.
+`running`, `forwarded`, `forwardFallbacks`, `outcomeUnknown`, `localityWeight`,
+`localityPreferred` and `cancelled`.
 
 ## Stored procedures and triggers
 

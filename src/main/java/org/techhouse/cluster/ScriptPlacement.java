@@ -20,6 +20,7 @@ public class ScriptPlacement {
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private final LongAdder forwarded = new LongAdder();
     private final LongAdder forwardFallbacks = new LongAdder();
+    private final LongAdder outcomeUnknown = new LongAdder();
     private final LongAdder localityPreferred = new LongAdder();
     private final RandomGenerator random;
 
@@ -55,12 +56,23 @@ public class ScriptPlacement {
         forwardFallbacks.increment();
     }
 
+    // A forward whose outcome could not be established, so the script was deliberately not re-run here.
+    // Counted apart from forwardFallbacks: a fallback ran the work somewhere, this one may have run it
+    // on the target and told the caller nothing, which is the case an operator needs to see.
+    public void recordOutcomeUnknown() {
+        outcomeUnknown.increment();
+    }
+
     public long getForwarded() {
         return forwarded.sum();
     }
 
     public long getForwardFallbacks() {
         return forwardFallbacks.sum();
+    }
+
+    public long getOutcomeUnknown() {
+        return outcomeUnknown.sum();
     }
 
     public long getLocalityPreferred() {

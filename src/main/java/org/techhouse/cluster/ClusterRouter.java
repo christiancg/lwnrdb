@@ -59,7 +59,7 @@ public class ClusterRouter {
             return forwardAdmin(type, rawJson, actingUser);
         }
         if (SCRIPT_OPS.contains(type)) {
-            return forwardScript(request.getDatabaseName(), rawJson, actingUser);
+            return forwardScript(type, request.getDatabaseName(), rawJson, actingUser);
         }
         if (!ROUTABLE.contains(type)) {
             return null;
@@ -202,10 +202,15 @@ public class ClusterRouter {
     }
 
     // A script is placed by load and by how much of the scoped database a node owns, not by the ownership
-    // of a single collection (see ScriptPlacement). A forward that fails falls back to local execution
-    // instead of erroring: the script would have run here before placement existed, so local is always a
-    // correct outcome and placement can never make a working call fail.
-    private String forwardScript(String databaseName, String rawJson, String actingUser) {
+    // of a single collection (see ScriptPlacement).
+    //
+    // Falling back to local execution is only correct when the target provably never got the request. Any
+    // other failure - a timeout, a connection reset mid-request - leaves the target possibly still running
+    // the script, and running it here as well would execute it twice. A script writes, so twice is a wrong
+    // answer, not a slow one: an inventory decrement applied on both nodes is silent corruption no read can
+    // detect afterwards. When the outcome cannot be established the caller is told so instead, and decides
+    // for itself whether re-running is safe.
+    private String forwardScript(OperationType type, String databaseName, String rawJson, String actingUser) {
         final var target = scriptPlacement.choose(databaseName);
         if (target == null) {
             return null;
@@ -222,14 +227,24 @@ public class ClusterRouter {
                 scriptPlacement.recordForward();
                 return ForwardBody.decode(response.getForwardBody());
             }
-            logger.warning("Node " + target.address() + " rejected a forwarded script, running it locally: "
-                    + response.getErrorMessage());
+            // The node answered, but with a failure rather than an outcome, which is what it also sends when
+            // the handler threw partway through. That is not proof the script did not run.
+            return outcomeUnknown(type, target, "answered " + response.getErrorMessage());
+        } catch (PeerUnreachableException e) {
+            logger.warning("Could not reach " + target.address() + " to place a script, running it locally: "
+                    + e.getMessage());
+            scriptPlacement.recordFallback();
+            return null;
         } catch (Exception e) {
-            logger.warning(
-                    "Failed to forward a script to " + target.address() + ", running it locally: " + e.getMessage());
+            return outcomeUnknown(type, target, "did not answer: " + e.getMessage());
         }
-        scriptPlacement.recordFallback();
-        return null;
+    }
+
+    private String outcomeUnknown(OperationType type, NodeInfo target, String detail) {
+        logger.warning("Script placed on " + target.address() + " " + detail
+                + "; not running it here, because it may already have run there");
+        scriptPlacement.recordOutcomeUnknown();
+        return eJson.toJson(new OperationResponse(type, ErrorCode.SCRIPT_OUTCOME_UNKNOWN));
     }
 
     private String forwardToOwner(OperationType type, String rawJson, String ownerAddress, String actingUser) {

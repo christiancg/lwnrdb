@@ -190,7 +190,11 @@ public enum ErrorCode {
                             "The collection's owner node is unreachable", OperationStatus.ERROR), ADMIN_SYNCING("503-5",
                                     "Admin coordinator is synchronizing, retry shortly",
                                     OperationStatus.ERROR), SCRIPT_CONCURRENCY_LIMIT("503-6",
-                                            "Too many scripts running, retry shortly", OperationStatus.ERROR);
+                                            "Too many scripts running, retry shortly",
+                                            OperationStatus.ERROR), SCRIPT_OUTCOME_UNKNOWN("503-7",
+                                                    "The node the script was placed on did not report an outcome; "
+                                                            + "it was not run again in case it already had",
+                                                    OperationStatus.ERROR);
 
     private final String code;
     private final String defaultMessage;
