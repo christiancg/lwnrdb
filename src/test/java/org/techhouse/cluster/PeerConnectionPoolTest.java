@@ -65,8 +65,7 @@ public class PeerConnectionPoolTest {
                     bothArrived.countDown();
                     Thread.ofVirtual().start(() -> replyAfterDelay(writer, writerLock, request));
                 }
-            } catch (IOException e) {
-                // The test closes the server socket in teardown; nothing to do.
+            } catch (IOException ignored) {
             }
         });
     }

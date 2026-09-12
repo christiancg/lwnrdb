@@ -108,8 +108,7 @@ public class MainTest {
         Thread thread = new Thread(() -> {
             try {
                 Main.main(args);
-            } catch (Exception e) {
-                // expected on interrupt
+            } catch (Exception ignored) {
             }
         });
         thread.start();
