@@ -228,8 +228,11 @@ final class FieldIndexStore {
     }
 
     private static void writeLine(RandomAccessFile writer, String line) throws IOException {
-        writer.write(line.getBytes(StandardCharsets.UTF_8));
-        writer.write(NEWLINE_BYTES);
+        final var lineBytes = line.getBytes(StandardCharsets.UTF_8);
+        final var buffer = new byte[lineBytes.length + NEWLINE_BYTES.length];
+        System.arraycopy(lineBytes, 0, buffer, 0, lineBytes.length);
+        System.arraycopy(NEWLINE_BYTES, 0, buffer, lineBytes.length, NEWLINE_BYTES.length);
+        writer.write(buffer);
     }
 
     private byte[] readFully(RandomAccessFile writer) throws IOException {

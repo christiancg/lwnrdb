@@ -24,7 +24,7 @@ public final class Globals {
     public static final String SCHEDULE_FILE_EXTENSION = JSON_FILE_EXTENSION;
     public static final String TRIGGERS_FILE_NAME = "triggers";
     public static final String TRIGGERS_FILE_EXTENSION = JSON_FILE_EXTENSION;
-    public static final String RW_PERMISSIONS = "rwd";
+    public static final String RW_PERMISSIONS = "rw";
     public static final String R_PERMISSIONS = "r";
     public static final char COLL_IDENTIFIER_SEPARATOR = '|';
     public static final String COLL_IDENTIFIER_SEPARATOR_REGEX = "\\|";
@@ -53,7 +53,6 @@ public final class Globals {
     public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
     public static final String FILE_PAGE_SEPARATOR = "-";
     public static final String NEWLINE = System.lineSeparator();
-    public static final int NEWLINE_CHAR_LENGTH = System.lineSeparator().equals("\n") ? 1 : 2;
     public static final String CLOSE_CONNECTION_MESSAGE = "Bye!";
     public static final String CUSTOM_JSON_REGEX = "^#[a-zA-Z0-9]{3,20}\\(.*\\)$";
     public static final double EARTH_RADIUS_METERS = 6371000.0;
