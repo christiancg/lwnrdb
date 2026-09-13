@@ -57,4 +57,9 @@ public final class JsDate extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.DATE;
+    }
 }

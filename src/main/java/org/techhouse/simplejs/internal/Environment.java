@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import org.techhouse.simplejs.exceptions.ReferenceErrorException;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
 import org.techhouse.simplejs.values.JsClass;
@@ -40,7 +41,7 @@ public final class Environment {
 
     private final Environment parent;
     private final boolean functionScope;
-    private final Map<String, Binding> bindings = new LinkedHashMap<>();
+    private Map<String, Binding> bindings;
     private Map<String, Binding> globalLexicalBindings;
     private JsValue thisValue;
     private boolean hasThis;
@@ -51,6 +52,19 @@ public final class Environment {
     private JsValue newTarget;
     private boolean hasNewTarget;
     private List<DisposalEntry> disposables;
+
+    private Map<String, Binding> bindings() {
+        var existing = bindings;
+        if (existing == null) {
+            existing = new LinkedHashMap<>();
+            bindings = existing;
+        }
+        return existing;
+    }
+
+    private Map<String, Binding> bindingsView() {
+        return bindings == null ? Map.of() : bindings;
+    }
 
     private Environment(Environment parent, boolean functionScope) {
         this.parent = parent;
@@ -176,29 +190,29 @@ public final class Environment {
     }
 
     public void declareFunction(String name, JsValue value) {
-        bindings.put(name, new Binding(value, "var", true, true));
+        bindings().put(name, new Binding(value, "var", true, true));
     }
 
     public void declareBuiltin(String name, JsValue value) {
-        bindings.put(name, new Binding(value, "var", true, false, true, true));
+        bindings().put(name, new Binding(value, "var", true, false, true, true));
     }
 
     public void declareNonWritableBuiltin(String name, JsValue value) {
-        bindings.put(name, new Binding(value, "var", true, false, false, false));
+        bindings().put(name, new Binding(value, "var", true, false, false, false));
     }
 
     public boolean hasLocal(String name) {
-        return bindings.containsKey(name);
+        return bindings != null && bindings.containsKey(name);
     }
 
     public void declareVar(String name) {
         final var target = functionScope();
-        target.bindings.computeIfAbsent(name, ignored -> new Binding(JsUndefined.getInstance(), "var", true, true));
+        target.bindings().computeIfAbsent(name, ignored -> new Binding(JsUndefined.getInstance(), "var", true, true));
     }
 
     public void declareParam(String name) {
         final var target = functionScope();
-        target.bindings.computeIfAbsent(name, ignored -> new Binding(JsUndefined.getInstance(), "var", false, true));
+        target.bindings().computeIfAbsent(name, ignored -> new Binding(JsUndefined.getInstance(), "var", false, true));
     }
 
     public void declareLexical(String name, String kind) {
@@ -209,11 +223,11 @@ public final class Environment {
             globalLexicalBindings.put(name, new Binding(JsUndefined.getInstance(), kind, false, false));
             return;
         }
-        bindings.put(name, new Binding(JsUndefined.getInstance(), kind, false, false));
+        bindings().put(name, new Binding(JsUndefined.getInstance(), kind, false, false));
     }
 
     public void initialize(String name, JsValue value) {
-        final var binding = ownBinding(name);
+        final var binding = Objects.requireNonNull(ownBinding(name), () -> "no binding declared for " + name);
         binding.value = value;
         binding.initialized = true;
     }
@@ -225,7 +239,7 @@ public final class Environment {
                 return lexical;
             }
         }
-        return bindings.get(name);
+        return bindings == null ? null : bindings.get(name);
     }
 
     public JsValue get(String name) {
@@ -263,7 +277,7 @@ public final class Environment {
     }
 
     public JsValue tryGetGlobalProperty(String name) {
-        final var binding = bindings.get(name);
+        final var binding = bindings == null ? null : bindings.get(name);
         return binding == null || !binding.initialized ? null : binding.value;
     }
 
@@ -273,7 +287,7 @@ public final class Environment {
 
     public List<String> enumerableGlobalNames() {
         final var names = new ArrayList<String>();
-        for (final var entry : bindings.entrySet()) {
+        for (final var entry : bindingsView().entrySet()) {
             final var binding = entry.getValue();
             if (binding.initialized && binding.enumerable) {
                 names.add(entry.getKey());
@@ -284,7 +298,7 @@ public final class Environment {
 
     public List<String> allGlobalNames() {
         final var names = new ArrayList<String>();
-        for (final var entry : bindings.entrySet()) {
+        for (final var entry : bindingsView().entrySet()) {
             final var binding = entry.getValue();
             if (binding.initialized && "var".equals(binding.kind)) {
                 names.add(entry.getKey());
@@ -295,44 +309,47 @@ public final class Environment {
 
     public void setGlobal(String name, JsValue value) {
         if (resolve(name) == null) {
-            bindings.put(name, new Binding(JsUndefined.getInstance(), "var", true, true, true, true));
+            bindings().put(name, new Binding(JsUndefined.getInstance(), "var", true, true, true, true));
         }
         assign(name, value);
     }
 
     public void defineGlobal(String name, JsValue value, JsObject.PropertyFlags flags) {
-        bindings.put(name, new Binding(value, "var", true, flags.enumerable(), flags.writable(), flags.configurable()));
+        bindings().put(name,
+                new Binding(value, "var", true, flags.enumerable(), flags.writable(), flags.configurable()));
     }
 
     public void setGlobalFlags(String name, JsObject.PropertyFlags flags, JsValue value) {
-        final var binding = bindings.get(name);
+        final var binding = bindings == null ? null : bindings.get(name);
         if (binding == null) {
             return;
         }
-        bindings.put(name, new Binding(value == null ? binding.value : value, binding.kind, true, flags.enumerable(),
+        bindings().put(name, new Binding(value == null ? binding.value : value, binding.kind, true, flags.enumerable(),
                 flags.writable(), flags.configurable()));
     }
 
     public boolean hasGlobalProperty(String name) {
-        return bindings.containsKey(name);
+        return bindings != null && bindings.containsKey(name);
     }
 
     public JsObject.PropertyFlags globalPropertyFlags(String name) {
-        final var binding = bindings.get(name);
+        final var binding = bindings == null ? null : bindings.get(name);
         return binding == null
                 ? null
                 : new JsObject.PropertyFlags(binding.writable, binding.enumerable, binding.configurable);
     }
 
     public boolean deleteGlobal(String name) {
-        final var binding = bindings.get(name);
+        final var binding = bindings == null ? null : bindings.get(name);
         if (binding == null) {
             return true;
         }
         if (!binding.configurable) {
             return false;
         }
-        bindings.remove(name);
+        if (bindings != null) {
+            bindings.remove(name);
+        }
         return true;
     }
 
@@ -345,7 +362,7 @@ public final class Environment {
                     return lexical;
                 }
             }
-            final var binding = env.bindings.get(name);
+            final var binding = env.bindings == null ? null : env.bindings.get(name);
             if (binding != null) {
                 return binding;
             }

@@ -12,4 +12,9 @@ public class StaticBlock extends JsNode {
     public List<Statement> getBody() {
         return body;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.STATIC_BLOCK;
+    }
 }

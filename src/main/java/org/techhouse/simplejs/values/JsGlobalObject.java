@@ -105,4 +105,9 @@ public final class JsGlobalObject extends JsValue {
                 ? super.deleteOwnProperty(key)
                 : env.deleteGlobal(OrdinaryProperties.keyName(key));
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.GLOBAL;
+    }
 }

@@ -12,4 +12,9 @@ public class ObjectPattern extends JsNode {
     public List<JsNode> getProperties() {
         return properties;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.OBJECT_PATTERN;
+    }
 }

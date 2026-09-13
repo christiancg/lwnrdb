@@ -16,4 +16,9 @@ public class ExportSpecifier extends JsNode {
     public Expression getExported() {
         return exported;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.EXPORT_SPECIFIER;
+    }
 }

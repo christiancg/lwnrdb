@@ -12,4 +12,9 @@ public class Program extends JsNode {
     public List<Statement> getBody() {
         return body;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.PROGRAM;
+    }
 }

@@ -22,4 +22,9 @@ public class ArrayExpression extends Expression {
     public boolean hasTrailingComma() {
         return trailingComma;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.ARRAY_EXPRESSION;
+    }
 }

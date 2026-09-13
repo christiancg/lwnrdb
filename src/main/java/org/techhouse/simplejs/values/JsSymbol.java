@@ -35,4 +35,9 @@ public final class JsSymbol extends JsValue {
     public boolean isRegistered() {
         return registered;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.SYMBOL;
+    }
 }

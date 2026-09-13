@@ -10,4 +10,9 @@ public class SpreadElement extends Expression {
     public Expression getArgument() {
         return argument;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.SPREAD_ELEMENT;
+    }
 }

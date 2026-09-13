@@ -10,4 +10,9 @@ public class Identifier extends Expression {
     public String getName() {
         return name;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.IDENTIFIER;
+    }
 }

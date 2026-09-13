@@ -16,4 +16,9 @@ public class ImportExpression extends Expression {
     public Expression getOptions() {
         return options;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.IMPORT_EXPRESSION;
+    }
 }

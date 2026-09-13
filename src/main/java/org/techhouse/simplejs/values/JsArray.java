@@ -403,4 +403,9 @@ public final class JsArray extends JsValue {
     public void setLengthWritable(boolean writable) {
         lengths.setLengthWritable(writable);
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.ARRAY;
+    }
 }

@@ -404,4 +404,9 @@ public final class JsClass extends JsValue {
         }
         return false;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.CLASS;
+    }
 }

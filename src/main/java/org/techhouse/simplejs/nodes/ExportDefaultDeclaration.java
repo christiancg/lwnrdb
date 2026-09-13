@@ -10,4 +10,9 @@ public class ExportDefaultDeclaration extends Statement {
     public JsNode getDeclaration() {
         return declaration;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.EXPORT_DEFAULT_DECLARATION;
+    }
 }

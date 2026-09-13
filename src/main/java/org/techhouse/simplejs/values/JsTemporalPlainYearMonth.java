@@ -39,4 +39,9 @@ public final class JsTemporalPlainYearMonth extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.TEMPORAL_PLAIN_YEAR_MONTH;
+    }
 }

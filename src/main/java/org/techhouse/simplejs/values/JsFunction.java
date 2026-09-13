@@ -16,6 +16,7 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     private final CallableMetadata metadata = new CallableMetadata();
     private JsValue prototype;
     private String sourceText;
+    private boolean usesArguments = true;
     private String moduleName;
     private boolean method;
     private boolean derivedConstructor;
@@ -56,6 +57,11 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
 
     public void setSourceText(String sourceText) {
         this.sourceText = sourceText;
+        this.usesArguments = sourceText == null || sourceText.contains("\\u") || sourceText.contains("arguments");
+    }
+
+    public boolean usesArguments() {
+        return usesArguments;
     }
 
     public List<JsNode> getParams() {
@@ -144,5 +150,10 @@ public final class JsFunction extends JsValue implements JsCallableProperties {
     @Override
     public List<String> enumerablePropertyKeys() {
         return metadata.table().keys().stream().filter(metadata.table()::isEnumerable).toList();
+    }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.FUNCTION;
     }
 }

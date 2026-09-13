@@ -18,4 +18,9 @@ public class SwitchCase extends JsNode {
     public List<Statement> getConsequent() {
         return consequent;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.SWITCH_CASE;
+    }
 }

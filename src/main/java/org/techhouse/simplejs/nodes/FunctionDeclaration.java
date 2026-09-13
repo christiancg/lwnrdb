@@ -37,4 +37,9 @@ public class FunctionDeclaration extends Statement {
     public boolean isGenerator() {
         return generator;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.FUNCTION_DECLARATION;
+    }
 }

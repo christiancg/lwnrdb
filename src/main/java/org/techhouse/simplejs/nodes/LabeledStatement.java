@@ -16,4 +16,9 @@ public class LabeledStatement extends Statement {
     public Statement getBody() {
         return body;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.LABELED_STATEMENT;
+    }
 }

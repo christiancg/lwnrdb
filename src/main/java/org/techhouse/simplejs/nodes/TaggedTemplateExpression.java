@@ -16,4 +16,9 @@ public class TaggedTemplateExpression extends Expression {
     public TemplateLiteral getQuasi() {
         return quasi;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.TAGGED_TEMPLATE_EXPRESSION;
+    }
 }

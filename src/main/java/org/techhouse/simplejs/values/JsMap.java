@@ -171,4 +171,9 @@ public final class JsMap extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.MAP;
+    }
 }

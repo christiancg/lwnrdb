@@ -370,6 +370,14 @@ public final class Interpreter {
         dispatch.hoist(body, env);
     }
 
+    public void hoistBlock(org.techhouse.simplejs.nodes.BlockStatement block, Environment env) {
+        dispatch.hoistBlock(block, env);
+    }
+
+    public boolean blockDeclaresUsing(org.techhouse.simplejs.nodes.BlockStatement block) {
+        return dispatch.planFor(block).declaresUsing();
+    }
+
     public JsValue getMemberByKey(JsValue target, JsValue keyValue) {
         return memberIo.getMemberByKey(target, keyValue);
     }
@@ -402,6 +410,10 @@ public final class Interpreter {
 
     public void tick() {
         lifecycle.tick();
+    }
+
+    public void checkDeadline() {
+        lifecycle.checkDeadline();
     }
 
     public void charge(long bytes) {

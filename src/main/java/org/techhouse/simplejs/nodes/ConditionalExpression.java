@@ -22,4 +22,9 @@ public class ConditionalExpression extends Expression {
     public Expression getAlternate() {
         return alternate;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.CONDITIONAL_EXPRESSION;
+    }
 }

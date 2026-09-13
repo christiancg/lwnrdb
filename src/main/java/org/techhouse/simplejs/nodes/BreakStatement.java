@@ -10,4 +10,9 @@ public class BreakStatement extends Statement {
     public Identifier getLabel() {
         return label;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.BREAK_STATEMENT;
+    }
 }

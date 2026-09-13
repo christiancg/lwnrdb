@@ -18,4 +18,9 @@ public class NewExpression extends Expression {
     public List<Expression> getArguments() {
         return arguments;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.NEW_EXPRESSION;
+    }
 }

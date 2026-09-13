@@ -22,4 +22,9 @@ public class IfStatement extends Statement {
     public Statement getAlternate() {
         return alternate;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.IF_STATEMENT;
+    }
 }

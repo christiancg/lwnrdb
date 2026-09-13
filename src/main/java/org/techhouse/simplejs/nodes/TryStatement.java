@@ -22,4 +22,9 @@ public class TryStatement extends Statement {
     public BlockStatement getFinalizer() {
         return finalizer;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.TRY_STATEMENT;
+    }
 }

@@ -19,6 +19,7 @@ import org.techhouse.simplejs.host.ResourceLimits;
 
 public final class PipelineScriptContext implements AutoCloseable {
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
+    private static final CompiledScriptCache compiledScriptCache = IocContainer.get(CompiledScriptCache.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     private final Map<String, ScriptCallable> callables = new HashMap<>();
@@ -38,7 +39,11 @@ public final class PipelineScriptContext implements AutoCloseable {
         if (remaining <= 0) {
             throw new ScriptCallableException(TIMEOUT, TIMED_OUT_MESSAGE);
         }
-        final var opened = simpleJs.openCallable(source, PipelineHostBindings.of(limits(remaining)));
+        final var bindings = PipelineHostBindings.of(limits(remaining));
+        final var cached = compiledScriptCache.get(source);
+        final var opened = cached.failure() == null
+                ? simpleJs.openCallable(cached.compiled(), bindings)
+                : simpleJs.openCallable(source, bindings);
         callables.put(source, opened);
         return opened;
     }

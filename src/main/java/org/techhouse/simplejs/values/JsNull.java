@@ -9,4 +9,9 @@ public final class JsNull extends JsValue {
     public static JsNull getInstance() {
         return instance;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.NULL;
+    }
 }

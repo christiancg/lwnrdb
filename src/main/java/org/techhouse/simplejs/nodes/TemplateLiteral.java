@@ -30,4 +30,9 @@ public class TemplateLiteral extends Expression {
     public List<Expression> getExpressions() {
         return expressions;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.TEMPLATE_LITERAL;
+    }
 }

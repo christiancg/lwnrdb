@@ -5,6 +5,19 @@ public class MemberExpression extends Expression {
     private final Expression property;
     private final boolean computed;
     private final boolean optional;
+    private org.techhouse.simplejs.values.JsString keyValue;
+
+    public org.techhouse.simplejs.values.JsString staticKeyValue() {
+        var cached = keyValue;
+        if (cached == null) {
+            if (computed || !(property instanceof Identifier id)) {
+                return null;
+            }
+            cached = new org.techhouse.simplejs.values.JsString(id.getName());
+            keyValue = cached;
+        }
+        return cached;
+    }
 
     public MemberExpression(Expression object, Expression property, boolean computed, boolean optional) {
         this.object = object;
@@ -27,5 +40,10 @@ public class MemberExpression extends Expression {
 
     public boolean isOptional() {
         return optional;
+    }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.MEMBER_EXPRESSION;
     }
 }

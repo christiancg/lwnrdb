@@ -22,4 +22,9 @@ public class UpdateExpression extends Expression {
     public boolean isPrefix() {
         return prefix;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.UPDATE_EXPRESSION;
+    }
 }

@@ -14,4 +14,9 @@ public final class JsUndefined extends JsValue {
     public static JsUndefined getHole() {
         return hole;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.UNDEFINED;
+    }
 }

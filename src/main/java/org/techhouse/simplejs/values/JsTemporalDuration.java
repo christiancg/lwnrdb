@@ -38,4 +38,9 @@ public final class JsTemporalDuration extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.TEMPORAL_DURATION;
+    }
 }

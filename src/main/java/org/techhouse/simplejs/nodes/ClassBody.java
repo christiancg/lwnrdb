@@ -12,4 +12,9 @@ public class ClassBody extends JsNode {
     public List<JsNode> getMembers() {
         return members;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.CLASS_BODY;
+    }
 }

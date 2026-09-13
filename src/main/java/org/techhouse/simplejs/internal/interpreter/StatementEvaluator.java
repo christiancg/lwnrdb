@@ -1,6 +1,5 @@
 package org.techhouse.simplejs.internal.interpreter;
 
-import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.USING_KINDS;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.isCallable;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.matchesLabel;
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.toErrorValue;
@@ -31,7 +30,6 @@ import org.techhouse.simplejs.nodes.Statement;
 import org.techhouse.simplejs.nodes.SwitchCase;
 import org.techhouse.simplejs.nodes.SwitchStatement;
 import org.techhouse.simplejs.nodes.TryStatement;
-import org.techhouse.simplejs.nodes.VariableDeclaration;
 import org.techhouse.simplejs.nodes.WhileStatement;
 import org.techhouse.simplejs.values.JsUndefined;
 
@@ -50,8 +48,8 @@ public final class StatementEvaluator {
 
     public Completion evalBlock(BlockStatement block, Environment env) {
         final var blockEnv = env.child();
-        interp.hoist(block.getBody(), blockEnv);
-        if (!blockDeclaresUsing(block.getBody())) {
+        interp.hoistBlock(block, blockEnv);
+        if (!interp.blockDeclaresUsing(block)) {
             return execStatements(block.getBody(), blockEnv);
         }
         return runDisposing(blockEnv, () -> execStatements(block.getBody(), blockEnv));
@@ -65,15 +63,6 @@ public final class StatementEvaluator {
             }
         }
         return Completion.empty();
-    }
-
-    public boolean blockDeclaresUsing(List<Statement> body) {
-        for (final var statement : body) {
-            if (statement instanceof VariableDeclaration declaration && USING_KINDS.contains(declaration.getKind())) {
-                return true;
-            }
-        }
-        return false;
     }
 
     public Completion runDisposing(Environment env, Supplier<Completion> body) {
