@@ -336,6 +336,7 @@ public class FilterOperatorHelper {
     // re-added by re-testing the operator against the current document, keeping the result exact.
     private static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
+        final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final var raw = rawIndexMatchingIds(operator, dbName, collName);
         if (raw == null) {
             return null;
@@ -345,7 +346,7 @@ public class FilterOperatorHelper {
             analyzeContext.addIndexUsed(operator.getField());
             analyzeContext.addLock(AnalyzeContext.fieldLockId(dbName, collName, operator.getField()));
         }
-        final var pendingIds = PendingWriteReconciler.pendingIds(dbName, collName);
+        final var pendingIds = PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName);
         if (pendingIds.isEmpty()) {
             return raw;
         }

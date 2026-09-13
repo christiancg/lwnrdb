@@ -42,6 +42,7 @@ public final class IndexEntryReader {
         }
         final List<FieldIndexEntry<?>> combined = new ArrayList<>();
         final Set<String> hashIds = new HashSet<>();
+        final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         try {
             rl.lockIndexRead(dbName, collName, fieldName);
         } catch (InterruptedException e) {
@@ -69,7 +70,7 @@ public final class IndexEntryReader {
         if (!hashIds.isEmpty()) {
             addHashIndexEntries(combined, dbName, collName, fieldName, hashIds);
         }
-        final var pendingIds = PendingWriteReconciler.pendingIds(dbName, collName);
+        final var pendingIds = PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName);
         if (!pendingIds.isEmpty() && !reconcilePending(combined, dbName, collName, fieldName, pendingIds)) {
             return null;
         }
@@ -250,6 +251,7 @@ public final class IndexEntryReader {
             return null;
         }
         recordAnalyzeIndexUse(dbName, collName, fieldName);
+        final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final var matchingIds = new HashSet<String>();
         for (var localValue : localValues) {
             if (localValue.isJsonNull()) {
@@ -265,7 +267,7 @@ public final class IndexEntryReader {
                 matchingIds.addAll(ids);
             }
         }
-        final var pendingIds = PendingWriteReconciler.pendingIds(dbName, collName);
+        final var pendingIds = PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName);
         if (pendingIds.isEmpty()) {
             return matchingIds;
         }
