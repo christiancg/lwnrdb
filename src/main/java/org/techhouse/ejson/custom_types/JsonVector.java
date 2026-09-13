@@ -65,9 +65,19 @@ public class JsonVector extends JsonCustom<double[]> {
     @Override
     public Integer compare(double[] another) {
         final var bySignature = simHash().compareTo(VectorUtils.simHash(another, SIMHASH_BITS));
-        if (bySignature != 0) {
-            return bySignature;
+        return bySignature != 0 ? bySignature : compareByComponents(another);
+    }
+
+    @Override
+    public Integer compareToCustom(JsonCustom<double[]> another) {
+        if (another instanceof JsonVector otherVector) {
+            final var bySignature = simHash().compareTo(otherVector.simHash());
+            return bySignature != 0 ? bySignature : compareByComponents(otherVector.customValue);
         }
+        return compare(another.getCustomValue());
+    }
+
+    private int compareByComponents(double[] another) {
         final var minLength = Math.min(customValue.length, another.length);
         for (var i = 0; i < minLength; i++) {
             final var byComponent = Double.compare(customValue[i], another[i]);
