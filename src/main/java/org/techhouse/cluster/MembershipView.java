@@ -37,12 +37,25 @@ public final class MembershipView {
     // Null-safe on self: a node's own identity is only set when it joins, so a sweep firing before that
     // would otherwise dereference null.
     public List<NodeInfo> peers(NodeInfo self) {
-        return aliveMembers().stream().filter(member -> self == null || !member.getNodeId().equals(self.getNodeId()))
-                .toList();
+        final var peers = new ArrayList<NodeInfo>();
+        for (final var member : members) {
+            if (member.getState() == NodeState.ALIVE
+                    && (self == null || !member.getNodeId().equals(self.getNodeId()))) {
+                peers.add(member);
+            }
+        }
+        return peers;
     }
 
     public List<String> aliveNodeIds() {
-        return aliveMembers().stream().map(NodeInfo::getNodeId).sorted().toList();
+        final var ids = new ArrayList<String>();
+        for (final var member : members) {
+            if (member.getState() == NodeState.ALIVE) {
+                ids.add(member.getNodeId());
+            }
+        }
+        ids.sort(null);
+        return ids;
     }
 
     public int size() {
@@ -50,6 +63,12 @@ public final class MembershipView {
     }
 
     public int aliveCount() {
-        return aliveMembers().size();
+        var alive = 0;
+        for (final var member : members) {
+            if (member.getState() == NodeState.ALIVE) {
+                alive++;
+            }
+        }
+        return alive;
     }
 }

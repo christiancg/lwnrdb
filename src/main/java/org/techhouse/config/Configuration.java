@@ -81,6 +81,10 @@ public final class Configuration {
         return values.get(ConfigKey.LOG_PATH);
     }
 
+    public String getLogLevel() {
+        return values.get(ConfigKey.LOG_LEVEL);
+    }
+
     public int getMaxLogFiles() {
         return intValue(ConfigKey.MAX_LOG_FILES);
     }

@@ -3,6 +3,9 @@ package org.techhouse.cluster;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
@@ -56,9 +59,7 @@ public class Tx2pcCoordinator {
         if (local) {
             TransactionOperationHelper.commitPrepared(clientId);
         }
-        for (final var address : remotes) {
-            send(address, ClusterMessageType.COMMIT_TX, sessionId, dtxId, ClusterMessageType.COMMIT_TX_ACK, null);
-        }
+        sendToAll(remotes, ClusterMessageType.COMMIT_TX, sessionId, dtxId, ClusterMessageType.COMMIT_TX_ACK, null);
         deleteCoordinatorMarkerQuietly(dtxId);
         finishEdge(clientId, local);
         return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
@@ -103,22 +104,44 @@ public class Tx2pcCoordinator {
         if (local && !TransactionOperationHelper.prepare(clientId, selfAddress, participants)) {
             return false;
         }
-        for (final var address : remotes) {
-            if (!send(address, ClusterMessageType.PREPARE_TX, sessionId, dtxId, ClusterMessageType.PREPARE_TX_ACK,
-                    participants)) {
-                return false;
-            }
+        return sendToAll(remotes, ClusterMessageType.PREPARE_TX, sessionId, dtxId, ClusterMessageType.PREPARE_TX_ACK,
+                participants);
+    }
+
+    private boolean sendToAll(List<String> addresses, ClusterMessageType type, String sessionId, String dtxId,
+            ClusterMessageType expectedAck, List<String> participants) {
+        if (addresses.isEmpty()) {
+            return true;
         }
-        return true;
+        final var allAcked = new AtomicBoolean(true);
+        final var done = new CountDownLatch(addresses.size());
+        for (final var address : addresses) {
+            Thread.ofVirtual().name("cluster-2pc").start(() -> {
+                try {
+                    if (!send(address, type, sessionId, dtxId, expectedAck, participants)) {
+                        allAcked.set(false);
+                    }
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        try {
+            if (!done.await(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS)) {
+                allAcked.set(false);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            allAcked.set(false);
+        }
+        return allAcked.get();
     }
 
     private void abortAll(UUID clientId, String sessionId, String dtxId, boolean local, ArrayList<String> remotes) {
         if (local) {
             TransactionOperationHelper.abort(clientId);
         }
-        for (final var address : remotes) {
-            send(address, ClusterMessageType.ABORT_TX, sessionId, dtxId, ClusterMessageType.ABORT_TX_ACK, null);
-        }
+        sendToAll(remotes, ClusterMessageType.ABORT_TX, sessionId, dtxId, ClusterMessageType.ABORT_TX_ACK, null);
     }
 
     private void finishEdge(UUID clientId, boolean local) {

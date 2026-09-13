@@ -19,6 +19,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ReplicatedApplyHelper;
+import org.techhouse.utils.JsonUtils;
 
 public class AntiEntropyService implements MembershipListener {
     private final Logger logger = Logger.logFor(AntiEntropyService.class);
@@ -70,6 +71,10 @@ public class AntiEntropyService implements MembershipListener {
     }
 
     public AntiEntropyPayload buildDigest(String dbName, String collName) throws Exception {
+        return buildDigest(dbName, collName, null);
+    }
+
+    public AntiEntropyPayload buildDigest(String dbName, String collName, String peerSummary) throws Exception {
         final var payload = new AntiEntropyPayload(dbName, collName);
         final var entries = new ArrayList<DigestEntry>();
         for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
@@ -78,8 +83,23 @@ public class AntiEntropyService implements MembershipListener {
         for (final var tombstone : fs.readTombstones(dbName, collName).entrySet()) {
             entries.add(new DigestEntry(tombstone.getKey(), tombstone.getValue(), true));
         }
+        final var summary = summaryOf(entries);
+        payload.setSummary(summary);
+        if (peerSummary != null && peerSummary.equals(summary)) {
+            payload.setSummaryMatch(true);
+            return payload;
+        }
         payload.setDigest(entries);
         return payload;
+    }
+
+    static String summaryOf(List<DigestEntry> entries) {
+        final var canonical = new ArrayList<String>(entries.size());
+        for (final var entry : entries) {
+            canonical.add(entry.getId() + '|' + entry.getVersion() + '|' + entry.isDeleted());
+        }
+        canonical.sort(null);
+        return entries.size() + ":" + JsonUtils.sha256(String.join("\u001f", canonical));
     }
 
     public AntiEntropyPayload buildPull(String dbName, String collName, List<String> ids) throws Exception {
@@ -111,10 +131,15 @@ public class AntiEntropyService implements MembershipListener {
         localLive.forEach((id, version) -> merge(best, id, version, false, null));
         localTombstones.forEach((id, version) -> merge(best, id, version, true, null));
 
+        final var localEntries = new ArrayList<DigestEntry>(localLive.size() + localTombstones.size());
+        localLive.forEach((id, version) -> localEntries.add(new DigestEntry(id, version, false)));
+        localTombstones.forEach((id, version) -> localEntries.add(new DigestEntry(id, version, true)));
+        final var localSummary = summaryOf(localEntries);
+
         final var self = membershipService.getSelf();
         for (final var member : membershipService.membershipView().peers(self)) {
-            final var response = requestDigest(member.address(), dbName, collName);
-            if (response == null) {
+            final var response = requestDigest(member.address(), dbName, collName, localSummary);
+            if (response == null || response.isSummaryMatch() || response.getDigest() == null) {
                 continue;
             }
             for (final var digestEntry : response.getDigest()) {
@@ -173,9 +198,11 @@ public class AntiEntropyService implements MembershipListener {
         }
     }
 
-    private AntiEntropyPayload requestDigest(NodeAddress address, String dbName, String collName) {
+    private AntiEntropyPayload requestDigest(NodeAddress address, String dbName, String collName, String summary) {
         final var message = message(ClusterMessageType.DIGEST);
-        message.setAntiEntropy(new AntiEntropyPayload(dbName, collName));
+        final var query = new AntiEntropyPayload(dbName, collName);
+        query.setSummary(summary);
+        message.setAntiEntropy(query);
         final var response = send(address, message, ClusterMessageType.DIGEST_ACK);
         return response == null ? null : response.getAntiEntropy();
     }

@@ -9,6 +9,13 @@ public record Rule(Function<String, String> check) {
         return NONE;
     }
 
+    public static Rule oneOf(String... allowed) {
+        final var options = java.util.List.of(allowed);
+        return new Rule(value -> options.contains(value.toUpperCase(java.util.Locale.ROOT))
+                ? null
+                : "must be one of " + options + ", but was: " + value);
+    }
+
     public static Rule bool() {
         return new Rule(value -> "true".equalsIgnoreCase(value) || "false".equalsIgnoreCase(value)
                 ? null

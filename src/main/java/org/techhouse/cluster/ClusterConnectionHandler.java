@@ -246,7 +246,8 @@ public class ClusterConnectionHandler implements Runnable {
     private ClusterMessage handleDigest(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.DIGEST_ACK, "Failed to build digest", response -> {
             final var query = request.getAntiEntropy();
-            response.setAntiEntropy(antiEntropyService.buildDigest(query.getDbName(), query.getCollName()));
+            response.setAntiEntropy(
+                    antiEntropyService.buildDigest(query.getDbName(), query.getCollName(), query.getSummary()));
         });
     }
 

@@ -5,11 +5,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -19,6 +21,7 @@ import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.MembershipListener;
 import org.techhouse.cluster.MembershipView;
+import org.techhouse.cluster.NodeAddress;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
@@ -98,7 +101,7 @@ public class MembershipService {
                 continue;
             }
             try {
-                final var response = pool.request(seed, request(ClusterMessageType.JOIN_REQUEST),
+                final var response = pool.request(seed, message(ClusterMessageType.JOIN_REQUEST),
                         clusterConfig.replicationAckTimeoutMs());
                 mergeAll(response.getMembers());
             } catch (Exception e) {
@@ -124,33 +127,57 @@ public class MembershipService {
         self.setAdminSyncing(adminSyncing);
         self.setAdminEpoch(adminEpoch.current());
         lastSeen.put(self.getNodeId(), now);
-        for (var member : members.values()) {
-            if (member.getNodeId().equals(self.getNodeId()) || member.getState() != NodeState.ALIVE) {
-                continue;
-            }
-            try {
-                final var ack = pool.request(member.address(), request(ClusterMessageType.GOSSIP),
-                        clusterConfig.replicationAckTimeoutMs());
-                mergeAll(ack.getMembers());
-            } catch (Exception e) {
-                logger.warning("Gossip to " + member.address() + " failed: " + e.getMessage());
-            }
-        }
+        gossipToPeers();
         detectFailures(now);
         maybeNotify();
+    }
+
+    private void gossipToPeers() {
+        final var targets = new ArrayList<NodeAddress>();
+        for (final var member : members.values()) {
+            if (!member.getNodeId().equals(self.getNodeId()) && member.getState() == NodeState.ALIVE) {
+                targets.add(member.address());
+            }
+        }
+        if (targets.isEmpty()) {
+            return;
+        }
+        final var payload = snapshot();
+        final var timeout = clusterConfig.replicationAckTimeoutMs();
+        final var done = new CountDownLatch(targets.size());
+        for (final var address : targets) {
+            Thread.ofVirtual().name("cluster-gossip").start(() -> {
+                try {
+                    final var message = new ClusterMessage(null, ClusterMessageType.GOSSIP, clusterConfig.secret(),
+                            self, payload);
+                    mergeAll(pool.request(address, message, timeout).getMembers());
+                } catch (Exception e) {
+                    logger.warning("Gossip to " + address + " failed: " + e.getMessage());
+                } finally {
+                    done.countDown();
+                }
+            });
+        }
+        try {
+            if (!done.await(timeout, TimeUnit.MILLISECONDS)) {
+                logger.warning("Gossip round did not complete within " + timeout + "ms");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     public ClusterMessage handleJoin(ClusterMessage request) {
         merge(request.getSender());
         maybeNotify();
-        return response(ClusterMessageType.JOIN_RESPONSE);
+        return message(ClusterMessageType.JOIN_RESPONSE);
     }
 
     public ClusterMessage handleGossip(ClusterMessage request) {
         merge(request.getSender());
         mergeAll(request.getMembers());
         maybeNotify();
-        return response(ClusterMessageType.GOSSIP_ACK);
+        return message(ClusterMessageType.GOSSIP_ACK);
     }
 
     public void detectFailures(long nowMillis) {
@@ -236,11 +263,7 @@ public class MembershipService {
         }
     }
 
-    private ClusterMessage request(ClusterMessageType type) {
-        return new ClusterMessage(null, type, clusterConfig.secret(), self, snapshot());
-    }
-
-    private ClusterMessage response(ClusterMessageType type) {
+    private ClusterMessage message(ClusterMessageType type) {
         return new ClusterMessage(null, type, clusterConfig.secret(), self, snapshot());
     }
 

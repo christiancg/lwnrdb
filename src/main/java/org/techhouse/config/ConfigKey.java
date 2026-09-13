@@ -81,6 +81,7 @@ public enum ConfigKey {
     SCHEDULE_MAX_PER_DATABASE("scheduleMaxPerDatabase", ValueType.INT, "100", Rule.atLeast(1)),
     FILE_PATH("filePath", ValueType.STRING, "db", Rule.none()),
     LOG_PATH("logPath", ValueType.STRING, "logs", Rule.none()),
+    LOG_LEVEL("logLevel", ValueType.STRING, "INFO", Rule.oneOf("FATAL", "ERROR", "WARNING", "INFO")),
     DEFAULT_ADMIN_USERNAME("defaultAdminUsername", ValueType.STRING, "admin", Rule.none()),
     DEFAULT_ADMIN_PASSWORD("defaultAdminPassword", ValueType.STRING, "administrator", Rule.none()),
     TLS_KEYSTORE_PATH("tlsKeystorePath", ValueType.STRING, "certs/lwnrdb.p12", Rule.none()),
