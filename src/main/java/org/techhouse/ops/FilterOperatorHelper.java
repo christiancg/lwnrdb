@@ -59,14 +59,16 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator,
             Stream<JsonObject> resultStream, String dbName, String collName, PipelineScriptContext context)
             throws IOException {
+        final var buffered = resultStream == null ? null : resultStream.toList();
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
+            final var stepStream = buffered == null ? null : buffered.stream();
             final var partialResults = switch (step.getType()) {
                 case CONJUNCTION ->
-                    processConjunctionOperator((ConjunctionOperator) step, resultStream, dbName, collName, context);
-                case FIELD -> processFieldOperator((FieldOperator) step, resultStream, dbName, collName);
-                case CUSTOM -> processCustomOperator((CustomOperator) step, resultStream, dbName, collName);
-                case SCRIPT -> processScriptOperator((ScriptOperator) step, resultStream, dbName, collName, context);
+                    processConjunctionOperator((ConjunctionOperator) step, stepStream, dbName, collName, context);
+                case FIELD -> processFieldOperator((FieldOperator) step, stepStream, dbName, collName);
+                case CUSTOM -> processCustomOperator((CustomOperator) step, stepStream, dbName, collName);
+                case SCRIPT -> processScriptOperator((ScriptOperator) step, stepStream, dbName, collName, context);
             };
             combinationResult.add(partialResults);
         }
@@ -76,30 +78,37 @@ public class FilterOperatorHelper {
             case XOR -> andXorConjunction(combinationResult, 1);
             case NOR -> {
                 final var combined = orConjunction(combinationResult);
-                yield norNandAllStreamAggregation(combined, resultStream, dbName, collName);
+                yield norNandAllStreamAggregation(combined, buffered == null ? null : buffered.stream(), dbName,
+                        collName);
             }
             case NAND -> {
                 final var combined = andXorConjunction(combinationResult, operator.getOperators().size());
-                yield norNandAllStreamAggregation(combined, resultStream, dbName, collName);
+                yield norNandAllStreamAggregation(combined, buffered == null ? null : buffered.stream(), dbName,
+                        collName);
             }
         };
     }
 
     private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
         return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
-                .collect(Collectors.groupingBy(jsonObject -> {
-                    final var id = jsonObject.get(Globals.PK_FIELD);
-                    if (id == null) {
-                        throw new IllegalStateException("Document missing _id in conjunction grouping");
-                    }
-                    return id;
-                })).entrySet().stream()
-                .filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == matches)
-                .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream()).distinct();
+                .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
+                .filter(matching -> matching.size() == matches).map(List::getFirst);
+    }
+
+    private static JsonBaseElement conjunctionKey(JsonObject jsonObject) {
+        final var id = jsonObject.get(Globals.PK_FIELD);
+        if (id == null) {
+            throw new IllegalStateException("Document missing _id in conjunction grouping");
+        }
+        return id;
     }
 
     private static Stream<JsonObject> orConjunction(List<Stream<JsonObject>> combinationResult) {
-        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).distinct();
+        final var seen = new HashSet<>();
+        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).filter(jsonObject -> {
+            final var id = jsonObject.get(Globals.PK_FIELD);
+            return seen.add(id != null ? id : jsonObject);
+        });
     }
 
     private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined,
@@ -108,14 +117,9 @@ public class FilterOperatorHelper {
             // Blocking step (documented exception): NOR/NAND must diff against the full collection.
             resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
         }
-        return Stream.concat(resultStream, combined).collect(Collectors.groupingBy(jsonObject -> {
-            final var id = jsonObject.get(Globals.PK_FIELD);
-            if (id == null) {
-                throw new IllegalStateException("Document missing _id in conjunction grouping");
-            }
-            return id;
-        })).entrySet().stream().filter(jsonElementListEntry -> jsonElementListEntry.getValue().size() == 1)
-                .flatMap(jsonElementListEntry -> jsonElementListEntry.getValue().stream());
+        return Stream.concat(resultStream, combined)
+                .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
+                .filter(matching -> matching.size() == 1).map(List::getFirst);
     }
 
     private static Stream<JsonObject> processFieldOperator(FieldOperator operator, Stream<JsonObject> resultStream,
@@ -193,10 +197,7 @@ public class FilterOperatorHelper {
             args.put(entry.getKey(), entry.getValue());
         }
         return (JsonObject toTest, String fieldName) -> {
-            if (!JsonUtils.hasInPath(toTest, fieldName)) {
-                return false;
-            }
-            final var element = JsonUtils.getFromPath(toTest, fieldName);
+            final var element = JsonUtils.resolvePath(toTest, fieldName);
             if (element == null || !element.isJsonCustom()) {
                 return false;
             }
@@ -255,10 +256,7 @@ public class FilterOperatorHelper {
 
     private static Double scoreDocument(JsonObject document, String fieldName, String operatorName,
             Map<String, JsonBaseElement> args) {
-        if (!JsonUtils.hasInPath(document, fieldName)) {
-            return null;
-        }
-        final var element = JsonUtils.getFromPath(document, fieldName);
+        final var element = JsonUtils.resolvePath(document, fieldName);
         if (element == null || !element.isJsonCustom()) {
             return null;
         }
@@ -338,6 +336,7 @@ public class FilterOperatorHelper {
     // re-added by re-testing the operator against the current document, keeping the result exact.
     private static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
+        final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final var raw = rawIndexMatchingIds(operator, dbName, collName);
         if (raw == null) {
             return null;
@@ -347,7 +346,7 @@ public class FilterOperatorHelper {
             analyzeContext.addIndexUsed(operator.getField());
             analyzeContext.addLock(AnalyzeContext.fieldLockId(dbName, collName, operator.getField()));
         }
-        final var pendingIds = PendingWriteReconciler.pendingIds(dbName, collName);
+        final var pendingIds = PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName);
         if (pendingIds.isEmpty()) {
             return raw;
         }

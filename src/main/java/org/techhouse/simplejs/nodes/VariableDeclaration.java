@@ -18,4 +18,9 @@ public class VariableDeclaration extends Statement {
     public List<VariableDeclarator> getDeclarations() {
         return declarations;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.VARIABLE_DECLARATION;
+    }
 }

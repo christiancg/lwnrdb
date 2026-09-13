@@ -10,4 +10,9 @@ public final class JsNumber extends JsValue {
     public double getValue() {
         return value;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.NUMBER;
+    }
 }

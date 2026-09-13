@@ -6,7 +6,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.analyze.AnalyzeContext;
-import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -14,6 +13,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.custom_types.GeoDistanceComparator;
 import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.index.PendingWriteReconciler;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.utils.GeoPoint;
 import org.techhouse.utils.GeoUtils;
@@ -26,7 +26,6 @@ public final class GeoSpatialIndexHelper {
 
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
-    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
     public static Set<String> candidateIds(CustomOperator operator, String dbName, String collName) throws IOException {
         final var bbox = boundingBoxFor(operator);
@@ -37,6 +36,7 @@ public final class GeoSpatialIndexHelper {
             return null;
         }
         final var fieldName = operator.getField();
+        final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final List<FieldIndexEntry<JsonGeo>> entries;
         try {
             rl.lockIndexRead(dbName, collName, fieldName);
@@ -58,7 +58,7 @@ public final class GeoSpatialIndexHelper {
         }
         final var candidates = collectByBoundingBox(entries, bbox);
         // Not-yet-indexed committed writes are added as candidates; the caller re-tests exactly.
-        candidates.addAll(pendingIndexWrites.idsFor(dbName, collName));
+        candidates.addAll(PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName));
         return candidates;
     }
 

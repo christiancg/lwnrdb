@@ -154,4 +154,9 @@ public final class JsSet extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.SET;
+    }
 }

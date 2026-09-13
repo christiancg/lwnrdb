@@ -16,4 +16,9 @@ public class DoWhileStatement extends Statement {
     public Expression getTest() {
         return test;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.DO_WHILE_STATEMENT;
+    }
 }

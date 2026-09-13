@@ -234,4 +234,9 @@ public final class JsObject extends JsValue {
     public boolean hasAccessor(String key) {
         return table.hasAccessor(key);
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.OBJECT;
+    }
 }

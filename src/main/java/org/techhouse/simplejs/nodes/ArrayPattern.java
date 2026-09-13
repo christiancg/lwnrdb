@@ -12,4 +12,9 @@ public class ArrayPattern extends JsNode {
     public List<JsNode> getElements() {
         return elements;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.ARRAY_PATTERN;
+    }
 }

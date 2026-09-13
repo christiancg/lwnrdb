@@ -15,7 +15,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ConcurrentMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -195,27 +194,6 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
-    public void test_read_and_map_index_files_success() throws NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        String fieldName = "age";
-
-        Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap = new HashMap<>();
-        List<FieldIndexEntry<?>> stringEntries = List.of(
-                new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value1", Set.of("id1", "id2")),
-                new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "value2", Set.of("id3")));
-        indexEntryMap.put(String.class, stringEntries);
-        fileSystem.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, fieldName, indexEntryMap);
-
-        ConcurrentMap<String, List<FieldIndexEntry<?>>> result = fileSystem.readAllWholeFieldIndexFiles(TestGlobals.DB,
-                TestGlobals.COLL, fieldName);
-
-        assertNotNull(result);
-        assertNotNull(result.get("String"));
-        assertEquals(2, result.get("String").size());
-    }
-
-    @Test
     public void test_read_number_type_index_entries() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
         TestUtils.setDbPath(fs, TestGlobals.PATH);
@@ -264,27 +242,6 @@ public class FileSystemFieldIndexTest {
         assertEquals("value1", result.get(0).getValue());
         assertEquals("value2", result.get(1).getValue());
         assertEquals("value3", result.get(2).getValue());
-    }
-
-    @Test
-    public void test_find_pk_index_entry() throws IOException, NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        fileSystem.createDatabaseFolder(TestGlobals.DB);
-        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
-
-        DbEntry entry = new DbEntry();
-        entry.set_id("findMe");
-        entry.setDatabaseName(TestGlobals.DB);
-        entry.setCollectionName(TestGlobals.COLL);
-        entry.setData(new JsonObject());
-        fileSystem.insertIntoCollection(entry);
-
-        final var found = fileSystem.findPkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "findMe");
-        assertNotNull(found);
-        assertEquals("findMe", found.getValue());
-
-        assertNull(fileSystem.findPkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "nope"));
     }
 
     @Test

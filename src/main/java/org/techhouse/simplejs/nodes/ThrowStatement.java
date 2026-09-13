@@ -10,4 +10,9 @@ public class ThrowStatement extends Statement {
     public Expression getArgument() {
         return argument;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.THROW_STATEMENT;
+    }
 }

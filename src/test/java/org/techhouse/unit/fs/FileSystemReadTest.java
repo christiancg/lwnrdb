@@ -9,10 +9,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.Objects;
 import java.util.Set;
-import java.util.concurrent.ConcurrentMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -131,18 +129,6 @@ public class FileSystemReadTest {
                 "exact 'foo' entry should have been removed");
         assertTrue(fileContent.contains("foo|bar" + Globals.ID_SEPARATOR + "id2"),
                 "'foo|bar' entry must not be affected");
-    }
-
-    @Test
-    public void test_returns_null_when_collection_folder_missing() throws NoSuchFieldException, IllegalAccessException {
-        FileSystem fileSystem = new FileSystem();
-        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
-        String fieldName = "age";
-
-        ConcurrentMap<String, List<FieldIndexEntry<?>>> result = fileSystem.readAllWholeFieldIndexFiles(TestGlobals.DB,
-                "nonexistentCollection", fieldName);
-
-        assertNull(result);
     }
 
     @Test

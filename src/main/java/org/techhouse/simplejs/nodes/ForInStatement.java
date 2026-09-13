@@ -22,4 +22,9 @@ public class ForInStatement extends Statement {
     public Statement getBody() {
         return body;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.FOR_IN_STATEMENT;
+    }
 }

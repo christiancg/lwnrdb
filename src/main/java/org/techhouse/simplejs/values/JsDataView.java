@@ -140,4 +140,9 @@ public final class JsDataView extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.DATA_VIEW;
+    }
 }

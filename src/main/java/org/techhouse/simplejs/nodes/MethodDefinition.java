@@ -34,4 +34,9 @@ public class MethodDefinition extends JsNode {
     public boolean isComputed() {
         return computed;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.METHOD_DEFINITION;
+    }
 }

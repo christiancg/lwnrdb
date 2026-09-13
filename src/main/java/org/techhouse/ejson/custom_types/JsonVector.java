@@ -12,6 +12,8 @@ public class JsonVector extends JsonCustom<double[]> {
     public static final String OPERATOR_NEAREST = "nearest";
     public static final int SIMHASH_BITS = 16;
 
+    private String signature;
+
     public JsonVector(double[] customValue) {
         super(buildWireValue(customValue));
     }
@@ -63,9 +65,19 @@ public class JsonVector extends JsonCustom<double[]> {
     @Override
     public Integer compare(double[] another) {
         final var bySignature = simHash().compareTo(VectorUtils.simHash(another, SIMHASH_BITS));
-        if (bySignature != 0) {
-            return bySignature;
+        return bySignature != 0 ? bySignature : compareByComponents(another);
+    }
+
+    @Override
+    public Integer compareToCustom(JsonCustom<double[]> another) {
+        if (another instanceof JsonVector otherVector) {
+            final var bySignature = simHash().compareTo(otherVector.simHash());
+            return bySignature != 0 ? bySignature : compareByComponents(otherVector.customValue);
         }
+        return compare(another.getCustomValue());
+    }
+
+    private int compareByComponents(double[] another) {
         final var minLength = Math.min(customValue.length, another.length);
         for (var i = 0; i < minLength; i++) {
             final var byComponent = Double.compare(customValue[i], another[i]);
@@ -81,7 +93,12 @@ public class JsonVector extends JsonCustom<double[]> {
     }
 
     public String simHash() {
-        return VectorUtils.simHash(customValue, SIMHASH_BITS);
+        var cached = signature;
+        if (cached == null) {
+            cached = VectorUtils.simHash(customValue, SIMHASH_BITS);
+            signature = cached;
+        }
+        return cached;
     }
 
     @Override

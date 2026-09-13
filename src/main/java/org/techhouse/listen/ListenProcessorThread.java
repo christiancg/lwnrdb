@@ -30,6 +30,7 @@ public class ListenProcessorThread implements Runnable {
         while (!Thread.currentThread().isInterrupted()) {
             try {
                 final var listenId = dirtyQueue.take();
+                manager.dequeued(listenId);
                 processListen(listenId);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

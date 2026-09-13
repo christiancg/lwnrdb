@@ -12,4 +12,9 @@ public class BigIntLiteral extends Expression {
     public BigInteger getValue() {
         return value;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.BIGINT_LITERAL;
+    }
 }

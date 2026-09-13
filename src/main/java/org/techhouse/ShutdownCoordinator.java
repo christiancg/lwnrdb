@@ -14,6 +14,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
+import org.techhouse.log.LogWriter;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
@@ -77,6 +78,7 @@ public class ShutdownCoordinator {
             }
         });
         logger.info("Shutdown complete");
+        LogWriter.flushAndClose();
     }
 
     private void step(String description, Runnable action) {

@@ -1,7 +1,7 @@
 package org.techhouse.ejson.custom_types;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Predicate;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonString;
@@ -11,7 +11,7 @@ import org.techhouse.ejson.exceptions.NonRegisteredCustomTypeException;
 public final class CustomTypeFactory {
     private CustomTypeFactory() {
     }
-    private static final Map<String, Class<? extends JsonCustom<?>>> _customTypes = new HashMap<>();
+    private static final Map<String, Class<? extends JsonCustom<?>>> _customTypes = new ConcurrentHashMap<>();
 
     public static void registerCustomType(Class<? extends JsonCustom<?>> aClass) {
         try {

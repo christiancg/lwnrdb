@@ -1,7 +1,5 @@
 package org.techhouse.ejson.type_adapters.impl;
 
-import java.util.Objects;
-import java.util.stream.Collectors;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.internal.JsonStrings;
@@ -12,14 +10,25 @@ public class JsonObjectTypeAdapter implements TypeAdapter<JsonObject> {
 
     @Override
     public String toJson(JsonObject value) {
-        return '{'
-                + value.entrySet().stream()
-                        .map(stringJsonBaseElementEntry -> "\""
-                                + JsonStrings.escape(stringJsonBaseElementEntry.getKey()) + "\":"
-                                + Objects.requireNonNull(TypeAdapterFactory.getAdapter(JsonBaseElement.class))
-                                        .toJson(stringJsonBaseElementEntry.getValue()))
-                        .collect(Collectors.joining(","))
-                + '}';
+        final var out = new StringBuilder();
+        toJson(value, out);
+        return out.toString();
+    }
+
+    @Override
+    public void toJson(JsonObject value, StringBuilder out) {
+        final var elementAdapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);
+        out.append('{');
+        var first = true;
+        for (final var entry : value.entrySet()) {
+            if (!first) {
+                out.append(',');
+            }
+            first = false;
+            out.append('"').append(JsonStrings.escape(entry.getKey())).append("\":");
+            elementAdapter.toJson(entry.getValue(), out);
+        }
+        out.append('}');
     }
 
     @Override

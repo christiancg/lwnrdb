@@ -24,4 +24,9 @@ public class ImportDeclaration extends Statement {
     public List<ImportAttribute> getAttributes() {
         return attributes;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.IMPORT_DECLARATION;
+    }
 }

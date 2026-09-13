@@ -2,10 +2,11 @@ package org.techhouse.cache;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -30,7 +31,7 @@ final class AdminPageCache {
             pagesStream.forEach(map -> map.values().stream()
                     .map(e -> AdminPageEntry.fromJsonObject(dbName, collName, e.getData())).forEach(pageEntries::add));
         }
-        pages.put(collId, pageEntries);
+        pages.put(collId, new CopyOnWriteArrayList<>(pageEntries));
         rebuildInMemoryPagesFromPkIndex(pagesCollName, pkIdx);
     }
 
@@ -45,7 +46,7 @@ final class AdminPageCache {
             entry.setPageSize(pkList.stream().mapToLong(PkIndexEntry::getLength).sum());
             entries.add(entry);
         }
-        pages.put(pagesCollectionKey(collName), entries);
+        pages.put(pagesCollectionKey(collName), new CopyOnWriteArrayList<>(entries));
     }
 
     List<PkIndexEntry> pkIndexesForPagesCollection(String pagesCollName) {
@@ -65,31 +66,45 @@ final class AdminPageCache {
         final var entries = pages.get(Cache.getCollectionIdentifier(dbName, collName));
         if (entries == null)
             return null;
-        return entries.stream().filter(p -> p.getPage() == page).findFirst().orElse(null);
-    }
-
-    void putAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
-        pages.put(Cache.getCollectionIdentifier(dbName, collName), adminPageEntries);
+        return findPage(entries, page);
     }
 
     void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
-        pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>())
-                .add(adminPageEntry);
+        pageList(dbName, collName).add(adminPageEntry);
+    }
+
+    void addAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
+        if (!adminPageEntries.isEmpty()) {
+            pageList(dbName, collName).addAll(adminPageEntries);
+        }
+    }
+
+    private List<AdminPageEntry> pageList(String dbName, String collName) {
+        return pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
+                _ -> new CopyOnWriteArrayList<>());
     }
 
     void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
-        final var pageEntries = pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
-                _ -> new ArrayList<>());
-        final var existing = pageEntries.stream().filter(p -> p.getPage() == page).findFirst();
-        if (existing.isPresent()) {
-            existing.get().setPageSize(existing.get().getPageSize() + bytesDelta);
-            existing.get().setEntryCount(existing.get().getEntryCount() + 1);
+        final var pageEntries = pageList(dbName, collName);
+        final var existing = findPage(pageEntries, page);
+        if (existing != null) {
+            existing.setPageSize(existing.getPageSize() + bytesDelta);
+            existing.setEntryCount(existing.getEntryCount() + 1);
         } else {
             final var newEntry = new AdminPageEntry(dbName, collName, page);
             newEntry.setPageSize(bytesDelta);
             newEntry.setEntryCount(1);
             pageEntries.add(newEntry);
         }
+    }
+
+    private static AdminPageEntry findPage(List<AdminPageEntry> entries, long page) {
+        for (final var entry : entries) {
+            if (entry.getPage() == page) {
+                return entry;
+            }
+        }
+        return null;
     }
 
     List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
@@ -108,22 +123,36 @@ final class AdminPageCache {
 
     long selectPageForInsert(String dbName, String collName, int entryByteSize, Map<Long, Long> pendingPageBytes) {
         final var maxPageBytes = configuration.getMaxPageSize();
-        final var pageEntries = pages.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
-                _ -> new ArrayList<>());
+        final var pageEntries = pageList(dbName, collName);
         // Without the pending pages, a bulk insert into a fresh collection scatters one entry per page.
-        final var committedSizeByPage = pageEntries.stream()
-                .collect(Collectors.toMap(AdminPageEntry::getPage, AdminPageEntry::getPageSize));
-        final var candidatePages = new TreeSet<>(committedSizeByPage.keySet());
-        candidatePages.addAll(pendingPageBytes.keySet());
-        for (final long page : candidatePages) {
-            final var effectiveSize = committedSizeByPage.getOrDefault(page, 0L)
-                    + pendingPageBytes.getOrDefault(page, 0L);
-            if (effectiveSize + entryByteSize <= maxPageBytes) {
-                return page;
+        var bestFit = -1L;
+        var maxPage = -1L;
+        final var committed = new HashSet<Long>();
+        for (final var entry : pageEntries) {
+            final var page = entry.getPage();
+            if (!pendingPageBytes.isEmpty()) {
+                committed.add(page);
+            }
+            if (page > maxPage) {
+                maxPage = page;
+            }
+            final var effectiveSize = entry.getPageSize() + pendingPageBytes.getOrDefault(page, 0L);
+            if (effectiveSize + entryByteSize <= maxPageBytes && (bestFit < 0 || page < bestFit)) {
+                bestFit = page;
             }
         }
-        final var maxKnownPage = pageEntries.stream().mapToLong(AdminPageEntry::getPage).max().orElse(-1L);
-        final var maxPendingPage = pendingPageBytes.keySet().stream().mapToLong(Long::longValue).max().orElse(-1L);
-        return Math.max(maxKnownPage, maxPendingPage) + 1L;
+        for (final var pending : pendingPageBytes.entrySet()) {
+            final var page = pending.getKey();
+            if (page > maxPage) {
+                maxPage = page;
+            }
+            if (committed.contains(page)) {
+                continue;
+            }
+            if (pending.getValue() + entryByteSize <= maxPageBytes && (bestFit < 0 || page < bestFit)) {
+                bestFit = page;
+            }
+        }
+        return bestFit >= 0 ? bestFit : maxPage + 1L;
     }
 }

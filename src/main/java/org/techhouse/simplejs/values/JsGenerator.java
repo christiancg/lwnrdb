@@ -33,4 +33,9 @@ public final class JsGenerator extends JsValue {
     public void setProto(JsValue proto) {
         this.proto = proto;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.GENERATOR;
+    }
 }

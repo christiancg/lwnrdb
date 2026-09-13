@@ -1,9 +1,9 @@
 package org.techhouse.data;
 
-import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Objects;
 import java.util.Set;
-import java.util.stream.Collectors;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonCustom;
@@ -19,13 +19,28 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
     }
 
     public String toFileEntry() {
-        String strValue;
-        if (value instanceof JsonCustom<?> jc) {
-            strValue = jc.getValue();
-        } else {
-            strValue = value.toString();
+        return indexKeyOf(value) + Globals.ID_SEPARATOR + String.join(Globals.ID_SEPARATOR, ids);
+    }
+
+    public static String indexKeyOf(Object indexedValue) {
+        if (indexedValue instanceof JsonCustom<?> jc) {
+            return jc.getValue();
         }
-        return strValue + Globals.ID_SEPARATOR + String.join(Globals.ID_SEPARATOR, ids);
+        if (indexedValue instanceof Number number) {
+            final var asDouble = number.doubleValue();
+            if (asDouble % 1 == 0 && asDouble >= Long.MIN_VALUE && asDouble <= Long.MAX_VALUE) {
+                return Long.toString(number.longValue());
+            }
+            return Double.toString(asDouble);
+        }
+        return indexedValue.toString();
+    }
+
+    public static boolean sameIndexedValue(Object indexedValue, Object candidate) {
+        if (indexedValue instanceof Number indexedNumber && candidate instanceof Number candidateNumber) {
+            return Double.compare(indexedNumber.doubleValue(), candidateNumber.doubleValue()) == 0;
+        }
+        return Objects.equals(indexedValue, candidate);
     }
 
     public static <T> FieldIndexEntry<T> fromIndexFileEntry(String databaseName, String collectionName, String line,
@@ -42,9 +57,37 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
         } else {
             value = CustomTypeFactory.getCustomTypeInstance(strValue);
         }
-        final var idsStr = line.substring(separatorIdx + Globals.ID_SEPARATOR.length());
         return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value),
-                Arrays.stream(idsStr.split(Globals.ID_SEPARATOR)).collect(Collectors.toSet()));
+                parseIds(line, separatorIdx + Globals.ID_SEPARATOR.length()));
+    }
+
+    private static Set<String> parseIds(String line, int from) {
+        final var separator = Globals.ID_SEPARATOR.charAt(0);
+        var count = 0;
+        for (var i = from; i < line.length(); i++) {
+            if (line.charAt(i) == separator) {
+                count++;
+            }
+        }
+        if (count == 0) {
+            final var single = HashSet.<String>newHashSet(1);
+            single.add(line.substring(from));
+            return single;
+        }
+        final var ids = new ArrayList<String>(count + 1);
+        var start = from;
+        for (var i = from; i <= line.length(); i++) {
+            if (i == line.length() || line.charAt(i) == separator) {
+                ids.add(line.substring(start, i));
+                start = i + 1;
+            }
+        }
+        while (!ids.isEmpty() && ids.getLast().isEmpty()) {
+            ids.removeLast();
+        }
+        final var result = HashSet.<String>newHashSet(ids.size());
+        result.addAll(ids);
+        return result;
     }
 
     public T getValue() {
@@ -78,7 +121,7 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
                     final var ownValue = (JsonCustom<T>) value;
                     @SuppressWarnings("unchecked")
                     final var toCompareValue = (JsonCustom<T>) otherIndexValue;
-                    yield ownValue.compare(toCompareValue.getCustomValue());
+                    yield ownValue.compareToCustom(toCompareValue);
                 } else {
                     throw new IllegalStateException("Unexpected value: " + otherIndexValue);
                 }

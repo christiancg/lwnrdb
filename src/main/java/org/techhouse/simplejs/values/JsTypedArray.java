@@ -356,4 +356,9 @@ public final class JsTypedArray extends JsValue {
     private static Double exoticIndex(JsValue key) {
         return key instanceof JsSymbol ? null : canonicalNumericIndex(OrdinaryProperties.keyName(key));
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.TYPED_ARRAY;
+    }
 }

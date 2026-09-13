@@ -145,5 +145,11 @@ public class ResourceLocking {
     public void removeLock(String dbName, String collName) {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         locks.remove(collIdentifier);
+        final var indexPrefix = collIdentifier + Globals.COLL_IDENTIFIER_SEPARATOR;
+        locks.entrySet().removeIf(entry -> entry.getKey().startsWith(indexPrefix) && isUnheld(entry.getValue()));
+    }
+
+    private static boolean isUnheld(ReentrantReadWriteLock lock) {
+        return !lock.isWriteLocked() && lock.getReadLockCount() == 0;
     }
 }

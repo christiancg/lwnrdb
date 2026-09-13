@@ -32,4 +32,9 @@ public final class JsDbDateTime extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.DB_DATE_TIME;
+    }
 }

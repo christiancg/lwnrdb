@@ -16,4 +16,9 @@ public class CatchClause extends JsNode {
     public BlockStatement getBody() {
         return body;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.CATCH_CLAUSE;
+    }
 }

@@ -66,6 +66,7 @@ public class AdminPageEntry extends DbEntry {
         data.addProperty(PAGE_FIELD_NAME, page);
         data.addProperty(ENTRY_COUNT_FIELD_NAME, entryCount);
         data.addProperty(PAGE_SIZE_FIELD_NAME, pageSize);
+        setData(data);
     }
 
     @Override

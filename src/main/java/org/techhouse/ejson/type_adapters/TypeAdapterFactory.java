@@ -2,8 +2,8 @@ package org.techhouse.ejson.type_adapters;
 
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.type_adapters.impl.EnumTypeAdapter;
 import org.techhouse.ejson.type_adapters.impl.IterableTypeAdapter;
@@ -14,8 +14,8 @@ public final class TypeAdapterFactory {
     private TypeAdapterFactory() {
     }
 
-    private static final Map<Class<?>, TypeAdapter<?>> _adapters = new HashMap<>();
-    private static final Map<Type, TypeAdapter<?>> _genericTypeAdapters = new HashMap<>();
+    private static final Map<Class<?>, TypeAdapter<?>> _adapters = new ConcurrentHashMap<>();
+    private static final Map<Type, TypeAdapter<?>> _genericTypeAdapters = new ConcurrentHashMap<>();
 
     public static void registerTypeAdapter(Class<?> type, TypeAdapter<?> adapter) {
         _adapters.put(type, adapter);
@@ -40,23 +40,19 @@ public final class TypeAdapterFactory {
         return null;
     }
 
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    @SuppressWarnings("unchecked")
     public static <T> TypeAdapter<T> getAdapter(Class<T> type) {
-        final var adapter = _adapters.get(type);
-        if (adapter != null) {
-            return (TypeAdapter<T>) adapter;
-        } else if (type.isEnum()) {
-            final var enumAdapter = new EnumTypeAdapter(type);
-            _adapters.put(type, enumAdapter);
-            return enumAdapter;
-        } else if (JsonCustom.class.isAssignableFrom(type)) {
-            final var customAdapter = new JsonCustomTypeAdapter();
-            _adapters.put(type, customAdapter);
-            return (TypeAdapter<T>) customAdapter;
-        } else {
-            final var newAdapter = new ReflectionTypeAdapter<>(type);
-            _adapters.put(type, newAdapter);
-            return newAdapter;
+        return (TypeAdapter<T>) _adapters.computeIfAbsent(type, TypeAdapterFactory::createAdapter);
+    }
+
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    private static TypeAdapter<?> createAdapter(Class<?> type) {
+        if (type.isEnum()) {
+            return new EnumTypeAdapter(type);
         }
+        if (JsonCustom.class.isAssignableFrom(type)) {
+            return new JsonCustomTypeAdapter();
+        }
+        return new ReflectionTypeAdapter<>(type);
     }
 }

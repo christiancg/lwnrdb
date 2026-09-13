@@ -68,8 +68,9 @@ public record MemberAccessEvaluator(Interpreter interp) {
         if (member.isComputed()) {
             return interp.eval(member.getProperty(), env);
         }
-        if (member.getProperty() instanceof Identifier id) {
-            return new JsString(id.getName());
+        final var cached = member.staticKeyValue();
+        if (cached != null) {
+            return cached;
         }
         throw new UnsupportedNodeException(member.getProperty().getType().name());
     }

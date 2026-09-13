@@ -8,8 +8,9 @@ import java.lang.reflect.Modifier;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.NoConstructorException;
@@ -19,7 +20,8 @@ public class ReflectionUtils {
     private record ClassSpecification(Constructor<?>[] constructors, Field[] fields) {
     }
 
-    private static final HashMap<Class<?>, ClassSpecification> classSpecifications = new HashMap<>();
+    private static final Map<Class<?>, ClassSpecification> classSpecifications = new ConcurrentHashMap<>();
+    private static final Map<Class<?>, Method> enumValueOf = new ConcurrentHashMap<>();
 
     public static <T> Object getFieldValue(Field field, T instance) throws IllegalAccessException {
         return field.get(instance);
@@ -30,25 +32,21 @@ public class ReflectionUtils {
     }
 
     public static <T> Field[] getFields(Class<T> tClass) {
-        if (classSpecifications.containsKey(tClass)) {
-            return classSpecifications.get(tClass).fields();
-        } else {
-            final var constructorArr = internalGetConstructors(tClass);
-            final var fieldArr = internalGetFields(tClass);
-            classSpecifications.put(tClass, new ClassSpecification(constructorArr, fieldArr));
-            return fieldArr;
-        }
+        return specificationFor(tClass).fields();
     }
 
     public static <T> Constructor<?>[] getConstructors(Class<T> tClass) {
-        if (classSpecifications.containsKey(tClass)) {
-            return classSpecifications.get(tClass).constructors();
-        } else {
-            final var constructorArr = internalGetConstructors(tClass);
-            final var fieldArr = internalGetFields(tClass);
-            classSpecifications.put(tClass, new ClassSpecification(constructorArr, fieldArr));
-            return constructorArr;
+        return specificationFor(tClass).constructors();
+    }
+
+    private static <T> ClassSpecification specificationFor(Class<T> tClass) {
+        final var existing = classSpecifications.get(tClass);
+        if (existing != null) {
+            return existing;
         }
+        final var specification = new ClassSpecification(internalGetConstructors(tClass), internalGetFields(tClass));
+        final var raced = classSpecifications.putIfAbsent(tClass, specification);
+        return raced != null ? raced : specification;
     }
 
     // Static fields are skipped: including them would put every `public static final` on the wire and
@@ -167,8 +165,7 @@ public class ReflectionUtils {
             default -> throw new IllegalStateException("Unexpected value: " + jsonType);
         };
         if (parameterType.isEnum() && jsonValue instanceof String) {
-            Method valueOf = parameterType.getMethod("valueOf", String.class);
-            Object value = valueOf.invoke(null, jsonValue.toString());
+            Object value = valueOfFor(parameterType).invoke(null, jsonValue.toString());
             return parameterType.cast(value);
         } else if (genericType != null && parameterType.isAssignableFrom(List.class)) {
             final var typeArguments = ((ParameterizedType) genericType).getActualTypeArguments();
@@ -203,6 +200,16 @@ public class ReflectionUtils {
             return adapter.fromJson(fieldValue);
         }
         return parameterType.cast(jsonValue);
+    }
+
+    private static Method valueOfFor(Class<?> enumType) throws NoSuchMethodException {
+        final var cached = enumValueOf.get(enumType);
+        if (cached != null) {
+            return cached;
+        }
+        final var valueOf = enumType.getMethod("valueOf", String.class);
+        final var raced = enumValueOf.putIfAbsent(enumType, valueOf);
+        return raced != null ? raced : valueOf;
     }
 
     // Reflective field set only unboxes, so the box must already match the field's type: a double-valued

@@ -39,4 +39,9 @@ public final class JsVector extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.VECTOR;
+    }
 }

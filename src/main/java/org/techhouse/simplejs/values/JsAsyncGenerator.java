@@ -72,4 +72,9 @@ public final class JsAsyncGenerator extends JsValue {
     public void setProto(JsValue proto) {
         this.proto = proto;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.ASYNC_GENERATOR;
+    }
 }

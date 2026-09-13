@@ -10,4 +10,9 @@ public class ExpressionStatement extends Statement {
     public Expression getExpression() {
         return expression;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.EXPRESSION_STATEMENT;
+    }
 }

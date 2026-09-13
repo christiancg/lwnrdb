@@ -16,4 +16,9 @@ public class AssignmentPattern extends JsNode {
     public Expression getRight() {
         return right;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.ASSIGNMENT_PATTERN;
+    }
 }

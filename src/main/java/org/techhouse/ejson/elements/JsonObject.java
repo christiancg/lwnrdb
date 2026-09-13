@@ -1,18 +1,23 @@
 package org.techhouse.ejson.elements;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
-import org.techhouse.ejson.internal.LinkedTreeMap;
 
 public class JsonObject extends JsonBaseElement {
-    private final LinkedTreeMap<String, JsonBaseElement> members = new LinkedTreeMap<>(false);
+    private final Map<String, JsonBaseElement> members = new LinkedHashMap<>();
 
     public void add(String property, JsonBaseElement value) {
-        members.put(property, value == null ? JsonNull.INSTANCE : value);
+        put(property, value == null ? JsonNull.INSTANCE : value);
     }
 
     public void add(String property, String value) {
-        members.put(property, new JsonString(value));
+        put(property, new JsonString(value));
+    }
+
+    private void put(String property, JsonBaseElement value) {
+        members.put(Objects.requireNonNull(property, "property == null"), value);
     }
 
     public void addProperty(String property, String value) {
@@ -20,19 +25,19 @@ public class JsonObject extends JsonBaseElement {
     }
 
     public void addProperty(String property, Boolean value) {
-        members.put(property, new JsonBoolean(value));
+        put(property, new JsonBoolean(value));
     }
 
     public void addProperty(String property, Integer value) {
-        members.put(property, new JsonNumber(value));
+        put(property, new JsonNumber(value));
     }
 
     public void addProperty(String property, Number value) {
-        members.put(property, new JsonNumber(value));
+        put(property, new JsonNumber(value));
     }
 
     public void addProperty(String property, Long value) {
-        members.put(property, new JsonNumber(value));
+        put(property, new JsonNumber(value));
     }
 
     public void remove(String property) {

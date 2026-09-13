@@ -10,6 +10,8 @@ public class AntiEntropyPayload {
     private List<String> ids;
     private List<JsonObject> documents;
     private List<Long> versions;
+    private String summary;
+    private boolean summaryMatch;
 
     public AntiEntropyPayload() {
     }
@@ -65,5 +67,21 @@ public class AntiEntropyPayload {
 
     public void setVersions(List<Long> versions) {
         this.versions = versions;
+    }
+
+    public String getSummary() {
+        return summary;
+    }
+
+    public void setSummary(String summary) {
+        this.summary = summary;
+    }
+
+    public boolean isSummaryMatch() {
+        return summaryMatch;
+    }
+
+    public void setSummaryMatch(boolean summaryMatch) {
+        this.summaryMatch = summaryMatch;
     }
 }

@@ -2,6 +2,8 @@ package org.techhouse.bckg_ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
@@ -11,6 +13,7 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.ScriptRunHistoryEvent;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.cache.MemoryManagement;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
@@ -20,6 +23,60 @@ import org.techhouse.ops.ScriptRunHistory;
 public class EventProcessorHelper {
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+
+    public static void processBatch(List<Event> batch) throws IOException, InterruptedException {
+        if (batch.size() == 1) {
+            processEvent(batch.getFirst());
+            return;
+        }
+        final var entityGroups = new LinkedHashMap<String, List<EntityEvent>>();
+        final var others = new ArrayList<Event>();
+        for (final var event : batch) {
+            if (event instanceof EntityEvent entityEvent) {
+                final var key = entityEvent.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR + entityEvent.getCollName();
+                entityGroups.computeIfAbsent(key, _ -> new ArrayList<>()).add(entityEvent);
+            } else {
+                others.add(event);
+            }
+        }
+        for (final var group : entityGroups.values()) {
+            processEntityGroup(group);
+        }
+        for (final var event : others) {
+            processEvent(event);
+        }
+    }
+
+    private static void processEntityGroup(List<EntityEvent> group) throws IOException, InterruptedException {
+        if (group.size() == 1) {
+            processEntityEvent(group.getFirst());
+            return;
+        }
+        final var dbName = group.getFirst().getDbName();
+        final var collName = group.getFirst().getCollName();
+        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+            clearPendingEvents(group);
+            return;
+        }
+        try {
+            final var ids = new LinkedHashSet<String>();
+            for (final var event : group) {
+                ids.add(event.getDbEntry().get_id());
+            }
+            IndexHelper.bulkUpdateIndexes(dbName, collName, new ArrayList<>(ids));
+            for (final var event : group) {
+                AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getDbEntry());
+            }
+        } finally {
+            clearPendingEvents(group);
+        }
+    }
+
+    private static void clearPendingEvents(List<EntityEvent> group) {
+        for (final var event : group) {
+            pendingIndexWrites.clear(event.getDbName(), event.getCollName(), event.getDbEntry().get_id());
+        }
+    }
 
     public static void processEvent(Event event) throws IOException, InterruptedException {
         switch (event) {

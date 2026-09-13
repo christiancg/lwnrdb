@@ -10,4 +10,9 @@ public class PrivateIdentifier extends Expression {
     public String getName() {
         return name;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.PRIVATE_IDENTIFIER;
+    }
 }

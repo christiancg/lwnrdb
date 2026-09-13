@@ -109,4 +109,9 @@ public final class JsArrayBuffer extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.ARRAY_BUFFER;
+    }
 }

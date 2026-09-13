@@ -37,4 +37,9 @@ public class FunctionExpression extends Expression {
     public boolean isGenerator() {
         return generator;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.FUNCTION_EXPRESSION;
+    }
 }

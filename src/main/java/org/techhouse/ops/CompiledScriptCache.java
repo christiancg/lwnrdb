@@ -7,7 +7,6 @@ import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.simplejs.CompiledScript;
 import org.techhouse.simplejs.SimpleJs;
-import org.techhouse.utils.JsonUtils;
 
 public class CompiledScriptCache {
     private final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
@@ -23,13 +22,12 @@ public class CompiledScriptCache {
         if (maxSize <= 0) {
             return compile(source);
         }
-        final var key = JsonUtils.sha256(source);
         lock.lock();
         try {
-            var entry = cache.get(key);
+            var entry = cache.get(source);
             if (entry == null) {
                 entry = compile(source);
-                cache.put(key, entry);
+                cache.put(source, entry);
                 evictDownTo(maxSize);
             }
             return entry;

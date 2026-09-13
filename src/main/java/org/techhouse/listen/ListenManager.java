@@ -19,6 +19,7 @@ public class ListenManager {
     private final Map<UUID, ListenRegistration> registrations = new ConcurrentHashMap<>();
     private final Map<String, Set<UUID>> collectionToListens = new ConcurrentHashMap<>();
     private final LinkedBlockingQueue<UUID> dirtyQueue = new LinkedBlockingQueue<>();
+    private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
     private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public UUID register(UUID clientId, AggregateRequest dirtyRequest, String initialHash) {
@@ -90,8 +91,14 @@ public class ListenManager {
             return;
         }
         for (var listenId : listenIds) {
-            dirtyQueue.offer(listenId);
+            if (queued.add(listenId)) {
+                dirtyQueue.offer(listenId);
+            }
         }
+    }
+
+    void dequeued(UUID listenId) {
+        queued.remove(listenId);
     }
 
     public ListenRegistration getRegistration(UUID listenId) {
@@ -106,6 +113,7 @@ public class ListenManager {
     public void stopWorkers() {
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Listen");
         dirtyQueue.clear();
+        queued.clear();
         registrations.clear();
         collectionToListens.clear();
         logger.info("Stopped listen processor worker");

@@ -5,13 +5,13 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.analyze.AnalyzeContext;
-import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.index.PendingWriteReconciler;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.utils.VectorUtils;
 
@@ -23,7 +23,6 @@ public final class VectorSimilarityIndexHelper {
 
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking rl = IocContainer.get(ResourceLocking.class);
-    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
     private static final int CANDIDATE_MULTIPLIER = 10;
     private static final int MIN_CANDIDATES = 100;
@@ -36,6 +35,7 @@ public final class VectorSimilarityIndexHelper {
             return null;
         }
         final var fieldName = operator.getField();
+        final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final List<FieldIndexEntry<JsonVector>> entries;
         try {
             rl.lockIndexRead(dbName, collName, fieldName);
@@ -59,7 +59,7 @@ public final class VectorSimilarityIndexHelper {
         final var budget = Math.max(kFor(operator) * CANDIDATE_MULTIPLIER, MIN_CANDIDATES);
         final var candidates = collectNeighbourhood(entries, query, budget);
         // Not-yet-indexed committed writes may be missing from the index; the caller re-scores them exactly.
-        candidates.addAll(pendingIndexWrites.idsFor(dbName, collName));
+        candidates.addAll(PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName));
         return candidates;
     }
 

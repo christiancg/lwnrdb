@@ -28,10 +28,22 @@ public final class JsonUtils {
         return compareAtPath(o1, o2, fieldName, JsonUtils::descendingPrimitives);
     }
 
+    public static int compareSortKeysAscending(JsonBaseElement o1Field, JsonBaseElement o2Field) {
+        return compareResolved(o1Field, o2Field, JsonUtils::ascendingPrimitives);
+    }
+
+    public static int compareSortKeysDescending(JsonBaseElement o1Field, JsonBaseElement o2Field) {
+        return compareResolved(o1Field, o2Field, JsonUtils::descendingPrimitives);
+    }
+
     private static int compareAtPath(JsonObject o1, JsonObject o2, String fieldName,
             ToIntBiFunction<JsonPrimitive<?>, JsonPrimitive<?>> comparePrimitives) {
-        final var o1Field = JsonUtils.getFromPath(o1, fieldName);
-        final var o2Field = JsonUtils.getFromPath(o2, fieldName);
+        return compareResolved(JsonUtils.getFromPath(o1, fieldName), JsonUtils.getFromPath(o2, fieldName),
+                comparePrimitives);
+    }
+
+    private static int compareResolved(JsonBaseElement o1Field, JsonBaseElement o2Field,
+            ToIntBiFunction<JsonPrimitive<?>, JsonPrimitive<?>> comparePrimitives) {
         if (o1Field == JsonNull.INSTANCE && o2Field == JsonNull.INSTANCE) {
             return 0;
         }
@@ -184,34 +196,45 @@ public final class JsonUtils {
         }
     }
 
-    public static boolean hasInPath(JsonObject obj, String path) {
-        var currentPart = obj;
-        final var parts = path.split("\\.");
-        for (String part : parts) {
-            final var step = currentPart.get(part);
-            if (step == null) {
-                return false;
-            } else if (step.isJsonObject()) {
-                currentPart = step.asJsonObject();
-            }
+    public static JsonBaseElement resolvePath(JsonObject obj, String path) {
+        if (path.indexOf('.') < 0) {
+            return obj.get(path);
         }
-        return true;
-    }
-
-    public static JsonBaseElement getFromPath(JsonObject obj, String path) {
-        JsonBaseElement result = JsonNull.INSTANCE;
+        var limit = path.length();
+        while (limit > 0 && path.charAt(limit - 1) == '.') {
+            limit--;
+        }
+        if (limit == 0) {
+            return JsonNull.INSTANCE;
+        }
         var currentPart = obj;
-        final var parts = path.split("\\.");
-        for (String part : parts) {
-            final var step = currentPart.get(part);
+        JsonBaseElement result = JsonNull.INSTANCE;
+        var start = 0;
+        while (start <= limit) {
+            var dot = path.indexOf('.', start);
+            if (dot < 0 || dot > limit) {
+                dot = limit;
+            }
+            final var step = currentPart.get(path.substring(start, dot));
             if (step == null) {
-                return JsonNull.INSTANCE;
-            } else if (step.isJsonObject()) {
+                return null;
+            }
+            if (step.isJsonObject()) {
                 currentPart = step.asJsonObject();
             }
             result = step;
+            start = dot + 1;
         }
         return result;
+    }
+
+    public static boolean hasInPath(JsonObject obj, String path) {
+        return resolvePath(obj, path) != null;
+    }
+
+    public static JsonBaseElement getFromPath(JsonObject obj, String path) {
+        final var resolved = resolvePath(obj, path);
+        return resolved == null ? JsonNull.INSTANCE : resolved;
     }
 
 }

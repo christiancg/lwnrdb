@@ -41,4 +41,9 @@ public final class JsTemporalPlainMonthDay extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.TEMPORAL_PLAIN_MONTH_DAY;
+    }
 }

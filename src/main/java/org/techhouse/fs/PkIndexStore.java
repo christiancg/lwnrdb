@@ -157,21 +157,4 @@ final class PkIndexStore {
         return entries;
     }
 
-    PkIndexEntry findPkIndexEntry(String dbName, String collName, String id) throws IOException {
-        final var indexFile = paths.pkIndexFile(dbName, collName);
-        if (!indexFile.exists()) {
-            return null;
-        }
-        final var lock = FileLocks.lockFor(indexFile).readLock();
-        lock.lock();
-        final List<String> lines;
-        try {
-            lines = Files.readAllLines(indexFile.toPath(), StandardCharsets.UTF_8);
-        } finally {
-            lock.unlock();
-        }
-        return lines.stream().filter(line -> !line.isEmpty())
-                .map(line -> PkIndexEntry.fromIndexFileEntry(dbName, collName, line))
-                .filter(entry -> entry.getValue().equals(id)).findFirst().orElse(null);
-    }
 }

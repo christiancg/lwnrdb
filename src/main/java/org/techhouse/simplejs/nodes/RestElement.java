@@ -10,4 +10,9 @@ public class RestElement extends JsNode {
     public JsNode getArgument() {
         return argument;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.REST_ELEMENT;
+    }
 }

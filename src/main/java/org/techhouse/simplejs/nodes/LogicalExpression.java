@@ -22,4 +22,9 @@ public class LogicalExpression extends Expression {
     public Expression getRight() {
         return right;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.LOGICAL_EXPRESSION;
+    }
 }

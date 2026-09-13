@@ -733,6 +733,141 @@ def geo_suite(c):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+# Correctness regressions
+# ══════════════════════════════════════════════════════════════════════════
+
+REG_UNICODE = "idxagg_reg_unicode"
+REG_SINGLE = "idxagg_reg_single"
+REG_CONJ = "idxagg_reg_conj"
+REG_NUMERIC = "idxagg_reg_numeric"
+
+
+def reg_filter(c, coll, field, value, op="EQUALS"):
+    r = agg(c, coll, [{"type": "FILTER",
+                       "operator": {"fieldOperatorType": op, "field": field, "value": value}}])
+    return sorted(d.get("_id") for d in (r.get("results") or []))
+
+
+def probe_non_ascii_indexed_values(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_UNICODE})
+    for doc_id, city in (("u1", "café"), ("u2", "日本語"), ("u3", "plain"), ("u4", "a😀b")):
+        save_doc(c, REG_UNICODE, {"_id": doc_id, "city": city})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_UNICODE, "fieldName": "city"})
+    wait_for_indexes(c, [(REG_UNICODE, "city")])
+    save_doc(c, REG_UNICODE, {"_id": "u3", "city": "日本語"})
+    save_doc(c, REG_UNICODE, {"_id": "u5", "city": "café"})
+    wait_for_background()
+
+    for city, expected in (("café", ["u1", "u5"]), ("日本語", ["u2", "u3"]), ("a😀b", ["u4"])):
+        got = reg_filter(c, REG_UNICODE, "city", city)
+        check(f"non-ASCII indexed value {city!r} is queryable after an in-place index rewrite",
+              got == expected, detail=f"expected {expected}, got {got}")
+    check("re-pointed document no longer answers under its old non-ASCII value",
+          "u3" not in reg_filter(c, REG_UNICODE, "city", "plain"))
+
+
+def probe_single_valued_index_ranges(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_SINGLE})
+    for i in range(5):
+        save_doc(c, REG_SINGLE, {"_id": f"s{i}", "score": 10})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_SINGLE, "fieldName": "score"})
+    wait_for_indexes(c, [(REG_SINGLE, "score")])
+    wait_for_background()
+
+    everything = sorted(f"s{i}" for i in range(5))
+    for op, value, expected in (("GREATER_THAN", 5, everything),
+                                ("GREATER_THAN_EQUALS", 10, everything),
+                                ("SMALLER_THAN", 20, everything),
+                                ("SMALLER_THAN_EQUALS", 10, everything),
+                                ("GREATER_THAN", 10, []),
+                                ("SMALLER_THAN", 10, []),
+                                ("GREATER_THAN_EQUALS", 15, []),
+                                ("SMALLER_THAN_EQUALS", 5, [])):
+        got = reg_filter(c, REG_SINGLE, "score", value, op)
+        check(f"single-valued index answers {op} {value}", got == expected,
+              detail=f"expected {expected}, got {got}")
+
+
+def probe_conjunction_after_a_filter_step(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CONJ})
+    for doc_id, role, active in (("a", "admin", "yes"), ("b", "admin", "no"),
+                                 ("c", "user", "yes"), ("ghost", "ghost", "yes")):
+        save_doc(c, REG_CONJ, {"_id": doc_id, "role": role, "active": active})
+    wait_for_background()
+
+    leaves = [{"fieldOperatorType": "EQUALS", "field": "role", "value": "admin"},
+              {"fieldOperatorType": "EQUALS", "field": "active", "value": "yes"}]
+    for conj, expected in (("AND", ["a"]), ("OR", ["a", "b", "c"]), ("XOR", ["b", "c"]),
+                           ("NAND", ["b", "c"]), ("NOR", [])):
+        r = agg(c, REG_CONJ, [
+            {"type": "FILTER",
+             "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "role", "value": "ghost"}},
+            {"type": "FILTER", "operator": {"conjunctionType": conj, "operators": leaves}}])
+        got = sorted(d.get("_id") for d in (r.get("results") or []))
+        check(f"{conj} conjunction with two children runs on an already-filtered stream",
+              got == expected, detail=f"expected {expected}, got {got}")
+
+    nested = agg(c, REG_CONJ, [
+        {"type": "FILTER",
+         "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "role", "value": "ghost"}},
+        {"type": "FILTER", "operator": {"conjunctionType": "AND", "operators": [
+            {"conjunctionType": "OR", "operators": leaves},
+            {"fieldOperatorType": "EQUALS", "field": "active", "value": "yes"}]}}])
+    got = sorted(d.get("_id") for d in (nested.get("results") or []))
+    check("nested conjunction runs on an already-filtered stream", got == ["a", "c"],
+          detail=f"expected ['a', 'c'], got {got}")
+
+
+
+def probe_low_cardinality_numeric_index(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NUMERIC})
+    save_doc(c, REG_NUMERIC, {"_id": "seed", "bucket": 99, "big": 1, "ratio": 0.5})
+    for field in ("bucket", "big", "ratio"):
+        c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_NUMERIC, "fieldName": field})
+    wait_for_indexes(c, [(REG_NUMERIC, f) for f in ("bucket", "big", "ratio")])
+
+    for i in range(6):
+        save_doc(c, REG_NUMERIC, {"_id": f"n{i}", "bucket": i % 2, "big": 10000000000, "ratio": 0.25})
+    wait_for_background()
+
+    for value, expected in ((0, ["n0", "n2", "n4"]), (1, ["n1", "n3", "n5"])):
+        got = reg_filter(c, REG_NUMERIC, "bucket", value)
+        check(f"every document written after CREATE_INDEX with bucket={value} stays in the numeric index",
+              got == expected, detail=f"expected {expected}, got {got}")
+
+    all_new = sorted(f"n{i}" for i in range(6))
+    got = reg_filter(c, REG_NUMERIC, "big", 10000000000)
+    check("an integral value above Integer.MAX_VALUE indexes every document sharing it",
+          got == all_new, detail=f"expected {all_new}, got {got}")
+
+    got = reg_filter(c, REG_NUMERIC, "ratio", 0.25)
+    check("a fractional value indexes every document sharing it",
+          got == all_new, detail=f"expected {all_new}, got {got}")
+
+    with_seed = sorted(all_new + ["seed"])
+    got = reg_filter(c, REG_NUMERIC, "bucket", 0, "GREATER_THAN_EQUALS")
+    check("a range query over a low-cardinality numeric index sees every document",
+          got == with_seed, detail=f"expected {with_seed}, got {got}")
+
+    save_doc(c, REG_NUMERIC, {"_id": "n1", "bucket": 5, "big": 10000000000, "ratio": 0.25})
+    wait_for_background()
+    got = reg_filter(c, REG_NUMERIC, "bucket", 1)
+    check("re-pointing one document leaves the other ids under the old numeric value",
+          got == ["n3", "n5"], detail=f"expected ['n3', 'n5'], got {got}")
+    check("the re-pointed document answers under its new numeric value",
+          reg_filter(c, REG_NUMERIC, "bucket", 5) == ["n1"])
+
+
+def regression_suite(c):
+    section("Correctness regressions: non-ASCII index values, single-valued index ranges, "
+            "low-cardinality numeric indexes, conjunctions over a filtered stream")
+    probe_non_ascii_indexed_values(c)
+    probe_single_valued_index_ranges(c)
+    probe_low_cardinality_numeric_index(c)
+    probe_conjunction_after_a_filter_step(c)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
@@ -802,6 +937,11 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         geo_suite(c)
+
+    # Phase 5 — correctness regressions for previously-fixed index and conjunction defects.
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        regression_suite(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

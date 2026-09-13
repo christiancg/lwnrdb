@@ -17,4 +17,9 @@ public final class JsBoolean extends JsValue {
     public boolean getValue() {
         return value;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.BOOLEAN;
+    }
 }

@@ -6,8 +6,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.cache.Cache;
@@ -16,8 +14,6 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
-import org.techhouse.ejson.elements.JsonCustom;
-import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
@@ -98,7 +94,8 @@ public final class AggregationOperationHelper {
                 case DISTINCT -> processDistinctStep(step, resultStream, dbName, collName);
                 case LIMIT -> processLimitStep(step, resultStream, dbName, collName);
                 case SKIP -> processSkipStep(step, resultStream, dbName, collName);
-                case SORT -> processSortStep(step, resultStream, dbName, collName);
+                case SORT -> SortOperatorHelper.processSortStep((SortAggregationStep) step, resultStream, dbName,
+                        collName, sortBound(steps, i));
                 case REDUCE -> processReduceStep(step, resultStream, dbName, collName, context);
             };
         }
@@ -113,6 +110,22 @@ public final class AggregationOperationHelper {
         } catch (java.io.UncheckedIOException e) {
             throw e.getCause();
         }
+    }
+
+    private static long sortBound(List<BaseAggregationStep> steps, int sortIndex) {
+        final var next = stepAt(steps, sortIndex + 1);
+        if (next instanceof LimitAggregationStep limitStep) {
+            return limitStep.getLimit();
+        }
+        if (next instanceof SkipAggregationStep skipStep
+                && stepAt(steps, sortIndex + 2) instanceof LimitAggregationStep limitStep) {
+            return skipStep.getSkip() + (long) limitStep.getLimit();
+        }
+        return -1;
+    }
+
+    private static BaseAggregationStep stepAt(List<BaseAggregationStep> steps, int index) {
+        return index < steps.size() ? steps.get(index) : null;
     }
 
     private static Stream<JsonObject> processCountStep(Stream<JsonObject> resultStream, String dbName,
@@ -132,13 +145,14 @@ public final class AggregationOperationHelper {
             String dbName, String collName, PipelineScriptContext context) throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var mapStep = (MapAggregationStep) baseMapStep;
-        for (var step : mapStep.getOperators()) {
-            resultStream = resultStream.map(jsonObject -> {
-                final var copy = jsonObject.deepCopy();
-                return MapOperatorHelper.processOperator(step, copy, context);
-            });
-        }
-        return resultStream;
+        final var operators = mapStep.getOperators();
+        return resultStream.map(jsonObject -> {
+            var mapped = jsonObject.deepCopy();
+            for (var step : operators) {
+                mapped = MapOperatorHelper.processOperator(step, mapped, context);
+            }
+            return mapped;
+        });
     }
 
     private static Stream<JsonObject> processReduceStep(BaseAggregationStep baseReduceStep,
@@ -167,11 +181,10 @@ public final class AggregationOperationHelper {
                 .entrySet().stream().map(jsonElementListEntry -> {
                     final var groupedEntry = new JsonObject();
                     groupedEntry.add(groupByStep.getFieldName(), jsonElementListEntry.getKey());
-                    final var values = jsonElementListEntry.getValue().stream().reduce(new JsonArray(),
-                            (jsonArray, jsonObject) -> {
-                                jsonArray.add(jsonObject);
-                                return jsonArray;
-                            }, (jsonArray, _) -> jsonArray);
+                    final var values = new JsonArray();
+                    for (final var grouped : jsonElementListEntry.getValue()) {
+                        values.add(grouped);
+                    }
                     groupedEntry.add(GROUP_FIELD_NAME, values);
                     return groupedEntry;
                 });
@@ -220,10 +233,10 @@ public final class AggregationOperationHelper {
         final var joinedCollection = buildJoinLookup(dbName, joinCollectionName, joinCollectionRemoteField, leftEntries,
                 joinCollectionLocalField);
         return leftEntries.stream().map(jsonObject -> {
-            if (JsonUtils.hasInPath(jsonObject, joinCollectionLocalField)) {
+            final var localValue = JsonUtils.resolvePath(jsonObject, joinCollectionLocalField);
+            if (localValue != null) {
                 final var copy = jsonObject.deepCopy();
-                final var found = joinedCollection.get(JsonUtils.getFromPath(copy, joinCollectionLocalField));
-                copy.add(as, found);
+                copy.add(as, joinedCollection.get(localValue));
                 return copy;
             }
             return jsonObject;
@@ -234,8 +247,9 @@ public final class AggregationOperationHelper {
             String remoteField, List<JsonObject> leftEntries, String localField) throws IOException {
         final var localValues = new HashSet<JsonBaseElement>();
         for (var left : leftEntries) {
-            if (JsonUtils.hasInPath(left, localField)) {
-                localValues.add(JsonUtils.getFromPath(left, localField));
+            final var localValue = JsonUtils.resolvePath(left, localField);
+            if (localValue != null) {
+                localValues.add(localValue);
             }
         }
         final var matchingIds = IndexHelper.getMatchingIdsForJoin(dbName, joinCollectionName, remoteField, localValues);
@@ -254,8 +268,8 @@ public final class AggregationOperationHelper {
         final var lookup = new HashMap<JsonBaseElement, JsonArray>();
         for (var dbEntry : matchedDocs) {
             final var data = dbEntry.getData();
-            if (JsonUtils.hasInPath(data, remoteField)) {
-                final var key = JsonUtils.getFromPath(data, remoteField);
+            final var key = JsonUtils.resolvePath(data, remoteField);
+            if (key != null) {
                 lookup.computeIfAbsent(key, _ -> new JsonArray()).add(data);
             }
         }
@@ -308,77 +322,4 @@ public final class AggregationOperationHelper {
         return resultStream.skip(skipStep.getSkip());
     }
 
-    private static Stream<JsonObject> processSortStep(BaseAggregationStep baseSortStep, Stream<JsonObject> resultStream,
-            String dbName, String collName) throws IOException {
-        final var sortStep = (SortAggregationStep) baseSortStep;
-        final var fieldName = sortStep.getFieldName();
-        final var ascending = sortStep.getAscending();
-        if (resultStream == null) {
-            final var indexEntries = IndexHelper.getIndexEntriesForField(dbName, collName, fieldName);
-            if (indexEntries != null) {
-                return sortViaIndex(indexEntries, dbName, collName, ascending);
-            }
-        }
-        resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
-        if (ascending) {
-            return resultStream.sorted((o1, o2) -> JsonUtils.sortFunctionAscending(o1, o2, fieldName));
-        } else {
-            return resultStream.sorted((o1, o2) -> JsonUtils.sortFunctionDescending(o1, o2, fieldName));
-        }
-    }
-
-    private static Stream<JsonObject> sortViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
-            String collName, boolean ascending) {
-        final var sortedEntries = new ArrayList<>(indexEntries);
-        sortedEntries.sort((a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending));
-        return sortedEntries.stream().flatMap(entry -> entry.getIds().stream()).map(id -> {
-            try {
-                final var docs = cache.getEntriesByIds(dbName, collName, Set.of(id));
-                return docs.isEmpty() ? null : docs.getFirst().getData();
-            } catch (IOException e) {
-                throw new java.io.UncheckedIOException(e);
-            }
-        }).filter(Objects::nonNull);
-    }
-
-    // Must match the sort semantics of sortFunctionAscending/Descending.
-    private static int compareIndexValues(Object a, Object b, boolean ascending) {
-        if (!ascending) {
-            return compareIndexValues(b, a, true);
-        }
-        final var aIsNull = (a == null || a instanceof JsonNull);
-        final var bIsNull = (b == null || b instanceof JsonNull);
-        if (aIsNull && bIsNull) {
-            return 0;
-        }
-        if (aIsNull) {
-            return 1;
-        }
-        if (bIsNull) {
-            return -1;
-        }
-        switch (a) {
-            case Number na when b instanceof Number nb -> {
-                return Double.compare(na.doubleValue(), nb.doubleValue());
-            }
-            case String sa when b instanceof String sb -> {
-                return sa.compareTo(sb);
-            }
-            case Boolean ba -> {
-                return ba ? -1 : 1;
-            }
-            case JsonCustom<?> ca when b instanceof JsonCustom<?> cb
-                    && ca.getClass().isAssignableFrom(cb.getClass()) -> {
-                return ca.getValue().compareTo(cb.getValue());
-            }
-            default -> {
-            }
-        }
-        final var elemA = IndexHelper.indexValueToElement(a);
-        final var elemB = IndexHelper.indexValueToElement(b);
-        if (elemA.isJsonPrimitive() && !elemB.isJsonPrimitive()) {
-            return 1;
-        }
-        return -1;
-    }
 }
