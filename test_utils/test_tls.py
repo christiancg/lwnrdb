@@ -34,8 +34,6 @@ ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 KEYSTORE_PASSWORD = "changeit"
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = bu.REPO_ROOT
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -194,9 +192,7 @@ def test_plaintext_rejected():
 def main():
     bu.banner("TLS / secure connections test suite")
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
+    if not bu.server_binary_ready():
         sys.exit(1)
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-tls-")
@@ -207,7 +203,7 @@ def main():
 
     proc = None
     try:
-        proc = bu.start_server(work_dir, log_path, jar=jar)
+        proc = bu.start_server(work_dir, log_path)
         test_keystore_generated(work_dir, log_path)
         test_self_signed_is_untrusted()
         test_tls_roundtrip()

@@ -216,8 +216,13 @@ Unicode property escapes resolve a name to a `CodePointSet` using `java.util.reg
 one-time per-property **oracle** (compiled once, every code point tested, cached) — never as the
 matching engine. Properties *of strings* (`\p{RGI_Emoji}` and siblings) have no JDK data at all
 and are expanded from `src/main/resources/simplejs/emoji-sequences.txt`, which is ours and
-pinned to Unicode 17.0. This is why the build JDK is pinned at 26 or newer: the UCD comes from
-the JDK, and two JDK versions would make `\p{…}` answer differently on two nodes of one cluster.
+pinned to Unicode 17.0. This is why the build JDK is pinned to exactly one version: the UCD comes
+from the JDK, and two JDK versions would make `\p{…}` answer differently on two nodes of one
+cluster. That version is **25, carrying Unicode 16.0**, because the shipped artifact is the GraalVM
+native image and GraalVM has no JDK 26 release. So the two data sources sit one version apart —
+properties *of strings* come from our own 17.0 file, single-code-point properties from the JDK's
+16.0 data — and the eight `language/identifiers/*-unicode-17.0.0*` cases are excluded for that
+reason (`config/test262-exclusions.txt`).
 
 ### Numbers
 
@@ -678,7 +683,7 @@ procedure/trigger/schedule code.
 | `Object.defineProperty` with a non-primitive `length` value throws `RangeError` | `defineOwnProperty` has no route to invoke user code for the coercion; threading `InterpreterOps` through would cascade into every override. |
 | `super.m()` on a native super is an explicit `TypeError` | There are no native method tables to chain into — a loud failure rather than a silent wrong answer. |
 | A function written inside a template substitution has no source text and no line/column | The lexer re-lexes each `${…}` into its own position-less token list, so there is no span to slice. Legal for `toString` (`HostHasSourceTextAvailable` is false); the frame degrades to a bare module name. |
-| Property escapes do not match the UCD exhaustively | `built-ins/RegExp/property-escapes/generated/` scores 66.31% (311/469) — a genuine per-code-point gap between our resolution of a property name and the exhaustive set the corpus asserts. Property data is the build JDK's (Unicode 17.0 on the pinned JDK 26 floor), so a future JDK will move these escapes with it. |
+| Property escapes do not match the UCD exhaustively | `built-ins/RegExp/property-escapes/generated/` scores 66.31% (311/469) — a genuine per-code-point gap between our resolution of a property name and the exhaustive set the corpus asserts. Property data is the build JDK's (Unicode 16.0 on the pinned JDK 25 floor), so a future JDK will move these escapes with it. |
 | `scriptMaxMemoryBytes` does not bound O(1)-per-instruction allocation | By design — see *Sandbox and resource limits*. Sizing it against `scriptInstructionBudget` is the operator's job. |
 | `localeCompare`/`toLocaleString` honour a locale but only part of `options` | The subset `java.text` can express without `Intl`: `sensitivity` maps onto `Collator`'s three strengths, and `usage`/`numeric`/`caseFirst`/`ignorePunctuation` are validated but not honoured. |
 | `Temporal` fixed offsets beyond ±18:00 are unsupported | `java.time.ZoneOffset` hard-caps there and `ZoneRules` is `final` with no factory past it; supporting it would mean reimplementing every zone computation against a hand-rolled abstraction, for an offset magnitude no real IANA zone uses. Ten test262 cases are excluded by exact path. |
@@ -719,9 +724,11 @@ here is a number being flattered.
   `JSON.rawJSON`, `await-dictionary`, decorators. A proposal that missed the snapshot is not a
   gap.
 
-One exclusion is a measurement decision rather than a feature one:
+Two exclusions are measurement decisions rather than feature ones:
 `built-ins/RegExp/property-escapes/generated/` asserts, code point by code point, the contents of
-one Unicode version — see the property-escape row of the gaps table.
+one Unicode version — see the property-escape row of the gaps table — and
+`language/identifiers/*-unicode-17.0.0*` asserts identifier code points added in a Unicode version
+newer than the build JDK's, as described under *Regular expressions*.
 
 ## Measuring conformance
 

@@ -58,10 +58,9 @@ COLL = "docs"
 AUDIT_COLL = "audit"
 TICKS_COLL = "ticks"
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = bu.REPO_ROOT
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
+
 
 # The cap under test. Deliberately tiny so a burst of CALLERS reaches it in one round.
 CAPACITY = 2
@@ -79,7 +78,6 @@ MAX_MEMORY_BYTES = 4 * 1024 * 1024
 MAX_SOURCE_BYTES = 8 * 1024
 
 SLOW_SCRIPT = f"export default new Promise(r => setTimeout(() => r(1), {SLOW_SCRIPT_MS}));"
-
 
 
 # ── connection / protocol ────────────────────────────────────────────────────
@@ -607,9 +605,7 @@ def cleanup(conn: Conn):
 def main():
     bu.banner("script admission control test suite")
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
+    if not bu.server_binary_ready():
         sys.exit(1)
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-admission-")

@@ -51,15 +51,13 @@ USER_PASSWORD = "password123"
 MANAGER = "sched_manager"
 READER = "sched_reader"
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = bu.REPO_ROOT
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
+
 
 TICK_MS = 200
 SCHEDULE_TIMEOUT_MS = 10_000
 MAX_PER_DATABASE = 3
-
 
 
 # ── connection / protocol ────────────────────────────────────────────────────
@@ -501,9 +499,7 @@ def test_switch_off(conn: Conn):
 def main():
     bu.banner("Scheduled procedures test suite")
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"jar not found at {jar}; run `mvn clean package -DskipTests` first", file=sys.stderr)
+    if not bu.server_binary_ready():
         sys.exit(1)
     if bu.port_open():
         print(f"port {PORT} is already in use", file=sys.stderr)

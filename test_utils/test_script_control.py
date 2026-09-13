@@ -61,10 +61,9 @@ DB = "script_control_db"
 COLL = "docs"
 OUT_COLL = "sideeffects"
 
-JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
-REPO_ROOT = bu.REPO_ROOT
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
+
 
 # Long enough that no test's own patience can be mistaken for the sandbox giving up: every
 # run in this suite ends because it was cancelled, finished, or the test failed.
@@ -79,7 +78,6 @@ BUSY_SCRIPT = "while (true) { }"
 # must never be the reason a run ended. (The key rejects -1, so this is the "unlimited" form.)
 INSTRUCTION_BUDGET = 1_000_000_000_000
 TICK_MS = 200
-
 
 
 # ── connection / protocol ────────────────────────────────────────────────────
@@ -544,9 +542,7 @@ def cleanup(conn: Conn):
 def main():
     bu.banner("script run visibility and cancellation e2e tests")
 
-    jar = os.path.join(REPO_ROOT, JAR)
-    if not os.path.isfile(jar):
-        print(f"\n[ERROR] Jar not found at {jar}. Build it first: mvn package -DskipTests\n")
+    if not bu.server_binary_ready():
         sys.exit(1)
 
     work_dir = tempfile.mkdtemp(prefix="lwnrdb-scriptcontrol-")
