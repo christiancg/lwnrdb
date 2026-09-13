@@ -9,11 +9,16 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 
 public class LogWriter {
     private static final Configuration config = Configuration.getInstance();
+    private static final ReentrantLock WRITER_LOCK = new ReentrantLock();
+    private static BufferedWriter openWriter;
+    private static String openPath;
+    private static boolean needsLeadingNewline;
 
     public static void createLogPathAndRemoveOldFiles() throws IOException {
         final var logPath = config.getLogPath();
@@ -68,17 +73,64 @@ public class LogWriter {
 
     public static void writeLogEntry(String logEntry) {
         try {
-            final var file = currentLogFile();
-            try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
-                    Globals.BUFFER_SIZE)) {
-                if (file.length() > 0) {
-                    writer.write(Globals.NEWLINE);
-                }
-                writer.append(logEntry);
-                System.out.println(logEntry);
-            }
+            appendToLogFile(logEntry);
+            System.out.println(logEntry);
         } catch (Exception e) {
             System.out.println("Warning: could not write log entry -> " + logEntry);
+        }
+    }
+
+    private static void appendToLogFile(String logEntry) throws IOException {
+        WRITER_LOCK.lock();
+        try {
+            final var file = currentLogFile();
+            ensureWriterFor(file, file.getAbsolutePath());
+            if (needsLeadingNewline) {
+                openWriter.write(Globals.NEWLINE);
+            }
+            openWriter.append(logEntry);
+            openWriter.flush();
+            needsLeadingNewline = true;
+        } finally {
+            WRITER_LOCK.unlock();
+        }
+    }
+
+    public static void flushAndClose() {
+        WRITER_LOCK.lock();
+        try {
+            closeQuietly();
+        } finally {
+            WRITER_LOCK.unlock();
+        }
+    }
+
+    private static boolean isWriterCurrent(File file, String path) {
+        return openWriter != null && path.equals(openPath) && file.exists();
+    }
+
+    private static void ensureWriterFor(File file, String path) throws IOException {
+        if (isWriterCurrent(file, path)) {
+            return;
+        }
+        closeQuietly();
+        needsLeadingNewline = file.exists() && file.length() > 0;
+        openPath = path;
+        openWriter = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE);
+    }
+
+    private static void closeQuietly() {
+        final var writer = openWriter;
+        openWriter = null;
+        openPath = null;
+        if (writer == null) {
+            return;
+        }
+        try {
+            writer.flush();
+            writer.close();
+        } catch (IOException e) {
+            System.out.println("Warning: could not close the log file -> " + e.getMessage());
         }
     }
 }

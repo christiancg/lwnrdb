@@ -44,4 +44,9 @@ public final class JsTemporalPlainDate extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.TEMPORAL_PLAIN_DATE;
+    }
 }

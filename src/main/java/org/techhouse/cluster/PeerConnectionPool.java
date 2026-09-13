@@ -49,6 +49,7 @@ public class PeerConnectionPool {
                 // this request. Callers that would otherwise have to assume the worst rely on the difference.
                 throw new PeerUnreachableException("Could not connect to " + address, e);
             }
+            socket.setTcpNoDelay(true);
             connection = new PeerConnection(socket);
             connections.put(address, connection);
             return connection;

@@ -16,4 +16,9 @@ public class ImportSpecifier extends JsNode {
     public Identifier getLocal() {
         return local;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.IMPORT_SPECIFIER;
+    }
 }

@@ -32,4 +32,9 @@ public final class JsGeo extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.GEO;
+    }
 }

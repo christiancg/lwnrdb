@@ -1,9 +1,15 @@
 package org.techhouse.ops;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PasswordHasher;
 import org.techhouse.ioc.IocContainer;
@@ -17,6 +23,16 @@ import org.techhouse.ops.resp.OperationResponse;
 public class UserOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+
+    public static Map<String, List<String>> ownedDatabasesByUser(Collection<AdminDbEntry> databases) {
+        final var ownedByUser = new HashMap<String, List<String>>();
+        for (final var database : databases) {
+            for (final var owner : database.getOwners()) {
+                ownedByUser.computeIfAbsent(owner, _ -> new ArrayList<>()).add(database.get_id());
+            }
+        }
+        return ownedByUser;
+    }
 
     public static OperationResponse processAuthenticate(AuthenticateRequest request, UUID clientId) {
         return OperationResponse.respondOrError(OperationType.AUTHENTICATE, ErrorCode.AUTHENTICATION_ERROR, () -> {

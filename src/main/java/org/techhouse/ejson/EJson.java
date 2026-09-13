@@ -145,4 +145,8 @@ public class EJson {
         }
         return schemaValidator.validate(instance, new JsonSchema(schema));
     }
+
+    public SchemaValidationResult validateInstance(JsonBaseElement instance, JsonObject schema) {
+        return schemaValidator.validate(instance, new JsonSchema(schema));
+    }
 }

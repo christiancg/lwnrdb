@@ -16,4 +16,9 @@ public class RegexLiteral extends Expression {
     public String getFlags() {
         return flags;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.REGEX_LITERAL;
+    }
 }

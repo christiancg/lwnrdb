@@ -33,6 +33,7 @@ public class SocketServer {
             logger.info("Server is listening on port " + port + (sslServerSocketFactory != null ? " (TLS)" : ""));
             while (!Thread.currentThread().isInterrupted()) {
                 Socket socket = socketForServing.accept();
+                disableNagle(socket);
                 pool.execute(new MessageProcessor(socket));
             }
         } catch (IOException ex) {
@@ -53,6 +54,14 @@ public class SocketServer {
             } catch (IOException e) {
                 logger.warning("Failed to close the listening socket: " + e.getMessage());
             }
+        }
+    }
+
+    private void disableNagle(Socket socket) {
+        try {
+            socket.setTcpNoDelay(true);
+        } catch (IOException e) {
+            logger.warning("Could not disable Nagle on an accepted connection: " + e.getMessage());
         }
     }
 

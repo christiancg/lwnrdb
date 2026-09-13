@@ -94,7 +94,7 @@ public final class AdminPageHelper {
                     newPages.add(newEntry);
                 }
             }
-            cache.putAdminPageEntries(dbName, collName, workingPageEntries);
+            cache.addAdminPageEntries(dbName, collName, newPages);
             if (!newPages.isEmpty()) {
                 insertAdminPages(pagesPerCollectionName, newPages);
             }

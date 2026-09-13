@@ -4,9 +4,13 @@ import static org.techhouse.simplejs.host.ScriptErrorNames.TIMED_OUT_MESSAGE;
 import static org.techhouse.simplejs.host.ScriptErrorNames.TIMEOUT;
 
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.Map;
+import java.util.function.BiPredicate;
 import org.techhouse.config.Configuration;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.simplejs.ScriptCallable;
 import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
@@ -15,10 +19,16 @@ import org.techhouse.simplejs.host.ResourceLimits;
 
 public final class PipelineScriptContext implements AutoCloseable {
     private static final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
+    private static final CompiledScriptCache compiledScriptCache = IocContainer.get(CompiledScriptCache.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     private final Map<String, ScriptCallable> callables = new HashMap<>();
+    private final Map<CustomOperator, BiPredicate<JsonObject, String>> customTesters = new IdentityHashMap<>();
     private final long deadline = System.currentTimeMillis() + configuration.getAggregationScriptTimeoutMs();
+
+    public BiPredicate<JsonObject, String> customTesterFor(CustomOperator operator) {
+        return customTesters.computeIfAbsent(operator, FilterOperatorHelper::getCustomTester);
+    }
 
     public ScriptCallable callableFor(String source) {
         final var existing = callables.get(source);
@@ -29,7 +39,11 @@ public final class PipelineScriptContext implements AutoCloseable {
         if (remaining <= 0) {
             throw new ScriptCallableException(TIMEOUT, TIMED_OUT_MESSAGE);
         }
-        final var opened = simpleJs.openCallable(source, PipelineHostBindings.of(limits(remaining)));
+        final var bindings = PipelineHostBindings.of(limits(remaining));
+        final var cached = compiledScriptCache.get(source);
+        final var opened = cached.failure() == null
+                ? simpleJs.openCallable(cached.compiled(), bindings)
+                : simpleJs.openCallable(source, bindings);
         callables.put(source, opened);
         return opened;
     }
@@ -49,5 +63,6 @@ public final class PipelineScriptContext implements AutoCloseable {
             callable.close();
         }
         callables.clear();
+        customTesters.clear();
     }
 }

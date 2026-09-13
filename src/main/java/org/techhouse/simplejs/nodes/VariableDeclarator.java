@@ -16,4 +16,9 @@ public class VariableDeclarator extends JsNode {
     public Expression getInit() {
         return init;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.VARIABLE_DECLARATOR;
+    }
 }

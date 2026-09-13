@@ -10,4 +10,9 @@ public class AwaitExpression extends Expression {
     public Expression getArgument() {
         return argument;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.AWAIT_EXPRESSION;
+    }
 }

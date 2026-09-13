@@ -32,4 +32,9 @@ public class ForOfStatement extends Statement {
     public boolean isAwait() {
         return await;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.FOR_OF_STATEMENT;
+    }
 }

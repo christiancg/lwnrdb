@@ -106,6 +106,7 @@ public class AdminTransactionEntry extends DbEntry {
         data.addProperty(TARGET_DB_FIELD, targetDb);
         data.addProperty(TARGET_COLL_FIELD, targetColl);
         data.add(PAYLOAD_FIELD, payload);
+        setData(data);
     }
 
     public String getTransactionId() {

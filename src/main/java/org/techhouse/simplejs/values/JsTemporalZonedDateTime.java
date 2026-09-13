@@ -118,4 +118,9 @@ public final class JsTemporalZonedDateTime extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.TEMPORAL_ZONED_DATE_TIME;
+    }
 }

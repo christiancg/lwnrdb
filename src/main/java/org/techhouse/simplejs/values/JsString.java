@@ -10,4 +10,9 @@ public final class JsString extends JsValue {
     public String getValue() {
         return value;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.STRING;
+    }
 }

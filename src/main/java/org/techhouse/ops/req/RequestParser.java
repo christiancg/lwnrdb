@@ -46,74 +46,74 @@ public final class RequestParser {
 
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
         try {
-            final var baseReq = eJson.fromJson(message, OperationRequest.class);
+            final var root = eJson.fromJson(message, JsonObject.class);
+            final var baseReq = eJson.fromJson(root, OperationRequest.class);
             return switch (baseReq.getType()) {
-                case BULK_SAVE -> eJson.fromJson(message, BulkSaveRequest.class);
+                case BULK_SAVE -> eJson.fromJson(root, BulkSaveRequest.class);
                 case SAVE -> {
-                    final var parsed = eJson.fromJson(message, SaveRequest.class);
+                    final var parsed = eJson.fromJson(root, SaveRequest.class);
                     if (parsed.getObject().has(Globals.PK_FIELD)) {
                         parsed.set_id(parsed.getObject().get(Globals.PK_FIELD).asJsonString().getValue());
                     }
                     yield parsed;
                 }
-                case FIND_BY_ID -> eJson.fromJson(message, FindByIdRequest.class);
-                case AGGREGATE -> parseAggregationRequest(message);
-                case DELETE -> eJson.fromJson(message, DeleteRequest.class);
-                case CREATE_DATABASE -> eJson.fromJson(message, CreateDatabaseRequest.class);
-                case DROP_DATABASE -> eJson.fromJson(message, DropDatabaseRequest.class);
-                case LIST_DATABASES -> eJson.fromJson(message, ListDatabasesRequest.class);
-                case CREATE_COLLECTION -> eJson.fromJson(message, CreateCollectionRequest.class);
-                case LIST_COLLECTIONS -> eJson.fromJson(message, ListCollectionsRequest.class);
-                case DROP_COLLECTION -> eJson.fromJson(message, DropCollectionRequest.class);
-                case CREATE_INDEX -> eJson.fromJson(message, CreateIndexRequest.class);
-                case DROP_INDEX -> eJson.fromJson(message, DropIndexRequest.class);
-                case REINDEX -> eJson.fromJson(message, ReindexRequest.class);
-                case SAVE_SCHEMA -> eJson.fromJson(message, SaveSchemaRequest.class);
-                case DELETE_SCHEMA -> eJson.fromJson(message, DeleteSchemaRequest.class);
-                case CLOSE_CONNECTION -> eJson.fromJson(message, CloseConnectionRequest.class);
-                case AUTHENTICATE -> eJson.fromJson(message, AuthenticateRequest.class);
-                case CREATE_USER -> eJson.fromJson(message, CreateUserRequest.class);
-                case DELETE_USER -> eJson.fromJson(message, DeleteUserRequest.class);
-                case CHANGE_PERMISSIONS -> eJson.fromJson(message, ChangePermissionsRequest.class);
-                case SET_DATABASE_OWNERS -> eJson.fromJson(message, SetDatabaseOwnersRequest.class);
-                case LIST_USERS -> parseListUsersRequest(message);
-                case SET_PASSWORD -> eJson.fromJson(message, SetPasswordRequest.class);
-                case GET_DATABASE_STATS -> eJson.fromJson(message, GetDatabaseStatsRequest.class);
-                case LISTEN -> parseListenRequest(message);
-                case STOP_LISTEN -> eJson.fromJson(message, StopListenRequest.class);
-                case START_TRANSACTION -> eJson.fromJson(message, StartTransactionRequest.class);
-                case COMMIT_TRANSACTION -> eJson.fromJson(message, CommitTransactionRequest.class);
-                case ROLLBACK_TRANSACTION -> eJson.fromJson(message, RollbackTransactionRequest.class);
-                case RESOLVE_TRANSACTION -> eJson.fromJson(message, ResolveTransactionRequest.class);
-                case LIST_TRANSACTIONS -> eJson.fromJson(message, ListTransactionsRequest.class);
-                case LIST_SCRIPTS -> eJson.fromJson(message, ListScriptsRequest.class);
-                case CANCEL_SCRIPT -> eJson.fromJson(message, CancelScriptRequest.class);
-                case LIST_TRIGGER_RUNS -> eJson.fromJson(message, ListTriggerRunsRequest.class);
-                case RESOLVE_TRIGGER_RUN -> eJson.fromJson(message, ResolveTriggerRunRequest.class);
-                case RUN_SCRIPT -> eJson.fromJson(message, RunScriptRequest.class);
-                case SAVE_PROCEDURE -> eJson.fromJson(message, SaveProcedureRequest.class);
-                case DELETE_PROCEDURE -> eJson.fromJson(message, DeleteProcedureRequest.class);
-                case LIST_PROCEDURES -> eJson.fromJson(message, ListProceduresRequest.class);
-                case CALL_PROCEDURE -> eJson.fromJson(message, CallProcedureRequest.class);
-                case SAVE_TRIGGER -> eJson.fromJson(message, SaveTriggerRequest.class);
-                case DELETE_TRIGGER -> eJson.fromJson(message, DeleteTriggerRequest.class);
-                case LIST_TRIGGERS -> eJson.fromJson(message, ListTriggersRequest.class);
-                case TEST_TRIGGER -> eJson.fromJson(message, TestTriggerRequest.class);
-                case SAVE_SCHEDULE -> eJson.fromJson(message, SaveScheduleRequest.class);
-                case DELETE_SCHEDULE -> eJson.fromJson(message, DeleteScheduleRequest.class);
-                case LIST_SCHEDULES -> eJson.fromJson(message, ListSchedulesRequest.class);
+                case FIND_BY_ID -> eJson.fromJson(root, FindByIdRequest.class);
+                case AGGREGATE -> parseAggregationRequest(root);
+                case DELETE -> eJson.fromJson(root, DeleteRequest.class);
+                case CREATE_DATABASE -> eJson.fromJson(root, CreateDatabaseRequest.class);
+                case DROP_DATABASE -> eJson.fromJson(root, DropDatabaseRequest.class);
+                case LIST_DATABASES -> eJson.fromJson(root, ListDatabasesRequest.class);
+                case CREATE_COLLECTION -> eJson.fromJson(root, CreateCollectionRequest.class);
+                case LIST_COLLECTIONS -> eJson.fromJson(root, ListCollectionsRequest.class);
+                case DROP_COLLECTION -> eJson.fromJson(root, DropCollectionRequest.class);
+                case CREATE_INDEX -> eJson.fromJson(root, CreateIndexRequest.class);
+                case DROP_INDEX -> eJson.fromJson(root, DropIndexRequest.class);
+                case REINDEX -> eJson.fromJson(root, ReindexRequest.class);
+                case SAVE_SCHEMA -> eJson.fromJson(root, SaveSchemaRequest.class);
+                case DELETE_SCHEMA -> eJson.fromJson(root, DeleteSchemaRequest.class);
+                case CLOSE_CONNECTION -> eJson.fromJson(root, CloseConnectionRequest.class);
+                case AUTHENTICATE -> eJson.fromJson(root, AuthenticateRequest.class);
+                case CREATE_USER -> eJson.fromJson(root, CreateUserRequest.class);
+                case DELETE_USER -> eJson.fromJson(root, DeleteUserRequest.class);
+                case CHANGE_PERMISSIONS -> eJson.fromJson(root, ChangePermissionsRequest.class);
+                case SET_DATABASE_OWNERS -> eJson.fromJson(root, SetDatabaseOwnersRequest.class);
+                case LIST_USERS -> parseListUsersRequest(root);
+                case SET_PASSWORD -> eJson.fromJson(root, SetPasswordRequest.class);
+                case GET_DATABASE_STATS -> eJson.fromJson(root, GetDatabaseStatsRequest.class);
+                case LISTEN -> parseListenRequest(root);
+                case STOP_LISTEN -> eJson.fromJson(root, StopListenRequest.class);
+                case START_TRANSACTION -> eJson.fromJson(root, StartTransactionRequest.class);
+                case COMMIT_TRANSACTION -> eJson.fromJson(root, CommitTransactionRequest.class);
+                case ROLLBACK_TRANSACTION -> eJson.fromJson(root, RollbackTransactionRequest.class);
+                case RESOLVE_TRANSACTION -> eJson.fromJson(root, ResolveTransactionRequest.class);
+                case LIST_TRANSACTIONS -> eJson.fromJson(root, ListTransactionsRequest.class);
+                case LIST_SCRIPTS -> eJson.fromJson(root, ListScriptsRequest.class);
+                case CANCEL_SCRIPT -> eJson.fromJson(root, CancelScriptRequest.class);
+                case LIST_TRIGGER_RUNS -> eJson.fromJson(root, ListTriggerRunsRequest.class);
+                case RESOLVE_TRIGGER_RUN -> eJson.fromJson(root, ResolveTriggerRunRequest.class);
+                case RUN_SCRIPT -> eJson.fromJson(root, RunScriptRequest.class);
+                case SAVE_PROCEDURE -> eJson.fromJson(root, SaveProcedureRequest.class);
+                case DELETE_PROCEDURE -> eJson.fromJson(root, DeleteProcedureRequest.class);
+                case LIST_PROCEDURES -> eJson.fromJson(root, ListProceduresRequest.class);
+                case CALL_PROCEDURE -> eJson.fromJson(root, CallProcedureRequest.class);
+                case SAVE_TRIGGER -> eJson.fromJson(root, SaveTriggerRequest.class);
+                case DELETE_TRIGGER -> eJson.fromJson(root, DeleteTriggerRequest.class);
+                case LIST_TRIGGERS -> eJson.fromJson(root, ListTriggersRequest.class);
+                case TEST_TRIGGER -> eJson.fromJson(root, TestTriggerRequest.class);
+                case SAVE_SCHEDULE -> eJson.fromJson(root, SaveScheduleRequest.class);
+                case DELETE_SCHEDULE -> eJson.fromJson(root, DeleteScheduleRequest.class);
+                case LIST_SCHEDULES -> eJson.fromJson(root, ListSchedulesRequest.class);
             };
         } catch (Exception e) {
             throw new InvalidCommandException(e);
         }
     }
 
-    private static OperationRequest parseAggregationRequest(final String message) {
-        final var aggRequest = eJson.fromJson(message, AggregateRequest.class);
+    private static OperationRequest parseAggregationRequest(final JsonObject parsed) {
+        final var aggRequest = eJson.fromJson(parsed, AggregateRequest.class);
         final var steps = new ArrayList<BaseAggregationStep>();
         final var roughlyParsedAggSteps = aggRequest.getAggregationSteps();
-        final var crudeArrayElements = eJson.fromJson(message, JsonObject.class);
-        final var jsonArray = crudeArrayElements.get("aggregationSteps").asJsonArray();
+        final var jsonArray = parsed.get("aggregationSteps").asJsonArray();
         for (var i = 0; i < roughlyParsedAggSteps.size(); i++) {
             final var type = roughlyParsedAggSteps.get(i).getType();
             steps.add(parseAggregationStep(type, jsonArray, i));
@@ -122,15 +122,14 @@ public final class RequestParser {
         return aggRequest;
     }
 
-    private static OperationRequest parseListenRequest(final String message) {
-        final var listenRequest = eJson.fromJson(message, ListenRequest.class);
+    private static OperationRequest parseListenRequest(final JsonObject parsed) {
+        final var listenRequest = eJson.fromJson(parsed, ListenRequest.class);
         final var roughlyParsedSteps = listenRequest.getAggregationSteps();
         if (roughlyParsedSteps == null || roughlyParsedSteps.isEmpty()) {
             return listenRequest;
         }
         final var steps = new ArrayList<BaseAggregationStep>();
-        final var crudeArrayElements = eJson.fromJson(message, JsonObject.class);
-        final var jsonArray = crudeArrayElements.get("aggregationSteps").asJsonArray();
+        final var jsonArray = parsed.get("aggregationSteps").asJsonArray();
         for (var i = 0; i < roughlyParsedSteps.size(); i++) {
             final var type = roughlyParsedSteps.get(i).getType();
             steps.add(parseAggregationStep(type, jsonArray, i));
@@ -246,10 +245,9 @@ public final class RequestParser {
         return parsedOperator;
     }
 
-    private static ListUsersRequest parseListUsersRequest(final String message) {
-        final var req = eJson.fromJson(message, ListUsersRequest.class);
-        final var raw = eJson.fromJson(message, JsonObject.class);
-        final var stepsEl = raw.get("aggregationSteps");
+    private static ListUsersRequest parseListUsersRequest(final JsonObject parsed) {
+        final var req = eJson.fromJson(parsed, ListUsersRequest.class);
+        final var stepsEl = parsed.get("aggregationSteps");
         if (stepsEl == null || stepsEl.isJsonNull()) {
             return req;
         }

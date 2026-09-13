@@ -86,4 +86,9 @@ public final class JsRegExp extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.REGEXP;
+    }
 }

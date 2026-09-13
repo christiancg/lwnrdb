@@ -33,7 +33,10 @@ public class DbEntry extends JsonDocumentEntry {
         if (data == null) {
             return 0;
         }
-        return (toFileEntry() + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8).length;
+        if (cachedByteSize < 0) {
+            cachedByteSize = (toFileEntry() + Globals.NEWLINE).getBytes(StandardCharsets.UTF_8).length;
+        }
+        return cachedByteSize;
     }
 
     public long getPage() {

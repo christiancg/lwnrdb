@@ -156,4 +156,9 @@ public final class JsArguments extends JsValue {
         }
         return deleted;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.ARGUMENTS;
+    }
 }

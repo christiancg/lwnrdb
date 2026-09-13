@@ -22,4 +22,9 @@ public class UnaryExpression extends Expression {
     public boolean isPrefix() {
         return prefix;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.UNARY_EXPRESSION;
+    }
 }

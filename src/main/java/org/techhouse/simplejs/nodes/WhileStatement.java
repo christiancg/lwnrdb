@@ -16,4 +16,9 @@ public class WhileStatement extends Statement {
     public Statement getBody() {
         return body;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.WHILE_STATEMENT;
+    }
 }

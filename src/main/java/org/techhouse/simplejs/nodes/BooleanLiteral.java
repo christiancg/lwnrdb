@@ -10,4 +10,9 @@ public class BooleanLiteral extends Expression {
     public boolean getValue() {
         return value;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.BOOLEAN_LITERAL;
+    }
 }

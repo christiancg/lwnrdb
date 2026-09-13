@@ -1,6 +1,9 @@
 package org.techhouse.cache;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -14,6 +17,7 @@ public class UsageTracker {
     private final Configuration config = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final ConcurrentHashMap<String, UsageCounter> counters = new ConcurrentHashMap<>();
+    private final Set<String> dirtyKeys = ConcurrentHashMap.newKeySet();
 
     private boolean isCachingDisabled() {
         return config.isCachingDisabled();
@@ -35,6 +39,22 @@ public class UsageTracker {
         final var counter = counters.computeIfAbsent(key,
                 _ -> new UsageCounter(kind, dbName, collName, indexKey == null ? "" : indexKey, 0L, 0L));
         counter.increment(System.currentTimeMillis());
+        dirtyKeys.add(key);
+    }
+
+    public List<UsageCounter> drainDirtyCounters() {
+        if (dirtyKeys.isEmpty()) {
+            return List.of();
+        }
+        final var drained = new ArrayList<UsageCounter>();
+        for (final var key : List.copyOf(dirtyKeys)) {
+            dirtyKeys.remove(key);
+            final var counter = counters.get(key);
+            if (counter != null) {
+                drained.add(counter);
+            }
+        }
+        return drained;
     }
 
     public UsageCounter getCounter(AccessKind kind, String dbName, String collName, String indexKey) {

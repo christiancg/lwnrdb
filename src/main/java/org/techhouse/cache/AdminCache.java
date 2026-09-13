@@ -132,12 +132,12 @@ public class AdminCache {
         return pageCache.getAdminPageEntry(dbName, collName, page);
     }
 
-    public void putAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
-        pageCache.putAdminPageEntries(dbName, collName, adminPageEntries);
-    }
-
     public void addAdminPageEntries(String dbName, String collName, AdminPageEntry adminPageEntry) {
         pageCache.addAdminPageEntries(dbName, collName, adminPageEntry);
+    }
+
+    public void addAdminPageEntries(String dbName, String collName, List<AdminPageEntry> adminPageEntries) {
+        pageCache.addAdminPageEntries(dbName, collName, adminPageEntries);
     }
 
     public void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {

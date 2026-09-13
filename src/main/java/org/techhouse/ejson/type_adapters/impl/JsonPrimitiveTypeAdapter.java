@@ -13,6 +13,15 @@ public class JsonPrimitiveTypeAdapter implements TypeAdapter<JsonPrimitive<?>> {
     }
 
     @Override
+    public void toJson(JsonPrimitive<?> value, StringBuilder out) {
+        if (value == null) {
+            out.append("null");
+        } else {
+            TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(value, out);
+        }
+    }
+
+    @Override
     public JsonPrimitive<?> fromJson(JsonBaseElement value) {
         return value == null ? null : switch (value.getJsonType()) {
             case BOOLEAN, NUMBER, STRING ->

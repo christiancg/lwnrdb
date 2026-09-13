@@ -22,4 +22,9 @@ public class ObjectExpression extends Expression {
     public boolean hasTrailingComma() {
         return trailingComma;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.OBJECT_EXPRESSION;
+    }
 }

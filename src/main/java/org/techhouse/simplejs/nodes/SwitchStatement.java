@@ -18,4 +18,9 @@ public class SwitchStatement extends Statement {
     public List<SwitchCase> getCases() {
         return cases;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.SWITCH_STATEMENT;
+    }
 }

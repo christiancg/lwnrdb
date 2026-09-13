@@ -14,8 +14,9 @@ import org.techhouse.simplejs.values.JsObject.PropertyFlags;
 public final class PropertyTable {
     private static final int MAX_INDEX_KEY_LENGTH = 10;
 
-    private final Map<String, JsValue> properties = new LinkedHashMap<>();
-    private final Set<String> keyOrder = new LinkedHashSet<>();
+    private Map<String, JsValue> properties;
+    private Set<String> keyOrder;
+    private boolean mayHaveIndexKeys;
     private boolean extensible = true;
     private Map<String, JsValue> accessorGetters;
     private Map<String, JsValue> accessorSetters;
@@ -28,8 +29,32 @@ public final class PropertyTable {
     private Map<JsSymbol, JsValue> symbolAccessorSetters;
     private Set<JsSymbol> symbolAccessorKeys;
 
+    private Map<String, JsValue> properties() {
+        var existing = properties;
+        if (existing == null) {
+            existing = new LinkedHashMap<>();
+            properties = existing;
+        }
+        return existing;
+    }
+
+    private void trackKey(String key) {
+        if (!mayHaveIndexKeys && isArrayIndexKey(key)) {
+            mayHaveIndexKeys = true;
+        }
+    }
+
+    private Set<String> keyOrder() {
+        var existing = keyOrder;
+        if (existing == null) {
+            existing = new LinkedHashSet<>();
+            keyOrder = existing;
+        }
+        return existing;
+    }
+
     public JsValue get(String key) {
-        final var value = properties.get(key);
+        final var value = properties == null ? null : properties.get(key);
         return value == null ? JsUndefined.getInstance() : value;
     }
 
@@ -37,37 +62,44 @@ public final class PropertyTable {
         if (hasAccessor(key)) {
             return false;
         }
-        if (properties.containsKey(key)) {
+        if (properties != null && properties.containsKey(key)) {
             if (isWritable(key)) {
-                properties.put(key, value);
-                keyOrder.add(key);
+                properties().put(key, value);
+                trackKey(key);
+                keyOrder().add(key);
                 return true;
             }
             return false;
         }
         if (extensible) {
-            properties.put(key, value);
-            keyOrder.add(key);
+            properties().put(key, value);
+            trackKey(key);
+            keyOrder().add(key);
             return true;
         }
         return false;
     }
 
     public void defineValue(String key, JsValue value) {
-        properties.put(key, value);
-        keyOrder.add(key);
+        properties().put(key, value);
+        trackKey(key);
+        keyOrder().add(key);
     }
 
     public boolean has(String key) {
-        return properties.containsKey(key);
+        return properties != null && properties.containsKey(key);
     }
 
     public boolean delete(String key) {
-        if (keyOrder.contains(key) && isNotConfigurable(key)) {
+        if (keyOrder != null && keyOrder.contains(key) && isNotConfigurable(key)) {
             return false;
         }
-        properties.remove(key);
-        keyOrder.remove(key);
+        if (properties != null) {
+            properties.remove(key);
+        }
+        if (keyOrder != null) {
+            keyOrder.remove(key);
+        }
         if (accessorGetters != null) {
             accessorGetters.remove(key);
         }
@@ -167,7 +199,10 @@ public final class PropertyTable {
     }
 
     public Set<String> keys() {
-        return orderKeys(keyOrder);
+        if (keyOrder == null) {
+            return new LinkedHashSet<>();
+        }
+        return mayHaveIndexKeys ? orderKeys(keyOrder) : new LinkedHashSet<>(keyOrder);
     }
 
     // OrdinaryOwnPropertyKeys: canonical array-index keys ascending, then the rest in insertion order
@@ -204,7 +239,7 @@ public final class PropertyTable {
     }
 
     public Map<String, JsValue> getProperties() {
-        return properties;
+        return properties();
     }
 
     public JsValue getSymbol(JsSymbol key) {
@@ -283,8 +318,11 @@ public final class PropertyTable {
     }
 
     public void defineAccessor(String key, JsValue getter, JsValue setter) {
-        keyOrder.add(key);
-        properties.remove(key);
+        trackKey(key);
+        keyOrder().add(key);
+        if (properties != null) {
+            properties.remove(key);
+        }
         registerAccessorKey(key);
         if (getter != null) {
             if (accessorGetters == null) {

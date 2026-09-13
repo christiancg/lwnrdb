@@ -31,7 +31,6 @@ import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsProxy;
 import org.techhouse.simplejs.values.JsString;
-import org.techhouse.simplejs.values.JsSymbol;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -73,6 +72,7 @@ public record FunctionInvoker(Interpreter interp) {
     }
 
     public JsValue callFunction(JsFunction function, JsValue thisArg, List<JsValue> args, JsValue newTarget) {
+        interp.checkDeadline();
         if (interp.maxDepth >= 0 && interp.depth >= interp.maxDepth) {
             throw new ScriptLimitException("Script exceeded its maximum call depth");
         }
@@ -87,7 +87,9 @@ public record FunctionInvoker(Interpreter interp) {
                     activation.defineThis(thisArg);
                 }
                 activation.defineNewTarget(newTarget);
-                activation.declareFunction("arguments", makeArguments(args));
+                if (function.usesArguments()) {
+                    activation.declareFunction("arguments", makeArguments(args));
+                }
             }
             if (function.isAsync() && !function.isGenerator()) {
                 return runAsync(function, activation, args);
@@ -137,8 +139,8 @@ public record FunctionInvoker(Interpreter interp) {
         }
         final var body = (BlockStatement) function.getBody();
         final var bodyEnv = bodyEnvironment(function, activation, body);
-        interp.hoist(body.getBody(), bodyEnv);
-        final var completion = interp.statements.blockDeclaresUsing(body.getBody())
+        interp.hoistBlock(body, bodyEnv);
+        final var completion = interp.blockDeclaresUsing(body)
                 ? interp.statements.runDisposing(bodyEnv,
                         () -> interp.statements.execStatements(body.getBody(), bodyEnv))
                 : interp.statements.execStatements(body.getBody(), bodyEnv);
@@ -269,16 +271,7 @@ public record FunctionInvoker(Interpreter interp) {
     }
 
     public JsArguments makeArguments(List<JsValue> args) {
-        return withOwnProperties(new JsArguments(args, null, null));
-    }
-
-    public JsArguments withOwnProperties(JsArguments arguments) {
-        interp.intrinsics.poison(arguments, "callee");
-        final var table = arguments.ownProperties();
-        table.setFlags("callee", new JsObject.PropertyFlags(false, false, false));
-        table.defineSymbolValue(JsSymbol.ITERATOR, interp.intrinsics.arrayProto.getSymbol(JsSymbol.ITERATOR));
-        table.setSymbolFlags(JsSymbol.ITERATOR, JsObject.PropertyFlags.HIDDEN);
-        return arguments;
+        return new ArgumentsObjects(interp).make(args);
     }
 
 }

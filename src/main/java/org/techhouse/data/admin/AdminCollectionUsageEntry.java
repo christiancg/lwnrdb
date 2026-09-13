@@ -71,6 +71,7 @@ public class AdminCollectionUsageEntry extends DbEntry {
         data.addProperty(INDEX_KEY_FIELD, indexKey);
         data.addProperty(ACCESS_COUNT_FIELD, Long.toString(accessCount));
         data.addProperty(LAST_ACCESS_FIELD, Long.toString(lastAccessMillis));
+        setData(data);
     }
 
     public AccessKind getKind() {

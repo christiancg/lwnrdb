@@ -22,4 +22,9 @@ public class ClassDeclaration extends Statement {
     public ClassBody getBody() {
         return body;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.CLASS_DECLARATION;
+    }
 }

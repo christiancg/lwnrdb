@@ -38,4 +38,9 @@ public class Property extends JsNode {
     public String getKind() {
         return kind;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.PROPERTY;
+    }
 }

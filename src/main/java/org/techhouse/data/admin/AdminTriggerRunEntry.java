@@ -181,6 +181,7 @@ public class AdminTriggerRunEntry extends DbEntry {
         data.addProperty(LAST_ERROR_FIELD, lastError);
         data.addProperty(LAST_ERROR_AT_FIELD, Long.toString(lastErrorAt));
         data.addProperty(NEXT_ATTEMPT_AT_FIELD, Long.toString(nextAttemptAt));
+        setData(data);
     }
 
     public void markAttempt(TriggerRunStatus newStatus, int attemptCount, String error, long nextAttempt) {

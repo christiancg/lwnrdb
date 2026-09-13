@@ -16,4 +16,9 @@ public class YieldExpression extends Expression {
     public boolean isDelegate() {
         return delegate;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.YIELD_EXPRESSION;
+    }
 }

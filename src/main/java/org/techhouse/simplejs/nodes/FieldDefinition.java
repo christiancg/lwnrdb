@@ -28,4 +28,9 @@ public class FieldDefinition extends JsNode {
     public boolean isComputed() {
         return computed;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.FIELD_DEFINITION;
+    }
 }

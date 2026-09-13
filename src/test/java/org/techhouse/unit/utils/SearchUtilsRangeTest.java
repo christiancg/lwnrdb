@@ -66,17 +66,17 @@ public class SearchUtilsRangeTest {
     }
 
     @Test
-    public void test_greater_than_single_element_list_returns_empty() {
+    public void test_greater_than_single_element_list_returns_the_entry() {
         List<FieldIndexEntry<Number>> entries = List.of(new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1")));
         Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.GREATER_THAN, 5);
-        assertTrue(result.isEmpty());
+        assertEquals(Set.of("id1"), result);
     }
 
     @Test
-    public void test_smaller_than_single_element_list_returns_empty() {
+    public void test_smaller_than_single_element_list_returns_the_entry() {
         List<FieldIndexEntry<Number>> entries = List.of(new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1")));
         Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.SMALLER_THAN, 20);
-        assertTrue(result.isEmpty());
+        assertEquals(Set.of("id1"), result);
     }
 
     @Test

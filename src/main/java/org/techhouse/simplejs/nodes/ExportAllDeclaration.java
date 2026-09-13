@@ -24,4 +24,9 @@ public class ExportAllDeclaration extends Statement {
     public List<ImportAttribute> getAttributes() {
         return attributes;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.EXPORT_ALL_DECLARATION;
+    }
 }

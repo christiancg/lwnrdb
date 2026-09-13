@@ -32,4 +32,9 @@ public class AssignmentExpression extends Expression {
     public boolean isTargetParenthesized() {
         return targetParenthesized;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.ASSIGNMENT_EXPRESSION;
+    }
 }

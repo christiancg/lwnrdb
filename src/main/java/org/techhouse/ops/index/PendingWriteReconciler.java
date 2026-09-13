@@ -20,10 +20,21 @@ public final class PendingWriteReconciler {
     private PendingWriteReconciler() {
     }
 
-    // Call this AFTER the index read: a write that committed before the read is either already indexed
-    // or still pending here; snapshotting first would miss one that landed in between.
     public static Set<String> pendingIds(String dbName, String collName) {
         return pendingIndexWrites.idsFor(dbName, collName);
+    }
+
+    public static Set<String> pendingIdsAround(Set<String> before, String dbName, String collName) {
+        final var after = pendingIndexWrites.idsFor(dbName, collName);
+        if (before.isEmpty()) {
+            return after;
+        }
+        if (after.isEmpty()) {
+            return before;
+        }
+        final var union = new HashSet<>(before);
+        union.addAll(after);
+        return union;
     }
 
     public static List<DbEntry> pendingDocuments(String dbName, String collName, Set<String> pendingIds)

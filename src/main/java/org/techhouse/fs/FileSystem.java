@@ -10,7 +10,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.ConcurrentMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
@@ -209,10 +208,6 @@ public class FileSystem {
 
     public List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
         return pkIndexStore.readWholePkIndexFile(dbName, collectionName);
-    }
-
-    public PkIndexEntry findPkIndexEntry(String dbName, String collName, String id) throws IOException {
-        return pkIndexStore.findPkIndexEntry(dbName, collName, id);
     }
 
     public DbEntry getById(PkIndexEntry pkIndexEntry) throws Exception {
@@ -415,11 +410,6 @@ public class FileSystem {
 
     public boolean dropIndex(String dbName, String collName, String fieldName) {
         return fieldIndexStore.dropIndex(dbName, collName, fieldName);
-    }
-
-    public ConcurrentMap<String, List<FieldIndexEntry<?>>> readAllWholeFieldIndexFiles(String dbName, String collName,
-            String fieldName) {
-        return fieldIndexLoader.readAllWholeFieldIndexFiles(dbName, collName, fieldName);
     }
 
     public <T> List<FieldIndexEntry<T>> readWholeFieldIndexFiles(String dbName, String collName, String fieldName,

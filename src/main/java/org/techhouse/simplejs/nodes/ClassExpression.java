@@ -22,4 +22,9 @@ public class ClassExpression extends Expression {
     public ClassBody getBody() {
         return body;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.CLASS_EXPRESSION;
+    }
 }

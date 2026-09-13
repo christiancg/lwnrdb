@@ -7,7 +7,7 @@ public class SimpleJsRuntimeException extends RuntimeException {
     private final transient List<String> capturedStack;
 
     public SimpleJsRuntimeException(String message) {
-        super(message);
+        super(message, null, false, false);
         capturedStack = StackCapture.current();
     }
 

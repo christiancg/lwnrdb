@@ -16,4 +16,9 @@ public class ImportAttribute extends JsNode {
     public StringLiteral getValue() {
         return value;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.IMPORT_ATTRIBUTE;
+    }
 }

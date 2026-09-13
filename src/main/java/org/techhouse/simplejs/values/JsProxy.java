@@ -40,4 +40,9 @@ public final class JsProxy extends JsValue {
             default -> false;
         };
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.PROXY;
+    }
 }

@@ -30,4 +30,9 @@ public class ArrowFunctionExpression extends Expression {
     public boolean isAsync() {
         return async;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.ARROW_FUNCTION_EXPRESSION;
+    }
 }

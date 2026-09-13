@@ -28,4 +28,9 @@ public class CallExpression extends Expression {
     public boolean isOptional() {
         return optional;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.CALL_EXPRESSION;
+    }
 }

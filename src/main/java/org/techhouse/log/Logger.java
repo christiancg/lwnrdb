@@ -3,7 +3,9 @@ package org.techhouse.log;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Arrays;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 
 public class Logger {
@@ -14,6 +16,36 @@ public class Logger {
 
     public Logger(Class<?> tClass) {
         this.tClass = tClass;
+    }
+
+    public boolean isEnabled(LogSeverity severity) {
+        return severity.ordinal() <= threshold().ordinal();
+    }
+
+    private static LogSeverity threshold() {
+        try {
+            return LogSeverity.valueOf(Configuration.getInstance().getLogLevel().toUpperCase(java.util.Locale.ROOT));
+        } catch (Exception e) {
+            return LogSeverity.INFO;
+        }
+    }
+
+    public void error(Supplier<String> message) {
+        lazy(LogSeverity.ERROR, message);
+    }
+
+    public void warning(Supplier<String> message) {
+        lazy(LogSeverity.WARNING, message);
+    }
+
+    public void info(Supplier<String> message) {
+        lazy(LogSeverity.INFO, message);
+    }
+
+    private void lazy(LogSeverity severity, Supplier<String> message) {
+        if (isEnabled(severity)) {
+            internalWriteLog(severity, message.get(), null);
+        }
     }
 
     public static Logger logFor(Class<?> tClass) {
@@ -49,6 +81,9 @@ public class Logger {
     }
 
     private void internalWriteLog(LogSeverity severity, String message, Exception exception) {
+        if (!isEnabled(severity)) {
+            return;
+        }
         String logEntry = LocalTime.now().format(DateTimeFormatter.ISO_LOCAL_TIME) + LOG_ENTRY_SEPARATOR
                 + severity.name() + LOG_ENTRY_SEPARATOR + tClass.getName() + MESSAGE_SEPARATOR + message;
         if (exception != null) {

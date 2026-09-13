@@ -176,4 +176,9 @@ public final class JsPromise extends JsValue {
         }
         return table;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.PROMISE;
+    }
 }

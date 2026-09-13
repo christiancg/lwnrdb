@@ -10,4 +10,9 @@ public class ImportDefaultSpecifier extends JsNode {
     public Identifier getLocal() {
         return local;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.IMPORT_DEFAULT_SPECIFIER;
+    }
 }

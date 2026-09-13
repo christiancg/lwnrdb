@@ -2,11 +2,12 @@ package org.techhouse.simplejs.internal;
 
 import static org.techhouse.simplejs.internal.interpreter.InterpreterUtils.*;
 
-import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.SyntaxErrorException;
 import org.techhouse.simplejs.exceptions.UnsupportedNodeException;
+import org.techhouse.simplejs.internal.interpreter.HoistPlan;
+import org.techhouse.simplejs.internal.interpreter.InterpreterUtils;
 import org.techhouse.simplejs.nodes.ArrayExpression;
 import org.techhouse.simplejs.nodes.ArrowFunctionExpression;
 import org.techhouse.simplejs.nodes.AssignmentExpression;
@@ -29,7 +30,6 @@ import org.techhouse.simplejs.nodes.ExpressionStatement;
 import org.techhouse.simplejs.nodes.ForInStatement;
 import org.techhouse.simplejs.nodes.ForOfStatement;
 import org.techhouse.simplejs.nodes.ForStatement;
-import org.techhouse.simplejs.nodes.FunctionDeclaration;
 import org.techhouse.simplejs.nodes.FunctionExpression;
 import org.techhouse.simplejs.nodes.Identifier;
 import org.techhouse.simplejs.nodes.IfStatement;
@@ -60,8 +60,6 @@ import org.techhouse.simplejs.nodes.YieldExpression;
 import org.techhouse.simplejs.values.JsBigInt;
 import org.techhouse.simplejs.values.JsBoolean;
 import org.techhouse.simplejs.values.JsNull;
-import org.techhouse.simplejs.values.JsNumber;
-import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -73,30 +71,35 @@ final class EvalDispatch {
     }
 
     void hoist(List<Statement> body, Environment env) {
-        for (final var raw : body) {
-            final var statement = raw instanceof ExportNamedDeclaration export
-                    && export.getDeclaration() instanceof Statement inner ? inner : raw;
-            if (statement instanceof VariableDeclaration declaration) {
-                final var kind = declaration.getKind();
-                for (final var declarator : declaration.getDeclarations()) {
-                    final var names = new ArrayList<String>();
-                    collectBoundNames(declarator.getId(), names);
-                    for (final var name : names) {
-                        if (LEXICAL_KINDS.contains(kind)) {
-                            env.declareLexical(name, kind);
-                        } else if (USING_KINDS.contains(kind)) {
-                            env.declareLexical(name, "const");
-                        } else if ("var".equals(kind)) {
-                            env.declareVar(name);
-                        }
-                    }
+        applyPlan(HoistPlan.of(body, InterpreterUtils::collectBoundNames), env);
+    }
+
+    void hoistBlock(BlockStatement block, Environment env) {
+        applyPlan(planFor(block), env);
+    }
+
+    HoistPlan planFor(BlockStatement block) {
+        if (block.getHoistPlan() instanceof HoistPlan cached) {
+            return cached;
+        }
+        final var plan = HoistPlan.of(block.getBody(), InterpreterUtils::collectBoundNames);
+        block.setHoistPlan(plan);
+        return plan;
+    }
+
+    private void applyPlan(HoistPlan plan, Environment env) {
+        for (final var action : plan.actions()) {
+            switch (action) {
+                case HoistPlan.Action.DeclareLexical lexical -> env.declareLexical(lexical.name(), lexical.kind());
+                case HoistPlan.Action.DeclareVar var -> env.declareVar(var.name());
+                case HoistPlan.Action.DeclareFunction function -> {
+                    final var declaration = function.declaration();
+                    final var name = declaration.getName().getName();
+                    env.declareFunction(name,
+                            interpreter.functionFactory.makeFunction(name, declaration.getParams(),
+                                    declaration.getBody(), false, false, declaration.isAsync(),
+                                    declaration.isGenerator(), env, declaration.getSourceText()));
                 }
-            } else if (statement instanceof FunctionDeclaration declaration) {
-                final var name = declaration.getName().getName();
-                final var function = interpreter.functionFactory.makeFunction(name, declaration.getParams(),
-                        declaration.getBody(), false, false, declaration.isAsync(), declaration.isGenerator(), env,
-                        declaration.getSourceText());
-                env.declareFunction(name, function);
             }
         }
     }
@@ -152,9 +155,9 @@ final class EvalDispatch {
 
     JsValue eval(Expression expression, Environment env) {
         return switch (expression.getType()) {
-            case NUMBER_LITERAL -> new JsNumber(((NumberLiteral) expression).getValue().doubleValue());
+            case NUMBER_LITERAL -> ((NumberLiteral) expression).boxed();
             case BIGINT_LITERAL -> new JsBigInt(((BigIntLiteral) expression).getValue());
-            case STRING_LITERAL -> new JsString(((StringLiteral) expression).getValue());
+            case STRING_LITERAL -> ((StringLiteral) expression).boxed();
             case BOOLEAN_LITERAL -> JsBoolean.of(((BooleanLiteral) expression).getValue());
             case NULL_LITERAL -> JsNull.getInstance();
             case UNDEFINED_LITERAL -> JsUndefined.getInstance();

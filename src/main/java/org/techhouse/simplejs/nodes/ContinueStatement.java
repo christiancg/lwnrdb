@@ -10,4 +10,9 @@ public class ContinueStatement extends Statement {
     public Identifier getLabel() {
         return label;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.CONTINUE_STATEMENT;
+    }
 }

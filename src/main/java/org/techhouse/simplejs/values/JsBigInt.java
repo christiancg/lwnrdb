@@ -12,4 +12,9 @@ public final class JsBigInt extends JsValue {
     public BigInteger getValue() {
         return value;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.BIGINT;
+    }
 }

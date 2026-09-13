@@ -31,4 +31,9 @@ public class ExportNamedDeclaration extends Statement {
     public List<ImportAttribute> getAttributes() {
         return attributes;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.EXPORT_NAMED_DECLARATION;
+    }
 }

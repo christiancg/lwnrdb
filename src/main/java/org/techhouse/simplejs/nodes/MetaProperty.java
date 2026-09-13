@@ -16,4 +16,9 @@ public class MetaProperty extends Expression {
     public String getProperty() {
         return property;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.META_PROPERTY;
+    }
 }

@@ -12,4 +12,9 @@ public class SequenceExpression extends Expression {
     public List<Expression> getExpressions() {
         return expressions;
     }
+
+    @Override
+    public NodeType getType() {
+        return NodeType.SEQUENCE_EXPRESSION;
+    }
 }

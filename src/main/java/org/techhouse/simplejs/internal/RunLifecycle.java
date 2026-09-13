@@ -16,6 +16,8 @@ final class RunLifecycle {
         this.interpreter = interpreter;
     }
 
+    private static final long DEADLINE_CHECK_MASK = 0x3FF;
+
     void tick() {
         if (interpreter.instructionsRemaining >= 0) {
             if (interpreter.instructionsRemaining == 0) {
@@ -24,11 +26,17 @@ final class RunLifecycle {
             interpreter.instructionsRemaining--;
         }
         interpreter.instructionsUsed++;
-        if (interpreter.deadlineNanos >= 0 && System.nanoTime() >= interpreter.deadlineNanos) {
-            throw new ScriptTimeoutException(TIMED_OUT_MESSAGE);
-        }
         if (interpreter.cancellation != null && interpreter.cancellation.isCancelled()) {
             throw new ScriptCancelledException("Script was cancelled");
+        }
+        if ((interpreter.instructionsUsed & DEADLINE_CHECK_MASK) == 0) {
+            checkDeadline();
+        }
+    }
+
+    void checkDeadline() {
+        if (interpreter.deadlineNanos >= 0 && System.nanoTime() >= interpreter.deadlineNanos) {
+            throw new ScriptTimeoutException(TIMED_OUT_MESSAGE);
         }
     }
 

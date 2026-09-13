@@ -135,4 +135,9 @@ public final class JsNativeFunction extends JsValue implements JsCallablePropert
     public void setOwnProto(JsValue ownProto) {
         this.ownProto = ownProto;
     }
+
+    @Override
+    public JsValueType getType() {
+        return JsValueType.FUNCTION;
+    }
 }

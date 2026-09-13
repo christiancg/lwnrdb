@@ -12,6 +12,15 @@ public class StringTypeAdapter implements TypeAdapter<String> {
     }
 
     @Override
+    public void toJson(String value, StringBuilder out) {
+        if (value == null) {
+            out.append("null");
+        } else {
+            out.append('"').append(JsonStrings.escape(value)).append('"');
+        }
+    }
+
+    @Override
     public String fromJson(JsonBaseElement value) {
         if (value.getJsonType() == JsonBaseElement.JsonType.STRING) {
             return value.asJsonString().getValue();
