@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -94,7 +95,28 @@ public class TransactionOperationHelperTest {
     }
 
     @Test
-    public void test_lock_timeout_auto_rolls_back_and_returns_409_5() throws Exception {
+    public void test_isAllowedOnAbortedTransaction_whitelist() {
+        for (final var allowed : new OperationType[]{OperationType.ROLLBACK_TRANSACTION,
+                OperationType.COMMIT_TRANSACTION, OperationType.CLOSE_CONNECTION}) {
+            assertTrue(TransactionOperationHelper.isAllowedOnAbortedTransaction(allowed),
+                    allowed + " should be allowed on an aborted transaction");
+        }
+        for (final var blocked : new OperationType[]{OperationType.SAVE, OperationType.BULK_SAVE, OperationType.DELETE,
+                OperationType.FIND_BY_ID, OperationType.AGGREGATE, OperationType.START_TRANSACTION}) {
+            assertFalse(TransactionOperationHelper.isAllowedOnAbortedTransaction(blocked),
+                    blocked + " should be blocked on an aborted transaction");
+        }
+    }
+
+    @Test
+    public void test_abort_in_place_without_a_transaction_is_a_noop() {
+        final var clientId = newClient();
+        TransactionOperationHelper.abortInPlace(clientId);
+        assertNull(clientTracker.getActiveTransaction(clientId));
+    }
+
+    @Test
+    public void test_lock_timeout_aborts_the_transaction_and_refuses_retries() throws Exception {
         final var config = Configuration.getInstance();
         final var originalTimeout = config.getTransactionLockTimeoutMs();
         // Shrink the lock-acquisition timeout so the buffered write aborts quickly instead of waiting
@@ -124,6 +146,12 @@ public class TransactionOperationHelperTest {
         try {
             final var response = processor.processMessage(saveRequest("txn-timeout-1"), clientId);
             assertEquals("409-5", response.getErrorCode());
+            final var aborted = clientTracker.getActiveTransaction(clientId);
+            assertNotNull(aborted);
+            assertTrue(aborted.isAborted());
+            final var retried = processor.processMessage(saveRequest("txn-timeout-1"), clientId);
+            assertEquals("409-9", retried.getErrorCode());
+            processor.processMessage(new RollbackTransactionRequest(), clientId);
             assertNull(clientTracker.getActiveTransaction(clientId));
         } finally {
             release.countDown();

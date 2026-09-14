@@ -59,6 +59,7 @@ public class IndexHelper {
     }
 
     public static void createIndex(String dbName, String collName, String fieldName) {
+        dropIndex(dbName, collName, fieldName);
         final var coll = cache.getWholeCollection(dbName, collName);
         final var entriesToBeIndexed = coll.values().stream().map(DbEntry::getData)
                 .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName))

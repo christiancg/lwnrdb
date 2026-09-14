@@ -50,6 +50,7 @@ public final class TransactionBuffer {
         final var collName = request.getCollectionName();
         return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
             final var object = request.getObject();
+            final var id = TransactionWrites.ensureId(object, request.get_id());
             final var entry = DbEntry.fromJsonObject(dbName, collName, object);
             final var entrySizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
             if (entrySizeError != null) {
@@ -59,7 +60,6 @@ public final class TransactionBuffer {
             if (lockResult != null) {
                 return lockResult;
             }
-            final var id = TransactionWrites.ensureId(object, request.get_id());
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
             final var insert = !TransactionWrites.isVisible(transaction, collId,
                     cache.getPkIndexAndLoadIfNecessary(dbName, collName), id);
@@ -92,12 +92,12 @@ public final class TransactionBuffer {
         return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
             final var seenIds = new HashSet<String>();
             for (final var object : request.getObjects()) {
+                final var id = TransactionWrites.ensureId(object, null);
                 final var entry = DbEntry.fromJsonObject(dbName, collName, object);
                 final var entrySizeError = EntrySizeGuard.check(entry, OperationType.BULK_SAVE);
                 if (entrySizeError != null) {
                     return entrySizeError;
                 }
-                final var id = TransactionWrites.ensureId(object, null);
                 if (!seenIds.add(id)) {
                     return new OperationResponse(OperationType.BULK_SAVE, "Duplicate _id in bulk save request: " + id,
                             ErrorCode.DUPLICATE_ID);

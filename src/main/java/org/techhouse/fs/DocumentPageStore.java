@@ -109,6 +109,16 @@ final class DocumentPageStore {
         return streamPages(dbName, collName).flatMap(map -> map.values().stream());
     }
 
+    long pageFileCount(String dbName, String collName) throws IOException {
+        final var collectionFolder = paths.collectionFolder(dbName, collName).toPath();
+        if (!Files.exists(collectionFolder)) {
+            return 0;
+        }
+        try (var pathStream = Files.list(collectionFolder)) {
+            return pathStream.filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION)).count();
+        }
+    }
+
     DbEntry readEntryFromOpenFile(RandomAccessFile reader, PkIndexEntry pkIndexEntry) throws IOException {
         reader.seek(pkIndexEntry.getPosition());
         final var entryLength = (int) pkIndexEntry.getLength();

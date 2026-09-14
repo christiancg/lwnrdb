@@ -12,10 +12,12 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.TransactionOpFailedException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.DeleteOperationHelper;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.Tx2pcLog;
@@ -23,6 +25,7 @@ import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.resp.OperationResponse;
 
 public final class TransactionRecovery {
     private static final Logger logger = Logger.logFor(TransactionRecovery.class);
@@ -149,6 +152,13 @@ public final class TransactionRecovery {
         return sep > 0 ? recordId.substring(0, sep) : recordId;
     }
 
+    private static void requireApplied(String opType, OperationResponse response) {
+        if (response == null || response.getStatus() == OperationStatus.OK) {
+            return;
+        }
+        throw new TransactionOpFailedException(opType, response.getErrorCode(), response.getMessage());
+    }
+
     public static void applyBufferedOp(AdminTransactionEntry op) throws Exception {
         final var dbName = op.getTargetDb();
         final var collName = op.getTargetColl();
@@ -158,7 +168,7 @@ public final class TransactionRecovery {
                 final var object = op.getPayload();
                 saveRequest.setObject(object);
                 saveRequest.set_id(object.get(Globals.PK_FIELD).asJsonString().getValue());
-                SaveOperationHelper.executeSave(saveRequest);
+                requireApplied(AdminTransactionEntry.OP_TYPE_SAVE, SaveOperationHelper.executeSave(saveRequest));
             }
             case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
                 final var bulkSaveRequest = new BulkSaveRequest(dbName, collName);
@@ -167,7 +177,8 @@ public final class TransactionRecovery {
                     objects.add(element.asJsonObject());
                 }
                 bulkSaveRequest.setObjects(objects);
-                SaveOperationHelper.executeBulkSave(bulkSaveRequest);
+                requireApplied(AdminTransactionEntry.OP_TYPE_BULK_SAVE,
+                        SaveOperationHelper.executeBulkSave(bulkSaveRequest));
             }
             case AdminTransactionEntry.OP_TYPE_DELETE -> {
                 final var deleteRequest = new DeleteRequest(dbName, collName);

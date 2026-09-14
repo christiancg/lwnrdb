@@ -737,6 +737,8 @@ def geo_suite(c):
 # ══════════════════════════════════════════════════════════════════════════
 
 REG_UNICODE = "idxagg_reg_unicode"
+REG_DELIMITER = "idxagg_reg_delimiter"
+REG_IDEMPOTENT = "idxagg_reg_idempotent"
 REG_SINGLE = "idxagg_reg_single"
 REG_CONJ = "idxagg_reg_conj"
 REG_NUMERIC = "idxagg_reg_numeric"
@@ -764,6 +766,60 @@ def probe_non_ascii_indexed_values(c):
               got == expected, detail=f"expected {expected}, got {got}")
     check("re-pointed document no longer answers under its old non-ASCII value",
           "u3" not in reg_filter(c, REG_UNICODE, "city", "plain"))
+
+
+def probe_index_values_containing_delimiters(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_DELIMITER})
+    values = {
+        "d1": "line\nbreak",
+        "d2": "carriage\rreturn",
+        "d3": "unitseparator",
+        "d4": "back\\slash",
+        "d5": "plain",
+    }
+    for doc_id, note in values.items():
+        save_doc(c, REG_DELIMITER, {"_id": doc_id, "note": note})
+
+    for doc_id, note in values.items():
+        got = reg_filter(c, REG_DELIMITER, "note", note)
+        check(f"{doc_id}: unindexed scan finds {note!r}", got == [doc_id], detail=f"got {got}")
+
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_DELIMITER, "fieldName": "note"})
+    wait_for_indexes(c, [(REG_DELIMITER, "note")])
+    wait_for_background()
+
+    for doc_id, note in values.items():
+        got = reg_filter(c, REG_DELIMITER, "note", note)
+        check(f"{doc_id}: an index value containing a delimiter stays queryable ({note!r})",
+              got == [doc_id], detail=f"expected ['{doc_id}'], got {got}")
+
+
+def probe_repeated_create_index_is_idempotent(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_IDEMPOTENT})
+    for doc_id, status in (("i0", "active"), ("i1", "active"), ("i2", "archived")):
+        save_doc(c, REG_IDEMPOTENT, {"_id": doc_id, "status": status})
+
+    baseline_eq = reg_filter(c, REG_IDEMPOTENT, "status", "active")
+    baseline_ne = reg_filter(c, REG_IDEMPOTENT, "status", "active", op="NOT_EQUALS")
+
+    for attempt in range(3):
+        c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_IDEMPOTENT,
+                "fieldName": "status"})
+        wait_for_indexes(c, [(REG_IDEMPOTENT, "status")])
+        wait_for_background()
+        got_eq = reg_filter(c, REG_IDEMPOTENT, "status", "active")
+        got_ne = reg_filter(c, REG_IDEMPOTENT, "status", "active", op="NOT_EQUALS")
+        check(f"EQUALS is unchanged after CREATE_INDEX x{attempt + 1}", got_eq == baseline_eq,
+              detail=f"expected {baseline_eq}, got {got_eq}")
+        check(f"NOT_EQUALS is unchanged after CREATE_INDEX x{attempt + 1}", got_ne == baseline_ne,
+              detail=f"expected {baseline_ne}, got {got_ne}")
+
+    counted = agg(c, REG_IDEMPOTENT, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "status", "value": "active"}},
+        {"type": "COUNT"}])
+    got = ((counted.get("results") or [{}])[0]).get("count")
+    check("index-only COUNT is not inflated by repeated CREATE_INDEX", got == len(baseline_ne),
+          detail=f"expected {len(baseline_ne)}, got {got}")
 
 
 def probe_single_valued_index_ranges(c):
@@ -859,9 +915,12 @@ def probe_low_cardinality_numeric_index(c):
 
 
 def regression_suite(c):
-    section("Correctness regressions: non-ASCII index values, single-valued index ranges, "
-            "low-cardinality numeric indexes, conjunctions over a filtered stream")
+    section("Correctness regressions: non-ASCII index values, index values containing the file's own "
+            "delimiters, repeated CREATE_INDEX, single-valued index ranges, low-cardinality numeric "
+            "indexes, conjunctions over a filtered stream")
     probe_non_ascii_indexed_values(c)
+    probe_index_values_containing_delimiters(c)
+    probe_repeated_create_index_is_idempotent(c)
     probe_single_valued_index_ranges(c)
     probe_low_cardinality_numeric_index(c)
     probe_conjunction_after_a_filter_step(c)

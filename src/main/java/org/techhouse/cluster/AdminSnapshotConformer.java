@@ -291,15 +291,15 @@ final class AdminSnapshotConformer {
             }
             if (fs.deleteDatabase(dbName)) {
                 cache.evictDatabase(dbName);
-                for (final var collName : lockedColls) {
-                    locks.removeLock(dbName, collName);
-                }
                 AdminOperationHelper.deleteDatabaseEntry(dbName);
                 listenManager.unregisterAllForDatabase(dbName);
             }
         } finally {
             for (final var collName : lockedColls) {
                 locks.release(dbName, collName);
+            }
+            for (final var collName : lockedColls) {
+                locks.removeLock(dbName, collName);
             }
         }
     }

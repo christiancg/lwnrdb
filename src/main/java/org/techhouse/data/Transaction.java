@@ -24,6 +24,7 @@ public class Transaction {
     // LinkedHashMap, not HashMap: inserts must stream in a stable order after the committed documents.
     private final Map<String, LinkedHashMap<String, JsonObject>> overlay = new HashMap<>();
     private final Map<Long, Set<String>> insertedIdsByOp = new HashMap<>();
+    private boolean aborted;
 
     public Transaction(UUID transactionId, UUID clientId) {
         this.transactionId = transactionId;
@@ -36,6 +37,14 @@ public class Transaction {
 
     public int getTriggerDepth() {
         return triggerDepth;
+    }
+
+    public boolean isAborted() {
+        return aborted;
+    }
+
+    public void markAborted() {
+        this.aborted = true;
     }
 
     public void setTriggerDepth(int triggerDepth) {

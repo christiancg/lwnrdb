@@ -26,8 +26,9 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
     }
 
     public String toFileEntry() {
-        return value + Globals.INDEX_ENTRY_SEPARATOR + position + Globals.INDEX_ENTRY_SEPARATOR + length
-                + Globals.INDEX_ENTRY_SEPARATOR + page + Globals.INDEX_ENTRY_SEPARATOR + version;
+        return FieldIndexEntry.escapeIndexToken(value) + Globals.INDEX_ENTRY_SEPARATOR + position
+                + Globals.INDEX_ENTRY_SEPARATOR + length + Globals.INDEX_ENTRY_SEPARATOR + page
+                + Globals.INDEX_ENTRY_SEPARATOR + version;
     }
 
     public static PkIndexEntry fromIndexFileEntry(String databaseName, String collectionName, String line) {
@@ -38,7 +39,8 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
         final var secondLastPipe = cleaned.lastIndexOf(sep, lastPipe - 1);
         final var thirdLastPipe = cleaned.lastIndexOf(sep, secondLastPipe - 1);
         final var fourthLastPipe = cleaned.lastIndexOf(sep, thirdLastPipe - 1);
-        return new PkIndexEntry(databaseName, collectionName, cleaned.substring(0, fourthLastPipe),
+        return new PkIndexEntry(databaseName, collectionName,
+                FieldIndexEntry.unescapeIndexToken(cleaned.substring(0, fourthLastPipe)),
                 Long.parseLong(cleaned.substring(fourthLastPipe + sep.length(), thirdLastPipe)),
                 Long.parseLong(cleaned.substring(thirdLastPipe + sep.length(), secondLastPipe)),
                 Long.parseLong(cleaned.substring(secondLastPipe + sep.length(), lastPipe)),

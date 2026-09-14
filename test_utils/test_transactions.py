@@ -245,6 +245,47 @@ def test_table_locking_blocks_other_clients(c):
                    f"resumed={resumed!r}")
 
 
+def test_lock_timeout_aborts_and_refuses_retries(c):
+    section("A lock timeout aborts the transaction instead of silently ending it")
+
+    check_status("holder: START_TRANSACTION", start_txn(c), "OK")
+    check_status("holder: SAVE takes the collection write lock", save(c, {"_id": "to-holder", "v": 1}), "OK")
+
+    with authed_conn() as bc:
+        check_status("waiter: START_TRANSACTION", start_txn(bc), "OK")
+        timed_out = save(bc, {"_id": "to-waiter", "v": 1})
+        check("waiter: the contended write times out with 409-5",
+              timed_out.get("errorCode") == "409-5", f"got {timed_out}")
+
+        retried = save(bc, {"_id": "to-waiter", "v": 2})
+        check("waiter: retrying the statement is refused rather than silently committed standalone",
+              retried.get("errorCode") == "409-9", f"got {retried}")
+
+        committed = commit_txn(bc)
+        check("waiter: committing an aborted transaction fails",
+              committed.get("errorCode") == "409-9", f"got {committed}")
+
+    check_status("holder: COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    with authed_conn() as reader:
+        orphan = reader.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "to-waiter"})
+        check("the refused write never landed as a standalone document",
+              orphan.get("status") == "NOT_FOUND", f"got {orphan}")
+
+
+def test_entry_size_is_checked_after_the_id_is_assigned(c):
+    section("An oversized-once-identified document is refused at buffer time")
+
+    # 1Mb is the shipped maxEntrySize. A document that fits only until the generated _id is
+    # injected used to pass the buffer check and then be dropped at commit, which reported OK.
+    padding = "x" * (1024 * 1024 - 30)
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    buffered = save(c, {"pad": padding})
+    check("the buffer refuses it rather than reporting success",
+          buffered.get("errorCode") == "400-2", f"got errorCode={buffered.get('errorCode')!r}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+
 def test_auto_rollback_on_disconnect():
     section("Disconnecting with an open transaction auto-rolls-back")
 
@@ -303,6 +344,10 @@ def main():
         test_ddl_forbidden_during_transaction(c)
     with authed_conn() as (c):
         test_table_locking_blocks_other_clients(c)
+    with authed_conn() as (c):
+        test_lock_timeout_aborts_and_refuses_retries(c)
+    with authed_conn() as (c):
+        test_entry_size_is_checked_after_the_id_is_assigned(c)
     test_auto_rollback_on_disconnect()
 
     with authed_conn() as (c):

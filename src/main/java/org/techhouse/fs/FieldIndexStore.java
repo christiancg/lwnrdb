@@ -43,10 +43,10 @@ final class FieldIndexStore {
             FieldIndexEntry<String> insertedEntry, FieldIndexEntry<String> removedEntry) throws IOException {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, kind.label());
         if (removedEntry != null) {
-            removeIndexLine(indexFile, removedEntry.getValue(), removedEntry);
+            removeIndexLine(indexFile, getStringValue(removedEntry), removedEntry);
         }
         if (insertedEntry != null) {
-            upsertIndexLine(indexFile, insertedEntry.getValue(), insertedEntry);
+            upsertIndexLine(indexFile, getStringValue(insertedEntry), insertedEntry);
         }
     }
 
@@ -209,7 +209,7 @@ final class FieldIndexStore {
     }
 
     private <K> String getStringValue(FieldIndexEntry<K> entry) {
-        return FieldIndexEntry.indexKeyOf(entry.getValue());
+        return FieldIndexEntry.fileKeyOf(entry.getValue());
     }
 
     private void shiftOtherEntries(RandomAccessFile writer, byte[] wholeFile, int indexOfExisting) throws IOException {

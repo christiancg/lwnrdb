@@ -108,6 +108,10 @@ All messages are line-delimited JSON sent over a TCP connection. Every request m
 ```json
 {"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","object":{"_id":"user-1","name":"Alice"}}
 ```
+The id may also be sent beside the object instead of inside it; the two forms address the same document. When both are present the object's `_id` wins.
+```json
+{"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","_id":"user-1","object":{"name":"Alice"}}
+```
 
 #### `BULK_SAVE`
 At least one object required.
@@ -405,6 +409,8 @@ The connection's own reads (`FIND_BY_ID`, `AGGREGATE`) see its buffered writes (
 See [Concurrency & locking](#concurrency--locking).
 
 While a transaction is open only `SAVE`, `BULK_SAVE`, `DELETE`, `FIND_BY_ID`, `AGGREGATE`, `COMMIT_TRANSACTION`, `ROLLBACK_TRANSACTION` and `CLOSE_CONNECTION` are accepted; any other operation is rejected with `409-6`. 
+
+If a buffered write cannot take a collection's write lock within `transactionLockTimeoutMs` the transaction is aborted: that statement answers `409-5`, its buffered writes are discarded and its locks released. The transaction stays open but unusable — every further `SAVE`, `BULK_SAVE`, `DELETE`, `FIND_BY_ID` and `AGGREGATE` answers `409-9`, and so does `COMMIT_TRANSACTION`. Send `ROLLBACK_TRANSACTION` to end it and start again. This is deliberate: a retried statement must never silently commit on its own outside the transaction the client still believes it is in.
 
 If the connection closes with a transaction still open, it is automatically rolled back.
 
@@ -1112,6 +1118,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-6` | `ERROR` | Operation not allowed while a transaction is open |
 | `409-7` | `ERROR` | Transaction aborted: a participant could not prepare |
 | `409-8` | `ERROR` | The procedure, trigger or schedule was modified by someone else |
+| `409-9` | `ERROR` | The transaction was aborted and must be rolled back before continuing |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |

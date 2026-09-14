@@ -75,6 +75,10 @@ public class OperationProcessor {
                 && !TransactionOperationHelper.isAllowedDuringTransaction(operationRequest.getType())) {
             return new OperationResponse(operationRequest.getType(), ErrorCode.OPERATION_NOT_ALLOWED_IN_TRANSACTION);
         }
+        if (activeTransaction != null && activeTransaction.isAborted()
+                && !TransactionOperationHelper.isAllowedOnAbortedTransaction(operationRequest.getType())) {
+            return new OperationResponse(operationRequest.getType(), ErrorCode.TRANSACTION_NOT_USABLE);
+        }
         final var adminGuard = ClusterAdminHelper.guard(operationRequest);
         if (adminGuard != null) {
             return adminGuard;
@@ -325,7 +329,8 @@ public class OperationProcessor {
             final var response = ClusterWriteHelper.afterSave(dbName, collName,
                     SaveOperationHelper.executeSave(saveRequest));
             if (response instanceof SaveResponse saveResponse) {
-                TriggerHelper.afterWriteIds(dbName, collName, isInsert ? EventType.CREATED : EventType.UPDATED,
+                TriggerHelper.afterWriteIds(dbName, collName,
+                        saveResponse.isInserted() ? EventType.CREATED : EventType.UPDATED,
                         List.of(saveResponse.get_id()), actingUser, saveRequest.getTriggerDepth());
             }
             return response;

@@ -52,6 +52,13 @@ public final class TransactionOperationHelper {
         };
     }
 
+    public static boolean isAllowedOnAbortedTransaction(OperationType type) {
+        return switch (type) {
+            case ROLLBACK_TRANSACTION, COMMIT_TRANSACTION, CLOSE_CONNECTION -> true;
+            default -> false;
+        };
+    }
+
     public static OperationResponse start(UUID clientId) {
         return start(clientId, UUID.randomUUID(), 0);
     }
@@ -159,6 +166,11 @@ public final class TransactionOperationHelper {
         if (transaction == null) {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
         }
+        if (transaction.isAborted()) {
+            clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionState(clientId);
+            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_NOT_USABLE);
+        }
         try {
             // A clustered commit must still hold a write quorum: abort before applying if it was lost.
             if (coordinator.hasNotTransactionQuorum()) {
@@ -192,6 +204,21 @@ public final class TransactionOperationHelper {
             releaseHeldLocks(transaction);
             clientTracker.clearActiveTransaction(clientId);
             clientTracker.clearTransactionState(clientId);
+        }
+    }
+
+    public static void abortInPlace(UUID clientId) {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        if (transaction == null) {
+            return;
+        }
+        transaction.markAborted();
+        try {
+            AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
+        } catch (Exception e) {
+            logger.error("Failed to discard the buffered operations of an aborted transaction", e);
+        } finally {
+            releaseHeldLocks(transaction);
         }
     }
 
@@ -298,15 +325,15 @@ public final class TransactionOperationHelper {
     }
 
     public static OperationResponse bufferSave(SaveRequest request, Transaction transaction) {
-        return TransactionBuffer.bufferSave(request, transaction, () -> rollback(transaction.getClientId()));
+        return TransactionBuffer.bufferSave(request, transaction, () -> abortInPlace(transaction.getClientId()));
     }
 
     public static OperationResponse bufferBulkSave(BulkSaveRequest request, Transaction transaction) {
-        return TransactionBuffer.bufferBulkSave(request, transaction, () -> rollback(transaction.getClientId()));
+        return TransactionBuffer.bufferBulkSave(request, transaction, () -> abortInPlace(transaction.getClientId()));
     }
 
     public static OperationResponse bufferDelete(DeleteRequest request, Transaction transaction) {
-        return TransactionBuffer.bufferDelete(request, transaction, () -> rollback(transaction.getClientId()));
+        return TransactionBuffer.bufferDelete(request, transaction, () -> abortInPlace(transaction.getClientId()));
     }
 
     public static Stream<JsonObject> applyOverlayToStream(Transaction transaction, String collId,

@@ -113,10 +113,11 @@ public final class AdminPageHelper {
             final var size = p.byteSize();
             final var target = cache.selectPageForInsert(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName, size,
                     pendingPageBytes);
-            p.setPage(target);
+            p.setStoragePage(target);
             pendingPageBytes.merge(target, (long) size, Long::sum);
         }
-        final var inserted = fs.bulkInsertIntoCollection(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName, newPages);
+        final var inserted = fs.bulkInsertIntoCollection(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName, newPages,
+                AdminPageEntry::getStoragePage);
         final var pkIdxList = cache.getAdminPagePkIndexes(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName);
         for (var ie : inserted) {
             pkIdxList.add(ie.getIndex());
@@ -162,10 +163,12 @@ public final class AdminPageHelper {
             throws IOException {
         final var pkIdxList = cache.getAdminPagePkIndexes(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName);
         final var indexedEntriesToUpdate = new ArrayList<IndexedDbEntry>();
+        final var firstTouchPages = new ArrayList<AdminPageEntry>();
         for (var touchedPage : touchedPages) {
             final var matchingPkIdx = pkIdxList.stream().filter(pk -> pk.getValue().equals(touchedPage.get_id()))
                     .findFirst().orElse(null);
             if (matchingPkIdx == null) {
+                firstTouchPages.add(touchedPage);
                 continue;
             }
             final var indexedEntry = new IndexedDbEntry();
@@ -187,6 +190,9 @@ public final class AdminPageHelper {
                 pkIdxList.add(ie.getIndex());
             }
             trackInMemoryAdminPagesForUpdate(pagesPerCollectionName, updated);
+        }
+        if (!firstTouchPages.isEmpty()) {
+            insertAdminPages(pagesPerCollectionName, firstTouchPages);
         }
     }
 

@@ -13,10 +13,12 @@ import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.WriteVersion;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -39,10 +41,33 @@ public final class SaveOperationHelper {
     private SaveOperationHelper() {
     }
 
+    private static OperationResponse reconcileSaveId(SaveRequest saveRequest) {
+        final var object = saveRequest.getObject();
+        final var requestId = saveRequest.get_id();
+        final var objectId = object.get(Globals.PK_FIELD) instanceof JsonString jsonString
+                ? jsonString.getValue()
+                : null;
+        if (requestId != null && objectId != null && !requestId.equals(objectId)) {
+            return new OperationResponse(OperationType.SAVE,
+                    "The _id sent with the request does not match the _id inside the object",
+                    ErrorCode.VALIDATION_ERROR);
+        }
+        if (requestId != null && objectId == null) {
+            object.addProperty(Globals.PK_FIELD, requestId);
+        } else if (requestId == null && objectId != null) {
+            saveRequest.set_id(objectId);
+        }
+        return null;
+    }
+
     // The caller must already hold the collection write lock.
     public static OperationResponse executeSave(SaveRequest saveRequest) throws Exception {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
+        final var idError = reconcileSaveId(saveRequest);
+        if (idError != null) {
+            return idError;
+        }
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
         entry.setVersion(WriteVersion.next());
         final var sizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
@@ -89,7 +114,7 @@ public final class SaveOperationHelper {
         taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
         listenManager.markDirty(dbName, collName);
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
-        return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue());
+        return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue(), eventType == EventType.CREATED);
     }
 
     // The caller must already hold the collection write lock.

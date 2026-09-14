@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
@@ -220,9 +221,14 @@ public class FileSystem {
 
     public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName,
             final List<T> entries) throws IOException {
+        return bulkInsertIntoCollection(dbName, collName, entries, DbEntry::getPage);
+    }
+
+    public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName,
+            final List<T> entries, final Function<? super T, Long> storagePageResolver) throws IOException {
         final var indexEntries = new ArrayList<IndexedDbEntry>();
         final var pkEntriesToIndex = new ArrayList<PkIndexEntry>();
-        final var entrySet = entries.stream().collect(Collectors.groupingBy(DbEntry::getPage)).entrySet();
+        final var entrySet = entries.stream().collect(Collectors.groupingBy(storagePageResolver)).entrySet();
         for (var groupedEntry : entrySet) {
             final var page = groupedEntry.getKey();
             final var pageEntries = groupedEntry.getValue();
@@ -433,6 +439,10 @@ public class FileSystem {
 
     public Stream<DbEntry> streamEntries(String dbName, String collName) throws IOException {
         return documentPageStore.streamEntries(dbName, collName);
+    }
+
+    public long pageFileCount(String dbName, String collName) throws IOException {
+        return documentPageStore.pageFileCount(dbName, collName);
     }
 
 }

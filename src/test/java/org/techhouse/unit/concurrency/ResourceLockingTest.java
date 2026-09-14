@@ -171,6 +171,71 @@ public class ResourceLockingTest {
         assertFalse(locks(rl).containsKey(identifier));
     }
 
+    @Test
+    public void test_remove_lock_while_held_does_not_strand_a_waiter() throws Exception {
+        final var rl = new ResourceLocking();
+        rl.lock("db", "held");
+        final var acquired = new CountDownLatch(1);
+        final var waiter = new Thread(() -> {
+            try {
+                rl.lock("db", "held");
+                acquired.countDown();
+                rl.release("db", "held");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        waiter.start();
+        Thread.sleep(200);
+        assertEquals(1, acquired.getCount());
+        rl.removeLock("db", "held");
+        rl.release("db", "held");
+        assertTrue(acquired.await(5, TimeUnit.SECONDS), "the waiter must acquire once the holder releases");
+        waiter.join(5000);
+    }
+
+    @Test
+    public void test_remove_lock_while_held_preserves_mutual_exclusion() throws Exception {
+        final var rl = new ResourceLocking();
+        rl.lock("db", "excl");
+        rl.removeLock("db", "excl");
+        final var stolen = new AtomicBoolean(true);
+        final var other = new Thread(() -> stolen.set(rl.tryLockWrite("db", "excl")));
+        other.start();
+        other.join(5000);
+        assertFalse(stolen.get(), "another thread must not acquire a collection lock that is still held");
+        rl.release("db", "excl");
+    }
+
+    @Test
+    public void test_remove_lock_is_a_noop_while_a_waiter_is_queued() throws Exception {
+        final var rl = new ResourceLocking();
+        rl.lock("db", "queued");
+        final var waiter = new Thread(() -> {
+            try {
+                rl.lock("db", "queued");
+                rl.release("db", "queued");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        waiter.start();
+        Thread.sleep(200);
+        rl.removeLock("db", "queued");
+        assertTrue(locks(rl).containsKey(Cache.getCollectionIdentifier("db", "queued")));
+        rl.release("db", "queued");
+        waiter.join(5000);
+    }
+
+    @Test
+    public void test_remove_lock_evicts_when_unheld_and_unqueued() throws Exception {
+        final var rl = new ResourceLocking();
+        rl.lock("db", "free");
+        rl.release("db", "free");
+        rl.removeLock("db", "free");
+        assertFalse(locks(rl).containsKey(Cache.getCollectionIdentifier("db", "free")));
+    }
+
     // An interrupted read-lock acquisition has to release the locks it already took: the caller only
     // ever releases the returned list, so anything still held would be stranded for good.
     @Test

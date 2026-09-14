@@ -48,6 +48,8 @@ public enum ErrorCode {
     OPERATION_NOT_ALLOWED_IN_TRANSACTION("409-6", "Operation not allowed while a transaction is open", OperationStatus.ERROR),
     TRANSACTION_ABORTED("409-7", "Transaction aborted: a participant could not prepare", OperationStatus.ERROR),
     PROCEDURE_VERSION_CONFLICT("409-8", "The procedure or trigger was modified by someone else", OperationStatus.ERROR),
+    TRANSACTION_NOT_USABLE("409-9", "The transaction was aborted and must be rolled back before continuing",
+            OperationStatus.ERROR),
     NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection", OperationStatus.ERROR),
     CROSS_OWNER_TRANSACTION("421-2", "A transaction may only touch collections owned by a single node", OperationStatus.ERROR),
     AUTHENTICATION_ERROR("500-1", "Error during authentication", OperationStatus.ERROR),

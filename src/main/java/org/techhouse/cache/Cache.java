@@ -152,7 +152,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName) throws IOException {
         final var collPages = adminCache.getAdminPageEntries(dbName, collName);
-        if (collPages == null || collPages.isEmpty()) {
+        if (collPages == null || collPages.isEmpty() || collPages.size() < fs.pageFileCount(dbName, collName)) {
             return fs.streamEntries(dbName, collName);
         }
         final var maxPageBytes = configuration.getMaxPageSize();
