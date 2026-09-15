@@ -227,12 +227,18 @@ public class ClusterRouter {
             }
             logger.warning("Owner " + ownerAddress + " rejected a forwarded request: " + response.getErrorMessage());
             return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
+        } catch (PeerUnreachableException e) {
+            if (READS.contains(type) && clusterConfig.readFallbackToLocal()) {
+                return null;
+            }
+            logger.warning("Could not reach owner " + ownerAddress + ": " + e.getMessage());
+            return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
         } catch (Exception e) {
             if (READS.contains(type) && clusterConfig.readFallbackToLocal()) {
                 return null;
             }
-            logger.warning("Failed to forward request to owner " + ownerAddress + ": " + e.getMessage());
-            return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
+            logger.warning("Owner " + ownerAddress + " did not answer a forwarded request: " + e.getMessage());
+            return eJson.toJson(new OperationResponse(type, ErrorCode.WRITE_OUTCOME_UNKNOWN));
         }
     }
 }

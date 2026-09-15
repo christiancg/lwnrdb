@@ -1,5 +1,7 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.net.InetAddress;
 import java.net.Socket;
 import java.util.UUID;
@@ -17,8 +19,6 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class TransactionEntrySizeTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);

@@ -140,7 +140,7 @@ public class AntiEntropyServiceTest {
     @Test
     public void test_reconcile_applies_newer_tombstone_from_peer() throws Exception {
         seed();
-        final var tombstoneVersion = System.currentTimeMillis() + 1_000_000L;
+        final var tombstoneVersion = HybridClock.pack(System.currentTimeMillis() + 1_000_000L, 0);
         final var pool = mock(PeerConnectionPool.class);
         when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
             final var response = new ClusterMessage();
@@ -269,8 +269,8 @@ public class AntiEntropyServiceTest {
     @Test
     public void test_reconcile_garbage_collects_expired_tombstones() throws Exception {
         final var retention = Configuration.getInstance().getTombstoneRetentionMs();
-        final var expired = System.currentTimeMillis() - (2L * retention);
-        final var recent = System.currentTimeMillis();
+        final var expired = HybridClock.pack(System.currentTimeMillis() - (2L * retention), 0);
+        final var recent = HybridClock.pack(System.currentTimeMillis(), 0);
         fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "old", expired);
         fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "recent", recent);
         injectPeer(emptyDigestPool());

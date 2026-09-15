@@ -105,6 +105,24 @@ public final class ConfigurationValidator {
             errors.add("clusterSecret must be a non-blank string when clusterEnabled is true");
         }
         validateSeeds(configs.get("clusterSeeds"), errors);
+        validateExpectedSize(configs, errors);
+        validateDeadEviction(configs, errors);
+    }
+
+    private static void validateExpectedSize(Map<String, String> configs, List<String> errors) {
+        final var expectedSize = parseIntOrNull(configs.get("clusterExpectedSize"));
+        if (expectedSize != null && expectedSize < 2 && !isBlank(configs.get("clusterSeeds"))) {
+            errors.add("clusterExpectedSize (" + expectedSize
+                    + ") must be at least 2 when clusterSeeds names other nodes");
+        }
+    }
+
+    private static void validateDeadEviction(Map<String, String> configs, List<String> errors) {
+        final var dead = parseLongOrNull(configs.get("deadTimeoutMs"));
+        final var eviction = parseLongOrNull(configs.get("deadEvictionMs"));
+        if (dead != null && eviction != null && eviction <= dead) {
+            errors.add("deadEvictionMs (" + eviction + ") must be greater than deadTimeoutMs (" + dead + ")");
+        }
     }
 
     private static boolean isBlank(String value) {

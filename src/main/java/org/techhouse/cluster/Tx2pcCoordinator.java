@@ -59,8 +59,14 @@ public class Tx2pcCoordinator {
         if (local) {
             TransactionOperationHelper.commitPrepared(clientId);
         }
-        sendToAll(remotes, ClusterMessageType.COMMIT_TX, sessionId, dtxId, ClusterMessageType.COMMIT_TX_ACK, null);
-        deleteCoordinatorMarkerQuietly(dtxId);
+        final var allAcked = sendToAll(remotes, ClusterMessageType.COMMIT_TX, sessionId, dtxId,
+                ClusterMessageType.COMMIT_TX_ACK, null);
+        if (allAcked) {
+            deleteCoordinatorMarkerQuietly(dtxId);
+        } else {
+            logger.warning("Not every participant acknowledged the commit of " + dtxId
+                    + "; keeping the coordinator marker so recovery can re-drive it");
+        }
         finishEdge(clientId, local);
         return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
     }

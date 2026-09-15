@@ -301,6 +301,40 @@ public class ConfigurationValidatorTest {
     }
 
     @Test
+    public void test_seeded_cluster_requires_expectedSize_of_at_least_two(@TempDir Path tempDir) {
+        final var config = ConfigFixture.clusterEnabled(tempDir);
+        config.put("clusterExpectedSize", "1");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("clusterExpectedSize")),
+                "a seeded cluster with expectedSize 1 lets a partitioned node satisfy its own quorum: " + errors);
+    }
+
+    @Test
+    public void test_unseeded_single_node_cluster_still_starts(@TempDir Path tempDir) {
+        final var config = ConfigFixture.clusterEnabled(tempDir);
+        config.put("clusterExpectedSize", "1");
+        config.put("clusterSeeds", "");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
+    public void test_deadEvictionMs_must_exceed_deadTimeoutMs(@TempDir Path tempDir) {
+        final var config = ConfigFixture.clusterEnabled(tempDir);
+        config.put("deadTimeoutMs", "15000");
+        config.put("deadEvictionMs", "15000");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("deadEvictionMs")), errors.toString());
+    }
+
+    @Test
+    public void test_a_dead_eviction_grace_above_the_dead_timeout_is_valid(@TempDir Path tempDir) {
+        final var config = ConfigFixture.clusterEnabled(tempDir);
+        config.put("deadTimeoutMs", "15000");
+        config.put("deadEvictionMs", "86400000");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
     public void test_zero_script_admission_bounds_are_valid(@TempDir Path tempDir) {
         final var config = baseValid(tempDir);
         config.put("maxConcurrentScripts", "0");

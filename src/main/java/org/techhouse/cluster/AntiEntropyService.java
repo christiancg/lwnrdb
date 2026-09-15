@@ -77,11 +77,12 @@ public class AntiEntropyService implements MembershipListener {
     public AntiEntropyPayload buildDigest(String dbName, String collName, String peerSummary) throws Exception {
         final var payload = new AntiEntropyPayload(dbName, collName);
         final var entries = new ArrayList<DigestEntry>();
+        final var selfNodeId = selfNodeId();
         for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
-            entries.add(new DigestEntry(entry.getValue(), entry.getVersion(), false));
+            entries.add(new DigestEntry(entry.getValue(), entry.getVersion(), false, selfNodeId));
         }
         for (final var tombstone : fs.readTombstones(dbName, collName).entrySet()) {
-            entries.add(new DigestEntry(tombstone.getKey(), tombstone.getValue(), true));
+            entries.add(new DigestEntry(tombstone.getKey(), tombstone.getValue(), true, selfNodeId));
         }
         final var summary = summaryOf(entries);
         payload.setSummary(summary);
@@ -127,9 +128,10 @@ public class AntiEntropyService implements MembershipListener {
         }
         final var localTombstones = fs.readTombstones(dbName, collName);
 
+        final var selfNodeId = selfNodeId();
         final var best = new HashMap<String, Best>();
-        localLive.forEach((id, version) -> merge(best, id, version, false, null));
-        localTombstones.forEach((id, version) -> merge(best, id, version, true, null));
+        localLive.forEach((id, version) -> merge(best, id, version, false, null, selfNodeId));
+        localTombstones.forEach((id, version) -> merge(best, id, version, true, null, selfNodeId));
 
         final var localEntries = new ArrayList<DigestEntry>(localLive.size() + localTombstones.size());
         localLive.forEach((id, version) -> localEntries.add(new DigestEntry(id, version, false)));
@@ -143,7 +145,8 @@ public class AntiEntropyService implements MembershipListener {
                 continue;
             }
             for (final var digestEntry : response.getDigest()) {
-                merge(best, digestEntry.getId(), digestEntry.getVersion(), digestEntry.isDeleted(), member.address());
+                merge(best, digestEntry.getId(), digestEntry.getVersion(), digestEntry.isDeleted(), member.address(),
+                        digestEntry.getNodeId());
             }
         }
 
@@ -186,16 +189,34 @@ public class AntiEntropyService implements MembershipListener {
         if (retention <= 0) {
             return;
         }
-        fs.compactTombstones(dbName, collName, System.currentTimeMillis() - retention);
+        fs.compactTombstones(dbName, collName, HybridClock.pack(System.currentTimeMillis() - retention, 0));
     }
 
-    private void merge(Map<String, Best> best, String id, long version, boolean deleted, NodeAddress source) {
+    private void merge(Map<String, Best> best, String id, long version, boolean deleted, NodeAddress source,
+            String nodeId) {
         final var current = best.get(id);
-        // Higher version wins; on an equal version a tombstone beats a live document (delete wins ties).
-        if (current == null || version > current.version
-                || (version == current.version && deleted && !current.deleted)) {
-            best.put(id, new Best(version, deleted, source));
+        if (current == null || wins(version, deleted, nodeId, current)) {
+            best.put(id, new Best(version, deleted, source, nodeId));
         }
+    }
+
+    private String selfNodeId() {
+        final var self = membershipService.getSelf();
+        return self == null ? null : self.getNodeId();
+    }
+
+    private static boolean wins(long version, boolean deleted, String nodeId, Best current) {
+        if (version != current.version()) {
+            return version > current.version();
+        }
+        if (deleted != current.deleted()) {
+            return deleted;
+        }
+        final var currentNodeId = current.nodeId();
+        if (nodeId == null || currentNodeId == null) {
+            return false;
+        }
+        return nodeId.compareTo(currentNodeId) > 0;
     }
 
     private AntiEntropyPayload requestDigest(NodeAddress address, String dbName, String collName, String summary) {
@@ -234,6 +255,6 @@ public class AntiEntropyService implements MembershipListener {
         return new ClusterMessage(null, type, clusterConfig.secret(), membershipService.getSelf(), null);
     }
 
-    private record Best(long version, boolean deleted, NodeAddress source) {
+    private record Best(long version, boolean deleted, NodeAddress source, String nodeId) {
     }
 }

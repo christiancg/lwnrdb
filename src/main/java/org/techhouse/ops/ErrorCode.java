@@ -91,7 +91,9 @@ public enum ErrorCode {
     ADMIN_SYNCING("503-5", "Admin coordinator is synchronizing, retry shortly", OperationStatus.ERROR),
     SCRIPT_CONCURRENCY_LIMIT("503-6", "Too many scripts running, retry shortly", OperationStatus.ERROR),
     SCRIPT_OUTCOME_UNKNOWN("503-7", "The node the script was placed on did not report an outcome; "
-            + "it was not run again in case it already had", OperationStatus.ERROR);
+            + "it was not run again in case it already had", OperationStatus.ERROR),
+    WRITE_OUTCOME_UNKNOWN("503-8", "The collection's owner did not report an outcome; the write may already "
+            + "have been applied, so retrying is only safe for an idempotent write", OperationStatus.ERROR);
     // @formatter:on
 
     private final String code;

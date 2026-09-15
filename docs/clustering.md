@@ -18,9 +18,32 @@ There is **no single master**. Every collection is consistent-hashed to an **own
 and ownership is spread across all nodes — one owner per collection. The owner is both the
 collection's **cache home** (reads route there) and its **write coordinator** (writes route
 there, are serialized by the existing per-collection lock, then replicated). A client may
-connect to **any** node, which transparently routes to the owner. Because each collection
-has exactly one serializing owner at a time, concurrent writes to the same document never
-conflict, preserving the engine's linearizable-per-collection guarantees.
+connect to **any** node, which transparently routes to the owner.
+
+### What the cluster actually guarantees
+
+The delivered model is **eventual consistency with per-document last-write-wins**, not
+linearizability. Ownership is derived from each node's own gossip view, and nothing agrees on a
+total order of views, so two nodes can briefly disagree about who owns a collection.
+
+Three mechanisms bound the damage rather than eliminate the disagreement:
+
+- **A hybrid logical clock** (`cluster/HybridClock`) supplies every write version: 48 bits of
+  physical milliseconds and 16 bits of logical counter packed into one `long`, seeded at startup
+  from the highest version on disk and advanced by every version received from a peer. This is
+  what makes "newer" well-defined across nodes and across restarts.
+- **A ring generation** fences writes. It is captured before the collection lock, re-checked after
+  acquiring it, and carried on every replication payload, so a node that lost ownership while
+  blocked on the lock is refused — by itself, and again by any replica whose view is newer.
+- **Version-checked applies**: a replica refuses any upsert or delete older than what it stores,
+  which makes an out-of-order arrival and a stale anti-entropy decision harmless.
+
+The residual, which fencing cannot close, is two nodes holding genuinely concurrent and
+incomparable views. Resolving that needs consensus, which this design does not introduce. A write
+accepted under such a split is reconciled by last-write-wins rather than rejected.
+
+A cluster must also run a single build throughout: there is no mixed-version negotiation, and data
+written by an older build is not carried forward.
 
 ## Membership and discovery
 

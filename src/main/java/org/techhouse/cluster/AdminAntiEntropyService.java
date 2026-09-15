@@ -70,12 +70,18 @@ public class AdminAntiEntropyService implements MembershipListener {
         }
         try {
             AdminSnapshotPayload best = null;
-            var bestEpoch = adminEpoch.current();
             final var self = membershipService.getSelf();
+            var bestEpoch = adminEpoch.current();
+            var bestNodeId = self != null ? self.getNodeId() : null;
             for (final var member : membershipService.membershipView().peers(self)) {
                 final var snapshot = requestSnapshot(member.address());
-                if (snapshot != null && snapshot.getEpoch() > bestEpoch) {
+                if (snapshot == null) {
+                    continue;
+                }
+                final var snapshotNodeId = snapshot.getNodeId() != null ? snapshot.getNodeId() : member.getNodeId();
+                if (outranks(snapshot.getEpoch(), snapshotNodeId, bestEpoch, bestNodeId)) {
                     bestEpoch = snapshot.getEpoch();
+                    bestNodeId = snapshotNodeId;
                     best = snapshot;
                 }
             }
@@ -88,6 +94,16 @@ public class AdminAntiEntropyService implements MembershipListener {
             adminSyncCompleted.set(true);
             publishSyncState();
         }
+    }
+
+    private static boolean outranks(long epoch, String nodeId, long bestEpoch, String bestNodeId) {
+        if (epoch != bestEpoch) {
+            return epoch > bestEpoch;
+        }
+        if (nodeId == null || bestNodeId == null) {
+            return false;
+        }
+        return nodeId.compareTo(bestNodeId) > 0;
     }
 
     public AdminSnapshotPayload buildSnapshot() {
@@ -134,8 +150,11 @@ public class AdminAntiEntropyService implements MembershipListener {
         for (final var userEntry : cache.getAllAdminUserEntries()) {
             users.add(userEntry.getData());
         }
-        return new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas, procedures,
-                triggers, schedules);
+        final var payload = new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas,
+                procedures, triggers, schedules);
+        final var self = membershipService.getSelf();
+        payload.setNodeId(self != null ? self.getNodeId() : null);
+        return payload;
     }
 
     private AdminSnapshotPayload requestSnapshot(NodeAddress address) {

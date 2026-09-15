@@ -35,7 +35,7 @@ public final class TriggerDispatcher {
     }
 
     public static void dispatch(TriggerEvent event) {
-        if (event.getDepth() >= configuration.getTriggerMaxDepth()) {
+        if (event.getDepth() < 0 || event.getDepth() >= configuration.getTriggerMaxDepth()) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             triggerExecutor.countFailure();
             final var reason = "cascade depth " + event.getDepth() + " reached triggerMaxDepth";

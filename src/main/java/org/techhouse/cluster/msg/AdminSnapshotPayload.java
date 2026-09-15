@@ -5,6 +5,7 @@ import org.techhouse.ejson.elements.JsonObject;
 
 public class AdminSnapshotPayload {
     private long epoch;
+    private String nodeId;
     private List<JsonObject> databases = List.of();
     private List<JsonObject> collections = List.of();
     private List<JsonObject> users = List.of();
@@ -28,11 +29,6 @@ public class AdminSnapshotPayload {
     }
 
     public AdminSnapshotPayload(long epoch, List<JsonObject> databases, List<JsonObject> collections,
-            List<JsonObject> users, JsonObject schemas, JsonObject procedures, JsonObject triggers) {
-        this(epoch, databases, collections, users, schemas, procedures, triggers, new JsonObject());
-    }
-
-    public AdminSnapshotPayload(long epoch, List<JsonObject> databases, List<JsonObject> collections,
             List<JsonObject> users, JsonObject schemas, JsonObject procedures, JsonObject triggers,
             JsonObject schedules) {
         this.epoch = epoch;
@@ -47,6 +43,14 @@ public class AdminSnapshotPayload {
 
     public long getEpoch() {
         return epoch;
+    }
+
+    public String getNodeId() {
+        return nodeId;
+    }
+
+    public void setNodeId(String nodeId) {
+        this.nodeId = nodeId;
     }
 
     public void setEpoch(long epoch) {

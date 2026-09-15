@@ -186,6 +186,14 @@ public class MembershipService {
                 continue;
             }
             final var elapsed = nowMillis - lastSeen.getOrDefault(member.getNodeId(), 0L);
+            if (elapsed > clusterConfig.deadEvictionMs()) {
+                members.remove(member.getNodeId());
+                lastSeen.remove(member.getNodeId());
+                changed.set(true);
+                logger.warning("Evicted node " + member.getNodeId() + " from the membership view after " + elapsed
+                        + "ms without contact");
+                continue;
+            }
             final NodeState newState;
             if (elapsed > clusterConfig.deadTimeoutMs()) {
                 newState = NodeState.DEAD;

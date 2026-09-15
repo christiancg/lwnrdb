@@ -23,6 +23,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ReplicatedApplyHelper;
 import org.techhouse.ops.ReplicatedUserApplyHelper;
+import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.ScriptRunRegistry;
 import org.techhouse.ops.TriggerRunResolution;
 import org.techhouse.ops.req.RequestParser;
@@ -212,6 +213,10 @@ public class ClusterConnectionHandler implements Runnable {
         final var clientId = actingUser != null ? clientTracker.registerForwardedClient(actingUser) : null;
         try {
             final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            final var schemaError = SchemaValidationHelper.check(parsed);
+            if (schemaError != null) {
+                return schemaError;
+            }
             return operationProcessor.processMessage(parsed, clientId);
         } finally {
             if (clientId != null) {

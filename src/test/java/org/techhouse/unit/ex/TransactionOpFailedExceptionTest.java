@@ -1,9 +1,9 @@
 package org.techhouse.unit.ex;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import org.junit.jupiter.api.Test;
 import org.techhouse.ex.TransactionOpFailedException;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class TransactionOpFailedExceptionTest {
     @Test

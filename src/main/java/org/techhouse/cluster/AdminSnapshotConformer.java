@@ -20,12 +20,14 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
 
 // The admin epoch is the ordering, so there is no per-record version, and every step is
 // idempotent so the periodic sweep does not rewrite an already-converged node.
 final class AdminSnapshotConformer {
+    private final Logger logger = Logger.logFor(AdminSnapshotConformer.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -254,20 +256,17 @@ final class AdminSnapshotConformer {
 
     private void dropCollection(String dbName, String collName) throws Exception {
         locks.lock(dbName, collName);
-        var dropped = false;
         try {
-            if (fs.deleteCollectionFiles(dbName, collName)) {
-                cache.evictCollection(dbName, collName);
-                AdminOperationHelper.deleteCollectionEntry(dbName, collName);
-                AdminOperationHelper.deletePageCollections(dbName, collName);
-                listenManager.unregisterAllForCollection(dbName, collName);
-                dropped = true;
-            }
+            cache.evictCollection(dbName, collName);
+            AdminOperationHelper.deleteCollectionEntry(dbName, collName);
+            AdminOperationHelper.deletePageCollections(dbName, collName);
+            listenManager.unregisterAllForCollection(dbName, collName);
+            logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                    + ": it is absent from the winning admin snapshot. Its documents are left on disk and it no"
+                    + " longer serves reads or writes until an operator reinstates or removes it.");
         } finally {
             locks.release(dbName, collName);
-            if (dropped) {
-                locks.removeLock(dbName, collName);
-            }
+            locks.removeLock(dbName, collName);
         }
     }
 
@@ -289,11 +288,12 @@ final class AdminSnapshotConformer {
                 locks.lock(dbName, collName);
                 lockedColls.add(collName);
             }
-            if (fs.deleteDatabase(dbName)) {
-                cache.evictDatabase(dbName);
-                AdminOperationHelper.deleteDatabaseEntry(dbName);
-                listenManager.unregisterAllForDatabase(dbName);
-            }
+            cache.evictDatabase(dbName);
+            AdminOperationHelper.deleteDatabaseEntry(dbName);
+            listenManager.unregisterAllForDatabase(dbName);
+            logger.warning("Quarantined database " + dbName
+                    + ": it is absent from the winning admin snapshot. Its documents are left on disk and it no"
+                    + " longer serves reads or writes until an operator reinstates or removes it.");
         } finally {
             for (final var collName : lockedColls) {
                 locks.release(dbName, collName);

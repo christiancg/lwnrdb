@@ -81,14 +81,15 @@ public class ScheduleExecutor {
     public void tick(long now) {
         for (final var entry : registry.entries()) {
             final var definition = entry.getDefinition();
-            if (!isOwner(entry)) {
-                continue;
-            }
             if (!definition.isEnabled()) {
                 continue;
             }
             final var nextRunAt = entry.getNextRunAt();
             if (nextRunAt <= 0 || now < nextRunAt) {
+                continue;
+            }
+            if (!isOwner(entry)) {
+                entry.setNextRunAt(registry.nextRunAfter(entry, now));
                 continue;
             }
             entry.setNextRunAt(registry.nextRunAfter(entry, now));

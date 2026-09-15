@@ -6,6 +6,7 @@ public final class Globals {
     private Globals() {
     }
     public static final String PK_FIELD = "_id";
+    public static final String TRIGGER_DEPTH_FIELD = "triggerDepth";
     public static final String INDEX_TYPE_NUMBER = "Number";
     public static final String INDEX_TYPE_STRING = "String";
     public static final String INDEX_TYPE_BOOLEAN = "Boolean";

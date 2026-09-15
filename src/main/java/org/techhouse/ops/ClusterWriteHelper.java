@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.ReplicationOutcome;
+import org.techhouse.cluster.WriteGuard;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.DeleteResponse;
@@ -17,7 +18,10 @@ public final class ClusterWriteHelper {
     }
 
     public static OperationResponse guard(OperationType type, String dbName, String collName) {
-        final var guard = coordinator.guardWrite(dbName, collName);
+        return errorFor(type, coordinator.guardWrite(dbName, collName));
+    }
+
+    private static OperationResponse errorFor(OperationType type, WriteGuard guard) {
         return switch (guard.kind()) {
             case ALLOW -> null;
             case NO_QUORUM -> new OperationResponse(type, ErrorCode.NO_QUORUM);
@@ -45,18 +49,31 @@ public final class ClusterWriteHelper {
         return response;
     }
 
-    public static OperationResponse afterDelete(String dbName, String collName, String id, OperationResponse response) {
+    public static Long reserveDelete(String dbName, String collName, String id) throws java.io.IOException {
+        return coordinator.reserveDelete(dbName, collName, List.of(id));
+    }
+
+    public static OperationResponse afterDelete(String dbName, String collName, String id, Long reservedVersion,
+            OperationResponse response) {
         if (response instanceof DeleteResponse) {
             return withReplication(response, OperationType.DELETE,
-                    coordinator.replicateDelete(dbName, collName, List.of(id)));
+                    coordinator.replicateDelete(dbName, collName, List.of(id), reservedVersion));
         }
         return response;
     }
 
     private static OperationResponse withReplication(OperationResponse success, OperationType type,
             ReplicationOutcome outcome) {
-        return outcome == ReplicationOutcome.TIMEOUT
-                ? new OperationResponse(type, ErrorCode.REPLICATION_TIMEOUT)
-                : success;
+        return switch (outcome) {
+            case TIMEOUT -> new OperationResponse(type, ErrorCode.REPLICATION_TIMEOUT);
+            case NOT_OWNER -> new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
+            case NOT_CLUSTERED, QUORUM_MET -> success;
+        };
+    }
+
+    public static OperationResponse stillOwnsOrError(OperationType type, String dbName, String collName) {
+        return coordinator.stillOwns(dbName, collName)
+                ? null
+                : new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
     }
 }

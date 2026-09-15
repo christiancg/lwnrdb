@@ -296,6 +296,11 @@ public class OperationProcessor {
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING,
                 () -> {
+                    final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.BULK_SAVE, dbName,
+                            collName);
+                    if (ownershipError != null) {
+                        return ownershipError;
+                    }
                     final var hookError = BeforeHookHelper.beforeBulkSave(bulkSaveRequest, actingUser);
                     if (hookError != null) {
                         return hookError;
@@ -321,6 +326,10 @@ public class OperationProcessor {
         }
         final var isInsert = saveRequest.get_id() == null || saveRequest.get_id().isBlank();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
+            final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.SAVE, dbName, collName);
+            if (ownershipError != null) {
+                return ownershipError;
+            }
             final var hookError = BeforeHookHelper.beforeSave(saveRequest,
                     isInsert ? EventType.CREATED : EventType.UPDATED, actingUser);
             if (hookError != null) {
@@ -350,6 +359,11 @@ public class OperationProcessor {
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE, ErrorCode.ERROR_DELETING,
                 () -> {
+                    final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.DELETE, dbName,
+                            collName);
+                    if (ownershipError != null) {
+                        return ownershipError;
+                    }
                     // Read before the delete: afterWrite needs the document that is about to disappear.
                     final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),
                             deleteRequest.getTriggerDepth());
@@ -357,8 +371,10 @@ public class OperationProcessor {
                     if (hookError != null) {
                         return hookError;
                     }
+                    final var reservedVersion = ClusterWriteHelper.reserveDelete(dbName, collName,
+                            deleteRequest.get_id());
                     final var response = ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
-                            DeleteOperationHelper.executeDelete(deleteRequest));
+                            reservedVersion, DeleteOperationHelper.executeDelete(deleteRequest));
                     if (response instanceof DeleteResponse) {
                         TriggerHelper.afterWrite(dbName, collName, EventType.DELETED, deleted, actingUser,
                                 deleteRequest.getTriggerDepth());

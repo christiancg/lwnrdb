@@ -15,6 +15,7 @@ import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.AntiEntropyService;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterServer;
+import org.techhouse.cluster.HybridClock;
 import org.techhouse.cluster.MetadataCachePruner;
 import org.techhouse.cluster.TransactionSessionReaper;
 import org.techhouse.cluster.Tx2pcRecovery;
@@ -50,6 +51,7 @@ public class Main {
     private static final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private static final MetadataCachePruner metadataCachePruner = IocContainer.get(MetadataCachePruner.class);
@@ -83,6 +85,7 @@ public class Main {
         fs.createAdminDatabase();
         cache.loadAdminData();
         cleanupOrphanedTransactions();
+        seedHybridClock();
         bootstrapDefaultAdmin();
         final var port = getPort(args);
         backgroundTaskManager.startBackgroundWorkers();
@@ -147,6 +150,30 @@ public class Main {
             logger.fatal("Failed to start the cluster server", e);
             throw new RuntimeException("Failed to start the cluster server", e);
         }
+    }
+
+    private static void seedHybridClock() {
+        if (!clusterConfig.isEnabled()) {
+            return;
+        }
+        var highest = 0L;
+        try {
+            for (final var dbName : cache.getUserDatabaseNames()) {
+                for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
+                    for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
+                        highest = Math.max(highest, pkEntry.getVersion());
+                    }
+                    for (final var tombstoneVersion : fs.readTombstones(dbName, collName).values()) {
+                        highest = Math.max(highest, tombstoneVersion);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Failed to seed the write clock from disk; versions could regress after this restart", e);
+            return;
+        }
+        hybridClock.seed(highest);
+        logger.info("Seeded the write clock from disk at version " + highest);
     }
 
     private static void cleanupOrphanedTransactions() {

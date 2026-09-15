@@ -66,7 +66,7 @@ public class ClusterWriteHelperTest {
     @Test
     public void test_after_delete_passes_through_error_responses() {
         final var error = new OperationResponse(OperationType.DELETE, ErrorCode.ENTRY_NOT_FOUND);
-        assertSame(error, ClusterWriteHelper.afterDelete(TestGlobals.DB, TestGlobals.COLL, "x", error));
+        assertSame(error, ClusterWriteHelper.afterDelete(TestGlobals.DB, TestGlobals.COLL, "x", null, error));
     }
 
     @Test

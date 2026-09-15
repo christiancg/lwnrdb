@@ -12,12 +12,12 @@ import org.techhouse.bckg_ops.events.BulkEntityEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.HybridClock;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
-import org.techhouse.data.WriteVersion;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -37,6 +37,7 @@ public final class SaveOperationHelper {
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final Configuration configuration = Configuration.getInstance();
+    private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
 
     private SaveOperationHelper() {
     }
@@ -69,7 +70,7 @@ public final class SaveOperationHelper {
             return idError;
         }
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
-        entry.setVersion(WriteVersion.next());
+        entry.setVersion(hybridClock.next());
         final var sizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
         if (sizeError != null) {
             return sizeError;
@@ -131,13 +132,16 @@ public final class SaveOperationHelper {
         final var objects = bulkSaveRequest.getObjects();
         for (var i = 0; i < objects.size(); i++) {
             final var entry = DbEntry.fromJsonObject(dbName, collName, objects.get(i));
+            // Versions deserialize as a boxed Integer/Long/Double, so read them through Number.
+            Number version = null;
             if (versions != null) {
-                // Versions deserialize as a boxed Integer/Long/Double, so read them through Number.
-                final Number version = versions.get(i);
+                version = versions.get(i);
+            }
+            if (version != null) {
                 entry.setVersion(version.longValue());
-                WriteVersion.observe(version.longValue());
+                hybridClock.observe(version.longValue());
             } else {
-                entry.setVersion(WriteVersion.next());
+                entry.setVersion(hybridClock.next());
             }
             entries.add(entry);
         }

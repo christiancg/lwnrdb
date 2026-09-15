@@ -11,7 +11,6 @@ import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Globals;
 import org.techhouse.data.Transaction;
-import org.techhouse.data.WriteVersion;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
@@ -26,6 +25,7 @@ public class ClusterCoordinator {
     private final Replicator replicator = IocContainer.get(Replicator.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final HybridClock hybridClock = IocContainer.get(HybridClock.class);
     private final EJson eJson = IocContainer.get(EJson.class);
 
     public WriteGuard guardWrite(String dbName, String collName) {
@@ -42,8 +42,9 @@ public class ClusterCoordinator {
     }
 
     public ReplicationOutcome replicateUpsert(String dbName, String collName, List<String> ids) {
-        if (notApplicable(dbName, collName)) {
-            return ReplicationOutcome.NOT_APPLICABLE;
+        final var applicability = documentReplicationOutcome(dbName, collName);
+        if (applicability != null) {
+            return applicability;
         }
         try {
             final var documents = new ArrayList<JsonObject>();
@@ -58,21 +59,24 @@ public class ClusterCoordinator {
         }
     }
 
-    public ReplicationOutcome replicateDelete(String dbName, String collName, List<String> ids) {
-        if (notApplicable(dbName, collName)) {
-            return ReplicationOutcome.NOT_APPLICABLE;
+    public Long reserveDelete(String dbName, String collName, List<String> ids) throws java.io.IOException {
+        if (documentReplicationOutcome(dbName, collName) != null) {
+            return null;
         }
-        final var version = WriteVersion.next();
-        final var versions = new ArrayList<Long>(ids.size());
+        final var version = hybridClock.next();
         for (final var id : ids) {
-            try {
-                fs.appendTombstone(dbName, collName, id, version);
-            } catch (Exception e) {
-                logger.warning(
-                        "Failed to record tombstone for " + dbName + "|" + collName + "|" + id + ": " + e.getMessage());
-            }
-            versions.add(version);
+            fs.appendTombstone(dbName, collName, id, version);
         }
+        return version;
+    }
+
+    public ReplicationOutcome replicateDelete(String dbName, String collName, List<String> ids, Long reservedVersion) {
+        final var applicability = documentReplicationOutcome(dbName, collName);
+        if (applicability != null) {
+            return applicability;
+        }
+        final var version = reservedVersion != null ? reservedVersion : hybridClock.next();
+        final var versions = new ArrayList<>(Collections.nCopies(ids.size(), version));
         return replicator
                 .broadcast(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, ids, versions));
     }
@@ -85,7 +89,7 @@ public class ClusterCoordinator {
 
     public ReplicationOutcome replicateTransaction(Transaction transaction) {
         if (!clusterConfig.isEnabled()) {
-            return ReplicationOutcome.NOT_APPLICABLE;
+            return ReplicationOutcome.NOT_CLUSTERED;
         }
         final var entries = new ArrayList<ReplicationPayload>();
         try {
@@ -102,7 +106,7 @@ public class ClusterCoordinator {
             return ReplicationOutcome.TIMEOUT;
         }
         if (entries.isEmpty()) {
-            return ReplicationOutcome.NOT_APPLICABLE;
+            return ReplicationOutcome.NOT_CLUSTERED;
         }
         return replicator.broadcastTx(new TxReplicationPayload(entries));
     }
@@ -125,7 +129,7 @@ public class ClusterCoordinator {
             entries.add(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions));
         }
         if (!deleteIds.isEmpty()) {
-            final var version = WriteVersion.next();
+            final var version = hybridClock.next();
             final var versions = new ArrayList<Long>(deleteIds.size());
             for (final var id : deleteIds) {
                 fs.appendTombstone(dbName, collName, id, version);
@@ -146,7 +150,7 @@ public class ClusterCoordinator {
     // Only the coordinator replicates, so peers applying an inbound REPLICATE_ADMIN never re-broadcast.
     public ReplicationOutcome replicateAdminOp(OperationRequest request, String actingUser) {
         if (!clusterConfig.isEnabled() || !ownershipManager.isAdminCoordinator()) {
-            return ReplicationOutcome.NOT_APPLICABLE;
+            return ReplicationOutcome.NOT_CLUSTERED;
         }
         return replicator.broadcastAdmin(eJson.toJson(request), actingUser);
     }
@@ -155,7 +159,7 @@ public class ClusterCoordinator {
     // than re-hashed per node.
     public ReplicationOutcome replicateUserOp(String username, boolean delete) {
         if (!clusterConfig.isEnabled() || !ownershipManager.isAdminCoordinator()) {
-            return ReplicationOutcome.NOT_APPLICABLE;
+            return ReplicationOutcome.NOT_CLUSTERED;
         }
         final ReplicationPayload payload;
         if (delete) {
@@ -164,7 +168,7 @@ public class ClusterCoordinator {
         } else {
             final var entry = cache.getAdminUserEntry(username);
             if (entry == null) {
-                return ReplicationOutcome.NOT_APPLICABLE;
+                return ReplicationOutcome.NOT_CLUSTERED;
             }
             payload = new ReplicationPayload(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
                     ReplicationOp.UPSERT, List.of(entry.getData()), null);
@@ -176,8 +180,18 @@ public class ClusterCoordinator {
         return !clusterConfig.isEnabled() || Globals.ADMIN_DB_NAME.equals(dbName);
     }
 
-    private boolean notApplicable(String dbName, String collName) {
-        return doesntCoordinate(dbName) || !ownershipManager.isOwner(dbName, collName);
+    private ReplicationOutcome documentReplicationOutcome(String dbName, String collName) {
+        if (doesntCoordinate(dbName)) {
+            return ReplicationOutcome.NOT_CLUSTERED;
+        }
+        if (!ownershipManager.isOwner(dbName, collName)) {
+            return ReplicationOutcome.NOT_OWNER;
+        }
+        return null;
+    }
+
+    public boolean stillOwns(String dbName, String collName) {
+        return doesntCoordinate(dbName) || ownershipManager.isOwner(dbName, collName);
     }
 
     private void readDocuments(String dbName, String collName, List<String> ids, List<JsonObject> documents,

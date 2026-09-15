@@ -1260,6 +1260,45 @@ def test_node_rejoin():
                wait_until(_rejoined, timeout_s=45.0, interval_s=1.0))
 
 
+def test_restart_does_not_regress_write_versions():
+    section("Write versions do not regress across a restart")
+
+    # The write clock lives in memory. Before it was seeded at startup a restarted node assigned
+    # versions below ones it had already replicated, and anti-entropy then pulled the older
+    # document back over the acknowledged write.
+    coll = "version_regression"
+    check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
+    check_status("seed before the restart", save(nodes[0].client_port, DB, coll, {"_id": "r1", "v": 1}), "OK")
+    check("the seed is visible everywhere", all_nodes_see(DB, coll, "r1", 1, ports=all_ports()))
+
+    restarted = nodes[1]
+    print(f"  Restarting node-{restarted.index} ...")
+    restarted.stop()
+    restarted.start()
+
+    def _back():
+        return save(nodes[0].client_port, DB, coll, {"_id": "r1", "v": 2}).get("status") == "OK"
+
+    check("the cluster accepts a write after the restart", wait_until(_back, timeout_s=45.0, interval_s=1.0))
+    check("the newer write survives anti-entropy rather than being pulled back",
+          all_nodes_see(DB, coll, "r1", 2, ports=all_ports(), timeout_s=30.0))
+
+
+def test_forwarded_write_ignores_a_client_supplied_trigger_depth():
+    section("A client-supplied triggerDepth does not survive forwarding")
+
+    coll = "depth_guard"
+    check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
+    # Sent to every node so at least one of them is forwarding rather than owning the collection.
+    for node in nodes:
+        response = op(node.client_port, {"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                                         "triggerDepth": -2000000000,
+                                         "object": {"_id": f"d{node.index}", "v": node.index}})
+        check_status(f"node-{node.index} accepts the write", response, "OK")
+
+    check("every write landed", all_nodes_see(DB, coll, "d0", 0, ports=all_ports()))
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Scheduled procedures
 # ══════════════════════════════════════════════════════════════════════════
@@ -1476,6 +1515,8 @@ def main():
         test_node_failure_quorum_maintained()
         test_schedule_failover()
         test_node_rejoin()
+        test_restart_does_not_regress_write_versions()
+        test_forwarded_write_ignores_a_client_supplied_trigger_depth()
         test_schedule_rejoin_catch_up()
         # Last: it parks a long run on one node, which leaves that node's gossiped script load
         # elevated for a round or two. Placement takes the *less* loaded of two samples, so running

@@ -94,7 +94,7 @@ public class ClusterReplicationCoverageTest {
     @Test
     public void test_replicate_delete_meets_quorum() {
         assertEquals(ReplicationOutcome.QUORUM_MET,
-                coordinator.replicateDelete(TestGlobals.DB, TestGlobals.COLL, List.of("gone")));
+                coordinator.replicateDelete(TestGlobals.DB, TestGlobals.COLL, List.of("gone"), null));
     }
 
     @Test
@@ -112,7 +112,7 @@ public class ClusterReplicationCoverageTest {
 
     @Test
     public void test_replicate_user_op_not_applicable_for_unknown_user() {
-        assertEquals(ReplicationOutcome.NOT_APPLICABLE, coordinator.replicateUserOp("nobody", false));
+        assertEquals(ReplicationOutcome.NOT_CLUSTERED, coordinator.replicateUserOp("nobody", false));
     }
 
     @Test

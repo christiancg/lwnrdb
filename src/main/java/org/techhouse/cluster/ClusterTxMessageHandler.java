@@ -10,6 +10,7 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.ReplicatedTxApplyHelper;
+import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.RequestParser;
@@ -32,6 +33,12 @@ final class ClusterTxMessageHandler {
             final var session = clientTracker.registerTxSession(sessionId, request.getActingUser(), edgeNodeId);
             final var clientId = session.clientId();
             final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            final var schemaError = SchemaValidationHelper.check(parsed);
+            if (schemaError != null) {
+                response.setType(ClusterMessageType.FORWARD_RESPONSE);
+                response.setForwardBody(ForwardBody.encode(eJson.toJson(schemaError)));
+                return response;
+            }
             final var type = parsed.getType();
             // Run every op of the session on its own single-thread executor so the collection write locks it
             // holds across messages are acquired and released by the same thread.
