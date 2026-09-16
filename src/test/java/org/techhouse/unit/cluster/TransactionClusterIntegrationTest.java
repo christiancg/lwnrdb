@@ -233,6 +233,7 @@ public class TransactionClusterIntegrationTest {
     public void test_transaction_write_binds_and_forwards_to_owner() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
+        createCollection(coll);
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
 
@@ -311,6 +312,7 @@ public class TransactionClusterIntegrationTest {
     public void test_transaction_read_forwarded_to_participant() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
+        createCollection(coll);
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
         final var save = saveRequest(coll, "read-yw");

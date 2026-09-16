@@ -123,6 +123,14 @@ owner is unreachable and `readFallbackToLocal=true`, the edge serves the read fr
 complete on-disk replica instead of failing; a write to an unreachable owner returns
 `503-4 OWNER_UNREACHABLE`.
 
+A forwarded write can also arrive at the owner **before the collection does**: admin replication
+only waits for a quorum, and the collection's owner need not be in that quorum, so a client that
+creates a collection and immediately writes to it can beat the `CREATE_COLLECTION` to the owner.
+That write is refused with a retryable `503-10 COLLECTION_NOT_READY` rather than being attempted
+and failing on the missing page folder. A clustered node deliberately never answers `404-11
+COLLECTION_NOT_FOUND` for this, because it cannot tell a collection that was never created from
+one whose metadata has not reached it yet — only a node with clustering off can make that call.
+
 Forwarded bodies are Base64-wrapped (`cluster/msg/ForwardBody`) because EJson does not
 escape string values, so raw JSON cannot be embedded directly in the outer message.
 

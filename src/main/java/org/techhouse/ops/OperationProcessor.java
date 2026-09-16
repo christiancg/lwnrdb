@@ -301,6 +301,11 @@ public class OperationProcessor {
                     if (ownershipError != null) {
                         return ownershipError;
                     }
+                    final var readinessError = CollectionReadinessGuard.check(OperationType.BULK_SAVE, dbName,
+                            collName);
+                    if (readinessError != null) {
+                        return readinessError;
+                    }
                     final var hookError = BeforeHookHelper.beforeBulkSave(bulkSaveRequest, actingUser);
                     if (hookError != null) {
                         return hookError;
@@ -329,6 +334,10 @@ public class OperationProcessor {
             final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.SAVE, dbName, collName);
             if (ownershipError != null) {
                 return ownershipError;
+            }
+            final var readinessError = CollectionReadinessGuard.check(OperationType.SAVE, dbName, collName);
+            if (readinessError != null) {
+                return readinessError;
             }
             final var hookError = BeforeHookHelper.beforeSave(saveRequest,
                     isInsert ? EventType.CREATED : EventType.UPDATED, actingUser);
@@ -363,6 +372,10 @@ public class OperationProcessor {
                             collName);
                     if (ownershipError != null) {
                         return ownershipError;
+                    }
+                    final var readinessError = CollectionReadinessGuard.check(OperationType.DELETE, dbName, collName);
+                    if (readinessError != null) {
+                        return readinessError;
                     }
                     // Read before the delete: afterWrite needs the document that is about to disappear.
                     final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),

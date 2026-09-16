@@ -16,6 +16,7 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.CollectionReadinessGuard;
 import org.techhouse.ops.EntrySizeGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
@@ -49,6 +50,10 @@ public final class TransactionBuffer {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
+            final var readinessError = CollectionReadinessGuard.check(OperationType.SAVE, dbName, collName);
+            if (readinessError != null) {
+                return readinessError;
+            }
             final var object = request.getObject();
             final var id = TransactionWrites.ensureId(object, request.get_id());
             final var entry = DbEntry.fromJsonObject(dbName, collName, object);
@@ -90,6 +95,10 @@ public final class TransactionBuffer {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
+            final var readinessError = CollectionReadinessGuard.check(OperationType.BULK_SAVE, dbName, collName);
+            if (readinessError != null) {
+                return readinessError;
+            }
             final var seenIds = new HashSet<String>();
             for (final var object : request.getObjects()) {
                 final var id = TransactionWrites.ensureId(object, null);
@@ -151,6 +160,10 @@ public final class TransactionBuffer {
         final var collName = request.getCollectionName();
         final var id = request.get_id();
         return OperationResponse.respondOrError(OperationType.DELETE, ErrorCode.ERROR_TRANSACTION, () -> {
+            final var readinessError = CollectionReadinessGuard.check(OperationType.DELETE, dbName, collName);
+            if (readinessError != null) {
+                return readinessError;
+            }
             final var lockResult = ensureLock(transaction, OperationType.DELETE, dbName, collName, onLockTimeout);
             if (lockResult != null) {
                 return lockResult;

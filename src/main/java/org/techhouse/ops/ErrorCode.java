@@ -38,6 +38,7 @@ public enum ErrorCode {
     PROCEDURE_NOT_FOUND("404-8", "Procedure not found", OperationStatus.NOT_FOUND),
     TRIGGER_NOT_FOUND("404-9", "Trigger not found", OperationStatus.NOT_FOUND),
     SCHEDULE_NOT_FOUND("404-10", "Schedule not found", OperationStatus.NOT_FOUND),
+    COLLECTION_NOT_FOUND("404-11", "Collection not found", OperationStatus.NOT_FOUND),
     SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR),
     SCRIPT_CANCELLED("408-2", "Script was cancelled", OperationStatus.ERROR),
     USER_ALREADY_EXISTS("409-1", "User already exists", OperationStatus.ERROR),
@@ -95,6 +96,8 @@ public enum ErrorCode {
     WRITE_OUTCOME_UNKNOWN("503-8", "The collection's owner did not report an outcome; the write may already "
             + "have been applied, so retrying is only safe for an idempotent write", OperationStatus.ERROR),
     ADMIN_COORDINATOR_UNAVAILABLE("503-9", "The admin coordinator could not be resolved, retry shortly",
+            OperationStatus.ERROR),
+    COLLECTION_NOT_READY("503-10", "The collection has not reached this node yet, retry shortly",
             OperationStatus.ERROR);
     // @formatter:on
 

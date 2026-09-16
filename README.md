@@ -1108,6 +1108,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-8` | `NOT_FOUND` | Procedure not found |
 | `404-9` | `NOT_FOUND` | Trigger not found |
 | `404-10` | `NOT_FOUND` | Schedule not found |
+| `404-11` | `NOT_FOUND` | Collection not found — a write (`SAVE`, `BULK_SAVE`, `DELETE`) named a collection this node has no metadata for. Definitive only when clustering is off; a clustered node answers `503-10` instead, since it cannot tell "never existed" from "not replicated here yet" |
 | `408-1` | `ERROR` | Script exceeded its time budget |
 | `408-2` | `ERROR` | Script was cancelled |
 | `409-1` | `ERROR` | User already exists |
@@ -1162,6 +1163,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-7` | `ERROR` | The node the script was placed on did not report an outcome; it was not run again in case it already had *(only raised when a placed script's outcome could not be established; it is never re-run locally, so whether to retry is the caller's decision)* |
 | `503-8` | `ERROR` | The collection's owner did not report an outcome; the write may already have been applied, so retrying is only safe for an idempotent write *(distinct from `503-4`, which means the owner was provably never reached)* |
 | `503-9` | `ERROR` | The admin coordinator could not be resolved, retry shortly *(a coordinated admin op is never applied locally when no coordinator can be reached: an unreplicated DDL answered with `OK` would diverge the cluster silently)* |
+| `503-10` | `ERROR` | The collection has not reached this node yet, retry shortly *(a write routed to the collection's owner can arrive before the `CREATE_COLLECTION` that created it, since admin replication only waits for a quorum and the owner need not be in it — retryable, not a server fault)* |
 
 ### Bootstrap
 

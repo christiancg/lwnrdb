@@ -479,27 +479,25 @@ def test_formation_and_quorum_writes():
 
     p0 = nodes[0].client_port
     check_status("CREATE_DATABASE on the seed node commits under quorum",
-                 admin_op_with_retry(lambda: create_db(p0, DB)), "OK")
+                 op_with_retry(lambda: create_db(p0, DB)), "OK")
     check_status("CREATE_COLLECTION commits under quorum",
-                 admin_op_with_retry(lambda: create_coll(p0, DB, "docs")), "OK")
+                 op_with_retry(lambda: create_coll(p0, DB, "docs")), "OK")
 
-    # CREATE_COLLECTION reaches the collection's owner asynchronously, so the very first write can
-    # arrive there before it does. Retry rather than assert once against a cluster still settling.
-    check("SAVE reaches the replication quorum (not 503-2/503-3)",
-          wait_until(lambda: save(p0, DB, "docs", {"_id": "q1", "v": 1}).get("status") == "OK",
-                     timeout_s=30.0, interval_s=1.0))
+    check_status("SAVE reaches the replication quorum (not 503-2/503-3)",
+                 op_with_retry(lambda: save(p0, DB, "docs", {"_id": "q1", "v": 1})), "OK")
 
 
-# A coordinated admin op is refused, retryably, while the admin-coordinator ring slot is still
-# settling — the node will not apply it locally, because an unreplicated DDL acknowledged as OK is
-# exactly the divergence this suite exists to catch. Retry those, and only those.
-RETRYABLE_ADMIN_CODES = {"503-2", "503-5", "503-9"}
+# Refusals a settling cluster is entitled to give: the admin-coordinator ring slot is still moving
+# (503-2/503-5/503-9), or a write reached the collection's owner before the CREATE_COLLECTION did
+# (503-10). Retry those, and only those — anything else must fail the assertion immediately, since
+# an unreplicated DDL acknowledged as OK is exactly the divergence this suite exists to catch.
+RETRYABLE_CODES = {"503-2", "503-5", "503-9", "503-10"}
 
 
-def admin_op_with_retry(fn, timeout_s=30.0, interval_s=1.0):
+def op_with_retry(fn, timeout_s=30.0, interval_s=1.0):
     deadline = time.time() + timeout_s
     response = fn()
-    while response.get("errorCode") in RETRYABLE_ADMIN_CODES and time.time() < deadline:
+    while response.get("errorCode") in RETRYABLE_CODES and time.time() < deadline:
         time.sleep(interval_s)
         response = fn()
     return response
@@ -510,9 +508,9 @@ def test_ddl_replication():
 
     # Create a database + collection on node-1; it must appear on all nodes.
     check_status("CREATE_DATABASE via node-1",
-                 admin_op_with_retry(lambda: create_db(nodes[1].client_port, "ddl_repl_db")), "OK")
+                 op_with_retry(lambda: create_db(nodes[1].client_port, "ddl_repl_db")), "OK")
     check_status("CREATE_COLLECTION via node-1",
-                 admin_op_with_retry(lambda: create_coll(nodes[1].client_port, "ddl_repl_db", "widgets")), "OK")
+                 op_with_retry(lambda: create_coll(nodes[1].client_port, "ddl_repl_db", "widgets")), "OK")
 
     seen_db = wait_until(
         lambda: all("ddl_repl_db" in (list_databases(p).get("databases") or []) for p in all_ports()),
@@ -527,11 +525,11 @@ def test_ddl_replication():
 
     # A duplicate CREATE routed through a different node still conflicts (shared metadata).
     check_code("duplicate CREATE_DATABASE via node-2 conflicts (409-2)",
-               admin_op_with_retry(lambda: create_db(nodes[2].client_port, "ddl_repl_db")), "ERROR", "409-2")
+               op_with_retry(lambda: create_db(nodes[2].client_port, "ddl_repl_db")), "ERROR", "409-2")
 
     # DROP replicates too.
     check_status("DROP_DATABASE via node-2",
-                 admin_op_with_retry(lambda: drop_db(nodes[2].client_port, "ddl_repl_db")), "OK")
+                 op_with_retry(lambda: drop_db(nodes[2].client_port, "ddl_repl_db")), "OK")
     dropped = wait_until(
         lambda: all("ddl_repl_db" not in (list_databases(p).get("databases") or []) for p in all_ports()),
         timeout_s=15.0)

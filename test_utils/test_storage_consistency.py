@@ -202,6 +202,19 @@ def test_drop_database_does_not_strand_a_collection_lock(conn: Conn):
                  conn.save({"_id": "after-drop", "pad": "x"}, db=LOCK_DB, coll=LOCK_COLL), "OK")
 
 
+def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
+    section("writes naming a collection that does not exist")
+    for op, request in (
+        ("SAVE", {"type": "SAVE", "databaseName": DB, "collectionName": "ghost",
+                  "object": {"_id": "a", "pad": "x"}}),
+        ("BULK_SAVE", {"type": "BULK_SAVE", "databaseName": DB, "collectionName": "ghost",
+                       "objects": [{"_id": "b", "pad": "x"}]}),
+        ("DELETE", {"type": "DELETE", "databaseName": DB, "collectionName": "ghost", "_id": "a"}),
+    ):
+        bu.check_code(f"{op} answers 404-11 rather than leaking the I/O failure as a 5xx",
+                      conn.send(request), "NOT_FOUND", "404-11")
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -231,6 +244,7 @@ def main():
             test_scan_is_complete_after_the_first_write(conn)
             test_page_cap_is_enforced_after_restart(conn, work_dir)
             test_drop_database_does_not_strand_a_collection_lock(conn)
+            test_writes_to_an_unknown_collection_are_refused_cleanly(conn)
     finally:
         bu.stop_server(proc)
 
