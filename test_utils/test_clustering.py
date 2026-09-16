@@ -1267,9 +1267,18 @@ def test_restart_does_not_regress_write_versions():
     # versions below ones it had already replicated, and anti-entropy then pulled the older
     # document back over the acknowledged write.
     coll = "version_regression"
-    check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
-    check_status("seed before the restart", save(nodes[0].client_port, DB, coll, {"_id": "r1", "v": 1}), "OK")
-    check("the seed is visible everywhere", all_nodes_see(DB, coll, "r1", 1, ports=all_ports()))
+
+    # CREATE_COLLECTION is a coordinated admin op and reaches the owner asynchronously, so a write
+    # fired immediately after it can land on a node that has not seen the collection yet.
+    def _seeded():
+        if create_coll(nodes[0].client_port, DB, coll).get("status") != "OK":
+            return False
+        if save(nodes[0].client_port, DB, coll, {"_id": "r1", "v": 1}).get("status") != "OK":
+            return False
+        return all_nodes_see(DB, coll, "r1", 1, ports=all_ports(), timeout_s=2.0)
+
+    check("seed is committed and visible everywhere before the restart",
+          wait_until(_seeded, timeout_s=30.0, interval_s=1.0))
 
     restarted = nodes[1]
     print(f"  Restarting node-{restarted.index} ...")
@@ -1284,19 +1293,73 @@ def test_restart_does_not_regress_write_versions():
           all_nodes_see(DB, coll, "r1", 2, ports=all_ports(), timeout_s=30.0))
 
 
+def tombstone_ids(node, db, coll):
+    path = os.path.join(node.work_dir, "db", db, coll, f"{coll}-tombstones.idx")
+    if not os.path.isfile(path):
+        return set()
+    ids = set()
+    with open(path, encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if line:
+                ids.add(line.rsplit("|", 1)[0])
+    return ids
+
+
+def test_a_fresh_tombstone_survives_anti_entropy_sweeps():
+    section("Tombstones inside the retention window are not collected")
+
+    # The GC cutoff is a version, not a wall-clock instant. When the two were compared in different
+    # units a just-written tombstone was collected on the first sweep, after which any peer still
+    # holding the document resurrected it.
+    coll = "tombstone_retention"
+
+    def _written():
+        if create_coll(nodes[0].client_port, DB, coll).get("status") != "OK":
+            return False
+        if save(nodes[0].client_port, DB, coll, {"_id": "gone", "v": 1}).get("status") != "OK":
+            return False
+        return all_nodes_see(DB, coll, "gone", 1, ports=all_ports(), timeout_s=2.0)
+
+    check("the document is committed on every node", wait_until(_written, timeout_s=30.0, interval_s=1.0))
+
+    check_status("delete it", delete(nodes[0].client_port, DB, coll, "gone"), "OK")
+
+    owner = next((n for n in nodes if "gone" in tombstone_ids(n, DB, coll)), None)
+    check("the delete wrote a tombstone", owner is not None,
+          "no node recorded a tombstone for the deleted document")
+
+    # antiEntropyIntervalMs is 3000 here, so this spans several sweeps.
+    time.sleep(10)
+
+    if owner is not None:
+        check("the tombstone is still there after several sweeps", "gone" in tombstone_ids(owner, DB, coll),
+              "a tombstone inside tombstoneRetentionMs was garbage collected")
+    for node in nodes:
+        r = find_by_id(node.client_port, DB, coll, "gone")
+        check(f"node-{node.index} still reports the document deleted", r.get("status") == "NOT_FOUND",
+              f"got {r}")
+
+
 def test_forwarded_write_ignores_a_client_supplied_trigger_depth():
     section("A client-supplied triggerDepth does not survive forwarding")
 
     coll = "depth_guard"
-    check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
-    # Sent to every node so at least one of them is forwarding rather than owning the collection.
-    for node in nodes:
-        response = op(node.client_port, {"type": "SAVE", "databaseName": DB, "collectionName": coll,
-                                         "triggerDepth": -2000000000,
-                                         "object": {"_id": f"d{node.index}", "v": node.index}})
-        check_status(f"node-{node.index} accepts the write", response, "OK")
 
-    check("every write landed", all_nodes_see(DB, coll, "d0", 0, ports=all_ports()))
+    # Sent to every node so at least one of them is forwarding rather than owning the collection.
+    def _all_accepted():
+        if create_coll(nodes[0].client_port, DB, coll).get("status") != "OK":
+            return False
+        for node in nodes:
+            response = op(node.client_port, {"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                                             "triggerDepth": -2000000000,
+                                             "object": {"_id": f"d{node.index}", "v": node.index}})
+            if response.get("status") != "OK":
+                return False
+        return all_nodes_see(DB, coll, "d0", 0, ports=all_ports(), timeout_s=2.0)
+
+    check("a client-supplied triggerDepth is ignored and every write commits",
+          wait_until(_all_accepted, timeout_s=30.0, interval_s=1.0))
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1517,6 +1580,7 @@ def main():
         test_node_rejoin()
         test_restart_does_not_regress_write_versions()
         test_forwarded_write_ignores_a_client_supplied_trigger_depth()
+        test_a_fresh_tombstone_survives_anti_entropy_sweeps()
         test_schedule_rejoin_catch_up()
         # Last: it parks a long run on one node, which leaves that node's gossiped script load
         # elevated for a round or two. Placement takes the *less* loaded of two samples, so running
