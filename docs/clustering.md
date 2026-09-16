@@ -32,15 +32,24 @@ Three mechanisms bound the damage rather than eliminate the disagreement:
   physical milliseconds and 16 bits of logical counter packed into one `long`, seeded at startup
   from the highest version on disk and advanced by every version received from a peer. This is
   what makes "newer" well-defined across nodes and across restarts.
-- **A ring generation** fences writes. It is captured before the collection lock, re-checked after
-  acquiring it, and carried on every replication payload, so a node that lost ownership while
-  blocked on the lock is refused — by itself, and again by any replica whose view is newer.
+- **An ownership re-check under the lock.** `guardWrite` runs before the collection lock is taken,
+  so ownership can move while a write waits for it. The write handlers therefore re-check
+  `isOwner` *after* acquiring the lock and refuse with `421-1` if it moved, and a write that
+  commits locally but can no longer be replicated answers `421-1` rather than `OK` — that
+  silent success was the defect this closes.
 - **Version-checked applies**: a replica refuses any upsert or delete older than what it stores,
   which makes an out-of-order arrival and a stale anti-entropy decision harmless.
 
-The residual, which fencing cannot close, is two nodes holding genuinely concurrent and
-incomparable views. Resolving that needs consensus, which this design does not introduce. A write
-accepted under such a split is reconciled by last-write-wins rather than rejected.
+The residual is two nodes holding genuinely concurrent, incomparable views. The re-check narrows
+the window — an owner notices the loss before it writes — but cannot close it, because nothing
+orders the two views against each other. Resolving that needs consensus, which this design does not
+introduce; a write accepted under such a split is reconciled by last-write-wins rather than
+rejected.
+
+A ring-generation fencing token was tried and removed: a generation is a *per-node* counter, so a
+replica comparing a coordinator's value against its own is comparing unrelated numbers, and in
+testing it refused legitimate replication outright. A correct fence would have to compare something
+both ends can evaluate — ownership by node id — and has not been designed.
 
 A cluster must also run a single build throughout: there is no mixed-version negotiation, and data
 written by an older build is not carried forward.
