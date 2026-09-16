@@ -104,12 +104,14 @@ public class Tx2pcRecovery implements MembershipListener {
         TransactionOperationHelper.resolveFromDurable(dtxId, true);
     }
 
-    // The coordinator is authoritative when reachable (commit marker ⇒ commit, otherwise presumed-abort);
-    // only when it is unreachable do we fall back to cooperative termination among the other participants.
     private Decision resolve(String coordinatorAddress, java.util.List<String> participants, String dtxId) {
         final var fromCoordinator = statusFrom(coordinatorAddress, dtxId);
         if (fromCoordinator != null) {
-            return fromCoordinator == Tx2pcLog.Status.COMMITTED ? Decision.COMMIT : Decision.ABORT;
+            return switch (fromCoordinator) {
+                case COMMITTED -> Decision.COMMIT;
+                case ABORTED, NO_RECORD -> Decision.ABORT;
+                case PREPARED, UNKNOWN -> Decision.UNKNOWN;
+            };
         }
         for (final var peer : participants) {
             if (isSelf(peer) || peer.equals(coordinatorAddress)) {

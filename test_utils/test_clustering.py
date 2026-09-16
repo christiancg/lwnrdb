@@ -571,6 +571,19 @@ def test_bulk_delete_and_upsert():
     check_status("upsert b1 via node-2", save(nodes[2].client_port, DB, "bulk", {"_id": "b1", "v": 99}), "OK")
     check("upserted value is visible on every node", all_nodes_see(DB, "bulk", "b1", 99))
 
+    # A bulk UPDATE must ship the version it assigned. When it shipped 0 instead, every replica
+    # dropped the document as superseded while the owner still answered OK, and the next
+    # anti-entropy sweep pulled the stale copy back over the acknowledged write.
+    check_status("bulk-update every doc via node-1",
+                 bulk_save(nodes[1].client_port, DB, "bulk",
+                           [{"_id": "b1", "v": 111}, {"_id": "b3", "v": 333}]), "OK")
+    check("the bulk-updated values are visible on every node",
+          all_nodes_see(DB, "bulk", "b1", 111) and all_nodes_see(DB, "bulk", "b3", 333))
+    time.sleep(5)
+    check("the bulk-updated values survive an anti-entropy sweep rather than reverting",
+          all_nodes_see(DB, "bulk", "b1", 111, timeout_s=5.0)
+          and all_nodes_see(DB, "bulk", "b3", 333, timeout_s=5.0))
+
     # DELETE via yet another node removes it everywhere (tombstone → no resurrection).
     check_status("DELETE b2 via node-0", delete(nodes[0].client_port, DB, "bulk", "b2"), "OK")
 
@@ -1314,6 +1327,20 @@ def test_restart_does_not_regress_write_versions():
     check("the newer write survives anti-entropy rather than being pulled back",
           all_nodes_see(DB, coll, "r1", 2, ports=all_ports(), timeout_s=30.0))
 
+    # A burst inside one millisecond only differs in the version's logical counter. That counter used
+    # to be rounded away in transit, so distinct writes arrived at the replicas as equal versions --
+    # and equal versions have no repair path, leaving the nodes permanently divergent.
+    burst_ids = [f"burst{i}" for i in range(12)]
+    for index, doc_id in enumerate(burst_ids):
+        check_status(f"burst write {doc_id}", save(nodes[0].client_port, DB, coll, {"_id": doc_id, "v": index}), "OK")
+    for index, doc_id in enumerate(burst_ids):
+        check(f"every node agrees on {doc_id} after a same-millisecond burst",
+              all_nodes_see(DB, coll, doc_id, index, ports=all_ports(), timeout_s=30.0))
+    time.sleep(5)
+    for index, doc_id in enumerate(burst_ids):
+        check(f"{doc_id} still agrees after an anti-entropy sweep",
+              all_nodes_see(DB, coll, doc_id, index, ports=all_ports(), timeout_s=5.0))
+
 
 def tombstone_ids(node, db, coll):
     path = os.path.join(node.work_dir, "db", db, coll, f"{coll}-tombstones.idx")
@@ -1361,6 +1388,57 @@ def test_a_fresh_tombstone_survives_anti_entropy_sweeps():
         r = find_by_id(node.client_port, DB, coll, "gone")
         check(f"node-{node.index} still reports the document deleted", r.get("status") == "NOT_FOUND",
               f"got {r}")
+
+
+def test_delete_of_an_unreplicated_id_does_not_destroy_it():
+    section("A DELETE for an id this node does not hold writes no tombstone")
+
+    # The tombstone used to be reserved before the existence check, so a DELETE that answered
+    # 404 still buried the id at a fresh version -- and anti-entropy then propagated that
+    # tombstone over the live copy every other node still held.
+    coll = "spurious_tombstone"
+    candidates = [f"{coll}_w{i}" for i in range(6)]
+
+    def _created():
+        for name in [coll] + candidates:
+            if create_coll(nodes[0].client_port, DB, name).get("status") != "OK":
+                return False
+        return True
+
+    check("the collections exist on every node", wait_until(_created, timeout_s=30.0, interval_s=1.0))
+
+    for node in nodes:
+        r = delete(node.client_port, DB, coll, "never-existed")
+        check(f"node-{node.index} answers NOT_FOUND for an id nothing holds", r.get("status") == "NOT_FOUND",
+              f"got {r}")
+
+    holders = [n.index for n in nodes if "never-existed" in tombstone_ids(n, DB, coll)]
+    check("a refused DELETE wrote no tombstone anywhere", not holders,
+          f"node(s) {holders} buried an id they never held")
+
+    # The rejoin window: a node that owns the collection again before anti-entropy has caught it up
+    # does not hold the document yet, which is when this fired in practice. The collection has to be
+    # one whose owner is still alive while the node is down, or the write itself cannot commit.
+    absent = nodes[2]
+    print(f"  Stopping node-{absent.index} ...")
+    absent.stop()
+    written = next((name for name in candidates
+                    if save(nodes[0].client_port, DB, name, {"_id": "while-down", "v": 1}).get("status") == "OK"),
+                   None)
+    check("a write commits while one node is down", written is not None,
+          "no candidate collection had a live owner")
+    print(f"  Restarting node-{absent.index} ...")
+    absent.start()
+
+    if written is not None:
+        r = delete(absent.client_port, DB, written, "absent-during-rejoin")
+        check("the rejoining node refuses an id nothing holds rather than burying it",
+              r.get("status") != "OK", f"got {r}")
+        holders = [n.index for n in nodes if "absent-during-rejoin" in tombstone_ids(n, DB, written)]
+        check("the rejoining node wrote no tombstone for it", not holders,
+              f"node(s) {holders} buried an id nothing ever held")
+        check("the document written while that node was down is still readable everywhere",
+              all_nodes_see(DB, written, "while-down", 1, ports=all_ports(), timeout_s=45.0))
 
 
 def test_forwarded_write_ignores_a_client_supplied_trigger_depth():
@@ -1603,6 +1681,7 @@ def main():
         test_restart_does_not_regress_write_versions()
         test_forwarded_write_ignores_a_client_supplied_trigger_depth()
         test_a_fresh_tombstone_survives_anti_entropy_sweeps()
+        test_delete_of_an_unreplicated_id_does_not_destroy_it()
         test_schedule_rejoin_catch_up()
         # Last: it parks a long run on one node, which leaves that node's gossiped script load
         # elevated for a round or two. Placement takes the *less* loaded of two samples, so running

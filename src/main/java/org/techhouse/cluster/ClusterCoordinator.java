@@ -4,12 +4,14 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Globals;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -48,7 +50,7 @@ public class ClusterCoordinator {
         }
         try {
             final var documents = new ArrayList<JsonObject>();
-            final var versions = new ArrayList<Long>();
+            final var versions = new ArrayList<String>();
             readDocuments(dbName, collName, ids, documents, versions);
             return replicator.broadcast(
                     new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions));
@@ -64,8 +66,12 @@ public class ClusterCoordinator {
             return null;
         }
         final var version = hybridClock.next();
+        final var present = cache.getPkIndexAndLoadIfNecessary(dbName, collName).stream().map(PkIndexEntry::getValue)
+                .collect(Collectors.toSet());
         for (final var id : ids) {
-            fs.appendTombstone(dbName, collName, id, version);
+            if (present.contains(id)) {
+                fs.appendTombstone(dbName, collName, id, version);
+            }
         }
         return version;
     }
@@ -76,7 +82,7 @@ public class ClusterCoordinator {
             return applicability;
         }
         final var version = reservedVersion != null ? reservedVersion : hybridClock.next();
-        final var versions = new ArrayList<>(Collections.nCopies(ids.size(), version));
+        final var versions = new ArrayList<>(Collections.nCopies(ids.size(), Long.toString(version)));
         return replicator
                 .broadcast(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, ids, versions));
     }
@@ -124,16 +130,17 @@ public class ClusterCoordinator {
         }
         if (!upsertIds.isEmpty()) {
             final var documents = new ArrayList<JsonObject>();
-            final var versions = new ArrayList<Long>();
+            final var versions = new ArrayList<String>();
             readDocuments(dbName, collName, upsertIds, documents, versions);
             entries.add(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions));
         }
         if (!deleteIds.isEmpty()) {
             final var version = hybridClock.next();
-            final var versions = new ArrayList<Long>(deleteIds.size());
+            final var versions = new ArrayList<String>(deleteIds.size());
+            final var versionText = Long.toString(version);
             for (final var id : deleteIds) {
                 fs.appendTombstone(dbName, collName, id, version);
-                versions.add(version);
+                versions.add(versionText);
             }
             entries.add(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, versions));
         }
@@ -195,14 +202,14 @@ public class ClusterCoordinator {
     }
 
     private void readDocuments(String dbName, String collName, List<String> ids, List<JsonObject> documents,
-            List<Long> versions) throws Exception {
+            List<String> versions) throws Exception {
         final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         for (final var id : ids) {
             final var position = Collections.binarySearch(primaryKeyIndex, id);
             if (position >= 0) {
                 final var indexEntry = primaryKeyIndex.get(position);
                 documents.add(cache.getById(dbName, collName, indexEntry).getData());
-                versions.add(indexEntry.getVersion());
+                versions.add(Long.toString(indexEntry.getVersion()));
             }
         }
     }

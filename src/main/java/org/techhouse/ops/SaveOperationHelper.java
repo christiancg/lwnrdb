@@ -132,14 +132,10 @@ public final class SaveOperationHelper {
         final var objects = bulkSaveRequest.getObjects();
         for (var i = 0; i < objects.size(); i++) {
             final var entry = DbEntry.fromJsonObject(dbName, collName, objects.get(i));
-            // Versions deserialize as a boxed Integer/Long/Double, so read them through Number.
-            Number version = null;
-            if (versions != null) {
-                version = versions.get(i);
-            }
+            final var version = versions != null ? versions.get(i) : null;
             if (version != null) {
-                entry.setVersion(version.longValue());
-                hybridClock.observe(version.longValue());
+                entry.setVersion(version);
+                hybridClock.observe(version);
             } else {
                 entry.setVersion(hybridClock.next());
             }
@@ -174,6 +170,7 @@ public final class SaveOperationHelper {
                     indexedDbEntry.setCollectionName(collName);
                     indexedDbEntry.set_id(id);
                     indexedDbEntry.setData(data);
+                    indexedDbEntry.setVersion(i.getVersion());
                     indexedDbEntriesToUpdate.add(indexedDbEntry);
                 }
             }

@@ -28,6 +28,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
+import org.techhouse.utils.JsonUtils;
 
 public class IndexHelperUpdateTest {
     @BeforeEach
@@ -196,10 +197,12 @@ public class IndexHelperUpdateTest {
     }
 
     private static JsonArray arrayValue() {
+        return arrayValue("x");
+    }
+
+    private static JsonArray arrayValue(String item) {
         final var arr = new JsonArray();
-        for (final var item : new String[]{"x"}) {
-            arr.add(item);
-        }
+        arr.add(item);
         return arr;
     }
 
@@ -276,6 +279,27 @@ public class IndexHelperUpdateTest {
         assertNotNull(objIndex);
         assertEquals(1, objIndex.size());
         assertEquals(Set.of("o1", "o2"), objIndex.getFirst().getIds());
+    }
+
+    @Test
+    public void test_bulk_update_indexes_keeps_every_doc_sharing_a_new_array_value()
+            throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("a1", "data", arrayValue("seed")));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "data");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("data"));
+
+        final var ids = List.of("a2", "a3", "a4");
+        for (final var id : ids) {
+            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith(id, "data", arrayValue("shared")));
+        }
+        IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, ids);
+
+        final var arrIndex = readHashIndex(IndexKind.ARRAY);
+        assertNotNull(arrIndex);
+        final var sharedHash = JsonUtils.hashElement(arrayValue("shared"));
+        final var shared = arrIndex.stream().filter(e -> e.getValue().equals(sharedHash)).findFirst().orElseThrow();
+        assertEquals(Set.of("a2", "a3", "a4"), shared.getIds());
     }
 
     @Test

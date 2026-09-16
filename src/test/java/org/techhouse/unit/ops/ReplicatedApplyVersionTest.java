@@ -44,12 +44,12 @@ public class ReplicatedApplyVersionTest {
 
     private boolean applyUpsert(String id, String value, long version) {
         return ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.UPSERT, List.of(doc(id, value)), null, List.of(version)));
+                ReplicationOp.UPSERT, List.of(doc(id, value)), null, List.of(Long.toString(version))));
     }
 
     private boolean applyDelete(long version) {
         return ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.DELETE, null, List.of("a"), List.of(version)));
+                ReplicationOp.DELETE, null, List.of("a"), List.of(Long.toString(version))));
     }
 
     private OperationResponse find(String id) {
@@ -64,6 +64,40 @@ public class ReplicatedApplyVersionTest {
             return null;
         }
         return byId.getObject().get("value").asJsonString().getValue();
+    }
+
+    private void bulkSave() {
+        final var request = new org.techhouse.ops.req.BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObjects(List.of(doc("a", "bulk")));
+        assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+    }
+
+    private long storedVersion() throws Exception {
+        return IocContainer.get(org.techhouse.cache.Cache.class)
+                .getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
+                .filter(entry -> entry.getValue().equals("a")).findFirst().orElseThrow().getVersion();
+    }
+
+    @Test
+    public void test_a_bulk_updated_document_is_not_superseded_on_a_replica() throws Exception {
+        assertTrue(applyUpsert("a", "old", 100L));
+        bulkSave();
+        final var shipped = storedVersion();
+
+        assertTrue(shipped > 100L, "a bulk update must ship the version it assigned, not a reset 0");
+
+        assertTrue(applyUpsert("b", "old", 100L));
+        assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
+                ReplicationOp.UPSERT, List.of(doc("b", "bulk")), null, List.of(Long.toString(shipped)))));
+        assertEquals("bulk", valueOf("b"));
+    }
+
+    @Test
+    public void test_a_null_version_in_the_list_is_applied_as_unversioned() {
+        assertTrue(ReplicatedApplyHelper
+                .apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                        List.of(doc("n", "unversioned")), null, java.util.Collections.singletonList(null))));
+        assertEquals("unversioned", valueOf("n"));
     }
 
     @Test
@@ -86,7 +120,7 @@ public class ReplicatedApplyVersionTest {
         assertTrue(applyUpsert("b", "seed", 100L));
 
         assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
-                ReplicationOp.UPSERT, List.of(doc("a", "stale"), doc("b", "fresh")), null, List.of(150L, 300L))));
+                ReplicationOp.UPSERT, List.of(doc("a", "stale"), doc("b", "fresh")), null, List.of("150", "300"))));
 
         assertEquals("newer", valueOf("a"));
         assertEquals("fresh", valueOf("b"));

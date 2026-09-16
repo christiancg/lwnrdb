@@ -210,6 +210,26 @@ public class FileSystemWriteTest {
     }
 
     @Test
+    public void test_bulk_update_preserves_the_write_version()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("_id", "v1");
+        data.addProperty("field", "value");
+        final var seed = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        seed.setVersion(11L);
+        final var inserted = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, List.of(seed));
+        final var updated = inserted.getFirst();
+        updated.getData().get("field").asJsonString().setValue("changed");
+        updated.setVersion(22L);
+
+        final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, List.of(updated));
+
+        assertEquals(22L, result.updated().getFirst().getIndex().getVersion());
+    }
+
+    @Test
     public void test_bulk_update_empty_entries_list() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);

@@ -14,15 +14,17 @@ public class AntiEntropyPayloadTest {
     public void test_digest_entry_accessors() {
         final var entry = new DigestEntry("a", 42L, true);
         assertEquals("a", entry.getId());
-        assertEquals(42L, entry.getVersion());
+        assertEquals("42", entry.getVersion());
+        assertEquals(42L, entry.versionValue());
         assertTrue(entry.isDeleted());
 
         final var blank = new DigestEntry();
         blank.setId("b");
-        blank.setVersion(7L);
+        blank.setVersion("7");
         blank.setDeleted(false);
         assertEquals("b", blank.getId());
-        assertEquals(7L, blank.getVersion());
+        assertEquals("7", blank.getVersion());
+        assertEquals(7L, blank.versionValue());
         assertFalse(blank.isDeleted());
     }
 
@@ -37,7 +39,7 @@ public class AntiEntropyPayloadTest {
         payload.setDigest(List.of(new DigestEntry("a", 1L, false)));
         payload.setIds(List.of("a"));
         payload.setDocuments(List.of(new JsonObject()));
-        payload.setVersions(List.of(1L));
+        payload.setVersions(List.of("1"));
 
         assertEquals("db2", payload.getDbName());
         assertEquals("coll2", payload.getCollName());

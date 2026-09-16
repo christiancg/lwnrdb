@@ -319,14 +319,15 @@ public class UserCache {
     }
 
     public void evictDatabase(String dbName) {
-        final var toRemove = collectionMap.keySet().stream()
-                .filter(s -> s.startsWith(dbName + Globals.COLL_IDENTIFIER_SEPARATOR)).toList();
-        for (var entryKeyToRemove : toRemove) {
-            pkIndexMap.remove(entryKeyToRemove);
-            collectionMap.remove(entryKeyToRemove);
-            collectionBytes.remove(entryKeyToRemove);
-            fieldIndexMap.remove(entryKeyToRemove);
-        }
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        removeByPrefix(pkIndexMap, prefix);
+        removeByPrefix(collectionMap, prefix);
+        removeByPrefix(collectionBytes, prefix);
+        removeByPrefix(fieldIndexMap, prefix);
+    }
+
+    private static void removeByPrefix(Map<String, ?> map, String prefix) {
+        map.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     public void evictCollection(String dbName, String collName) {

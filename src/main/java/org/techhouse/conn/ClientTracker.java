@@ -160,6 +160,19 @@ public class ClientTracker {
         return client != null ? client.getActiveTransaction() : null;
     }
 
+    public boolean hasActiveTransaction(String transactionId) {
+        if (transactionId == null) {
+            return false;
+        }
+        for (final var client : clients.values()) {
+            final var transaction = client.getActiveTransaction();
+            if (transaction != null && transaction.getTransactionId().toString().equals(transactionId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public void setActiveTransaction(UUID clientId, Transaction transaction) {
         if (clientId == null)
             return;

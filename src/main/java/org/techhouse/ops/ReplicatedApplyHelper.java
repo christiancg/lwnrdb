@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.cluster.msg.ReplicationPayload;
@@ -59,21 +60,18 @@ public final class ReplicatedApplyHelper {
         final var acceptedVersions = new ArrayList<Long>();
         for (var i = 0; i < documents.size(); i++) {
             final var document = documents.get(i);
-            Number version = null;
-            if (versions != null && i < versions.size()) {
-                version = versions.get(i);
-            }
+            final var version = versionAt(versions, i);
             if (version == null) {
                 acceptedDocuments.add(document);
                 acceptedVersions.add(null);
                 continue;
             }
-            hybridClock.observe(version.longValue());
-            if (isSupersededLocally(payload.getDbName(), payload.getCollName(), document, version.longValue())) {
+            hybridClock.observe(version);
+            if (isSupersededLocally(payload.getDbName(), payload.getCollName(), document, version)) {
                 continue;
             }
             acceptedDocuments.add(document);
-            acceptedVersions.add(version.longValue());
+            acceptedVersions.add(version);
         }
         if (acceptedDocuments.isEmpty()) {
             return true;
@@ -99,23 +97,27 @@ public final class ReplicatedApplyHelper {
         return found >= 0 ? primaryKeyIndex.get(found).getVersion() : null;
     }
 
+    private static Long versionAt(List<String> versions, int index) {
+        if (versions == null || index >= versions.size()) {
+            return null;
+        }
+        final var raw = versions.get(index);
+        return raw == null ? null : Long.valueOf(raw);
+    }
+
     private static boolean applyDelete(ReplicationPayload payload) throws Exception {
         final var ids = payload.getIds();
         final var versions = payload.getVersions();
         for (var i = 0; i < ids.size(); i++) {
             final var id = ids.get(i);
-            // Versions deserialize as a boxed Integer/Long/Double, so read them through Number.
-            Number version = null;
-            if (versions != null && i < versions.size()) {
-                version = versions.get(i);
-            }
+            final var version = versionAt(versions, i);
             // Tombstone with the owner's version even when absent, so anti-entropy cannot resurrect it.
             if (version != null) {
-                fs.appendTombstone(payload.getDbName(), payload.getCollName(), id, version.longValue());
-                hybridClock.observe(version.longValue());
+                fs.appendTombstone(payload.getDbName(), payload.getCollName(), id, version);
+                hybridClock.observe(version);
             }
             final var stored = storedVersionOf(payload.getDbName(), payload.getCollName(), id);
-            if (version != null && stored != null && stored > version.longValue()) {
+            if (version != null && stored != null && stored > version) {
                 continue;
             }
             final var request = new DeleteRequest(payload.getDbName(), payload.getCollName());

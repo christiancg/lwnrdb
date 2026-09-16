@@ -161,6 +161,47 @@ public class IndexConsistencyTest {
         assertTrue(filterIds(new JsonString("gone")).isEmpty());
     }
 
+    @Test
+    public void test_bulk_update_indexes_keeps_both_docs_sharing_a_new_value()
+            throws IOException, InterruptedException {
+        addDoc("1", new JsonString("old"));
+        enableIndex();
+        addDoc("2", new JsonString("shared"));
+        addDoc("3", new JsonString("shared"));
+
+        IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("2", "3"));
+
+        assertEquals(Set.of("2", "3"), filterIds(new JsonString("shared")));
+        assertEquals(Set.of("1"), filterIds(new JsonString("old")));
+    }
+
+    @Test
+    public void test_bulk_update_indexes_keeps_three_docs_sharing_a_new_value()
+            throws IOException, InterruptedException {
+        addDoc("1", new JsonString("old"));
+        enableIndex();
+        addDoc("2", new JsonString("shared"));
+        addDoc("3", new JsonString("shared"));
+        addDoc("4", new JsonString("shared"));
+
+        IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("2", "3", "4"));
+
+        assertEquals(Set.of("2", "3", "4"), filterIds(new JsonString("shared")));
+    }
+
+    @Test
+    public void test_bulk_update_indexes_merges_into_an_existing_value_bucket()
+            throws IOException, InterruptedException {
+        addDoc("1", new JsonString("shared"));
+        enableIndex();
+        addDoc("2", new JsonString("shared"));
+        addDoc("3", new JsonString("shared"));
+
+        IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("2", "3"));
+
+        assertEquals(Set.of("1", "2", "3"), filterIds(new JsonString("shared")));
+    }
+
     // A collection dropped while its index event is still queued must not crash background maintenance:
     // getIndexesForCollection returns empty for the missing collection, so updateIndexes/bulkUpdateIndexes
     // are clean no-ops instead of throwing an NPE.

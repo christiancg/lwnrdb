@@ -23,6 +23,7 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.DigestEntry;
 import org.techhouse.config.Configuration;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -36,6 +37,7 @@ public class AntiEntropyServiceTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final EJson eJson = IocContainer.get(EJson.class);
     private MembershipService realMembership;
     private PeerConnectionPool realPool;
 
@@ -97,7 +99,22 @@ public class AntiEntropyServiceTest {
         assertFalse(live.isDeleted());
         final var tombstone = digest.stream().filter(e -> e.getId().equals("gone")).findFirst().orElseThrow();
         assertTrue(tombstone.isDeleted());
-        assertEquals(555L, tombstone.getVersion());
+        assertEquals("555", tombstone.getVersion());
+        assertEquals(555L, tombstone.versionValue());
+    }
+
+    @Test
+    public void test_summary_matches_between_owner_and_replica_after_a_write() throws Exception {
+        seed();
+        for (var logical = 1; logical <= 8; logical++) {
+            fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "gone-" + logical,
+                    HybridClock.pack(System.currentTimeMillis(), logical));
+        }
+        final var owner = service.buildDigest(TestGlobals.DB, TestGlobals.COLL);
+
+        final var asReceived = eJson.fromJson(eJson.toJson(owner), AntiEntropyPayload.class);
+
+        assertEquals(owner.getSummary(), AntiEntropyService.summaryOf(asReceived.getDigest()));
     }
 
     @Test
@@ -124,7 +141,7 @@ public class AntiEntropyServiceTest {
             } else {
                 response.setType(ClusterMessageType.PULL_ACK);
                 payload.setDocuments(List.of(doc));
-                payload.setVersions(List.of(1000L));
+                payload.setVersions(List.of("1000"));
             }
             response.setAntiEntropy(payload);
             return response;

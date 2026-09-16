@@ -106,14 +106,14 @@ public class AntiEntropyService implements MembershipListener {
     public AntiEntropyPayload buildPull(String dbName, String collName, List<String> ids) throws Exception {
         final var payload = new AntiEntropyPayload(dbName, collName);
         final var documents = new ArrayList<JsonObject>();
-        final var versions = new ArrayList<Long>();
+        final var versions = new ArrayList<String>();
         final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         for (final var id : ids) {
             final var position = Collections.binarySearch(pkIndex, id);
             if (position >= 0) {
                 final var indexEntry = pkIndex.get(position);
                 documents.add(cache.getById(dbName, collName, indexEntry).getData());
-                versions.add(indexEntry.getVersion());
+                versions.add(Long.toString(indexEntry.getVersion()));
             }
         }
         payload.setDocuments(documents);
@@ -145,14 +145,14 @@ public class AntiEntropyService implements MembershipListener {
                 continue;
             }
             for (final var digestEntry : response.getDigest()) {
-                merge(best, digestEntry.getId(), digestEntry.getVersion(), digestEntry.isDeleted(), member.address(),
+                merge(best, digestEntry.getId(), digestEntry.versionValue(), digestEntry.isDeleted(), member.address(),
                         digestEntry.getNodeId());
             }
         }
 
         final var pullByPeer = new HashMap<NodeAddress, List<String>>();
         final var deleteIds = new ArrayList<String>();
-        final var deleteVersions = new ArrayList<Long>();
+        final var deleteVersions = new ArrayList<String>();
         for (final var idBest : best.entrySet()) {
             final var id = idBest.getKey();
             final var winner = idBest.getValue();
@@ -160,7 +160,7 @@ public class AntiEntropyService implements MembershipListener {
                 final var localTombstone = localTombstones.get(id);
                 if (localLive.containsKey(id) || localTombstone == null || localTombstone < winner.version) {
                     deleteIds.add(id);
-                    deleteVersions.add(winner.version);
+                    deleteVersions.add(Long.toString(winner.version));
                 }
             } else if (winner.source != null) {
                 final var localVersion = localLive.get(id);

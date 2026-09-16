@@ -742,6 +742,7 @@ REG_IDEMPOTENT = "idxagg_reg_idempotent"
 REG_SINGLE = "idxagg_reg_single"
 REG_CONJ = "idxagg_reg_conj"
 REG_NUMERIC = "idxagg_reg_numeric"
+REG_BULK = "idxagg_reg_bulk"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -914,6 +915,31 @@ def probe_low_cardinality_numeric_index(c):
           reg_filter(c, REG_NUMERIC, "bucket", 5) == ["n1"])
 
 
+def probe_bulk_save_indexes_every_doc_sharing_a_value(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_BULK})
+    save_doc(c, REG_BULK, {"_id": "seed", "status": "seeded"})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_BULK, "fieldName": "status"})
+    wait_for_indexes(c, [(REG_BULK, "status")])
+    wait_for_background()
+
+    documents = [{"_id": f"b{i}", "status": "active" if i % 2 == 0 else "archived"} for i in range(5)]
+    check_status("BULK_SAVE five documents over two status values",
+                 c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": REG_BULK,
+                         "objects": documents}), "OK")
+    wait_for_background()
+
+    for status, expected in (("active", ["b0", "b2", "b4"]), ("archived", ["b1", "b3"])):
+        got = reg_filter(c, REG_BULK, "status", status)
+        check(f"every bulk-saved doc with status={status} is still indexed", got == expected,
+              detail=f"expected {expected}, got {got}")
+        counted = agg(c, REG_BULK, [
+            {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": status}},
+            {"type": "COUNT"}])
+        got_count = ((counted.get("results") or [{}])[0]).get("count")
+        check(f"the index-only COUNT for status={status} matches", got_count == len(expected),
+              detail=f"expected {len(expected)}, got {got_count}")
+
+
 def regression_suite(c):
     section("Correctness regressions: non-ASCII index values, index values containing the file's own "
             "delimiters, repeated CREATE_INDEX, single-valued index ranges, low-cardinality numeric "
@@ -924,6 +950,7 @@ def regression_suite(c):
     probe_single_valued_index_ranges(c)
     probe_low_cardinality_numeric_index(c)
     probe_conjunction_after_a_filter_step(c)
+    probe_bulk_save_indexes_every_doc_sharing_a_value(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════

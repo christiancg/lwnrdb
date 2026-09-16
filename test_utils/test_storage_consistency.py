@@ -43,6 +43,7 @@ ADMIN_PASSWORD = "administrator"
 DB = "storage_db"
 COLL = "docs"
 LOCK_DB = "lock_db"
+RECREATE_DB = "recreate_db"
 LOCK_COLL = "items"
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
@@ -123,6 +124,12 @@ def seed(conn: Conn, work_dir: str):
     for i in range(SEEDED_DOCS):
         conn.save({"_id": f"id{i:03d}", "pad": PAD})
 
+    check_status("create the drop/recreate database",
+                 conn.send({"type": "CREATE_DATABASE", "databaseName": RECREATE_DB}), "OK")
+    check_status("create its collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": RECREATE_DB, "collectionName": COLL}), "OK")
+    check_status("seed it", conn.save({"_id": "shared", "pad": "before"}, db=RECREATE_DB), "OK")
+
     files = page_files(work_dir)
     check("the collection really spans several pages", len(files) > 1, f"got {files}")
     check("page metadata is persisted for a user collection", page_metadata_bytes(work_dir) > 0,
@@ -202,6 +209,28 @@ def test_drop_database_does_not_strand_a_collection_lock(conn: Conn):
                  conn.save({"_id": "after-drop", "pad": "x"}, db=LOCK_DB, coll=LOCK_COLL), "OK")
 
 
+def test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn: Conn):
+    section("DROP_DATABASE then CREATE_DATABASE with the same ids")
+    # Seeded before the restart, so nothing about this collection is cached now. The COUNT below is
+    # an index-only read: it loads the pk index without ever populating the document cache, which is
+    # the state evictDatabase used to leave behind for a recreated collection to inherit.
+    conn.count_via_pk(db=RECREATE_DB)
+
+    check_status("drop the database", conn.send({"type": "DROP_DATABASE", "databaseName": RECREATE_DB}), "OK")
+    check_status("create it again", conn.send({"type": "CREATE_DATABASE", "databaseName": RECREATE_DB}), "OK")
+    check_status("create the collection again",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": RECREATE_DB, "collectionName": COLL}), "OK")
+    check_status("write the same id again", conn.save({"_id": "shared", "pad": "after"}, db=RECREATE_DB), "OK")
+
+    found = conn.send({"type": "FIND_BY_ID", "databaseName": RECREATE_DB, "collectionName": COLL, "_id": "shared"})
+    check_status("the recreated document is readable", found, "OK")
+    check("the recreated document is the new one, not a stale read at a dead offset",
+          (found.get("object") or {}).get("pad") == "after",
+          f"got {(found.get('object') or {}).get('pad')!r}")
+    check("the recreated collection holds exactly one document", conn.count_via_pk(db=RECREATE_DB) == 1,
+          f"got {conn.count_via_pk(db=RECREATE_DB)}")
+
+
 def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
     section("writes naming a collection that does not exist")
     for op, request in (
@@ -244,6 +273,7 @@ def main():
             test_scan_is_complete_after_the_first_write(conn)
             test_page_cap_is_enforced_after_restart(conn, work_dir)
             test_drop_database_does_not_strand_a_collection_lock(conn)
+            test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
             test_writes_to_an_unknown_collection_are_refused_cleanly(conn)
     finally:
         bu.stop_server(proc)

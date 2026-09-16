@@ -445,7 +445,19 @@ Every document write is stamped with a **version** — a node-global monotonic e
 value assigned by the coordinating owner and persisted as an extra trailing column of the
 PK index (`id|position|length|page|version`). It ships in the `REPLICATE` payload so
 replicas store the *owner's* version rather than assigning their own, and a node advances
-its clock past any version it receives so it never later assigns a lower one. A **delete**
+its clock past any version it receives so it never later assigns a lower one.
+
+**Versions travel as text, never as JSON numbers.** A packed version is around 2^57, well past
+the 2^53 a double represents exactly, so a numeric field lost the low bits of the logical counter
+on every hop: distinct writes arrived as equal versions (which last-write-wins cannot repair), a
+replica's stored version never matched the owner's so the digest-summary fast path could never
+hit, and a rounded-up version could outrank a newer write. The `version` field of `DigestEntry`
+and the `versions` lists of `ReplicationPayload` and `AntiEntropyPayload` are therefore strings
+on the wire. This is a cluster protocol change: nodes on either side of it do not interoperate,
+which the single-build rule above already requires. Document numbers are untouched — they are
+still stored and treated as `double`.
+
+A **delete**
 records a versioned **tombstone** (`{coll}-tombstones.idx`), needed because a plain delete
 cannot converge — a lagging replica still holding the document would resurrect it.
 

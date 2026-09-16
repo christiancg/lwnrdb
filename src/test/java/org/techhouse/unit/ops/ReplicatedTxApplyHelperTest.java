@@ -60,13 +60,13 @@ public class ReplicatedTxApplyHelperTest {
     @Test
     public void test_applies_upsert_and_delete_entries_atomically() throws Exception {
         ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                List.of(doc("tx-del")), null, List.of(1L)));
+                List.of(doc("tx-del")), null, List.of("1")));
         assertEquals(OperationStatus.OK, findStatus("tx-del"));
 
         final var upsert = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                List.of(doc("tx-a"), doc("tx-b")), null, List.of(10L, 11L));
+                List.of(doc("tx-a"), doc("tx-b")), null, List.of("10", "11"));
         final var delete = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.DELETE, null,
-                List.of("tx-del"), List.of(12L));
+                List.of("tx-del"), List.of("12"));
 
         assertTrue(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(upsert, delete))));
 

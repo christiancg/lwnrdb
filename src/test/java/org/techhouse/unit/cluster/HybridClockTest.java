@@ -3,10 +3,28 @@ package org.techhouse.unit.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.HashSet;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.HybridClock;
+import org.techhouse.cluster.msg.DigestEntry;
+import org.techhouse.ejson.EJson;
+import org.techhouse.ioc.IocContainer;
 
 public class HybridClockTest {
+    @Test
+    public void test_two_writes_in_one_millisecond_produce_distinct_wire_versions() {
+        final var eJson = IocContainer.get(EJson.class);
+        final var clock = new HybridClock();
+        final var seen = new HashSet<Long>();
+        for (var i = 0; i < 64; i++) {
+            final var version = clock.next();
+            final var onTheWire = eJson.fromJson(eJson.toJson(new DigestEntry("a", version, false)), DigestEntry.class)
+                    .versionValue();
+            assertEquals(version, onTheWire);
+            assertTrue(seen.add(onTheWire), "wire version " + onTheWire + " collided with an earlier write");
+        }
+    }
+
     @Test
     public void test_pack_and_unpack_round_trip() {
         final var packed = HybridClock.pack(1_700_000_000_000L, 42L);

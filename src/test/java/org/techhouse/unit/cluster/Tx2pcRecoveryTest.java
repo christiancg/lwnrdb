@@ -119,14 +119,14 @@ public class Tx2pcRecoveryTest {
     }
 
     @Test
-    public void test_undecided_transaction_is_presumed_abort() throws Exception {
+    public void test_a_reachable_undecided_coordinator_leaves_the_slice_in_doubt() throws Exception {
         final var dtxId = "44444444-4444-4444-4444-444444444444";
-        seedPreparedSlice(dtxId, "rec-abort");
+        seedPreparedSlice(dtxId, "rec-indoubt");
 
         recovery.recover();
 
-        assertEquals(OperationStatus.NOT_FOUND, findStatus("rec-abort"));
-        assertFalse(Tx2pcLog.isPrepared(dtxId));
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("rec-indoubt"));
+        assertTrue(Tx2pcLog.isPrepared(dtxId), "a coordinator that has not decided must not lose the slice");
     }
 
     @Test
@@ -209,6 +209,39 @@ public class Tx2pcRecoveryTest {
             return response;
         });
         TestUtils.setPrivateField(recovery, "pool", pool);
+    }
+
+    private void injectCoordinatorPool(Tx2pcLog.Status coordinatorStatus) throws Exception {
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
+            final var response = new ClusterMessage();
+            response.setType(ClusterMessageType.TX_STATUS_ACK);
+            response.setTxStatus(coordinatorStatus.name());
+            return response;
+        });
+        TestUtils.setPrivateField(recovery, "pool", pool);
+    }
+
+    @Test
+    public void test_a_restarted_coordinator_with_no_record_is_presumed_abort() throws Exception {
+        injectCoordinatorPool(Tx2pcLog.Status.NO_RECORD);
+        final var dtxId = seedCrossNodePrepared("no-record");
+
+        recovery.recover();
+
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("no-record"));
+        assertFalse(Tx2pcLog.isPrepared(dtxId));
+    }
+
+    @Test
+    public void test_a_reachable_coordinator_with_a_live_session_leaves_the_slice_in_doubt() throws Exception {
+        injectCoordinatorPool(Tx2pcLog.Status.UNKNOWN);
+        final var dtxId = seedCrossNodePrepared("live-session");
+
+        recovery.recover();
+
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("live-session"));
+        assertTrue(Tx2pcLog.isPrepared(dtxId), "a coordinator still fanning out must not be read as an abort");
     }
 
     private String seedCrossNodePrepared(String id) throws Exception {

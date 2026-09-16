@@ -248,6 +248,10 @@ public class IndexHelper {
             fs.updateHashIndexFiles(dbName, collName, fieldName, kind, found, null);
         } else {
             final var indexEntry = new FieldIndexEntry<>(dbName, collName, hash, new HashSet<>(Set.of(entryId)));
+            final var cached = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+            if (cached != null) {
+                cached.add(indexEntry);
+            }
             fs.updateHashIndexFiles(dbName, collName, fieldName, kind, indexEntry, null);
         }
     }
@@ -331,7 +335,9 @@ public class IndexHelper {
             updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
                     toRemoveJsonCustom, found);
         } else {
-            FieldIndexEntry<?> indexEntry = new FieldIndexEntry<>(dbName, collName, value, Set.of(entryId));
+            FieldIndexEntry<?> indexEntry = new FieldIndexEntry<>(dbName, collName, value,
+                    new HashSet<>(Set.of(entryId)));
+            addToCachedIndex(dbName, collName, fieldName, value.getClass(), indexEntry);
             updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
                     toRemoveJsonCustom, indexEntry);
         }
@@ -348,9 +354,23 @@ public class IndexHelper {
             updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
                     toRemoveJsonCustom, found);
         } else {
-            FieldIndexEntry<T> indexEntry = new FieldIndexEntry<>(dbName, collName, value, Set.of(entryId));
+            FieldIndexEntry<T> indexEntry = new FieldIndexEntry<>(dbName, collName, value,
+                    new HashSet<>(Set.of(entryId)));
+            addToCachedIndex(dbName, collName, fieldName, tClass, indexEntry);
             updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
                     toRemoveJsonCustom, indexEntry);
+        }
+    }
+
+    private static void addToCachedIndex(String dbName, String collName, String fieldName, Class<?> tClass,
+            FieldIndexEntry<?> indexEntry) throws IOException {
+        @SuppressWarnings("unchecked")
+        final var lookupType = (Class<Object>) tClass;
+        final var cached = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, lookupType);
+        if (cached != null) {
+            @SuppressWarnings("unchecked")
+            final var typed = (FieldIndexEntry<Object>) indexEntry;
+            cached.add(typed);
         }
     }
 

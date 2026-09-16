@@ -100,6 +100,11 @@ public final class TransactionOperationHelper {
         }
         try {
             final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
+            if (ops.size() != transaction.getBufferedOpIds().size()) {
+                logger.error("Transaction " + transaction.getTransactionId() + " lost "
+                        + (transaction.getBufferedOpIds().size() - ops.size()) + " buffered op(s) before commit");
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
+            }
             for (final var op : ops) {
                 TransactionRecovery.applyBufferedOp(op);
             }

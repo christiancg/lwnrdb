@@ -218,7 +218,7 @@ public class OperationProcessorBeforeHookTest {
         installHook("calc", "calc", "export default (d) => ({ ...d, total: 999 });", EventType.CREATED,
                 EventType.UPDATED);
         final var payload = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                List.of(document("r1")), List.of(), List.of(1L));
+                List.of(document("r1")), List.of(), List.of("1"));
         ReplicatedApplyHelper.apply(payload);
         final var stored = find("r1");
         assertNotNull(stored);

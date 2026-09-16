@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
@@ -13,6 +14,7 @@ import org.techhouse.ioc.IocContainer;
 // The coordinator marker's presence is the commit point: present means committed, absent means presumed-abort.
 public final class Tx2pcLog {
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final String COORDINATOR_ADDRESS_FIELD = "coordinatorAddress";
     private static final String COLLECTIONS_FIELD = "collections";
     private static final String PARTICIPANTS_FIELD = "participants";
@@ -23,7 +25,7 @@ public final class Tx2pcLog {
     private static final String OUTCOME_ABORTED = "aborted";
 
     public enum Status {
-        COMMITTED, ABORTED, PREPARED, UNKNOWN
+        COMMITTED, ABORTED, PREPARED, UNKNOWN, NO_RECORD
     }
 
     private Tx2pcLog() {
@@ -64,7 +66,10 @@ public final class Tx2pcLog {
         if (outcome != null) {
             return OUTCOME_COMMITTED.equals(outcome) ? Status.COMMITTED : Status.ABORTED;
         }
-        return isPrepared(dtxId) ? Status.PREPARED : Status.UNKNOWN;
+        if (isPrepared(dtxId)) {
+            return Status.PREPARED;
+        }
+        return clientTracker.hasActiveTransaction(dtxId) ? Status.UNKNOWN : Status.NO_RECORD;
     }
 
     private static String readOutcome(String dtxId) throws Exception {
