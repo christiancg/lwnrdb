@@ -1,7 +1,9 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -95,10 +97,12 @@ public class ClusterRouterTest {
     }
 
     @Test
-    public void test_null_for_non_routable_operation() throws Exception {
+    public void test_admin_op_is_refused_when_no_coordinator_can_be_resolved() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
-        assertNull(
-                router.forward(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "{}", false, null, null));
+        final var response = router.forward(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "{}", false,
+                null, null);
+        assertNotNull(response, "a coordinated admin op must not be applied locally when it cannot replicate");
+        assertTrue(response.contains("503-9"), response);
     }
 
     @Test

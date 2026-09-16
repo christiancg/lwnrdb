@@ -93,7 +93,9 @@ public enum ErrorCode {
     SCRIPT_OUTCOME_UNKNOWN("503-7", "The node the script was placed on did not report an outcome; "
             + "it was not run again in case it already had", OperationStatus.ERROR),
     WRITE_OUTCOME_UNKNOWN("503-8", "The collection's owner did not report an outcome; the write may already "
-            + "have been applied, so retrying is only safe for an idempotent write", OperationStatus.ERROR);
+            + "have been applied, so retrying is only safe for an idempotent write", OperationStatus.ERROR),
+    ADMIN_COORDINATOR_UNAVAILABLE("503-9", "The admin coordinator could not be resolved, retry shortly",
+            OperationStatus.ERROR);
     // @formatter:on
 
     private final String code;

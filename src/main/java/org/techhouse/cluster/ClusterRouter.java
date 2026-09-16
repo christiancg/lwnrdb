@@ -173,7 +173,7 @@ public class ClusterRouter {
         }
         final var coordinatorAddress = ownershipManager.adminCoordinatorAddress();
         if (coordinatorAddress == null) {
-            return null;
+            return eJson.toJson(new OperationResponse(type, ErrorCode.ADMIN_COORDINATOR_UNAVAILABLE));
         }
         return forwardToOwner(type, rawJson, coordinatorAddress, actingUser);
     }
