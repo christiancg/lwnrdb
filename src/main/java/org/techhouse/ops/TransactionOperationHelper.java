@@ -39,7 +39,8 @@ public final class TransactionOperationHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
-    private static final int COMMIT_APPLY_ATTEMPTS = 3;
+    private static final org.techhouse.listen.ListenManager listenManager = IocContainer
+            .get(org.techhouse.listen.ListenManager.class);
     private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
     private static final Logger logger = Logger.logFor(TransactionOperationHelper.class);
 
@@ -106,8 +107,13 @@ public final class TransactionOperationHelper {
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
             }
             final var reservedTombstones = coordinator.reserveTransactionTombstones(transaction);
-            for (final var op : ops) {
-                TransactionRecovery.applyBufferedOp(op);
+            listenManager.deferNotifications();
+            try {
+                for (final var op : ops) {
+                    TransactionRecovery.applyBufferedOp(op);
+                }
+            } finally {
+                listenManager.flushDeferredNotifications();
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             // After the durable commit, so a trigger never observes a transaction that later rolled back.
@@ -184,6 +190,10 @@ public final class TransactionOperationHelper {
                 AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_QUORUM);
             }
+            if (ownershipMoved(clientId, transaction)) {
+                AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NOT_COLLECTION_OWNER);
+            }
             final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
             final var txId = transaction.getTransactionId().toString();
             // The commit point: durable before the first op is applied, so a crash after this is finished by
@@ -191,7 +201,14 @@ public final class TransactionOperationHelper {
             TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(),
                     new ArrayList<>(transaction.getHeldLocks()));
             final var reservedTombstones = coordinator.reserveTransactionTombstones(transaction);
-            if (!applyBufferedOps(ops, txId)) {
+            listenManager.deferNotifications();
+            final boolean applied;
+            try {
+                applied = TransactionRecovery.applyAllWithRetry(ops, txId);
+            } finally {
+                listenManager.flushDeferredNotifications();
+            }
+            if (!applied) {
                 fenced = true;
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
             }
@@ -216,23 +233,6 @@ public final class TransactionOperationHelper {
                 clientTracker.clearTransactionState(clientId);
             }
         }
-    }
-
-    private static boolean applyBufferedOps(List<AdminTransactionEntry> ops, String txId) {
-        var next = 0;
-        for (var attempt = 1; attempt <= COMMIT_APPLY_ATTEMPTS; attempt++) {
-            try {
-                while (next < ops.size()) {
-                    TransactionRecovery.applyBufferedOp(ops.get(next));
-                    next++;
-                }
-                return true;
-            } catch (Exception e) {
-                logger.warning("Transaction " + txId + " failed to apply op " + next + " on attempt " + attempt + ": "
-                        + e.getMessage());
-            }
-        }
-        return false;
     }
 
     public static void abortInPlace(UUID clientId) {
@@ -456,6 +456,21 @@ public final class TransactionOperationHelper {
                 }
             }
         }
+    }
+
+    private static boolean ownershipMoved(UUID clientId, Transaction transaction) {
+        for (final var session : clientTracker.txSessionsSnapshot().values()) {
+            if (session.clientId().equals(clientId)) {
+                return false;
+            }
+        }
+        for (final var collId : transaction.getHeldLocks()) {
+            final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
+            if (parts.length == 2 && !coordinator.stillOwns(parts[0], parts[1])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void releaseHeldLocks(Transaction transaction) {

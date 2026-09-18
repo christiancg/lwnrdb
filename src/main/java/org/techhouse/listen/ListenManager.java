@@ -1,6 +1,7 @@
 package org.techhouse.listen;
 
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -20,6 +21,7 @@ public class ListenManager {
     private final Map<String, Set<UUID>> collectionToListens = new ConcurrentHashMap<>();
     private final LinkedBlockingQueue<UUID> dirtyQueue = new LinkedBlockingQueue<>();
     private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
+    private final ThreadLocal<Set<String>> deferred = new ThreadLocal<>();
     private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public UUID register(UUID clientId, AggregateRequest dirtyRequest, String initialHash) {
@@ -84,8 +86,31 @@ public class ListenManager {
         }
     }
 
+    public void deferNotifications() {
+        deferred.set(new LinkedHashSet<>());
+    }
+
+    public void flushDeferredNotifications() {
+        final var pending = deferred.get();
+        deferred.remove();
+        if (pending != null) {
+            for (final var key : pending) {
+                enqueueDirty(key);
+            }
+        }
+    }
+
     public void markDirty(String dbName, String collName) {
         final var key = dbName + "|" + collName;
+        final var pending = deferred.get();
+        if (pending != null) {
+            pending.add(key);
+            return;
+        }
+        enqueueDirty(key);
+    }
+
+    private void enqueueDirty(String key) {
         final var listenIds = collectionToListens.get(key);
         if (listenIds == null || listenIds.isEmpty()) {
             return;

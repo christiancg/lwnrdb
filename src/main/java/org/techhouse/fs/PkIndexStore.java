@@ -77,7 +77,14 @@ final class PkIndexStore {
                 if (line.isBlank()) {
                     continue;
                 }
-                final var entry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line);
+                final PkIndexEntry entry;
+                try {
+                    entry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line);
+                } catch (Exception e) {
+                    logger.warning(
+                            "Dropping malformed PK index entry in " + indexFile.getName() + ": " + e.getMessage());
+                    continue;
+                }
                 if (entry.getValue().equals(value)) {
                     oldEntry = entry;
                 } else {

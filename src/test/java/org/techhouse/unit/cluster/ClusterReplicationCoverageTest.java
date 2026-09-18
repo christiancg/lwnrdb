@@ -112,7 +112,7 @@ public class ClusterReplicationCoverageTest {
 
     @Test
     public void test_replicate_user_op_not_applicable_for_unknown_user() {
-        assertEquals(ReplicationOutcome.NOT_CLUSTERED, coordinator.replicateUserOp("nobody", false));
+        assertEquals(ReplicationOutcome.NOT_COORDINATOR, coordinator.replicateUserOp("nobody", false));
     }
 
     @Test

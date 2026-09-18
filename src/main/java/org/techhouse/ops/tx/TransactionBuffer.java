@@ -99,18 +99,9 @@ public final class TransactionBuffer {
             if (readinessError != null) {
                 return readinessError;
             }
-            final var seenIds = new HashSet<String>();
-            for (final var object : request.getObjects()) {
-                final var id = TransactionWrites.ensureId(object, null);
-                final var entry = DbEntry.fromJsonObject(dbName, collName, object);
-                final var entrySizeError = EntrySizeGuard.check(entry, OperationType.BULK_SAVE);
-                if (entrySizeError != null) {
-                    return entrySizeError;
-                }
-                if (!seenIds.add(id)) {
-                    return new OperationResponse(OperationType.BULK_SAVE, "Duplicate _id in bulk save request: " + id,
-                            ErrorCode.DUPLICATE_ID);
-                }
+            final var validationError = validateBulkObjects(request, dbName, collName);
+            if (validationError != null) {
+                return validationError;
             }
             final var lockResult = ensureLock(transaction, OperationType.BULK_SAVE, dbName, collName, onLockTimeout);
             if (lockResult != null) {
@@ -122,6 +113,7 @@ public final class TransactionBuffer {
             final var array = new JsonArray();
             final var inserted = new ArrayList<String>();
             final var updated = new ArrayList<String>();
+            final var overlayUpdates = new java.util.LinkedHashMap<String, JsonObject>();
             for (final var object : request.getObjects()) {
                 final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
                 final var isUpdate = TransactionWrites.isVisible(transaction, collId, primaryKeyIndex, id);
@@ -144,11 +136,12 @@ public final class TransactionBuffer {
                 } else {
                     inserted.add(id);
                 }
-                transaction.recordSave(collId, id, effective);
+                overlayUpdates.put(id, effective);
             }
             payload.add(OBJECTS_FIELD, array);
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_BULK_SAVE, dbName, collName,
                     payload);
+            overlayUpdates.forEach((id, document) -> transaction.recordSave(collId, id, document));
             transaction.recordInserts(seq, inserted);
             return new BulkSaveResponse("Successfully saved entries", inserted, updated);
         });
@@ -201,8 +194,23 @@ public final class TransactionBuffer {
         return seq;
     }
 
-    // The collection write lock is taken on first touch and held until commit/rollback. Ending the
-    // transaction on timeout belongs to the lifecycle, so the caller supplies onTimeout.
+    private static OperationResponse validateBulkObjects(BulkSaveRequest request, String dbName, String collName) {
+        final var seenIds = new HashSet<String>();
+        for (final var object : request.getObjects()) {
+            final var id = TransactionWrites.ensureId(object, null);
+            final var entry = DbEntry.fromJsonObject(dbName, collName, object);
+            final var entrySizeError = EntrySizeGuard.check(entry, OperationType.BULK_SAVE);
+            if (entrySizeError != null) {
+                return entrySizeError;
+            }
+            if (!seenIds.add(id)) {
+                return new OperationResponse(OperationType.BULK_SAVE, "Duplicate _id in bulk save request: " + id,
+                        ErrorCode.DUPLICATE_ID);
+            }
+        }
+        return null;
+    }
+
     public static OperationResponse ensureLock(Transaction transaction, OperationType type, String dbName,
             String collName, Runnable onTimeout) throws InterruptedException {
         final var collId = Cache.getCollectionIdentifier(dbName, collName);

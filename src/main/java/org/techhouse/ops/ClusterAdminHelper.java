@@ -5,7 +5,6 @@ import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterCoordinator;
-import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.WriteGuard;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.ioc.IocContainer;
@@ -67,9 +66,11 @@ public final class ClusterAdminHelper {
         final var outcome = USER_OPS.contains(type)
                 ? coordinator.replicateUserOp(usernameOf(request), type == OperationType.DELETE_USER)
                 : coordinator.replicateAdminOp(request, actingUser);
-        return outcome == ReplicationOutcome.TIMEOUT
-                ? new OperationResponse(type, ErrorCode.REPLICATION_TIMEOUT)
-                : response;
+        return switch (outcome) {
+            case TIMEOUT -> new OperationResponse(type, ErrorCode.REPLICATION_TIMEOUT);
+            case NOT_COORDINATOR, NOT_OWNER -> new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
+            case NOT_CLUSTERED, QUORUM_MET -> response;
+        };
     }
 
     private static String usernameOf(OperationRequest request) {

@@ -68,16 +68,20 @@ public class AdminAntiEntropyService implements MembershipListener {
         if (!clusterConfig.isEnabled()) {
             return;
         }
+        boolean answered;
         try {
             AdminSnapshotPayload best = null;
             final var self = membershipService.getSelf();
             var bestEpoch = adminEpoch.current();
             var bestNodeId = self != null ? self.getNodeId() : null;
-            for (final var member : membershipService.membershipView().peers(self)) {
+            final var peers = membershipService.membershipView().peers(self);
+            answered = peers.isEmpty();
+            for (final var member : peers) {
                 final var snapshot = requestSnapshot(member.address());
                 if (snapshot == null) {
                     continue;
                 }
+                answered = true;
                 final var snapshotNodeId = snapshot.getNodeId() != null ? snapshot.getNodeId() : member.getNodeId();
                 if (outranks(snapshot.getEpoch(), snapshotNodeId, bestEpoch, bestNodeId)) {
                     bestEpoch = snapshot.getEpoch();
@@ -90,8 +94,10 @@ public class AdminAntiEntropyService implements MembershipListener {
                 adminEpoch.adopt(best.getEpoch());
                 antiEntropyService.reconcileNow();
             }
+            if (answered) {
+                adminSyncCompleted.set(true);
+            }
         } finally {
-            adminSyncCompleted.set(true);
             publishSyncState();
         }
     }

@@ -41,6 +41,30 @@ public class FileSystemPkIndexTest {
     }
 
     @Test
+    public void test_a_malformed_line_does_not_throw_from_the_write_path() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var first = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        first.set_id("keep");
+        fileSystem.insertIntoCollection(first);
+        final var indexFile = new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator
+                + TestGlobals.COLL + File.separator + TestGlobals.COLL + "-_id-String.idx");
+        java.nio.file.Files.writeString(indexFile.toPath(), "this is not a pk index line" + System.lineSeparator(),
+                java.nio.file.StandardOpenOption.APPEND);
+
+        final var second = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        second.set_id("added");
+        assertDoesNotThrow(() -> fileSystem.insertIntoCollection(second),
+                "one torn line must not fail every write, the same way it does not fail every read");
+
+        final var index = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(index.stream().anyMatch(e -> e.getValue().equals("keep")));
+        assertTrue(index.stream().anyMatch(e -> e.getValue().equals("added")));
+    }
+
+    @Test
     public void test_delete_returns_compaction() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);

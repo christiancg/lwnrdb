@@ -1,8 +1,11 @@
 package org.techhouse.cluster;
 
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.ioc.IocContainer;
@@ -16,6 +19,9 @@ public class Tx2pcRecovery implements MembershipListener {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
+    private final AtomicBoolean pendingRecovery = new AtomicBoolean();
+    private final ExecutorService membershipWorker = Executors
+            .newSingleThreadExecutor(Thread.ofVirtual().name("tx2pc-membership-", 0).factory());
     private ScheduledExecutorService sweeper;
 
     private enum Decision {
@@ -24,7 +30,22 @@ public class Tx2pcRecovery implements MembershipListener {
 
     @Override
     public void onMembershipChanged(MembershipView view) {
-        recover();
+        if (!pendingRecovery.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            membershipWorker.execute(() -> {
+                pendingRecovery.set(false);
+                try {
+                    recover();
+                } catch (Exception e) {
+                    logger.warning("Membership-triggered transaction recovery failed: " + e.getMessage());
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            pendingRecovery.set(false);
+            logger.info("Skipping membership-triggered transaction recovery: this node is shutting down");
+        }
     }
 
     public void start() {
@@ -40,6 +61,7 @@ public class Tx2pcRecovery implements MembershipListener {
         if (sweeper != null) {
             sweeper.shutdownNow();
         }
+        membershipWorker.shutdownNow();
     }
 
     private void sweep() {

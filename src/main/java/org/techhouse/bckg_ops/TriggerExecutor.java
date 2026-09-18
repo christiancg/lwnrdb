@@ -22,6 +22,8 @@ public class TriggerExecutor {
     private final LongAdder retried = new LongAdder();
     private final LongAdder deadLettered = new LongAdder();
     private final AtomicInteger inFlight = new AtomicInteger();
+    private final AtomicInteger parked = new AtomicInteger();
+    private final AtomicInteger workerCount = new AtomicInteger();
     private final AtomicInteger scheduled = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
     private volatile boolean draining;
@@ -87,6 +89,8 @@ public class TriggerExecutor {
             return thread;
         });
         final var threadCount = Math.max(1, Configuration.getInstance().getTriggerThreads());
+        workerCount.set(threadCount);
+        parked.set(0);
         for (int i = 0; i < threadCount; i++) {
             pool.execute(this::runWorker);
         }
@@ -96,11 +100,14 @@ public class TriggerExecutor {
     private void runWorker() {
         while (!Thread.currentThread().isInterrupted()) {
             final TriggerEvent event;
+            parked.incrementAndGet();
             try {
                 event = queue.take();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
+            } finally {
+                parked.decrementAndGet();
             }
             inFlight.incrementAndGet();
             try {
@@ -133,7 +140,7 @@ public class TriggerExecutor {
     }
 
     private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0 && scheduled.get() == 0;
+        return queue.isEmpty() && inFlight.get() == 0 && scheduled.get() == 0 && parked.get() >= workerCount.get();
     }
 
     public int pending() {
@@ -141,6 +148,7 @@ public class TriggerExecutor {
     }
 
     public void stop() {
+        workerCount.set(0);
         final var scheduler = retryScheduler;
         retryScheduler = null;
         if (scheduler != null) {

@@ -2,13 +2,17 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.File;
 import java.io.IOException;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.UserCache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
@@ -402,5 +406,33 @@ public class IndexHelperUpdateTest {
                 Boolean.class);
         assertNotNull(boolIndex);
         assertTrue(boolIndex.stream().anyMatch(e -> e.getIds().contains("m2")));
+    }
+
+    @Test
+    public void test_a_failed_index_write_still_evicts_the_cache() throws Exception {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("d1", "score", new JsonNumber(7)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "score");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("score"));
+        assertNotNull(cache.getFieldIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL, "score", Number.class));
+
+        final var fs = IocContainer.get(FileSystem.class);
+        TestUtils.deleteFolder(new File(TestUtils.getDbPath(fs), TestGlobals.DB + File.separator + TestGlobals.COLL));
+
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("d1", "score", new JsonNumber(8)));
+        assertThrows(IOException.class, () -> IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "d1"));
+
+        assertTrue(cachedIndexKeys().stream().noneMatch(key -> key.startsWith("score")),
+                "a failed index write must still evict the cached index, or it stays mutated in the pessimistic"
+                        + " direction and answers with a false negative until REINDEX");
+    }
+
+    private static Set<String> cachedIndexKeys() throws Exception {
+        final var userCache = IocContainer.get(UserCache.class);
+        final var byCollection = TestUtils.getPrivateField(userCache, "fieldIndexMap", Map.class);
+        final var forCollection = byCollection.get(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL));
+        return forCollection == null
+                ? Set.of()
+                : new HashSet<>(((Map<?, ?>) forCollection).keySet().stream().map(String::valueOf).toList());
     }
 }

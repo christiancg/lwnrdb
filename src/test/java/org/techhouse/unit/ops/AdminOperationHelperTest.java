@@ -4,7 +4,11 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,6 +29,26 @@ import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
 public class AdminOperationHelperTest {
+    @Test
+    public void test_a_failed_owner_write_does_not_change_the_cached_owners() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        final var dbEntry = cache.getAdminDbEntry(TestGlobals.DB);
+        org.junit.jupiter.api.Assumptions.assumeTrue(dbEntry != null);
+        final var before = new ArrayList<>(dbEntry.getOwners());
+        final var fs = IocContainer.get(org.techhouse.fs.FileSystem.class);
+        final var originalPath = TestUtils.getDbPath(fs);
+        TestUtils.setDbPath(fs, originalPath + "/does-not-exist");
+        try {
+            org.junit.jupiter.api.Assertions.assertThrows(Exception.class,
+                    () -> AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of("mallory")));
+        } finally {
+            TestUtils.setDbPath(fs, originalPath);
+        }
+
+        assertEquals(before, cache.getAdminDbEntry(TestGlobals.DB).getOwners(),
+                "authorization reads the cached owners, so they may not change until the write is durable");
+    }
+
     @BeforeEach
     public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException, InterruptedException {
         TestUtils.standardInitialSetup();
@@ -296,4 +320,69 @@ public class AdminOperationHelperTest {
         assertTrue(page0.get().getPageSize() > 0, "pageSize must reflect both entries");
     }
 
+    @Test
+    public void test_two_concurrent_creates_do_not_duplicate_the_collection_name() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry("m17db"));
+
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry("m17db", "twice"));
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry("m17db", "twice"));
+
+        final var collections = cache.getAdminDbEntry("m17db").getCollections();
+        assertEquals(1, collections.stream().filter("twice"::equals).count(),
+                "a repeated registration must not duplicate the name, or one DROP strips only one copy");
+    }
+
+    private static Thread adminCollectionsLockHolder(ResourceLocking locks, CountDownLatch held,
+            CountDownLatch release) {
+        return new Thread(() -> {
+            try {
+                locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+                held.countDown();
+                release.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+            }
+        });
+    }
+
+    @SuppressWarnings("BusyWait")
+    private static void awaitSecondLockWait(ResourceLocking locks) throws InterruptedException {
+        final var deadline = System.currentTimeMillis() + 5_000L;
+        while (locks.tryLockWrite(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME)) {
+            locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
+            assertTrue(System.currentTimeMillis() < deadline, "the write never reached the second admin lock");
+            Thread.sleep(5);
+        }
+    }
+
+    @Test
+    public void test_an_interrupt_between_the_two_admin_locks_releases_the_first() throws Exception {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        final var held = new CountDownLatch(1);
+        final var release = new CountDownLatch(1);
+        final var blocker = adminCollectionsLockHolder(locks, held, release);
+        blocker.start();
+        assertTrue(held.await(5, TimeUnit.SECONDS));
+
+        final var victim = new Thread(() -> {
+            try {
+                AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, "m18coll"));
+            } catch (Exception ignored) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        victim.start();
+        awaitSecondLockWait(locks);
+        victim.interrupt();
+        victim.join(5_000L);
+        release.countDown();
+        blocker.join(5_000L);
+
+        assertTrue(locks.tryLockWrite(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME),
+                "an interrupt while taking the second admin lock must not strand the first for the process lifetime");
+        locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
+    }
 }

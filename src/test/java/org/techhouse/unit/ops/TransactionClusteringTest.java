@@ -224,10 +224,38 @@ public class TransactionClusteringTest {
     }
 
     @Test
+    @SuppressWarnings("BusyWait")
     public void test_reaper_listener_reaps_on_membership_change() throws Exception {
         configureMembership(1, node("self", 5000));
         clientTracker.registerTxSession("listener-session", "admin", "edge-gone");
+
         new TransactionSessionReaper().onMembershipChanged(new MembershipView(List.of(node("self", 5000))));
+
+        for (var i = 0; i < 100 && !clientTracker.txSessionsSnapshot().isEmpty(); i++) {
+            Thread.sleep(20);
+        }
         assertTrue(clientTracker.txSessionsSnapshot().isEmpty());
+    }
+
+    @Test
+    public void test_commit_refuses_when_ownership_moved() throws Exception {
+        configureMembership(1, node("self", 5000));
+        final var clientId = startedClientWithWrite("ownership-moved");
+        final var realOwnership = TestUtils.getPrivateField(coordinator, "ownershipManager", OwnershipManager.class);
+        final var moved = mock(OwnershipManager.class);
+        when(moved.hasQuorum()).thenReturn(true);
+        when(moved.isOwner(any(), any())).thenReturn(false);
+        TestUtils.setPrivateField(coordinator, "ownershipManager", moved);
+        try {
+            final var response = processor.processMessage(new CommitTransactionRequest(), clientId);
+            assertEquals("421-1", response.getErrorCode(),
+                    "a commit whose collections moved to another owner is no longer mutually exclusive with that"
+                            + " owner's writers and must be refused");
+        } finally {
+            TestUtils.setPrivateField(coordinator, "ownershipManager", realOwnership);
+        }
+
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("ownership-moved"),
+                "the refusal must land before the durable commit marker, so nothing is applied");
     }
 }

@@ -470,6 +470,34 @@ def test_multiple_listeners(writer: Conn, listener: Conn):
         delete_doc(writer, "alpha-doc")
 
 
+def test_transactional_commit_pushes_once_with_the_final_state(writer: Conn, listener: Conn):
+    section("LISTEN: a transactional commit notifies once, with every op applied")
+
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "txn"}}]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the transaction test", r, "OK")
+    listen_id = r.get("listenId")
+
+    expected = {f"txn-{i}" for i in range(1, 6)}
+    check_status("START_TRANSACTION", writer.send({"type": "START_TRANSACTION"}), "OK")
+    for id_ in sorted(expected):
+        save_doc(writer, {"_id": id_, "kind": "txn"})
+    check_status("COMMIT_TRANSACTION", writer.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+    pushed = listener.recv(timeout=5.0)
+    check("push received after the commit", pushed is not None, "no push message within 5 s")
+    if pushed is not None:
+        ids = {d.get("_id") for d in (pushed.get("results") or [])}
+        check("the pushed frame holds every document the transaction wrote", ids == expected,
+              f"partially applied frame pushed: {sorted(ids)}")
+
+    extra = listener.recv(timeout=1.5)
+    check("no second frame for the same commit", extra is None, f"unexpected extra push: {extra!r}")
+
+    stop_listen(listener, listen_id)
+    for id_ in sorted(expected):
+        delete_doc(writer, id_)
+
 def test_disconnect_cleanup(writer: Conn):
     section("LISTEN: listener cleanup on client disconnect")
 
@@ -529,6 +557,7 @@ def main():
                 test_no_push_on_vector_farther(writer_conn, listener_conn)
                 test_stop_listen(writer_conn, listener_conn)
                 test_multiple_listeners(writer_conn, listener_conn)
+                test_transactional_commit_pushes_once_with_the_final_state(writer_conn, listener_conn)
                 test_disconnect_cleanup(writer_conn)
 
             test_unauthenticated_listen()

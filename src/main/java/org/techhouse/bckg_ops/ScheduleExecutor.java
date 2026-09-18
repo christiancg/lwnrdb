@@ -29,6 +29,8 @@ public class ScheduleExecutor {
     private final LongAdder skipped = new LongAdder();
     private final LongAdder dropped = new LongAdder();
     private final AtomicInteger inFlight = new AtomicInteger();
+    private final AtomicInteger parked = new AtomicInteger();
+    private final AtomicInteger workerCount = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
     private final Set<String> running = ConcurrentHashMap.newKeySet();
     private volatile boolean draining;
@@ -44,6 +46,8 @@ public class ScheduleExecutor {
         draining = false;
         this.dispatcher = scheduleDispatcher;
         final var threadCount = Math.max(1, configuration.getScheduleThreads());
+        workerCount.set(threadCount);
+        parked.set(0);
         for (var i = 0; i < threadCount; i++) {
             pool.execute(this::runWorker);
         }
@@ -126,11 +130,14 @@ public class ScheduleExecutor {
     private void runWorker() {
         while (!Thread.currentThread().isInterrupted()) {
             final ScheduleRegistry.Entry entry;
+            parked.incrementAndGet();
             try {
                 entry = queue.take();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
+            } finally {
+                parked.decrementAndGet();
             }
             inFlight.incrementAndGet();
             try {
@@ -164,7 +171,7 @@ public class ScheduleExecutor {
     }
 
     private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0;
+        return queue.isEmpty() && inFlight.get() == 0 && parked.get() >= workerCount.get();
     }
 
     public int pending() {
@@ -172,6 +179,7 @@ public class ScheduleExecutor {
     }
 
     public void stop() {
+        workerCount.set(0);
         draining = true;
         if (scheduler != null) {
             scheduler.shutdownNow();

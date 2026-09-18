@@ -135,6 +135,9 @@ public class ClusterAdminHelperTest {
         final var coordinator = IocContainer.get(org.techhouse.cluster.ClusterCoordinator.class);
         final var original = TestUtils.getPrivateField(coordinator, "replicator",
                 org.techhouse.cluster.Replicator.class);
+        org.mockito.Mockito
+                .when(replicator.broadcastAdmin(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(org.techhouse.cluster.ReplicationOutcome.QUORUM_MET);
         TestUtils.setPrivateField(coordinator, "replicator", replicator);
         try {
             final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
@@ -147,6 +150,35 @@ public class ClusterAdminHelperTest {
         } finally {
             TestUtils.setPrivateField(coordinator, "replicator", original);
         }
+    }
+
+    @Test
+    public void test_losing_coordinatorship_mid_op_is_reported_retryably() throws Exception {
+        enable(1);
+        armAdminSync(true);
+        ownership.setSelfNodeId("not-the-coordinator");
+        ownership.onMembershipChanged(
+                new MembershipView(List.of(node(), new NodeInfo("other", "127.0.0.1", 9991, NodeState.ALIVE, 1L, 1L))));
+        final var wasCoordinator = ownership.isAdminCoordinator();
+        org.junit.jupiter.api.Assumptions.assumeFalse(wasCoordinator, "this node must not be the coordinator");
+        final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
+
+        final var answered = ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response);
+
+        assertEquals("421-1", answered.getErrorCode(),
+                "DDL that could not be replicated because coordinatorship moved must be retryable, not OK");
+    }
+
+    @Test
+    public void test_a_missing_user_entry_is_not_reported_as_success() throws Exception {
+        enable(1);
+        armAdminSync(true);
+        final var coordinator = IocContainer.get(org.techhouse.cluster.ClusterCoordinator.class);
+
+        final var outcome = coordinator.replicateUserOp("nobody-at-all", false);
+
+        assertEquals(org.techhouse.cluster.ReplicationOutcome.NOT_COORDINATOR, outcome,
+                "a user record that is not there is a failure to replicate, not a non-clustered no-op");
     }
 
     @Test

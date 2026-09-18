@@ -219,11 +219,14 @@ public final class JsonUtils {
             if (step == null) {
                 return null;
             }
-            if (step.isJsonObject()) {
-                currentPart = step.asJsonObject();
-            }
             result = step;
             start = dot + 1;
+            if (start <= limit) {
+                if (!step.isJsonObject()) {
+                    return null;
+                }
+                currentPart = step.asJsonObject();
+            }
         }
         return result;
     }

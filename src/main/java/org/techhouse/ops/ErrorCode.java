@@ -103,6 +103,8 @@ public enum ErrorCode {
             + "have been applied, so retrying is only safe for an idempotent write", OperationStatus.ERROR),
     ADMIN_COORDINATOR_UNAVAILABLE("503-9", "The admin coordinator could not be resolved, retry shortly",
             OperationStatus.ERROR),
+    SCHEMA_UNAVAILABLE("503-11", "The collection's schema could not be read, so the write cannot be validated;"
+            + " retry shortly", OperationStatus.ERROR),
     COLLECTION_NOT_READY("503-10", "The collection has not reached this node yet, retry shortly",
             OperationStatus.ERROR);
     // @formatter:on

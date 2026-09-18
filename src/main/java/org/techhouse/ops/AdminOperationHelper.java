@@ -123,9 +123,16 @@ public final class AdminOperationHelper {
     public static void updateDatabaseOwners(String dbName, java.util.List<String> owners)
             throws IOException, InterruptedException {
         final var dbEntry = cache.getAdminDbEntry(dbName);
-        if (dbEntry != null) {
-            dbEntry.setOwners(owners);
+        if (dbEntry == null) {
+            return;
+        }
+        final var previousOwners = new ArrayList<>(dbEntry.getOwners());
+        dbEntry.setOwners(owners);
+        try {
             saveDatabaseEntry(dbEntry);
+        } catch (Exception e) {
+            dbEntry.setOwners(previousOwners);
+            throw e;
         }
     }
 
@@ -133,8 +140,8 @@ public final class AdminOperationHelper {
         // Also mutates the parent AdminDbEntry in admin/databases, so hold the databases lock too,
         // acquired before collections to match deleteDatabaseEntry's order (deadlock-safe).
         lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
-        lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         try {
+            lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             final var pkIndexEntry = writeAdminEntry(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, dbEntry,
                     cache.getPkIndexAdminCollEntry(dbEntry.get_id()));
             cache.putAdminCollectionEntry(dbEntry, pkIndexEntry);
@@ -142,7 +149,9 @@ public final class AdminOperationHelper {
             final var adminDbEntry = cache.getAdminDbEntry(split[0]);
             var adminDbPkIndexEntry = cache.getPkIndexAdminDbEntry(split[0]);
             final var collections = adminDbEntry.getCollections();
-            collections.add(split[1]);
+            if (!collections.contains(split[1])) {
+                collections.add(split[1]);
+            }
             adminDbEntry.setCollections(collections);
             adminDbEntry.setPage(adminDbPkIndexEntry.getPage());
             final var dbUpdateResult = fs.updateFromCollection(adminDbEntry, adminDbPkIndexEntry);
@@ -164,8 +173,8 @@ public final class AdminOperationHelper {
             // Also mutates the parent AdminDbEntry in admin/databases; hold the databases lock too,
             // acquired before collections to match deleteDatabaseEntry's order.
             lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
-            lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             try {
+                lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
                 final var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
                 adminCollEntry.setPreviousByteSize(adminIndexPkCollEntry.getLength());
                 final var compaction = fs.deleteFromCollection(adminIndexPkCollEntry);
@@ -279,12 +288,9 @@ public final class AdminOperationHelper {
     public static void saveTriggerRun(AdminTriggerRunEntry entry) throws IOException, InterruptedException {
         lockAdmin(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
         try {
-            entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME,
-                    entry.byteSize()));
-            final var savedPk = fs.insertIntoCollection(entry);
+            final var savedPk = writeAdminEntry(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, entry,
+                    cache.getPkIndexTriggerRun(entry.get_id()));
             cache.putPkIndexTriggerRun(savedPk);
-            AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME,
-                    EventType.CREATED, List.of(entry), false);
         } finally {
             releaseAdmin(Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
         }

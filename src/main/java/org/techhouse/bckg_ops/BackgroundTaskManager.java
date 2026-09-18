@@ -13,6 +13,8 @@ public class BackgroundTaskManager {
     private final LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
     private final AtomicInteger inFlight = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
+    private final AtomicInteger parked = new AtomicInteger();
+    private final AtomicInteger workerCount = new AtomicInteger();
     private volatile boolean draining;
     private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -27,8 +29,10 @@ public class BackgroundTaskManager {
     public void startBackgroundWorkers() {
         draining = false;
         final var threadCount = Configuration.getInstance().getBackgroundProcessingThreads();
+        workerCount.set(threadCount);
+        parked.set(0);
         for (int i = 0; i < threadCount; i++) {
-            final var thread = new BackgroundProcessorThread(queue, inFlight, idleSignal);
+            final var thread = new BackgroundProcessorThread(queue, inFlight, parked, idleSignal);
             pool.execute(thread);
         }
         logger.info("Started listening for background tasks");
@@ -53,7 +57,7 @@ public class BackgroundTaskManager {
     }
 
     private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0;
+        return queue.isEmpty() && inFlight.get() == 0 && parked.get() >= workerCount.get();
     }
 
     public int pending() {
@@ -61,6 +65,7 @@ public class BackgroundTaskManager {
     }
 
     public void stopBackgroundWorkers() {
+        workerCount.set(0);
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Background");
         queue.clear();
         logger.info("Stopped listening for background tasks");

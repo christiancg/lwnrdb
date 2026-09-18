@@ -157,9 +157,15 @@ public class AntiEntropyService implements MembershipListener {
         final var localSummary = summaryOf(localEntries);
 
         final var self = membershipService.getSelf();
-        for (final var member : membershipService.membershipView().peers(self)) {
+        final var peers = membershipService.membershipView().peers(self);
+        var everyPeerAnswered = true;
+        for (final var member : peers) {
             final var response = requestDigest(member.address(), dbName, collName, localSummary);
-            if (response == null || response.isSummaryMatch() || response.getDigest() == null) {
+            if (response == null) {
+                everyPeerAnswered = false;
+                continue;
+            }
+            if (response.isSummaryMatch() || response.getDigest() == null) {
                 continue;
             }
             for (final var digestEntry : response.getDigest()) {
@@ -182,7 +188,8 @@ public class AntiEntropyService implements MembershipListener {
                 }
             } else if (winner.source != null) {
                 final var localVersion = localLive.get(id);
-                if (localVersion == null || localVersion < winner.version) {
+                if (localVersion == null || localVersion < winner.version
+                        || (localVersion == winner.version && outranksOnNodeId(winner.nodeId, selfNodeId))) {
                     pullByPeer.computeIfAbsent(winner.source, ignored -> new ArrayList<>()).add(id);
                 }
             }
@@ -199,12 +206,13 @@ public class AntiEntropyService implements MembershipListener {
                         response.getDocuments(), null, response.getVersions()));
             }
         }
-        garbageCollectTombstones(dbName, collName);
+        garbageCollectTombstones(dbName, collName, everyPeerAnswered && !peers.isEmpty());
     }
 
-    private void garbageCollectTombstones(String dbName, String collName) throws IOException {
+    private void garbageCollectTombstones(String dbName, String collName, boolean everyPeerAnswered)
+            throws IOException {
         final var retention = clusterConfig.tombstoneRetentionMs();
-        if (retention <= 0) {
+        if (retention <= 0 || !everyPeerAnswered) {
             return;
         }
         fs.compactTombstones(dbName, collName, HybridClock.pack(System.currentTimeMillis() - retention, 0));
@@ -221,6 +229,10 @@ public class AntiEntropyService implements MembershipListener {
     private String selfNodeId() {
         final var self = membershipService.getSelf();
         return self == null ? null : self.getNodeId();
+    }
+
+    private static boolean outranksOnNodeId(String winnerNodeId, String selfNodeId) {
+        return winnerNodeId != null && selfNodeId != null && winnerNodeId.compareTo(selfNodeId) > 0;
     }
 
     private static boolean wins(long version, boolean deleted, String nodeId, Best current) {

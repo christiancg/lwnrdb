@@ -87,8 +87,6 @@ public class IndexHelper {
                                 new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
                             default -> throw new IllegalStateException("Unexpected value: " + primitive);
                         };
-                    } else if (key.isJsonNull()) {
-                        return new FieldIndexEntry<>(dbName, collName, JsonNull.INSTANCE, ids);
                     } else {
                         return null;
                     }
@@ -151,8 +149,8 @@ public class IndexHelper {
                     for (var id : ids) {
                         applyCurrentState(dbName, collName, fieldName, id, byId.get(id));
                     }
-                    cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
                 } finally {
+                    cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
                     rl.releaseIndex(dbName, collName, fieldName);
                 }
             }
@@ -177,9 +175,9 @@ public class IndexHelper {
                 rl.lockIndex(dbName, collName, fieldName);
                 try {
                     applyCurrentState(dbName, collName, fieldName, id, doc);
+                } finally {
                     // Drop the cached index so the next read reloads the rewritten .idx files from disk.
                     cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-                } finally {
                     rl.releaseIndex(dbName, collName, fieldName);
                 }
             }

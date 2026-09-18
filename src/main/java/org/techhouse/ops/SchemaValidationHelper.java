@@ -8,6 +8,7 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.InvalidSchemaException;
 import org.techhouse.ejson.validate.SchemaValidationResult;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -34,6 +35,10 @@ public final class SchemaValidationHelper {
                 case BULK_SAVE -> checkBulkSave((BulkSaveRequest) request);
                 default -> null;
             };
+        } catch (MetadataReadException e) {
+            logger.error("Refusing the write: cannot read the schema for " + request.getDatabaseName() + "|"
+                    + request.getCollectionName(), e);
+            return new OperationResponse(request.getType(), ErrorCode.SCHEMA_UNAVAILABLE);
         } catch (Exception e) {
             // Cannot happen (the cached schema was validated when saved): never break the write path over it.
             logger.warning("Skipping schema validation for " + request.getDatabaseName() + "|"

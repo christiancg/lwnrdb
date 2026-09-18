@@ -30,10 +30,10 @@ public final class CollectionOperationHelper {
     }
 
     public static OperationResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
-        return OperationResponse.respondOrError(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION,
-                () -> {
-                    final var dbName = createCollectionRequest.getDatabaseName();
-                    final var collName = createCollectionRequest.getCollectionName();
+        final var dbName = createCollectionRequest.getDatabaseName();
+        final var collName = createCollectionRequest.getCollectionName();
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_COLLECTION,
+                ErrorCode.ERROR_CREATING_COLLECTION, () -> {
                     // A node can hold the database's admin entry without its folder (a replicated
                     // CREATE_DATABASE returns early), and createCollectionFile only mkdirs one level.
                     if (cache.getAdminDbEntry(dbName) != null) {

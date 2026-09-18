@@ -35,9 +35,11 @@ import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
+import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -211,5 +213,54 @@ public class TransactionBeforeHookTest {
         assertEquals(OperationStatus.OK, processor.processMessage(request, client).getStatus());
         assertEquals(OperationStatus.OK, processor.processMessage(new CommitTransactionRequest(), client).getStatus());
         assertNull(find("t9"));
+    }
+
+    private void vetoOn(String id) throws Exception {
+        installHook("veto", "veto", "export default (d) => { if (d._id === '" + id + "') { throw new Error('no'); } };",
+                EventType.CREATED, EventType.UPDATED);
+    }
+
+    private void bulkRejectedAt(UUID client, String keptId, String vetoedId) {
+        final var request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObjects(List.of(document(keptId), document(vetoedId)));
+        assertEquals(ErrorCode.BEFORE_HOOK_REJECTED.getCode(),
+                processor.processMessage(request, client).getErrorCode());
+    }
+
+    @Test
+    public void test_a_rejected_bulk_save_leaves_no_overlay_entries() throws Exception {
+        vetoOn("t20");
+        final var client = newClient();
+        processor.processMessage(new StartTransactionRequest(), client);
+        try {
+            bulkRejectedAt(client, "t19", "t20");
+
+            final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+            request.set_id("t19");
+            assertEquals(OperationStatus.NOT_FOUND, processor.processMessage(request, client).getStatus(),
+                    "an object from a refused bulk save must not be readable through the transaction's overlay");
+        } finally {
+            processor.processMessage(new RollbackTransactionRequest(), client);
+        }
+    }
+
+    @Test
+    public void test_a_later_save_of_a_rejected_id_is_classified_as_an_insert() throws Exception {
+        vetoOn("t22");
+        final var client = newClient();
+        processor.processMessage(new StartTransactionRequest(), client);
+        try {
+            bulkRejectedAt(client, "t21", "t22");
+
+            final var retry = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+            retry.setObjects(List.of(document("t21")));
+            final var response = (BulkSaveResponse) processor.processMessage(retry, client);
+
+            assertEquals(List.of("t21"), response.getInserted(),
+                    "a phantom overlay entry would classify the retry as an update and fire the wrong event");
+            assertTrue(response.getUpdated().isEmpty());
+        } finally {
+            processor.processMessage(new RollbackTransactionRequest(), client);
+        }
     }
 }

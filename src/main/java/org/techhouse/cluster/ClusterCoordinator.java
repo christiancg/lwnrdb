@@ -195,8 +195,11 @@ public class ClusterCoordinator {
 
     // Only the coordinator replicates, so peers applying an inbound REPLICATE_ADMIN never re-broadcast.
     public ReplicationOutcome replicateAdminOp(OperationRequest request, String actingUser) {
-        if (!clusterConfig.isEnabled() || !ownershipManager.isAdminCoordinator()) {
+        if (!clusterConfig.isEnabled()) {
             return ReplicationOutcome.NOT_CLUSTERED;
+        }
+        if (!ownershipManager.isAdminCoordinator()) {
+            return ReplicationOutcome.NOT_COORDINATOR;
         }
         return replicator.broadcastAdmin(eJson.toJson(request), actingUser);
     }
@@ -204,8 +207,11 @@ public class ClusterCoordinator {
     // Ships the committed admin/users record so the salted password hash is identical on every node rather
     // than re-hashed per node.
     public ReplicationOutcome replicateUserOp(String username, boolean delete) {
-        if (!clusterConfig.isEnabled() || !ownershipManager.isAdminCoordinator()) {
+        if (!clusterConfig.isEnabled()) {
             return ReplicationOutcome.NOT_CLUSTERED;
+        }
+        if (!ownershipManager.isAdminCoordinator()) {
+            return ReplicationOutcome.NOT_COORDINATOR;
         }
         final ReplicationPayload payload;
         if (delete) {
@@ -214,7 +220,7 @@ public class ClusterCoordinator {
         } else {
             final var entry = cache.getAdminUserEntry(username);
             if (entry == null) {
-                return ReplicationOutcome.NOT_CLUSTERED;
+                return ReplicationOutcome.NOT_COORDINATOR;
             }
             payload = new ReplicationPayload(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
                     ReplicationOp.UPSERT, List.of(entry.getData()), null);

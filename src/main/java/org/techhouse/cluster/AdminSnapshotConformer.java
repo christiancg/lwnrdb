@@ -28,6 +28,7 @@ import org.techhouse.ops.IndexHelper;
 // idempotent so the periodic sweep does not rewrite an already-converged node.
 final class AdminSnapshotConformer {
     private final Logger logger = Logger.logFor(AdminSnapshotConformer.class);
+    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -38,12 +39,18 @@ final class AdminSnapshotConformer {
     private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
 
     void conform(AdminSnapshotPayload snapshot) throws Exception {
+        final var epochAtStart = adminEpoch.current();
         final var snapshotUsers = conformUsers(snapshot);
         removeAbsentUsers(snapshotUsers);
         final var snapshotDbs = conformDatabases(snapshot);
         conformProcedures(snapshot, snapshotDbs);
         conformSchedules(snapshot, snapshotDbs);
         final var snapshotColls = conformCollections(snapshot, snapshotDbs);
+        if (adminEpoch.current() != epochAtStart) {
+            logger.warning("Skipping the quarantine phase of the admin conform: a local admin op committed"
+                    + " during it. The next round reconciles from the newer local state.");
+            return;
+        }
         dropAbsentCollections(snapshotDbs, snapshotColls);
         dropAbsentDatabases(snapshotDbs);
     }
@@ -130,6 +137,7 @@ final class AdminSnapshotConformer {
                     if (!definition.equals(cache.loadProcedureUncached(dbName, parts[1]))) {
                         fs.writeProcedure(dbName, parts[1], eJson.toJson(entry.getValue()));
                         cache.removeProcedure(dbName, parts[1]);
+                        compiledProcedures.invalidateProcedure(dbName, parts[1]);
                     }
                 }
             } finally {
@@ -290,6 +298,8 @@ final class AdminSnapshotConformer {
             }
             cache.evictDatabase(dbName);
             AdminOperationHelper.deleteDatabaseEntry(dbName);
+            compiledProcedures.invalidateDatabase(dbName);
+            scheduleRegistry.removeDatabase(dbName);
             listenManager.unregisterAllForDatabase(dbName);
             logger.warning("Quarantined database " + dbName
                     + ": it is absent from the winning admin snapshot. Its documents are left on disk and it no"

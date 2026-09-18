@@ -12,11 +12,14 @@ public class BackgroundProcessorThread implements Runnable {
     private final Logger logger = Logger.logFor(BackgroundProcessorThread.class);
     private final LinkedBlockingQueue<Event> queue;
     private final AtomicInteger inFlight;
+    private final AtomicInteger parked;
     private final IdleSignal idleSignal;
 
-    public BackgroundProcessorThread(LinkedBlockingQueue<Event> queue, AtomicInteger inFlight, IdleSignal idleSignal) {
+    public BackgroundProcessorThread(LinkedBlockingQueue<Event> queue, AtomicInteger inFlight, AtomicInteger parked,
+            IdleSignal idleSignal) {
         this.queue = queue;
         this.inFlight = inFlight;
+        this.parked = parked;
         this.idleSignal = idleSignal;
     }
 
@@ -25,11 +28,14 @@ public class BackgroundProcessorThread implements Runnable {
         final var batch = new ArrayList<Event>(MAX_BATCH);
         while (!Thread.currentThread().isInterrupted()) {
             final Event first;
+            parked.incrementAndGet();
             try {
                 first = queue.take();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
+            } finally {
+                parked.decrementAndGet();
             }
             inFlight.incrementAndGet();
             batch.clear();

@@ -26,6 +26,8 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private final AdminCache adminCache = IocContainer.get(AdminCache.class);
     private final UserCache userCache = IocContainer.get(UserCache.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final org.techhouse.concurrency.ResourceLocking locks = IocContainer
+            .get(org.techhouse.concurrency.ResourceLocking.class);
     @Override
     public UserCache userCache() {
         return userCache;
@@ -116,7 +118,9 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         }
         try {
             final var loaded = readWholeCollection(dbName, collName);
-            final var admitted = userCache.admitWholeCollection(dbName, collName, loaded);
+            final var admitted = locks.holdsCollectionLock(dbName, collName)
+                    ? userCache.admitWholeCollection(dbName, collName, loaded)
+                    : loaded;
             recordScanned(admitted.size());
             return admitted;
         } catch (IOException e) {

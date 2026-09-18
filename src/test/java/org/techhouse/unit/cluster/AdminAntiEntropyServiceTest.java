@@ -122,13 +122,14 @@ public class AdminAntiEntropyServiceTest {
     }
 
     @Test
-    public void test_reconcile_sets_sync_completed_and_skips_unreachable_peer() throws Exception {
+    public void test_sync_is_incomplete_when_no_peer_answered() throws Exception {
         when(mockPool.request(any(), any(), anyLong())).thenThrow(new RuntimeException("unreachable"));
 
         service.reconcile();
 
         assertNull(cache.getAdminDbEntry("newdb"));
-        assertTrue(service.hasCompletedAdminSync());
+        assertFalse(service.hasCompletedAdminSync(),
+                "a node no peer answered has conformed to nothing and must not advertise itself as synced");
     }
 
     @Test
@@ -147,12 +148,23 @@ public class AdminAntiEntropyServiceTest {
     @Test
     public void test_reconcile_publishes_the_caught_up_state_to_membership() throws Exception {
         membershipService.setAdminSyncing(true);
-        when(mockPool.request(any(), any(), anyLong())).thenThrow(new RuntimeException("unreachable"));
+        stubSnapshot(List.of(dbJson(List.of())), List.of(), List.of());
 
         service.reconcile();
 
         assertTrue(service.hasCompletedAdminSync());
         assertFalse(syncingFlag());
+    }
+
+    @Test
+    public void test_an_unreachable_peer_leaves_the_node_advertising_itself_as_syncing() throws Exception {
+        membershipService.setAdminSyncing(true);
+        when(mockPool.request(any(), any(), anyLong())).thenThrow(new RuntimeException("unreachable"));
+
+        service.reconcile();
+
+        assertFalse(service.hasCompletedAdminSync());
+        assertTrue(syncingFlag(), "a node that conformed to nothing must keep advertising that it is syncing");
     }
 
     private boolean syncingFlag() throws Exception {
@@ -180,7 +192,7 @@ public class AdminAntiEntropyServiceTest {
         service.reconcile();
 
         assertNull(cache.getAdminDbEntry("newdb"));
-        assertTrue(service.hasCompletedAdminSync());
+        assertFalse(service.hasCompletedAdminSync(), "a peer that answered with an error is not a completed sync");
     }
 
     @Test
@@ -206,6 +218,7 @@ public class AdminAntiEntropyServiceTest {
     public void test_start_membership_trigger_and_stop() throws Exception {
         TestUtils.setPrivateField(config, "antiEntropyIntervalMs", 3600000L);
         TestUtils.setPrivateField(service, "adminSyncCompleted", new AtomicBoolean(false));
+        stubSnapshot(List.of(dbJson(List.of())), List.of(), List.of());
         service.start();
         try {
             service.onMembershipChanged(membershipService.membershipView());

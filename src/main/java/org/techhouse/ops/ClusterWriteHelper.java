@@ -66,7 +66,7 @@ public final class ClusterWriteHelper {
             ReplicationOutcome outcome) {
         return switch (outcome) {
             case TIMEOUT -> new OperationResponse(type, ErrorCode.REPLICATION_TIMEOUT);
-            case NOT_OWNER -> new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
+            case NOT_OWNER, NOT_COORDINATOR -> new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
             case NOT_CLUSTERED, QUORUM_MET -> success;
         };
     }

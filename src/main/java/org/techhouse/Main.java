@@ -84,8 +84,8 @@ public class Main {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         cache.loadAdminData();
-        cleanupOrphanedTransactions();
         seedHybridClock();
+        cleanupOrphanedTransactions();
         bootstrapDefaultAdmin();
         final var port = getPort(args);
         backgroundTaskManager.startBackgroundWorkers();
@@ -93,7 +93,6 @@ public class Main {
         // Must run after cleanupOrphanedTransactions: the records left are runs that never applied.
         TriggerRunRecovery.garbageCollect();
         TriggerRunRecovery.warnAboutStrandedRuns();
-        TriggerRunRecovery.recoverLocal();
         startSchedulerIfEnabled();
         listenManager.startWorkers();
         memoryManagement.loadProfileFromAdmin();
@@ -103,7 +102,9 @@ public class Main {
         StartupWarnings.warnIfCachesExceedHeap();
         StartupWarnings.warnIfDefaultAdminPassword();
         StartupWarnings.warnIfScriptFetchEnabled();
+        StartupWarnings.warnIfIndexesLeftDirty();
         startClusterIfEnabled();
+        TriggerRunRecovery.recoverLocal();
         final var sslServerSocketFactory = createTlsFactory();
         final var server = new SocketServer(port, sslServerSocketFactory);
         registerShutdownHook(server);

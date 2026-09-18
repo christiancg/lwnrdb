@@ -448,4 +448,28 @@ public class OperationProcessorDdlTest {
         ReindexResponse response = (ReindexResponse) processor.processMessage(request);
         assertEquals(OperationStatus.OK, response.getStatus());
     }
+
+    @Test
+    public void test_concurrent_create_and_drop_leave_a_consistent_state() throws Exception {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        final var collName = "m17created";
+        locks.lock(TestGlobals.DB, collName);
+        final var finished = new CountDownLatch(1);
+        final var worker = new Thread(() -> {
+            processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, collName));
+            finished.countDown();
+        });
+        worker.start();
+        try {
+            assertFalse(finished.await(300, TimeUnit.MILLISECONDS),
+                    "CREATE_COLLECTION must hold the collection lock, or a concurrent DROP lands between the folder"
+                            + " creation and the registration and leaves an admin entry with no directory");
+        } finally {
+            locks.release(TestGlobals.DB, collName);
+        }
+
+        assertTrue(finished.await(5, TimeUnit.SECONDS));
+        worker.join(5_000L);
+        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, collName));
+    }
 }

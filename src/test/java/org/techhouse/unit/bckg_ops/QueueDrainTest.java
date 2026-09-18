@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
@@ -107,5 +108,51 @@ public class QueueDrainTest {
         backgroundTaskManager.submitBackgroundTask(new org.techhouse.bckg_ops.events.UsageProfileCleanupEvent());
 
         assertEquals(0, backgroundTaskManager.pending());
+    }
+
+    private static void takenButNotYetCounted(Object executor) throws Exception {
+        TestUtils.getPrivateField(executor, "workerCount", AtomicInteger.class).set(1);
+        TestUtils.getPrivateField(executor, "parked", AtomicInteger.class).set(0);
+    }
+
+    private static void parkedOnAnEmptyQueue(Object executor) throws Exception {
+        TestUtils.getPrivateField(executor, "workerCount", AtomicInteger.class).set(1);
+        TestUtils.getPrivateField(executor, "parked", AtomicInteger.class).set(1);
+    }
+
+    @Test
+    public void test_drain_waits_for_an_event_taken_but_not_yet_counted() throws Exception {
+        final var manager = new BackgroundTaskManager();
+
+        takenButNotYetCounted(manager);
+        assertFalse(manager.drain(200L),
+                "an event already taken from the queue but not yet counted must not read as idle");
+
+        parkedOnAnEmptyQueue(manager);
+        assertTrue(manager.drain(2_000L), "a worker parked on an empty queue is idle");
+    }
+
+    @Test
+    public void test_trigger_drain_waits_for_an_event_taken_but_not_yet_counted() throws Exception {
+        final var executor = new TriggerExecutor();
+
+        takenButNotYetCounted(executor);
+        assertFalse(executor.drain(200L),
+                "a trigger already taken from the queue but not yet counted must not read as idle");
+
+        parkedOnAnEmptyQueue(executor);
+        assertTrue(executor.drain(2_000L), "a worker parked on an empty queue is idle");
+    }
+
+    @Test
+    public void test_schedule_drain_waits_for_an_event_taken_but_not_yet_counted() throws Exception {
+        final var executor = new ScheduleExecutor();
+
+        takenButNotYetCounted(executor);
+        assertFalse(executor.drain(200L),
+                "a schedule already taken from the queue but not yet counted must not read as idle");
+
+        parkedOnAnEmptyQueue(executor);
+        assertTrue(executor.drain(2_000L), "a worker parked on an empty queue is idle");
     }
 }

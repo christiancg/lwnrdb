@@ -45,6 +45,7 @@ COLL = "docs"
 LOCK_DB = "lock_db"
 RECREATE_DB = "recreate_db"
 LOCK_COLL = "items"
+DIRTY_COLL = "dirty_index_docs"
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
@@ -248,6 +249,45 @@ def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
                       conn.send(request), "NOT_FOUND", "404-11")
 
 
+
+# ── phase 3: an unclean stop ─────────────────────────────────────────────────
+
+def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
+    folder = os.path.join(work_dir, "db", db, coll)
+    if not os.path.isdir(folder):
+        return []
+    return sorted(f for f in os.listdir(folder) if f.endswith("-indexes.dirty"))
+
+
+def write_until_indexes_are_dirty(conn: Conn, work_dir: str) -> bool:
+    check_status("create the collection whose indexes will be left dirty",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": DIRTY_COLL}), "OK")
+    check_status("index a field on it",
+                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": DIRTY_COLL,
+                            "fieldName": "n"}), "OK")
+    deadline = time.time() + 15.0
+    index = 0
+    while time.time() < deadline:
+        for _ in range(50):
+            conn.save({"_id": f"d{index:05d}", "n": index, "pad": PAD}, coll=DIRTY_COLL)
+            index += 1
+        if dirty_markers(work_dir):
+            return True
+    return False
+
+
+def test_an_unclean_stop_is_reported_at_the_next_startup(work_dir: str, log_path: str, log_offset: int):
+    section("Startup names a collection whose field-index work never drained")
+
+    with open(log_path, "rb") as fp:
+        fp.seek(log_offset)
+        restart_log = fp.read().decode(errors="replace")
+
+    check("startup warns about the collection left dirty",
+          f"{DB}|{DIRTY_COLL}" in restart_log and "REINDEX" in restart_log,
+          "the restart log does not name the collection, so an operator has no signal to rebuild it")
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -279,6 +319,19 @@ def main():
             test_drop_database_does_not_strand_a_collection_lock(conn)
             test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
             test_writes_to_an_unknown_collection_are_refused_cleanly(conn)
+
+            check("a burst of indexed writes leaves an index-dirty marker on disk",
+                  write_until_indexes_are_dirty(conn, work_dir),
+                  "the background queue drained faster than the test could write")
+        print("\n  Killing the server without a drain ...")
+        proc.kill()
+        proc.wait(timeout=30)
+        log_offset = os.path.getsize(log_path)
+        proc = None
+
+        print(f"  Restarting server on {HOST}:{PORT} ...")
+        proc = bu.start_server(work_dir, log_path)
+        test_an_unclean_stop_is_reported_at_the_next_startup(work_dir, log_path, log_offset)
     finally:
         bu.stop_server(proc)
 

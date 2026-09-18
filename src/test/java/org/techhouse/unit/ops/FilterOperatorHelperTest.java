@@ -102,6 +102,30 @@ public class FilterOperatorHelperTest {
     }
 
     @Test
+    public void test_a_path_through_a_scalar_matches_nothing() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        cache.putAdminCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL),
+                new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "n1", 0, 100, 0));
+        final var nested = new JsonObject();
+        nested.addProperty("scalar", 5);
+        nested.addProperty("b", 7);
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("n1"));
+        obj.add("a", nested);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id("n1");
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+
+        final var op = new FieldOperator(FieldOperatorType.EQUALS, "a.scalar.b",
+                new org.techhouse.ejson.elements.JsonNumber(7));
+        final var matched = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertTrue(matched.isEmpty(), "a path that walks through a scalar must not fall back to its parent");
+    }
+
+    @Test
     public void test_equals_returns_every_case_variant_via_the_index() throws IOException {
         seedCaseVariants();
         final var scanned = filterNames(FieldOperatorType.EQUALS, "bob");

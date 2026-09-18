@@ -19,7 +19,8 @@ public class BackgroundProcessorThreadTest {
         };
         queue.add(mockEvent);
 
-        Thread thread = new Thread(new BackgroundProcessorThread(queue, new AtomicInteger(), new IdleSignal()));
+        Thread thread = new Thread(
+                new BackgroundProcessorThread(queue, new AtomicInteger(), new AtomicInteger(), new IdleSignal()));
         thread.start();
 
         Thread.sleep(1000);
@@ -30,7 +31,8 @@ public class BackgroundProcessorThreadTest {
     public void testRunWhenQueueIsEmpty() {
         LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
 
-        Thread thread = new Thread(new BackgroundProcessorThread(queue, new AtomicInteger(), new IdleSignal()));
+        Thread thread = new Thread(
+                new BackgroundProcessorThread(queue, new AtomicInteger(), new AtomicInteger(), new IdleSignal()));
         thread.start();
         assertTrue(thread.isAlive());
 

@@ -19,9 +19,11 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.BulkUpdateResult;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
@@ -29,6 +31,7 @@ import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.SaveResponse;
 
 public final class SaveOperationHelper {
+    private static final Logger logger = Logger.logFor(SaveOperationHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     // Not final so tests can substitute a task manager whose workers are never started.
@@ -177,7 +180,13 @@ public final class SaveOperationHelper {
         }
         final List<IndexedDbEntry> updatedIndexEntries = new ArrayList<>();
         if (!indexedDbEntriesToUpdate.isEmpty()) {
-            final var bulkResult = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate);
+            final BulkUpdateResult bulkResult;
+            try {
+                bulkResult = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate);
+            } catch (Exception e) {
+                cache.userCache().evictPkIndex(dbName, collName);
+                throw e;
+            }
             updatedIndexEntries.addAll(bulkResult.updated());
             // Fix the in-memory positions of survivors shifted by the batch before replacing the updated ones.
             bulkResult.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
@@ -239,8 +248,14 @@ public final class SaveOperationHelper {
         pendingIndexWrites.mark(dbName, collName, entry.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, oldEntry));
 
-        entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
-        final var relocatedPkIndexEntry = fs.insertIntoCollection(entry);
+        final PkIndexEntry relocatedPkIndexEntry;
+        try {
+            entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
+            relocatedPkIndexEntry = fs.insertIntoCollection(entry);
+        } catch (Exception e) {
+            restoreAfterFailedRelocation(dbName, collName, oldEntry, primaryKeyIndex);
+            throw e;
+        }
         cache.updatePageSizeInMemory(dbName, collName, relocatedPkIndexEntry.getPage(),
                 relocatedPkIndexEntry.getLength());
         int insertAt = Collections.binarySearch(primaryKeyIndex, relocatedPkIndexEntry.getValue());
@@ -252,5 +267,26 @@ public final class SaveOperationHelper {
         pendingIndexWrites.mark(dbName, collName, entry.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, entry));
         return relocatedPkIndexEntry;
+    }
+
+    private static void restoreAfterFailedRelocation(String dbName, String collName, DbEntry oldEntry,
+            List<PkIndexEntry> primaryKeyIndex) {
+        try {
+            oldEntry.setPage(cache.selectPageForInsert(dbName, collName, oldEntry.byteSize()));
+            final var restored = fs.insertIntoCollection(oldEntry);
+            cache.updatePageSizeInMemory(dbName, collName, restored.getPage(), restored.getLength());
+            var insertAt = Collections.binarySearch(primaryKeyIndex, restored.getValue());
+            if (insertAt < 0) {
+                insertAt = -(insertAt + 1);
+            }
+            primaryKeyIndex.add(insertAt, restored);
+            cache.addEntryToCache(dbName, collName, oldEntry);
+            taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, oldEntry));
+        } catch (Exception restoreFailure) {
+            logger.error(
+                    "Relocation of " + oldEntry.get_id() + " in " + dbName + "|" + collName
+                            + " failed and the original could not be restored; run REINDEX on this collection",
+                    restoreFailure);
+        }
     }
 }

@@ -142,4 +142,15 @@ public class ReplicatedApplyVersionTest {
         assertTrue(applyDelete(300L));
         assertEquals(OperationStatus.NOT_FOUND, find("a").getStatus());
     }
+
+    @Test
+    public void test_equal_version_push_follows_the_same_order_as_anti_entropy() {
+        assertTrue(applyUpsert("eq", "local", 500L));
+
+        assertTrue(applyUpsert("eq", "peer", 500L));
+
+        assertEquals("peer", valueOf("eq"),
+                "anti-entropy pulls an equal-version winner, so an equal-version push must overwrite too or the two"
+                        + " paths tie-break in opposite directions and the cluster never converges");
+    }
 }

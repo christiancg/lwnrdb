@@ -25,6 +25,11 @@ public class ResourceLocking {
         lockFor(lockName).writeLock().lockInterruptibly();
     }
 
+    public boolean holdsCollectionLock(String dbName, String collName) {
+        final var lock = locks.get(Cache.getCollectionIdentifier(dbName, collName));
+        return lock != null && (lock.getReadHoldCount() > 0 || lock.isWriteLockedByCurrentThread());
+    }
+
     public boolean releaseWrite(String lockName) {
         final var lock = locks.get(lockName);
         if (lock != null && lock.isWriteLockedByCurrentThread()) {

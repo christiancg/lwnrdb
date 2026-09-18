@@ -200,6 +200,49 @@ public class CacheTest {
     // Regression: the completeness gate must use the synchronous PK index size, not the
     // background-updated (lagging) admin page entry count.
     @Test
+    public void test_a_dirty_read_does_not_admit_into_the_shared_cache() throws Exception {
+        final var cache = new Cache();
+        final var fs = IocContainer.get(FileSystem.class);
+        TestUtils.createTestDatabaseAndCollection();
+        for (int i = 1; i <= 2; i++) {
+            final var o = new JsonObject();
+            o.addProperty(Globals.PK_FIELD, "d" + i);
+            final var e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, o);
+            e.setPage(0L);
+            fs.insertIntoCollection(e);
+        }
+
+        final var loaded = cache.getWholeCollection(TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(2, loaded.size(), "the reader still gets a complete answer");
+        assertNull(cache.userCache().getCachedCollection(TestGlobals.DB, TestGlobals.COLL),
+                "a reader holding no collection lock must not publish its snapshot as the shared cache");
+    }
+
+    @Test
+    public void test_a_locked_read_does_admit_into_the_shared_cache() throws Exception {
+        final var cache = new Cache();
+        final var fs = IocContainer.get(FileSystem.class);
+        final var locks = IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
+        TestUtils.createTestDatabaseAndCollection();
+        final var o = new JsonObject();
+        o.addProperty(Globals.PK_FIELD, "d1");
+        final var e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, o);
+        e.setPage(0L);
+        fs.insertIntoCollection(e);
+
+        locks.lockRead(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            cache.getWholeCollection(TestGlobals.DB, TestGlobals.COLL);
+        } finally {
+            locks.releaseRead(TestGlobals.DB, TestGlobals.COLL);
+        }
+
+        assertNotNull(cache.userCache().getCachedCollection(TestGlobals.DB, TestGlobals.COLL),
+                "a properly locked scan still populates the shared cache");
+    }
+
+    @Test
     public void test_get_whole_collection_reloads_when_cache_incomplete_vs_pk_index() throws Exception {
         final var cache = new Cache();
         final var fs = IocContainer.get(FileSystem.class);

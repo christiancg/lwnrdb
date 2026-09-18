@@ -8,16 +8,20 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
@@ -163,5 +167,32 @@ public class AggregationGroupingStepTest {
             }
         }
         assertEquals(Set.of("s1", "s2", "o1"), allDocIds);
+    }
+
+    private static void saveDoc(String id, JsonBaseElement value) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add("kind", value);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id(id);
+        request.setObject(obj);
+        IocContainer.get(OperationProcessor.class).processMessage(request);
+        IocContainer.get(PendingIndexWrites.class).clear(TestGlobals.DB, TestGlobals.COLL, id);
+    }
+
+    @Test
+    public void test_group_by_includes_the_explicit_null_group() throws IOException {
+        saveDoc("n1", new JsonString("x"));
+        saveDoc("n2", JsonNull.INSTANCE);
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new GroupByAggregationStep("kind")));
+        final var scan = AggregationOperationHelper.processAggregation(req);
+
+        enableIndex(IocContainer.get(Cache.class), "kind");
+        final var indexed = AggregationOperationHelper.processAggregation(req);
+
+        assertEquals(2, scan.size(), "the scan path keeps the explicit null as its own group");
+        assertEquals(scan.size(), indexed.size(), "an index that cannot hold explicit nulls must not answer GROUP_BY");
     }
 }

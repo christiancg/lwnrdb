@@ -23,6 +23,7 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -265,7 +266,8 @@ public class AdminCache {
         } catch (Exception e) {
             logger.warning("Failed to load schema for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
                     + e.getMessage());
-            return null;
+            throw new MetadataReadException(
+                    "Failed to read the schema for " + Cache.getCollectionIdentifier(dbName, collName), e);
         }
     }
 

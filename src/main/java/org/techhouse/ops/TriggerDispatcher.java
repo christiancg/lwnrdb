@@ -117,6 +117,15 @@ public final class TriggerDispatcher {
         final var attempt = event.getAttempt();
         final var maxAttempts = Math.max(1, configuration.getTriggerMaxAttempts());
         final var error = errorName + ": " + errorMessage;
+        if (retryable && event.getRunId() != null && isClusterUnavailable(errorMessage)) {
+            final var delay = backoffFor(attempt);
+            TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
+                    System.currentTimeMillis() + delay);
+            triggerExecutor.submitAfter(event, delay);
+            logger.info("Trigger '" + trigger.getName() + "' is waiting for the cluster; retrying in " + delay
+                    + "ms without consuming an attempt");
+            return;
+        }
         if (retryable && event.getRunId() != null && attempt < maxAttempts) {
             final var delay = backoffFor(attempt);
             TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
@@ -152,6 +161,11 @@ public final class TriggerDispatcher {
         final var exponent = Math.min(attempt - 1, 32);
         final var delay = base << exponent;
         return delay < 0 || delay > ceiling ? ceiling : delay;
+    }
+
+    private static boolean isClusterUnavailable(String errorMessage) {
+        return errorMessage != null && (errorMessage.contains(ErrorCode.NO_QUORUM.getDefaultMessage())
+                || errorMessage.contains(ErrorCode.NOT_COLLECTION_OWNER.getDefaultMessage()));
     }
 
     private static TriggerEvent retryOf(TriggerEvent event) {

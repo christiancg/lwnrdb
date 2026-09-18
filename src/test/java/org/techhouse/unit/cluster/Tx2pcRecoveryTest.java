@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,6 +27,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -42,6 +44,7 @@ import org.techhouse.test.TestUtils;
 
 public class Tx2pcRecoveryTest {
     private static final String SELF_ADDRESS = "127.0.0.1:5000";
+    private static final long LOCK_HOLD_MILLIS = 1_500L;
     private final Configuration config = Configuration.getInstance();
     private final Tx2pcRecovery recovery = IocContainer.get(Tx2pcRecovery.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
@@ -302,5 +305,83 @@ public class Tx2pcRecoveryTest {
         TestUtils.setPrivateField(config, "clusterEnabled", false);
         recovery.start();
         recovery.stop();
+    }
+
+    private static Thread collectionLockHolder(CountDownLatch held) {
+        return new Thread(() -> {
+            final var locks = IocContainer.get(ResourceLocking.class);
+            try {
+                locks.lock(TestGlobals.DB, TestGlobals.COLL);
+                held.countDown();
+                Thread.sleep(LOCK_HOLD_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                locks.release(TestGlobals.DB, TestGlobals.COLL);
+            }
+        }, "lock-holder");
+    }
+
+    @Test
+    @SuppressWarnings("BusyWait")
+    public void test_recovery_does_not_run_on_the_membership_thread() throws Exception {
+        final var dtxId = "12121212-1212-1212-1212-121212121212";
+        seedPreparedSlice(dtxId, "rec-async");
+        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        final var listener = new Tx2pcRecovery();
+        final var held = new CountDownLatch(1);
+        final var holder = collectionLockHolder(held);
+        holder.start();
+        assertTrue(held.await(5, java.util.concurrent.TimeUnit.SECONDS));
+
+        final var start = System.nanoTime();
+        listener.onMembershipChanged(membershipService.membershipView());
+        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
+
+        assertTrue(elapsedMillis < 500L,
+                "recovery waits on collection write locks with no timeout, so running it inline stalls the gossip"
+                        + " thread and the node is marked dead while it is alive holding locks");
+        holder.join(10_000L);
+        for (var i = 0; i < 200 && findStatus("rec-async") != OperationStatus.OK; i++) {
+            Thread.sleep(20);
+        }
+        assertEquals(OperationStatus.OK, findStatus("rec-async"),
+                "the recovery still runs, just off the gossip thread");
+        listener.stop();
+    }
+
+    private void savePostRestart(String id) {
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.add("_id", new JsonString(id));
+        object.add("source", new JsonString("post-restart"));
+        request.setObject(object);
+        request.set_id(id);
+        processor.processMessage(request);
+    }
+
+    private String sourceOf() {
+        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("rec-newer");
+        final var response = processor.processMessage(request);
+        if (response instanceof org.techhouse.ops.resp.FindByIdResponse found && found.getObject().has("source")) {
+            return found.getObject().get("source").asJsonString().getValue();
+        }
+        return null;
+    }
+
+    @Test
+    public void test_in_doubt_slice_does_not_clobber_post_restart_writes() throws Exception {
+        final var dtxId = "14141414-1414-1414-1414-141414141414";
+        savePostRestart("clock-warmup");
+        seedPreparedSlice(dtxId, "rec-newer");
+        savePostRestart("rec-newer");
+        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+
+        recovery.recover();
+
+        assertEquals("post-restart", sourceOf(),
+                "the node does not hold its prepared slice's locks across a restart, so a replay that overwrites a"
+                        + " newer committed version silently loses everything written since the crash");
     }
 }

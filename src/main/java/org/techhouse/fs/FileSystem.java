@@ -6,6 +6,7 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -23,6 +24,7 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
 
 public class FileSystem {
+    private final org.techhouse.log.Logger logger = org.techhouse.log.Logger.logFor(FileSystem.class);
     private final FilePaths paths = new FilePaths();
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
@@ -193,6 +195,50 @@ public class FileSystem {
 
     public boolean deleteTriggers(String dbName, String collName) {
         return MetadataFileStore.delete(paths.triggersFile(dbName, collName));
+    }
+
+    public void markIndexesDirty(String dbName, String collName) {
+        final var marker = dirtyIndexMarker(dbName, collName);
+        try {
+            if (marker.getParentFile().exists() && !marker.exists()) {
+                Files.writeString(marker.toPath(), Long.toString(System.currentTimeMillis()));
+            }
+        } catch (IOException e) {
+            logger.warning(
+                    "Could not write the index-dirty marker for " + dbName + "|" + collName + ": " + e.getMessage());
+        }
+    }
+
+    public void clearIndexesDirty(String dbName, String collName) {
+        final var marker = dirtyIndexMarker(dbName, collName);
+        if (marker.exists() && !marker.delete()) {
+            logger.warning("Could not clear the index-dirty marker for " + dbName + "|" + collName);
+        }
+    }
+
+    public List<String> listDirtyIndexCollections() {
+        final var result = new ArrayList<String>();
+        final var root = new File(paths.dbPath());
+        final var databases = root.listFiles(File::isDirectory);
+        if (databases == null) {
+            return result;
+        }
+        for (final var database : databases) {
+            final var collections = database.listFiles(File::isDirectory);
+            if (collections == null) {
+                continue;
+            }
+            for (final var collection : collections) {
+                if (dirtyIndexMarker(database.getName(), collection.getName()).exists()) {
+                    result.add(database.getName() + Globals.COLL_IDENTIFIER_SEPARATOR + collection.getName());
+                }
+            }
+        }
+        return result;
+    }
+
+    private File dirtyIndexMarker(String dbName, String collName) {
+        return new File(paths.collectionFolder(dbName, collName), collName + "-indexes.dirty");
     }
 
     public void appendTombstone(String dbName, String collName, String id, long version) throws IOException {

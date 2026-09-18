@@ -391,9 +391,13 @@ Each participant's commit reuses the same atomic `REPLICATE_TX` batch to its own
 **Durable recovery log.** The PREPARED markers and the coordinator's commit decision are
 records in `admin/transactions` (keyed `{dtxId}|part` / `{dtxId}|coord`, alongside the
 transaction's buffered slice). Presence of the coordinator marker is the commit point:
-present ⇒ commit, absent ⇒ **presumed abort**. On restart a prepared participant
-re-acquires its write locks and asks the coordinator via `TX_STATUS` what to do, and a
-coordinator that recorded a commit re-drives `COMMIT_TX`. Recovery re-runs on every
+present ⇒ commit, absent ⇒ **presumed abort**, and a coordinator that is reachable but has not
+decided yet leaves the slice in doubt rather than being read as an abort. On restart a prepared
+participant asks the coordinator via `TX_STATUS` what to do, and a coordinator that recorded a
+commit re-drives `COMMIT_TX`. The participant does **not** hold its write locks while in doubt —
+clients may write those collections meanwhile — so the replay is version-aware instead: the marker
+records the write-clock version at prepare time, and any document written above that version is
+left alone rather than overwritten with the pre-crash value. Recovery re-runs on every
 membership change and on a periodic sweep, which also GCs old outcome markers and logs
 long in-doubt transactions.
 
@@ -457,6 +461,11 @@ on the wire. This is a cluster protocol change: nodes on either side of it do no
 which the single-build rule above already requires. Document numbers are untouched — they are
 still stored and treated as `double`.
 
+Tombstones are only garbage-collected on a round in which **every** currently known peer answered
+the digest request. A node that is partitioned — or alone — keeps them: collecting a tombstone
+while a peer still holds the document live is what lets the next rejoin resurrect a committed
+delete.
+
 A **delete**
 records a versioned **tombstone** (`{coll}-tombstones.idx`), needed because a plain delete
 cannot converge — a lagging replica still holding the document would resurrect it.
@@ -511,6 +520,19 @@ never overwrites live state — it catches up instead.
 To close the window where a stale node becomes the admin coordinator before it has caught
 up, a coordinator rejects coordinated admin ops with a retryable `503-5 ADMIN_SYNCING`
 until it has completed one admin reconciliation since starting.
+
+## Listenable queries in a cluster
+
+`LISTEN` and `STOP_LISTEN` are **not** owner-routed: they are served by whichever node the client is
+connected to, and the registration lives on that node. Replication is full rather than partial, so
+notifications are delivered everywhere — what is weaker is their *consistency*. An `AGGREGATE` is
+forwarded to the collection's owner and sees authoritative state, while a `LISTEN` on the same
+connection reads this node's replica, and a commit the owner acknowledged is only quorum-replicated.
+A client that runs `AGGREGATE` and then `LISTEN` can therefore watch the result set go **backwards**.
+
+Re-runs are deliberately dirty reads (timeliness over strict consistency), but a transactional commit
+defers its notifications until every buffered op has applied, so a listener never sees a frame holding
+half a transaction.
 
 ## Wire protocol
 

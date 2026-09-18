@@ -29,6 +29,29 @@ public class AdminCachePageTest {
     }
 
     @Test
+    public void test_update_page_size_in_memory_takes_the_admin_pages_lock() throws Exception {
+        final var cache = org.techhouse.ioc.IocContainer.get(Cache.class);
+        final var locks = org.techhouse.ioc.IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
+        final var pagesColl = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "lockdb", "lockcoll");
+        locks.lock(Globals.ADMIN_PAGES_DB_NAME, pagesColl);
+        final var finished = new java.util.concurrent.CountDownLatch(1);
+        final var worker = new Thread(() -> {
+            cache.updatePageSizeInMemory("lockdb", "lockcoll", 0L, 10L);
+            finished.countDown();
+        });
+        worker.start();
+        try {
+            assertFalse(finished.await(300, java.util.concurrent.TimeUnit.MILLISECONDS),
+                    "the in-memory page counter must serialise on the same lock the background page writer holds");
+        } finally {
+            locks.release(Globals.ADMIN_PAGES_DB_NAME, pagesColl);
+        }
+
+        assertTrue(finished.await(5, java.util.concurrent.TimeUnit.SECONDS), "it must proceed once that lock is free");
+        worker.join(5000);
+    }
+
+    @Test
     public void test_shift_pk_positions_for_collections_map() throws NoSuchFieldException, IllegalAccessException {
         AdminCache cache = new AdminCache();
         final var before = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, "c1", 0,
