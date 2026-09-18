@@ -33,7 +33,7 @@ import threading
 import time
 
 import base_utils as bu
-from base_utils import check, check_status, section
+from base_utils import check, check_code, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("STORAGE_CONSISTENCY_TEST_PORT", "8996"))
@@ -44,6 +44,7 @@ DB = "storage_db"
 COLL = "docs"
 LOCK_DB = "lock_db"
 RECREATE_DB = "recreate_db"
+SCHEMA_COLL = "schema_guarded"
 LOCK_COLL = "items"
 DIRTY_COLL = "dirty_index_docs"
 
@@ -130,6 +131,12 @@ def seed(conn: Conn, work_dir: str):
     check_status("create its collection",
                  conn.send({"type": "CREATE_COLLECTION", "databaseName": RECREATE_DB, "collectionName": COLL}), "OK")
     check_status("seed it", conn.save({"_id": "shared", "pad": "before"}, db=RECREATE_DB), "OK")
+
+    check_status("create the schema-guarded collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": SCHEMA_COLL}), "OK")
+    check_status("give it a schema", conn.send({
+        "type": "SAVE_SCHEMA", "databaseName": DB, "collectionName": SCHEMA_COLL,
+        "schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}}), "OK")
 
     files = page_files(work_dir)
     check("the collection really spans several pages", len(files) > 1, f"got {files}")
@@ -236,6 +243,18 @@ def test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn: Conn)
           f"got {conn.count_via_pk(db=RECREATE_DB)}")
 
 
+def test_an_unreadable_schema_refuses_the_write(conn: Conn, work_dir: str):
+    section("A schema that cannot be read closes the collection to writes")
+
+    schema_file = os.path.join(work_dir, "db", DB, SCHEMA_COLL, f"{SCHEMA_COLL}-schema.json")
+    check("the schema was persisted beside its collection", os.path.isfile(schema_file), schema_file)
+    with open(schema_file, "w", encoding="utf-8") as fp:
+        fp.write('{"type": "obj')
+
+    refused = conn.save({"_id": "unvalidated", "name": "alice"}, coll=SCHEMA_COLL)
+    check_code("a write against an unreadable schema is refused", refused, "ERROR", "503-11")
+
+
 def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
     section("writes naming a collection that does not exist")
     for op, request in (
@@ -319,6 +338,7 @@ def main():
             test_drop_database_does_not_strand_a_collection_lock(conn)
             test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
             test_writes_to_an_unknown_collection_are_refused_cleanly(conn)
+            test_an_unreadable_schema_refuses_the_write(conn, work_dir)
 
             check("a burst of indexed writes leaves an index-dirty marker on disk",
                   write_until_indexes_are_dirty(conn, work_dir),

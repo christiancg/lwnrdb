@@ -143,4 +143,24 @@ public class SchemaValidationHelperTest {
         assertNotNull(response, "an unreadable schema must refuse the write, not silently permit it");
         assertEquals("503-11", response.getErrorCode());
     }
+
+    @Test
+    public void test_an_unparseable_schema_refuses_the_write() {
+        cache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL, eJson.fromJson("{\"type\":123}", JsonObject.class));
+
+        final var response = SchemaValidationHelper.check(save(doc("Alice")));
+
+        assertNotNull(response, "a schema that does not meta-validate must refuse the write, not permit every one");
+        assertEquals("503-11", response.getErrorCode());
+    }
+
+    @Test
+    public void test_a_valid_schema_still_validates_normally() {
+        installSchema();
+
+        assertNull(SchemaValidationHelper.check(save(doc("Alice"))));
+        final var refused = SchemaValidationHelper.check(save(doc(null)));
+        assertNotNull(refused);
+        assertEquals("400-7", refused.getErrorCode());
+    }
 }

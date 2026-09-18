@@ -84,8 +84,6 @@ public class ClusterConnectionHandler implements Runnable {
         }
     }
 
-    // Everything else must keep the order the peer sent it in: ReplicatedApplyHelper does not compare
-    // versions before applying, so this connection is the only thing sequencing a coordinator's writes.
     private static boolean mayOvertake(ClusterMessageType type) {
         return type == ClusterMessageType.GOSSIP || type == ClusterMessageType.FORWARD_REQUEST;
     }

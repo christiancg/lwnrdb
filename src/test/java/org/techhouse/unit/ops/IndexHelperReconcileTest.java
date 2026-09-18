@@ -83,7 +83,7 @@ public class IndexHelperReconcileTest {
     }
 
     @Test
-    public void test_reconcilePending_null_value_does_not_force_full_scan() throws IOException {
+    public void test_reconcilePending_null_value_does_not_force_full_scan() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         final var indexed = entryWith("s1", "status", new JsonString("active"));
         final var pending = entryWith("n1", "status", JsonNull.INSTANCE);
@@ -122,7 +122,7 @@ public class IndexHelperReconcileTest {
     }
 
     @Test
-    public void test_reconcilePending_doc_missing_field_is_skipped() throws IOException {
+    public void test_reconcilePending_doc_missing_field_is_skipped() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         final var indexed = entryWith("has1", "status", new JsonString("active"));
         final var missingFieldDoc = new JsonObject();
@@ -148,7 +148,8 @@ public class IndexHelperReconcileTest {
     // first one processed in the same reconciliation pass (null entries are never preloaded from the
     // index, only ever created while reconciling pending writes)
     @Test
-    public void test_reconcilePending_second_null_value_joins_first_pending_null_entry() throws IOException {
+    public void test_reconcilePending_second_null_value_joins_first_pending_null_entry()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("s1", "status", new JsonString("active")));
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
@@ -167,7 +168,8 @@ public class IndexHelperReconcileTest {
     }
 
     @Test
-    public void test_reconcilePending_new_boolean_value_creates_entry_via_scalarEntryFor() throws IOException {
+    public void test_reconcilePending_new_boolean_value_creates_entry_via_scalarEntryFor()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("b1", "flag", new JsonBoolean(true)));
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "flag");
@@ -185,7 +187,8 @@ public class IndexHelperReconcileTest {
     }
 
     @Test
-    public void test_reconcilePending_new_custom_value_creates_entry_via_scalarEntryFor() throws IOException {
+    public void test_reconcilePending_new_custom_value_creates_entry_via_scalarEntryFor()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("ct1", "startTime", new JsonTime("#time(08:00:00)")));
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "startTime");

@@ -153,7 +153,11 @@ public class ResourceLocking {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         locks.computeIfPresent(collIdentifier, (_, lock) -> isEvictable(lock) ? null : lock);
         final var indexPrefix = collIdentifier + Globals.COLL_IDENTIFIER_SEPARATOR;
-        locks.entrySet().removeIf(entry -> entry.getKey().startsWith(indexPrefix) && isEvictable(entry.getValue()));
+        for (final var key : List.copyOf(locks.keySet())) {
+            if (key.startsWith(indexPrefix)) {
+                locks.computeIfPresent(key, (_, lock) -> isEvictable(lock) ? null : lock);
+            }
+        }
     }
 
     private static boolean isEvictable(ReentrantReadWriteLock lock) {

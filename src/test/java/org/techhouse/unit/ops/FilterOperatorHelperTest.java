@@ -56,7 +56,7 @@ public class FilterOperatorHelperTest {
     // as after a background-processing failure) is re-tested against the document and dropped, so the
     // FILTER never returns a false positive.
     @Test
-    public void test_filter_rejects_stale_object_hash_hit() throws IOException {
+    public void test_filter_rejects_stale_object_hash_hit() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "o1", 0, 100, 0);
@@ -126,7 +126,7 @@ public class FilterOperatorHelperTest {
     }
 
     @Test
-    public void test_equals_returns_every_case_variant_via_the_index() throws IOException {
+    public void test_equals_returns_every_case_variant_via_the_index() throws IOException, InterruptedException {
         seedCaseVariants();
         final var scanned = filterNames(FieldOperatorType.EQUALS, "bob");
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "name");
@@ -136,7 +136,7 @@ public class FilterOperatorHelperTest {
     }
 
     @Test
-    public void test_not_equals_excludes_every_case_variant_via_the_index() throws IOException {
+    public void test_not_equals_excludes_every_case_variant_via_the_index() throws IOException, InterruptedException {
         seedCaseVariants();
         final var scanned = filterNames(FieldOperatorType.NOT_EQUALS, "bob");
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "name");
@@ -146,7 +146,7 @@ public class FilterOperatorHelperTest {
     }
 
     @Test
-    public void test_index_and_scan_agree_on_case_variants() throws IOException {
+    public void test_index_and_scan_agree_on_case_variants() throws IOException, InterruptedException {
         seedCaseVariants();
         final var scannedEquals = filterNames(FieldOperatorType.EQUALS, "BOB");
         final var scannedNotEquals = filterNames(FieldOperatorType.NOT_EQUALS, "BOB");

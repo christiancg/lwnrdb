@@ -105,12 +105,24 @@ public class UsageTracker {
     }
 
     long accessCountFor(CacheableResource r) {
-        final var counter = counters.get(buildKey(r.kind(), r.dbName(), r.collName(), r.indexKey()));
+        final var counter = counterFor(r);
         return counter == null ? 0L : counter.getAccessCount();
     }
 
     long lastAccessFor(CacheableResource r) {
-        final var counter = counters.get(buildKey(r.kind(), r.dbName(), r.collName(), r.indexKey()));
+        final var counter = counterFor(r);
         return counter == null ? 0L : counter.getLastAccessMillis();
+    }
+
+    private UsageCounter counterFor(CacheableResource r) {
+        return counters.get(buildKey(r.kind(), r.dbName(), r.collName(), countedIndexKey(r)));
+    }
+
+    private static String countedIndexKey(CacheableResource r) {
+        if (r.kind() != AccessKind.FIELD_INDEX || r.indexKey() == null) {
+            return r.indexKey();
+        }
+        final var separator = r.indexKey().lastIndexOf(Globals.COLL_IDENTIFIER_SEPARATOR);
+        return separator < 0 ? r.indexKey() : r.indexKey().substring(0, separator);
     }
 }

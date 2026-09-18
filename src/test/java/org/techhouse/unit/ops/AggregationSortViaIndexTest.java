@@ -51,7 +51,7 @@ public class AggregationSortViaIndexTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void enableIndex() {
+    private void enableIndex() throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, FIELD);
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(FIELD));
     }
@@ -63,7 +63,7 @@ public class AggregationSortViaIndexTest {
                 .map(o -> o.get(FIELD).asJsonNumber().getValue().doubleValue()).toList();
     }
 
-    private void seed(int count) {
+    private void seed(int count) throws InterruptedException {
         for (var i = 0; i < count; i++) {
             insert(String.format("d%04d", i), (i * 37) % count);
         }
@@ -100,7 +100,7 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_sort_includes_documents_missing_the_field() throws IOException {
+    public void test_sort_includes_documents_missing_the_field() throws IOException, InterruptedException {
         save("s1", 3d);
         save("s2", 1d);
         save("s3", null);
@@ -113,7 +113,7 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_sort_includes_explicit_nulls() throws IOException {
+    public void test_sort_includes_explicit_nulls() throws IOException, InterruptedException {
         save("n1", 3d);
         save("n2", 1d);
         saveNullField("n3");
@@ -126,7 +126,7 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_indexed_sort_matches_unindexed_sort() throws IOException {
+    public void test_indexed_sort_matches_unindexed_sort() throws IOException, InterruptedException {
         save("m1", 3d);
         save("m2", 1d);
         save("m3", null);
@@ -140,7 +140,7 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_index_sort_spanning_several_fetch_chunks_stays_ordered() throws IOException {
+    public void test_index_sort_spanning_several_fetch_chunks_stays_ordered() throws IOException, InterruptedException {
         seed(700);
 
         final var sorted = run(new SortAggregationStep(FIELD, true));
@@ -152,7 +152,7 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_index_sort_descending_spanning_chunks_stays_ordered() throws IOException {
+    public void test_index_sort_descending_spanning_chunks_stays_ordered() throws IOException, InterruptedException {
         seed(600);
 
         final var sorted = run(new SortAggregationStep(FIELD, false));
@@ -164,7 +164,8 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_index_sort_with_limit_matches_the_head_of_the_full_sort() throws IOException {
+    public void test_index_sort_with_limit_matches_the_head_of_the_full_sort()
+            throws IOException, InterruptedException {
         seed(700);
 
         final var full = run(new SortAggregationStep(FIELD, true));
@@ -174,7 +175,7 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_index_sort_with_skip_and_limit_matches_the_same_window() throws IOException {
+    public void test_index_sort_with_skip_and_limit_matches_the_same_window() throws IOException, InterruptedException {
         seed(700);
 
         final var full = run(new SortAggregationStep(FIELD, true));
@@ -185,7 +186,8 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_index_sort_with_a_limit_smaller_than_one_chunk_stops_early() throws IOException {
+    public void test_index_sort_with_a_limit_smaller_than_one_chunk_stops_early()
+            throws IOException, InterruptedException {
         seed(700);
 
         final var limited = run(new SortAggregationStep(FIELD, true), new LimitAggregationStep(3));
@@ -195,7 +197,7 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_index_sort_drops_ids_whose_document_is_gone() throws IOException {
+    public void test_index_sort_drops_ids_whose_document_is_gone() throws IOException, InterruptedException {
         seed(300);
         cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "d0005");
 
@@ -205,7 +207,8 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_a_pending_write_is_sorted_by_its_current_value_not_the_stale_index() throws IOException {
+    public void test_a_pending_write_is_sorted_by_its_current_value_not_the_stale_index()
+            throws IOException, InterruptedException {
         seed(300);
         final var pending = IocContainer.get(PendingIndexWrites.class);
         insert("d0007", 999999);
@@ -225,7 +228,7 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_pending_write_fallback_matches_the_bounded_read() throws IOException {
+    public void test_pending_write_fallback_matches_the_bounded_read() throws IOException, InterruptedException {
         seed(400);
         final var expected = run(new SortAggregationStep(FIELD, true), new LimitAggregationStep(25));
         final var pending = IocContainer.get(PendingIndexWrites.class);
@@ -239,7 +242,7 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_a_hash_indexed_field_falls_back_and_still_sorts() throws IOException {
+    public void test_a_hash_indexed_field_falls_back_and_still_sorts() throws IOException, InterruptedException {
         for (var i = 0; i < 5; i++) {
             final var obj = new JsonObject();
             obj.add(Globals.PK_FIELD, new JsonString("h" + i));
@@ -261,7 +264,7 @@ public class AggregationSortViaIndexTest {
     }
 
     @Test
-    public void test_index_sort_below_one_chunk_is_unaffected() throws IOException {
+    public void test_index_sort_below_one_chunk_is_unaffected() throws IOException, InterruptedException {
         insert("a", 30);
         insert("b", 10);
         insert("c", 20);

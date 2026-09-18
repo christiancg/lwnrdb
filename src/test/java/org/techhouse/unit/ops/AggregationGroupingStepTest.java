@@ -95,13 +95,13 @@ public class AggregationGroupingStepTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void enableIndex(Cache cache, String field) {
+    private void enableIndex(Cache cache, String field) throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(field));
     }
 
     @Test
-    public void test_group_by_uses_index_groups_match_scan() throws IOException {
+    public void test_group_by_uses_index_groups_match_scan() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "g1", "type", new JsonString("A"));
         addDoc(cache, "g2", "type", new JsonString("B"));
@@ -125,7 +125,7 @@ public class AggregationGroupingStepTest {
     }
 
     @Test
-    public void test_group_by_with_upstream_filter_does_not_use_index() throws IOException {
+    public void test_group_by_with_upstream_filter_does_not_use_index() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "g1", "type", new JsonString("A"));
         addDoc(cache, "g2", "type", new JsonString("B"));
@@ -144,7 +144,8 @@ public class AggregationGroupingStepTest {
     }
 
     @Test
-    public void test_group_by_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
+    public void test_group_by_mixed_type_indexed_field_includes_object_valued_docs()
+            throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "s1", "meta", new JsonString("plain"));
         addDoc(cache, "s2", "meta", new JsonString("plain"));
@@ -181,7 +182,7 @@ public class AggregationGroupingStepTest {
     }
 
     @Test
-    public void test_group_by_includes_the_explicit_null_group() throws IOException {
+    public void test_group_by_includes_the_explicit_null_group() throws IOException, InterruptedException {
         saveDoc("n1", new JsonString("x"));
         saveDoc("n2", JsonNull.INSTANCE);
 

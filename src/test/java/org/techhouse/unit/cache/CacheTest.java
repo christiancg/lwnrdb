@@ -442,8 +442,8 @@ public class CacheTest {
         cache.shiftPkPositionsAfterCompaction(new org.techhouse.fs.PkCompaction("userDb", "userColl", 1, 20, 7));
         cache.shiftPkPositionsAfterCompaction(null);
 
-        verify(adminMock).shiftPkPositionsAfterCompaction("collections", 0, 10, 5);
-        verify(adminMock).shiftPkPositionsAfterCompaction("userDb_userColl", 2, 30, 9);
+        verify(adminMock).shiftPkPositionsAfterCompaction(Globals.ADMIN_DB_NAME, "collections", 0, 10, 5);
+        verify(adminMock).shiftPkPositionsAfterCompaction(Globals.ADMIN_PAGES_DB_NAME, "userDb_userColl", 2, 30, 9);
         verify(userMock).shiftPkPositionsAfterCompaction("userDb", "userColl", 1, 20, 7);
         verifyNoMoreInteractions(adminMock, userMock);
     }

@@ -67,7 +67,7 @@ public class IndexConsistencyTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void enableIndex() {
+    private void enableIndex() throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, STATUS);
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(STATUS));
     }
@@ -333,7 +333,7 @@ public class IndexConsistencyTest {
     }
 
     @Test
-    public void test_get_ids_from_index_returns_detached_snapshot() throws IOException {
+    public void test_get_ids_from_index_returns_detached_snapshot() throws IOException, InterruptedException {
         addDoc("1", new JsonString("active"));
         enableIndex();
         final var operator = new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"));

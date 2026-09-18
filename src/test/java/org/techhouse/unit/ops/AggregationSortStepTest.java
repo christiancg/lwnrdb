@@ -98,13 +98,13 @@ public class AggregationSortStepTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void enableIndex(Cache cache, String field) {
+    private void enableIndex(Cache cache, String field) throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(field));
     }
 
     @Test
-    public void test_sort_ascending_uses_index_matches_scan_order() throws IOException {
+    public void test_sort_ascending_uses_index_matches_scan_order() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "s1", "score", new JsonNumber(30));
         addDoc(cache, "s2", "score", new JsonNumber(10));
@@ -122,7 +122,7 @@ public class AggregationSortStepTest {
     }
 
     @Test
-    public void test_sort_descending_uses_index_matches_scan_order() throws IOException {
+    public void test_sort_descending_uses_index_matches_scan_order() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "s1", "score", new JsonNumber(30));
         addDoc(cache, "s2", "score", new JsonNumber(10));
@@ -140,7 +140,7 @@ public class AggregationSortStepTest {
     }
 
     @Test
-    public void test_sort_with_upstream_stream_does_not_use_index() throws IOException {
+    public void test_sort_with_upstream_stream_does_not_use_index() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "s1", "score", new JsonNumber(30));
         addDoc(cache, "s2", "score", new JsonNumber(10));
@@ -160,7 +160,8 @@ public class AggregationSortStepTest {
     }
 
     @Test
-    public void test_sort_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
+    public void test_sort_mixed_type_indexed_field_includes_object_valued_docs()
+            throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "s1", "meta", new JsonString("alpha"));
         addDoc(cache, "s2", "meta", new JsonString("beta"));
@@ -180,7 +181,7 @@ public class AggregationSortStepTest {
     }
 
     @Test
-    public void test_sort_via_index_with_limit_returns_correct_first_n() throws IOException {
+    public void test_sort_via_index_with_limit_returns_correct_first_n() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "v1", "score", new JsonNumber(50));
         addDoc(cache, "v2", "score", new JsonNumber(10));
@@ -200,7 +201,7 @@ public class AggregationSortStepTest {
     }
 
     @Test
-    public void test_sort_via_index_descending_with_limit_returns_top_n() throws IOException {
+    public void test_sort_via_index_descending_with_limit_returns_top_n() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "w1", "score", new JsonNumber(10));
         addDoc(cache, "w2", "score", new JsonNumber(50));

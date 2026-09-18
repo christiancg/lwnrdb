@@ -107,7 +107,7 @@ public class AggregationJoinStepTest {
     }
 
     @Test
-    public void test_join_uses_remote_index_returns_only_matching() throws IOException {
+    public void test_join_uses_remote_index_returns_only_matching() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         final var main = new JsonObject();
         main.add(Globals.PK_FIELD, new JsonString("m1"));
@@ -132,7 +132,8 @@ public class AggregationJoinStepTest {
     }
 
     @Test
-    public void test_join_via_index_no_remote_match_returns_empty_joined_array() throws IOException {
+    public void test_join_via_index_no_remote_match_returns_empty_joined_array()
+            throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         final var main = new JsonObject();
         main.add(Globals.PK_FIELD, new JsonString("m1"));

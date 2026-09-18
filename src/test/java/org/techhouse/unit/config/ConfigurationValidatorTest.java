@@ -310,9 +310,22 @@ public class ConfigurationValidatorTest {
     }
 
     @Test
-    public void test_unseeded_single_node_cluster_still_starts(@TempDir Path tempDir) {
+    public void test_cluster_enabled_requires_an_expected_size_of_at_least_two(@TempDir Path tempDir) {
         final var config = ConfigFixture.clusterEnabled(tempDir);
         config.put("clusterExpectedSize", "1");
+        config.put("clusterSeeds", "");
+
+        final var errors = ConfigurationValidator.validate(config);
+
+        assertTrue(errors.stream().anyMatch(e -> e.contains("clusterExpectedSize")),
+                "the seedless first node is the one most likely to keep the default, and it is the one that"
+                        + " evicts its peers and regains quorum alone: " + errors);
+    }
+
+    @Test
+    public void test_an_expected_size_of_two_starts_without_seeds(@TempDir Path tempDir) {
+        final var config = ConfigFixture.clusterEnabled(tempDir);
+        config.put("clusterExpectedSize", "2");
         config.put("clusterSeeds", "");
         assertTrue(ConfigurationValidator.validate(config).isEmpty());
     }

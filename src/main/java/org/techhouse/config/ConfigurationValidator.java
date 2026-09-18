@@ -111,9 +111,10 @@ public final class ConfigurationValidator {
 
     private static void validateExpectedSize(Map<String, String> configs, List<String> errors) {
         final var expectedSize = parseIntOrNull(configs.get("clusterExpectedSize"));
-        if (expectedSize != null && expectedSize < 2 && !isBlank(configs.get("clusterSeeds"))) {
+        if (expectedSize != null && expectedSize < 2) {
             errors.add("clusterExpectedSize (" + expectedSize
-                    + ") must be at least 2 when clusterSeeds names other nodes");
+                    + ") must be at least 2 when clusterEnabled is true: a lone node would evict its peers after"
+                    + " deadEvictionMs and regain quorum by itself, so both sides of a partition accept writes");
         }
     }
 

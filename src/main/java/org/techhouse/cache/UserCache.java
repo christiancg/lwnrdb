@@ -414,9 +414,10 @@ public class UserCache {
 
     public boolean hasLoadedIndex(String dbName, String collName, String fieldName) {
         final var fieldIndexes = fieldIndexMap.get(Cache.getCollectionIdentifier(dbName, collName));
-        if (fieldIndexes != null) {
-            return fieldIndexes.containsKey(fieldName);
+        if (fieldIndexes == null) {
+            return false;
         }
-        return false;
+        final var prefix = fieldName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        return fieldIndexes.keySet().stream().anyMatch(key -> key.equals(fieldName) || key.startsWith(prefix));
     }
 }

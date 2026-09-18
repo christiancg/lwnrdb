@@ -265,12 +265,8 @@ public final class AdminOperationHelper {
     public static void saveTransactionOp(AdminTransactionEntry entry) throws IOException, InterruptedException {
         lockAdmin(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         try {
-            entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME,
-                    entry.byteSize()));
-            final var savedPk = fs.insertIntoCollection(entry);
-            cache.putPkIndexTransaction(savedPk);
-            AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME,
-                    EventType.CREATED, List.of(entry), false);
+            cache.putPkIndexTransaction(writeAdminEntry(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, entry,
+                    cache.getPkIndexTransaction(entry.get_id())));
         } finally {
             releaseAdmin(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         }

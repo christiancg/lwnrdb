@@ -63,7 +63,7 @@ public class IndexConsistencyPipelineTest {
         cache.addEntryToCache(TestGlobals.DB, coll, entry);
     }
 
-    private void enableIndex(String coll, String field) {
+    private void enableIndex(String coll, String field) throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, coll, field);
         cache.getAdminCollectionEntry(TestGlobals.DB, coll).setIndexes(Set.of(field));
     }
@@ -89,7 +89,7 @@ public class IndexConsistencyPipelineTest {
     }
 
     @Test
-    public void test_filter_includes_pending_not_yet_indexed_match() throws IOException {
+    public void test_filter_includes_pending_not_yet_indexed_match() throws IOException, InterruptedException {
         addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
         enableIndex(TestGlobals.COLL, "status");
         addPendingDoc(TestGlobals.COLL, "2", "status", new JsonString("active"));
@@ -98,7 +98,7 @@ public class IndexConsistencyPipelineTest {
     }
 
     @Test
-    public void test_filter_reconciles_stale_updated_value() throws IOException {
+    public void test_filter_reconciles_stale_updated_value() throws IOException, InterruptedException {
         addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
         enableIndex(TestGlobals.COLL, "status");
         addPendingDoc(TestGlobals.COLL, "1", "status", new JsonString("inactive"));
@@ -108,7 +108,7 @@ public class IndexConsistencyPipelineTest {
     }
 
     @Test
-    public void test_count_with_filter_is_consistent() throws IOException {
+    public void test_count_with_filter_is_consistent() throws IOException, InterruptedException {
         addDoc(TestGlobals.COLL, "1", "status", new JsonString("active"));
         enableIndex(TestGlobals.COLL, "status");
         addPendingDoc(TestGlobals.COLL, "2", "status", new JsonString("active"));
@@ -139,7 +139,7 @@ public class IndexConsistencyPipelineTest {
     }
 
     @Test
-    public void test_distinct_includes_pending_new_value() throws IOException {
+    public void test_distinct_includes_pending_new_value() throws IOException, InterruptedException {
         addDoc(TestGlobals.COLL, "1", "color", new JsonString("red"));
         addDoc(TestGlobals.COLL, "2", "color", new JsonString("blue"));
         enableIndex(TestGlobals.COLL, "color");
@@ -153,7 +153,7 @@ public class IndexConsistencyPipelineTest {
     }
 
     @Test
-    public void test_distinct_drops_emptied_value_after_pending_update() throws IOException {
+    public void test_distinct_drops_emptied_value_after_pending_update() throws IOException, InterruptedException {
         addDoc(TestGlobals.COLL, "1", "color", new JsonString("red"));
         enableIndex(TestGlobals.COLL, "color");
         addPendingDoc(TestGlobals.COLL, "1", "color", new JsonString("blue"));
@@ -166,7 +166,7 @@ public class IndexConsistencyPipelineTest {
     }
 
     @Test
-    public void test_group_by_includes_pending_docs() throws IOException {
+    public void test_group_by_includes_pending_docs() throws IOException, InterruptedException {
         addDoc(TestGlobals.COLL, "1", "type", new JsonString("A"));
         enableIndex(TestGlobals.COLL, "type");
         addPendingDoc(TestGlobals.COLL, "2", "type", new JsonString("A"));
@@ -182,7 +182,7 @@ public class IndexConsistencyPipelineTest {
     }
 
     @Test
-    public void test_group_by_falls_back_to_scan_for_non_scalar_pending() throws IOException {
+    public void test_group_by_falls_back_to_scan_for_non_scalar_pending() throws IOException, InterruptedException {
         addDoc(TestGlobals.COLL, "1", "type", new JsonString("A"));
         enableIndex(TestGlobals.COLL, "type");
         final var objValue = new JsonObject();
@@ -196,7 +196,7 @@ public class IndexConsistencyPipelineTest {
     }
 
     @Test
-    public void test_sort_orders_pending_docs_by_current_value() throws IOException {
+    public void test_sort_orders_pending_docs_by_current_value() throws IOException, InterruptedException {
         addDoc(TestGlobals.COLL, "mid", "num", new JsonNumber(2));
         enableIndex(TestGlobals.COLL, "num");
         addPendingDoc(TestGlobals.COLL, "low", "num", new JsonNumber(1));
@@ -210,7 +210,7 @@ public class IndexConsistencyPipelineTest {
     }
 
     @Test
-    public void test_join_includes_pending_remote_doc() throws IOException {
+    public void test_join_includes_pending_remote_doc() throws IOException, InterruptedException {
         final var main = new JsonObject();
         main.add(Globals.PK_FIELD, new JsonString("m1"));
         main.addProperty("ref", 42);
@@ -233,7 +233,7 @@ public class IndexConsistencyPipelineTest {
     // index still maps the old value to it until the background write lands, so the JOIN has to drop
     // pending ids before re-deriving them from the current documents.
     @Test
-    public void test_join_excludes_pending_remote_doc_whose_value_changed() throws IOException {
+    public void test_join_excludes_pending_remote_doc_whose_value_changed() throws IOException, InterruptedException {
         addDoc(TestGlobals.JOIN_COLL, "j1", "refKey", new JsonNumber(7));
         enableIndex(TestGlobals.JOIN_COLL, "refKey");
         addPendingDoc(TestGlobals.JOIN_COLL, "j1", "refKey", new JsonNumber(99));
@@ -260,7 +260,7 @@ public class IndexConsistencyPipelineTest {
     // documents (COUNT, DISTINCT), not just from FILTER — because the delete marks it pending until the
     // async index removal completes.
     @Test
-    public void test_delete_is_consistent_for_count_and_distinct() throws IOException {
+    public void test_delete_is_consistent_for_count_and_distinct() throws IOException, InterruptedException {
         final var processor = new OperationProcessor();
         saveViaProcessor(processor, "gone", "gone");
         saveViaProcessor(processor, "stay", "stay");

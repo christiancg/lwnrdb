@@ -121,7 +121,7 @@ public class AggregationCountStepTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void enableIndex(Cache cache) {
+    private void enableIndex(Cache cache) throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status"));
     }
@@ -168,7 +168,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_indexed_filter_reads_no_documents() throws IOException {
+    public void test_count_after_indexed_filter_reads_no_documents() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", new JsonString("active"));
         addDoc(cache, "c2", new JsonString("inactive"));
@@ -205,7 +205,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_filter_indexed_matches_unindexed() throws IOException {
+    public void test_count_after_filter_indexed_matches_unindexed() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", new JsonString("active"));
         addDoc(cache, "c2", new JsonString("inactive"));
@@ -229,7 +229,7 @@ public class AggregationCountStepTest {
     // such a pipeline reaches the engine directly the fast-path {count:N} stream is still fed to the
     // trailing steps.
     @Test
-    public void test_count_after_filter_with_trailing_step_still_runs() throws IOException {
+    public void test_count_after_filter_with_trailing_step_still_runs() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", new JsonString("active"));
         addDoc(cache, "c2", new JsonString("active"));
@@ -247,7 +247,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_indexed_and_conjunction() throws IOException {
+    public void test_count_after_indexed_and_conjunction() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDocWithFields(cache, "c1", new JsonString("active"), "level", new JsonNumber(1));
         addDocWithFields(cache, "c2", new JsonString("active"), "level", new JsonNumber(2));
@@ -267,7 +267,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_indexed_or_conjunction() throws IOException {
+    public void test_count_after_indexed_or_conjunction() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDocWithFields(cache, "c1", new JsonString("active"), "level", new JsonNumber(1));
         addDocWithFields(cache, "c2", new JsonString("active"), "level", new JsonNumber(2));
@@ -287,7 +287,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_partially_indexed_conjunction_falls_back() throws IOException {
+    public void test_count_after_partially_indexed_conjunction_falls_back() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDocWithFields(cache, "c1", new JsonString("active"), "level", new JsonNumber(1));
         addDocWithFields(cache, "c2", new JsonString("active"), "level", new JsonNumber(2));
@@ -305,7 +305,8 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_only_step_is_unaffected() throws IOException, NoSuchFieldException, IllegalAccessException {
+    public void test_count_only_step_is_unaffected()
+            throws IOException, NoSuchFieldException, IllegalAccessException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", new JsonString("active"));
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
@@ -319,7 +320,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_indexed_filter_no_matches_returns_zero() throws IOException {
+    public void test_count_after_indexed_filter_no_matches_returns_zero() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", new JsonString("active"));
         enableIndex(cache);
@@ -334,7 +335,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_multiple_indexed_filters_intersects() throws IOException {
+    public void test_count_after_multiple_indexed_filters_intersects() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDocWithFields(cache, "c1", new JsonString("active"), "level", new JsonNumber(1));
         addDocWithFields(cache, "c2", new JsonString("active"), "level", new JsonNumber(2));
@@ -354,7 +355,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_indexed_filter_then_map_skips_map() throws IOException {
+    public void test_count_after_indexed_filter_then_map_skips_map() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", new JsonString("active"));
         addDoc(cache, "c2", new JsonString("inactive"));
@@ -375,7 +376,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_indexed_filter_then_join_skips_join() throws IOException {
+    public void test_count_after_indexed_filter_then_join_skips_join() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDocWithFields(cache, "c1", new JsonString("active"), "ref", new JsonNumber(1));
         addDocWithFields(cache, "c2", new JsonString("active"), "ref", new JsonNumber(2));
@@ -392,7 +393,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_indexed_filter_then_sort_skips_sort() throws IOException {
+    public void test_count_after_indexed_filter_then_sort_skips_sort() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", new JsonString("active"));
         addDoc(cache, "c2", new JsonString("active"));
@@ -426,7 +427,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_group_by_falls_back_to_group_count() throws IOException {
+    public void test_count_after_group_by_falls_back_to_group_count() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", new JsonString("active"));
         addDoc(cache, "c2", new JsonString("active"));
@@ -442,7 +443,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_with_filter_after_map_falls_back() throws IOException {
+    public void test_count_with_filter_after_map_falls_back() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", new JsonString("active"));
         addDoc(cache, "c2", new JsonString("inactive"));
@@ -461,7 +462,7 @@ public class AggregationCountStepTest {
     }
 
     @Test
-    public void test_count_after_limit_falls_back() throws IOException {
+    public void test_count_after_limit_falls_back() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", new JsonString("active"));
         addDoc(cache, "c2", new JsonString("active"));

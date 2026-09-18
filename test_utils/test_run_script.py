@@ -466,6 +466,27 @@ def test_history_kinds(conn: Conn):
     check("an ad-hoc run is not recorded under the default kinds", not ad_hoc, f"rows={ad_hoc!r}")
 
 
+def test_a_script_cannot_mutate_the_run_history(conn: Conn):
+    section("Reserved collections are closed to scripts")
+
+    forged = conn.run("import db from 'db';"
+                      " db.save(db.name, 'script_runs', { _id: 'forged', kind: 'RUN_SCRIPT' });"
+                      " return 'wrote';")
+    check("a script cannot forge a run-history row", forged.get("status") != "OK", f"got {forged!r}")
+
+    erased = conn.run("import db from 'db'; db.delete(db.name, 'script_runs', 'forged'); return 'deleted';")
+    check("a script cannot erase a run-history row", erased.get("status") != "OK", f"got {erased!r}")
+
+    readable = conn.run("import db from 'db';"
+                        " return db.aggregate(db.name, 'script_runs', []).length >= 0;")
+    check_result("a script can still read the run history", readable, True)
+
+    bad_id = conn.run("import db from 'db';"
+                      " db.save(db.name, '" + COLL + "', { _id: 'has spaces!', v: 1 });"
+                      " return 'wrote';")
+    check("a script cannot write an _id the client API refuses", bad_id.get("status") != "OK", f"got {bad_id!r}")
+
+
 def test_history_kinds_enabled(conn: Conn):
     section("Run history with RUN_SCRIPT recorded")
     check_result("a recorded ad-hoc run", conn.run("let t = 0; for (let i = 0; i < 20; i++) t += i; return t;"), 190)
@@ -1361,6 +1382,7 @@ def main():
             test_sandbox_limits(conn)
             test_run_metrics(conn)
             test_history_kinds(conn)
+            test_a_script_cannot_mutate_the_run_history(conn)
             test_fetch_unavailable(conn)
             test_locale_arguments(conn)
             test_request_validation(conn)

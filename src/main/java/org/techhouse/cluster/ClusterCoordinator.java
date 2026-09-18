@@ -193,7 +193,6 @@ public class ClusterCoordinator {
         return ownershipManager.hasQuorum() ? WriteGuard.allow() : WriteGuard.noQuorum();
     }
 
-    // Only the coordinator replicates, so peers applying an inbound REPLICATE_ADMIN never re-broadcast.
     public ReplicationOutcome replicateAdminOp(OperationRequest request, String actingUser) {
         if (!clusterConfig.isEnabled()) {
             return ReplicationOutcome.NOT_CLUSTERED;

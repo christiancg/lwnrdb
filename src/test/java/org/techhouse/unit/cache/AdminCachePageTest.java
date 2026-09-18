@@ -64,7 +64,8 @@ public class AdminCachePageTest {
         map.put("c1", before);
         map.put("c2", after);
 
-        cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, 0, 0, 10);
+        cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, 0, 0,
+                10);
 
         assertEquals(0, before.getPosition());
         assertEquals(0, after.getPosition(), "entry after removed position shifts left by removed length");
@@ -81,7 +82,7 @@ public class AdminCachePageTest {
                 Cache.getCollectionIdentifier(Globals.ADMIN_PAGES_DB_NAME, pagesCollName),
                 new ArrayList<>(List.of(entry)));
 
-        cache.shiftPkPositionsAfterCompaction(pagesCollName, 0, 0, 10);
+        cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_PAGES_DB_NAME, pagesCollName, 0, 0, 10);
 
         assertEquals(20, entry.getPosition());
     }
@@ -89,7 +90,7 @@ public class AdminCachePageTest {
     @Test
     public void test_shift_pk_positions_for_unknown_pages_collection_is_noop() {
         AdminCache cache = new AdminCache();
-        assertDoesNotThrow(() -> cache.shiftPkPositionsAfterCompaction(
+        assertDoesNotThrow(() -> cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_PAGES_DB_NAME,
                 String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "no", "coll"), 0, 0, 10));
     }
 
@@ -230,5 +231,23 @@ public class AdminCachePageTest {
         AdminCache cache = new AdminCache();
         long target = cache.selectPageForInsert("myDb", "myColl", 100, Map.of(0L, 2_097_150L, 1L, 100L));
         assertEquals(1L, target, "First pending page with room is chosen in ascending order");
+    }
+
+    @Test
+    public void test_a_user_collection_named_trigger_runs_does_not_shift_admin_rows()
+            throws NoSuchFieldException, IllegalAccessException {
+        final var cache = new AdminCache();
+        final var adminRow = new PkIndexEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, "run1",
+                30, 10, 0);
+        final var type = new ReflectionUtils.TypeToken<Map<String, PkIndexEntry>>() {
+        };
+        TestUtils.getPrivateField(cache, "triggerRunsPkIndex", type).put("run1", adminRow);
+
+        cache.shiftPkPositionsAfterCompaction(Globals.ADMIN_PAGES_DB_NAME,
+                String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, "trigger", "runs"), 0, 0, 10);
+
+        assertEquals(30, adminRow.getPosition(),
+                "names allow underscores, so db 'trigger' + collection 'runs' collides with admin/trigger_runs;"
+                        + " a compaction in the page metadata must not shift the real admin index");
     }
 }

@@ -16,7 +16,7 @@ public class BackgroundTaskManager {
     private final AtomicInteger parked = new AtomicInteger();
     private final AtomicInteger workerCount = new AtomicInteger();
     private volatile boolean draining;
-    private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public void submitBackgroundTask(Event op) {
         if (draining) {
@@ -26,7 +26,7 @@ public class BackgroundTaskManager {
         queue.add(op);
     }
 
-    public void startBackgroundWorkers() {
+    public synchronized void startBackgroundWorkers() {
         draining = false;
         final var threadCount = Configuration.getInstance().getBackgroundProcessingThreads();
         workerCount.set(threadCount);
@@ -64,7 +64,7 @@ public class BackgroundTaskManager {
         return queue.size() + inFlight.get();
     }
 
-    public void stopBackgroundWorkers() {
+    public synchronized void stopBackgroundWorkers() {
         workerCount.set(0);
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Background");
         queue.clear();

@@ -228,6 +228,22 @@ public class ResourceLockingTest {
     }
 
     @Test
+    public void test_index_lock_eviction_uses_the_same_atomicity_as_collections() throws Exception {
+        final var rl = new ResourceLocking();
+        rl.lockIndex("db", "idx", "held");
+        rl.lockIndex("db", "idx", "free");
+        rl.releaseIndex("db", "idx", "free");
+
+        rl.removeLock("db", "idx");
+
+        final var heldKey = Cache.getCollectionIdentifier("db", "idx") + "|held";
+        final var freeKey = Cache.getCollectionIdentifier("db", "idx") + "|free";
+        assertTrue(locks(rl).containsKey(heldKey), "an index lock that is still held must not be evicted");
+        assertFalse(locks(rl).containsKey(freeKey));
+        rl.releaseIndex("db", "idx", "held");
+    }
+
+    @Test
     public void test_remove_lock_evicts_when_unheld_and_unqueued() throws Exception {
         final var rl = new ResourceLocking();
         rl.lock("db", "free");

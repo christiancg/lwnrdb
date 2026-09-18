@@ -149,8 +149,20 @@ public class AdminCache {
         return pageCache.getAdminPagePkIndexes(dbName, collName);
     }
 
-    public void shiftPkPositionsAfterCompaction(String collName, long page, long removedPosition, long removedLength) {
-        final Collection<PkIndexEntry> entries = switch (collName) {
+    public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,
+            long removedLength) {
+        final Collection<PkIndexEntry> entries = Globals.ADMIN_DB_NAME.equals(dbName)
+                ? adminCollectionPkIndex(collName)
+                : pageCache.pkIndexesForPagesCollection(collName);
+        for (final var entry : entries) {
+            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
+                entry.setPosition(entry.getPosition() - removedLength);
+            }
+        }
+    }
+
+    private Collection<PkIndexEntry> adminCollectionPkIndex(String collName) {
+        return switch (collName) {
             case Globals.ADMIN_DATABASES_COLLECTION_NAME -> databasesPkIndex.values();
             case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> collectionsPkIndex.values();
             case Globals.ADMIN_USERS_COLLECTION_NAME -> usersPkIndex.values();
@@ -159,11 +171,6 @@ public class AdminCache {
             case Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME -> triggerRunsPkIndex.values();
             case null, default -> pageCache.pkIndexesForPagesCollection(collName);
         };
-        for (final var entry : entries) {
-            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
-                entry.setPosition(entry.getPosition() - removedLength);
-            }
-        }
     }
 
     public void removeAdminPageEntries(String dbName, String collName) {

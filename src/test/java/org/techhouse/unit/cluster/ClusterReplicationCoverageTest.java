@@ -1,6 +1,13 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.after;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.List;
@@ -13,6 +20,7 @@ import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
+import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.Replicator;
 import org.techhouse.cluster.membership.MembershipService;
@@ -124,5 +132,34 @@ public class ClusterReplicationCoverageTest {
                 ReplicationOp.UPSERT, List.of(user("carol").getData()), null);
         assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcastUser(userPayload));
         assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcastAdmin("{\"type\":\"REINDEX\"}", "alice"));
+    }
+
+    @Test
+    public void test_two_node_ids_at_one_address_count_as_one_ack() throws Exception {
+        final var self = new NodeInfo("self", "127.0.0.1", 19990, NodeState.ALIVE, 1L, 1L);
+        final var stale = new NodeInfo("stale-id", "127.0.0.1", 19991, NodeState.ALIVE, 1L, 1L);
+        final var fresh = new NodeInfo("fresh-id", "127.0.0.1", 19991, NodeState.ALIVE, 1L, 1L);
+        final var members = new ConcurrentHashMap<String, NodeInfo>();
+        members.put(self.getNodeId(), self);
+        members.put(stale.getNodeId(), stale);
+        members.put(fresh.getNodeId(), fresh);
+        TestUtils.setPrivateField(membershipService, "members", members);
+        TestUtils.setPrivateField(config, "clusterExpectedSize", 3);
+        ownership.onMembershipChanged(membershipService.membershipView());
+        final var originalTimeout = config.getReplicationAckTimeoutMs();
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 200L);
+        final var realPool = TestUtils.getPrivateField(replicator, "pool", PeerConnectionPool.class);
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenThrow(new IllegalStateException("unreachable"));
+        TestUtils.setPrivateField(replicator, "pool", pool);
+        try {
+            replicator.broadcast(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                    List.of(doc("dedup")), null));
+
+            verify(pool, after(500).times(1)).request(eq(stale.address()), any(), anyLong());
+        } finally {
+            TestUtils.setPrivateField(replicator, "pool", realPool);
+            TestUtils.setPrivateField(config, "replicationAckTimeoutMs", originalTimeout);
+        }
     }
 }

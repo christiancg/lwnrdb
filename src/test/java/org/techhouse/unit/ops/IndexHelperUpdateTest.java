@@ -108,7 +108,7 @@ public class IndexHelperUpdateTest {
     }
 
     @Test
-    public void test_update_indexes_string_field() {
+    public void test_update_indexes_string_field() throws InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         DbEntry entry = entryWith("s1", "tag", new JsonString("alpha"));
         setupCollection(cache, entry);
@@ -123,7 +123,7 @@ public class IndexHelperUpdateTest {
     }
 
     @Test
-    public void test_update_indexes_boolean_field() {
+    public void test_update_indexes_boolean_field() throws InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         DbEntry entry = entryWith("b1", "active", new JsonBoolean(true));
         setupCollection(cache, entry);

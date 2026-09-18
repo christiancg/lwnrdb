@@ -215,7 +215,7 @@ public class EventProcessorHelperTest {
         return events;
     }
 
-    private static void indexField(String collName) {
+    private static void indexField(String collName) throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, collName, "f");
         IocContainer.get(Cache.class).getAdminCollectionEntry(TestGlobals.DB, collName).setIndexes(Set.of("f"));
     }

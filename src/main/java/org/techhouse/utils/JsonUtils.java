@@ -17,6 +17,8 @@ import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 
 public final class JsonUtils {
+    private static final double MAX_EXACT_LONG = 9007199254740992d;
+
     private JsonUtils() {
     }
 
@@ -171,7 +173,7 @@ public final class JsonUtils {
 
     private static String normalizeNumber(Number value) {
         final var asDouble = value.doubleValue();
-        if (asDouble % 1.0 == 0 && !Double.isInfinite(asDouble)) {
+        if (asDouble % 1.0 == 0 && !Double.isInfinite(asDouble) && Math.abs(asDouble) <= MAX_EXACT_LONG) {
             return String.valueOf((long) asDouble);
         }
         return String.valueOf(asDouble);

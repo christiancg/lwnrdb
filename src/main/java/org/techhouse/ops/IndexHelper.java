@@ -58,8 +58,18 @@ public class IndexHelper {
         return IndexValueCodec.elementToLookupValue(element);
     }
 
-    public static void createIndex(String dbName, String collName, String fieldName) {
-        dropIndex(dbName, collName, fieldName);
+    public static void createIndex(String dbName, String collName, String fieldName) throws InterruptedException {
+        rl.lockIndex(dbName, collName, fieldName);
+        try {
+            buildIndex(dbName, collName, fieldName);
+        } finally {
+            cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+            rl.releaseIndex(dbName, collName, fieldName);
+        }
+    }
+
+    private static void buildIndex(String dbName, String collName, String fieldName) {
+        fs.dropIndex(dbName, collName, fieldName);
         final var coll = cache.getWholeCollection(dbName, collName);
         final var entriesToBeIndexed = coll.values().stream().map(DbEntry::getData)
                 .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName))
@@ -99,7 +109,6 @@ public class IndexHelper {
                 }));
         fs.writeIndexFile(dbName, collName, fieldName, indexes);
         writeHashIndexes(dbName, collName, fieldName, entriesToBeIndexed);
-        cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
     }
 
     private static void writeHashIndexes(String dbName, String collName, String fieldName,
@@ -125,10 +134,14 @@ public class IndexHelper {
         fs.writeHashIndexFile(dbName, collName, fieldName, IndexKind.ARRAY, arrayEntries);
     }
 
-    public static boolean dropIndex(String dbName, String collName, String fieldName) {
-        final var result = fs.dropIndex(dbName, collName, fieldName);
-        cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-        return result;
+    public static boolean dropIndex(String dbName, String collName, String fieldName) throws InterruptedException {
+        rl.lockIndex(dbName, collName, fieldName);
+        try {
+            return fs.dropIndex(dbName, collName, fieldName);
+        } finally {
+            cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+            rl.releaseIndex(dbName, collName, fieldName);
+        }
     }
 
     public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids)

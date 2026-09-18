@@ -274,6 +274,12 @@ def test_crud(c):
                save(c, COLL_CRUD, {"_id": "bad id!", "v": 1}), "ERROR", "400-1")
     check_code("SAVE invalid _id (too long) -> 400-1",
                save(c, COLL_CRUD, {"_id": "x" * 65, "v": 1}), "ERROR", "400-1")
+    check_code("SAVE non-string _id -> 400-1",
+               save(c, COLL_CRUD, {"_id": 123, "v": 1}), "ERROR", "400-1")
+    check_code("BULK_SAVE non-string _id -> 400-1",
+               bulk_save(c, COLL_CRUD, [{"_id": 123, "v": 1}]), "ERROR", "400-1")
+    check_code("BULK_SAVE invalid _id (illegal chars) -> 400-1",
+               bulk_save(c, COLL_CRUD, [{"_id": "bad id!", "v": 1}]), "ERROR", "400-1")
 
 
 def test_top_level_id(c):

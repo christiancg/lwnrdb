@@ -61,7 +61,7 @@ public class ListenProcessorThreadTest {
         final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         dirtyReq.setAggregationSteps(List.of());
         dirtyReq.setDirtyRead(true);
-        final var hash = ResultHasher.hash(List.of());
+        final var hash = ResultHasher.hash(List.of(), false);
         final var listenId = manager.register(clientId, dirtyReq, hash);
 
         final var queue = new LinkedBlockingQueue<UUID>();
@@ -257,7 +257,7 @@ public class ListenProcessorThreadTest {
             t.interrupt();
             t.join(1000);
 
-            final var expectedHash = ResultHasher.hash(List.of());
+            final var expectedHash = ResultHasher.hash(List.of(), false);
             assertEquals(expectedHash, registration.lastHash().get());
             final var written = stringWriter.toString();
             assertTrue(written.contains(listenId.toString()));

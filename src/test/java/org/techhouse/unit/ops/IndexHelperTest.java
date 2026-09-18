@@ -106,7 +106,7 @@ public class IndexHelperTest {
     }
 
     @Test
-    public void test_drop_index_success() throws IOException {
+    public void test_drop_index_success() throws IOException, InterruptedException {
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
         String fieldName = "testField";
@@ -118,7 +118,7 @@ public class IndexHelperTest {
     }
 
     @Test
-    public void test_drop_index_nonexistent_collection() {
+    public void test_drop_index_nonexistent_collection() throws InterruptedException {
         String dbName = TestGlobals.DB;
         String collName = "nonExistentColl";
         String fieldName = "testField";
@@ -127,7 +127,7 @@ public class IndexHelperTest {
     }
 
     @Test
-    public void test_drop_index_existent_collection_but_no_index() {
+    public void test_drop_index_existent_collection_but_no_index() throws InterruptedException {
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
         String fieldName = "testField";
@@ -175,7 +175,7 @@ public class IndexHelperTest {
     }
 
     @Test
-    public void test_create_index_with_object_and_array_values() throws IOException {
+    public void test_create_index_with_object_and_array_values() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("o1", objectValue(1)), entryWith("o2", objectValue(1)),
                 entryWith("o3", objectValue(2)), entryWith("a1", arrayValue()),

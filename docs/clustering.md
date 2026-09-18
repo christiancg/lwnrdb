@@ -508,8 +508,10 @@ behind.
 
 On a membership change and on the same periodic sweep, `cluster/AdminAntiEntropyService`
 pulls each live peer's `ADMIN_SNAPSHOT` (`{epoch, databases, collections, users, schemas,
-procedures, triggers, schedules}`, built from disk), keeps the **highest-epoch** one, and —
-only when it exceeds this node's own epoch — **conforms** local state to it: upsert
+procedures, triggers, schedules}`, built from disk) and keeps the winner under the
+`(epoch, nodeId)` order — a higher epoch wins, and at an **equal** epoch the higher node id
+does, so two nodes at the same epoch converge instead of conforming to each other forever.
+When that winner is a peer rather than this node, it **conforms** local state to it: upsert
 snapshot users then delete absent ones; create missing databases and reconcile owners;
 create missing collections and reconcile their indexes; then drop collections and databases
 absent from the snapshot. Each create/drop takes the target collection's write lock,
@@ -571,8 +573,10 @@ See the *Clustering* row of the configuration table in the main
 Two classes of key have cluster-wide constraints: `scriptsEnabled` and the `script*`
 sandbox keys must be **uniform**, because the sandbox comes from the executing node; and
 `clusterExpectedSize` should match the steady-state node count so the write-quorum majority
-is computed correctly before membership stabilizes. `scriptLocalityWeight` is explicitly
-per-node.
+is computed correctly before membership stabilizes; it must be **at least 2** whenever
+`clusterEnabled=true`, because a lone node evicts its peers after `deadEvictionMs` and then
+satisfies its own quorum, letting both sides of a partition accept divergent writes.
+`scriptLocalityWeight` is explicitly per-node.
 
 ## Operations runbook
 

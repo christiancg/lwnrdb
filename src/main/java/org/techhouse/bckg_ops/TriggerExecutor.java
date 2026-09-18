@@ -27,9 +27,9 @@ public class TriggerExecutor {
     private final AtomicInteger scheduled = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
     private volatile boolean draining;
-    private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
-    private ScheduledExecutorService retryScheduler;
-    private Consumer<TriggerEvent> dispatcher;
+    private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private volatile ScheduledExecutorService retryScheduler;
+    private volatile Consumer<TriggerEvent> dispatcher;
 
     public TriggerExecutor() {
         this.queue = new LinkedBlockingQueue<>(Math.max(1, Configuration.getInstance().getTriggerQueueSize()));
@@ -80,7 +80,7 @@ public class TriggerExecutor {
         deadLettered.increment();
     }
 
-    public void start(Consumer<TriggerEvent> triggerDispatcher) {
+    public synchronized void start(Consumer<TriggerEvent> triggerDispatcher) {
         draining = false;
         this.dispatcher = triggerDispatcher;
         retryScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -147,7 +147,7 @@ public class TriggerExecutor {
         return queue.size() + inFlight.get() + scheduled.get();
     }
 
-    public void stop() {
+    public synchronized void stop() {
         workerCount.set(0);
         final var scheduler = retryScheduler;
         retryScheduler = null;

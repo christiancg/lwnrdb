@@ -22,7 +22,7 @@ public class ListenManager {
     private final LinkedBlockingQueue<UUID> dirtyQueue = new LinkedBlockingQueue<>();
     private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
     private final ThreadLocal<Set<String>> deferred = new ThreadLocal<>();
-    private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public UUID register(UUID clientId, AggregateRequest dirtyRequest, String initialHash) {
         final var listenId = UUID.randomUUID();
@@ -130,12 +130,12 @@ public class ListenManager {
         return registrations.get(listenId);
     }
 
-    public void startWorkers() {
+    public synchronized void startWorkers() {
         pool.execute(new ListenProcessorThread(dirtyQueue, this));
         logger.info("Started listen processor worker");
     }
 
-    public void stopWorkers() {
+    public synchronized void stopWorkers() {
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Listen");
         dirtyQueue.clear();
         queued.clear();

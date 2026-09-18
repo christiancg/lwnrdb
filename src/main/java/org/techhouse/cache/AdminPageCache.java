@@ -29,8 +29,10 @@ final class AdminPageCache {
         final var pkIdx = fs.readWholePkIndexFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
         pagesPkIndexes.put(pagesCollectionKey(pagesCollName), new ArrayList<>(pkIdx));
         final var pageEntries = new ArrayList<AdminPageEntry>();
+        final var idPrefix = collId + Globals.COLL_IDENTIFIER_SEPARATOR;
         try (var pagesStream = fs.streamPages(Globals.ADMIN_PAGES_DB_NAME, pagesCollName)) {
             pagesStream.forEach(map -> map.values().stream()
+                    .filter(e -> e.get_id() != null && e.get_id().startsWith(idPrefix))
                     .map(e -> AdminPageEntry.fromJsonObject(dbName, collName, e.getData())).forEach(pageEntries::add));
         }
         pages.put(collId, new CopyOnWriteArrayList<>(pageEntries));

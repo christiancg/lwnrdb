@@ -57,7 +57,7 @@ public class FilterOperatorResolutionTest {
         return cache;
     }
 
-    private void indexField(Cache cache, String field) {
+    private void indexField(Cache cache, String field) throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(field));
     }
@@ -77,7 +77,7 @@ public class FilterOperatorResolutionTest {
     }
 
     @Test
-    public void test_contains_falls_back_to_scan_on_a_mixed_type_field() throws IOException {
+    public void test_contains_falls_back_to_scan_on_a_mixed_type_field() throws IOException, InterruptedException {
         final var cache = mixedTypeFixture();
         addTyped(cache, "c1", "tags", new JsonString("alpha"));
         addTyped(cache, "c2", "tags", arrayOf(new JsonString("alpha"), new JsonString("beta")));
@@ -91,7 +91,7 @@ public class FilterOperatorResolutionTest {
     }
 
     @Test
-    public void test_not_in_falls_back_to_scan_on_a_mixed_type_field() throws IOException {
+    public void test_not_in_falls_back_to_scan_on_a_mixed_type_field() throws IOException, InterruptedException {
         final var cache = mixedTypeFixture();
         addTyped(cache, "n1", "status", new JsonString("active"));
         addTyped(cache, "n2", "status", new JsonString("inactive"));
@@ -107,7 +107,7 @@ public class FilterOperatorResolutionTest {
     }
 
     @Test
-    public void test_contains_still_uses_the_index_on_a_homogeneous_field() throws IOException {
+    public void test_contains_still_uses_the_index_on_a_homogeneous_field() throws IOException, InterruptedException {
         final var cache = mixedTypeFixture();
         addTyped(cache, "h1", "tags", new JsonString("alpha"));
         addTyped(cache, "h2", "tags", new JsonString("alphabet"));
@@ -193,7 +193,7 @@ public class FilterOperatorResolutionTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void index(Cache cache, String... fields) {
+    private void index(Cache cache, String... fields) throws InterruptedException {
         for (final var field : fields) {
             org.techhouse.ops.IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
         }
@@ -365,7 +365,8 @@ public class FilterOperatorResolutionTest {
     // resolveIdsViaIndex disqualifies an object operand (hash hits are unconfirmed candidates), so the
     // index-only COUNT falls back; the document FILTER path still resolves it via the Object hash index.
     @Test
-    public void test_resolve_ids_via_index_object_equals_disqualified_but_filter_resolves() throws IOException {
+    public void test_resolve_ids_via_index_object_equals_disqualified_but_filter_resolves()
+            throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "o1", 0, 100, 0);
@@ -386,7 +387,8 @@ public class FilterOperatorResolutionTest {
     }
 
     @Test
-    public void test_resolve_ids_via_index_array_equals_disqualified_but_filter_resolves() throws IOException {
+    public void test_resolve_ids_via_index_array_equals_disqualified_but_filter_resolves()
+            throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "a1", 0, 100, 0);

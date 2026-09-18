@@ -57,7 +57,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         }
         if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())
                 || Globals.ADMIN_PAGES_DB_NAME.equals(compaction.dbName())) {
-            adminCache.shiftPkPositionsAfterCompaction(compaction.collName(), compaction.page(),
+            adminCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),
                     compaction.removedPosition(), compaction.removedLength());
         } else {
             userCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),

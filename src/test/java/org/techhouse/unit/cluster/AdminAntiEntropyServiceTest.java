@@ -3,6 +3,7 @@ package org.techhouse.unit.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -37,6 +38,7 @@ import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class AdminAntiEntropyServiceTest {
@@ -231,5 +233,31 @@ public class AdminAntiEntropyServiceTest {
         } finally {
             service.stop();
         }
+    }
+
+    private static void conform(AdminAntiEntropyService target, AdminSnapshotPayload snapshot) throws Exception {
+        final var field = AdminAntiEntropyService.class.getDeclaredField("conformer");
+        field.setAccessible(true);
+        final var conformer = field.get(target);
+        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class);
+        method.setAccessible(true);
+        method.invoke(conformer, snapshot);
+    }
+
+    @Test
+    public void test_a_converged_conform_writes_nothing() throws Exception {
+        TestUtils.createTestDatabaseAndCollection();
+        AdminOperationHelper.saveUserEntry(new AdminUserEntry("l14user", "hash", false, Set.of(), Map.of(), Map.of()));
+        final var snapshot = service.buildSnapshot();
+        conform(service, snapshot);
+        final var databasePk = cache.getPkIndexAdminDbEntry(TestGlobals.DB);
+        final var userPk = cache.getPkIndexAdminUserEntry("l14user");
+
+        conform(service, snapshot);
+
+        assertSame(databasePk, cache.getPkIndexAdminDbEntry(TestGlobals.DB),
+                "a converged node rewrote every database entry on every sweep, forever");
+        assertSame(userPk, cache.getPkIndexAdminUserEntry("l14user"),
+                "a converged node rewrote the whole admin/users collection on every sweep, forever");
     }
 }

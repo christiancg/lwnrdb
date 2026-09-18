@@ -106,7 +106,9 @@ public final class AggregationOperationHelper {
                 }
                 resultStream = cache.initializeStreamIfNecessary(null, dbName, collName);
             }
-            return resultStream.toList();
+            try (var stream = resultStream) {
+                return stream.toList();
+            }
         } catch (java.io.UncheckedIOException e) {
             throw e.getCause();
         }

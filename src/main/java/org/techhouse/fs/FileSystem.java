@@ -6,7 +6,6 @@ import java.io.FileWriter;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -22,10 +21,12 @@ import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
+import org.techhouse.log.Logger;
 
 public class FileSystem {
-    private final org.techhouse.log.Logger logger = org.techhouse.log.Logger.logFor(FileSystem.class);
+    private final Logger logger = Logger.logFor(FileSystem.class);
     private final FilePaths paths = new FilePaths();
+    private final DirtyIndexMarkers dirtyIndexMarkers = new DirtyIndexMarkers(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
     private final DocumentPageStore documentPageStore = new DocumentPageStore(paths);
@@ -198,47 +199,15 @@ public class FileSystem {
     }
 
     public void markIndexesDirty(String dbName, String collName) {
-        final var marker = dirtyIndexMarker(dbName, collName);
-        try {
-            if (marker.getParentFile().exists() && !marker.exists()) {
-                Files.writeString(marker.toPath(), Long.toString(System.currentTimeMillis()));
-            }
-        } catch (IOException e) {
-            logger.warning(
-                    "Could not write the index-dirty marker for " + dbName + "|" + collName + ": " + e.getMessage());
-        }
+        dirtyIndexMarkers.mark(dbName, collName);
     }
 
     public void clearIndexesDirty(String dbName, String collName) {
-        final var marker = dirtyIndexMarker(dbName, collName);
-        if (marker.exists() && !marker.delete()) {
-            logger.warning("Could not clear the index-dirty marker for " + dbName + "|" + collName);
-        }
+        dirtyIndexMarkers.clear(dbName, collName);
     }
 
     public List<String> listDirtyIndexCollections() {
-        final var result = new ArrayList<String>();
-        final var root = new File(paths.dbPath());
-        final var databases = root.listFiles(File::isDirectory);
-        if (databases == null) {
-            return result;
-        }
-        for (final var database : databases) {
-            final var collections = database.listFiles(File::isDirectory);
-            if (collections == null) {
-                continue;
-            }
-            for (final var collection : collections) {
-                if (dirtyIndexMarker(database.getName(), collection.getName()).exists()) {
-                    result.add(database.getName() + Globals.COLL_IDENTIFIER_SEPARATOR + collection.getName());
-                }
-            }
-        }
-        return result;
-    }
-
-    private File dirtyIndexMarker(String dbName, String collName) {
-        return new File(paths.collectionFolder(dbName, collName), collName + "-indexes.dirty");
+        return dirtyIndexMarkers.listMarked();
     }
 
     public void appendTombstone(String dbName, String collName, String id, long version) throws IOException {
@@ -316,17 +285,32 @@ public class FileSystem {
         final var file = paths.collectionPage(dbName, collName, page);
         final var lock = FileLocks.lockFor(file).writeLock();
         lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE)) {
+        try {
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
-            final var bytes = strData.getBytes(StandardCharsets.UTF_8);
-            final var length = bytes.length;
-            var totalFileLength = file.length();
-            writer.append(strData);
-            final var entryId = entry.get_id();
-            return pkIndexStore.indexNewPKValue(entry.getDatabaseName(), entry.getCollectionName(), entryId,
-                    totalFileLength, length, page, entry.getVersion());
+            final var length = strData.getBytes(StandardCharsets.UTF_8).length;
+            final var totalFileLength = file.length();
+            try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
+                    Globals.BUFFER_SIZE)) {
+                writer.append(strData);
+            }
+            try {
+                return pkIndexStore.indexNewPKValue(dbName, collName, entry.get_id(), totalFileLength, length, page,
+                        entry.getVersion());
+            } catch (IOException e) {
+                truncateTo(file, totalFileLength);
+                throw e;
+            }
         } finally {
             lock.unlock();
+        }
+    }
+
+    private void truncateTo(File file, long length) {
+        try (var channel = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
+            channel.setLength(length);
+        } catch (IOException e) {
+            logger.error("Could not roll back the page append for " + file.getAbsolutePath()
+                    + " after its index write failed; run REINDEX on this collection", e);
         }
     }
 

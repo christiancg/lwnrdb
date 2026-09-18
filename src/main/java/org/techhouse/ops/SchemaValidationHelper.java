@@ -39,8 +39,11 @@ public final class SchemaValidationHelper {
             logger.error("Refusing the write: cannot read the schema for " + request.getDatabaseName() + "|"
                     + request.getCollectionName(), e);
             return new OperationResponse(request.getType(), ErrorCode.SCHEMA_UNAVAILABLE);
+        } catch (InvalidSchemaException e) {
+            logger.error("Refusing the write: the stored schema for " + request.getDatabaseName() + "|"
+                    + request.getCollectionName() + " does not meta-validate", e);
+            return new OperationResponse(request.getType(), ErrorCode.SCHEMA_UNAVAILABLE);
         } catch (Exception e) {
-            // Cannot happen (the cached schema was validated when saved): never break the write path over it.
             logger.warning("Skipping schema validation for " + request.getDatabaseName() + "|"
                     + request.getCollectionName() + ": " + e.getMessage());
             return null;

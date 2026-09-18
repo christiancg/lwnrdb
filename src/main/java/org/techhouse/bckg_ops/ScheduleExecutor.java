@@ -34,15 +34,15 @@ public class ScheduleExecutor {
     private final IdleSignal idleSignal = new IdleSignal();
     private final Set<String> running = ConcurrentHashMap.newKeySet();
     private volatile boolean draining;
-    private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
-    private ScheduledExecutorService scheduler;
-    private Consumer<ScheduleRegistry.Entry> dispatcher;
+    private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private volatile ScheduledExecutorService scheduler;
+    private volatile Consumer<ScheduleRegistry.Entry> dispatcher;
 
     public ScheduleExecutor() {
         this.queue = new LinkedBlockingQueue<>(Math.max(1, Configuration.getInstance().getScheduleQueueSize()));
     }
 
-    public void start(Consumer<ScheduleRegistry.Entry> scheduleDispatcher) {
+    public synchronized void start(Consumer<ScheduleRegistry.Entry> scheduleDispatcher) {
         draining = false;
         this.dispatcher = scheduleDispatcher;
         final var threadCount = Math.max(1, configuration.getScheduleThreads());
@@ -178,7 +178,7 @@ public class ScheduleExecutor {
         return queue.size() + inFlight.get();
     }
 
-    public void stop() {
+    public synchronized void stop() {
         workerCount.set(0);
         draining = true;
         if (scheduler != null) {

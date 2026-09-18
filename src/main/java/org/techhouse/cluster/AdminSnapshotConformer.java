@@ -60,7 +60,10 @@ final class AdminSnapshotConformer {
         for (final var userJson : snapshot.getUsers()) {
             final var user = AdminUserEntry.fromJsonObject(userJson);
             snapshotUsers.add(user.get_id());
-            AdminOperationHelper.saveUserEntry(user);
+            final var local = cache.getAdminUserEntry(user.get_id());
+            if (local == null || !local.getData().equals(user.getData())) {
+                AdminOperationHelper.saveUserEntry(user);
+            }
         }
         return snapshotUsers;
     }
@@ -86,7 +89,7 @@ final class AdminSnapshotConformer {
             if (cache.getAdminDbEntry(db.get_id()) == null) {
                 AdminOperationHelper.saveDatabaseEntry(
                         new AdminDbEntry(db.get_id(), new ArrayList<>(), new ArrayList<>(db.getOwners())));
-            } else {
+            } else if (!cache.getAdminDbEntry(db.get_id()).getOwners().equals(db.getOwners())) {
                 AdminOperationHelper.updateDatabaseOwners(db.get_id(), db.getOwners());
             }
         }

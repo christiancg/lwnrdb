@@ -385,4 +385,36 @@ public class AdminOperationHelperTest {
                 "an interrupt while taking the second admin lock must not strand the first for the process lifetime");
         locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME);
     }
+
+    private static long storedCopiesOf(String opId) throws Exception {
+        final var fs = IocContainer.get(org.techhouse.fs.FileSystem.class);
+        final var folder = new File(TestUtils.getDbPath(fs),
+                Globals.ADMIN_DB_NAME + File.separator + Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
+        final var pages = folder.listFiles((_, name) -> name.endsWith(".dat"));
+        if (pages == null) {
+            return 0;
+        }
+        var copies = 0L;
+        for (final var page : pages) {
+            copies += java.nio.file.Files.readAllLines(page.toPath()).stream()
+                    .filter(line -> line.contains("\"_id\":\"" + opId + "\"")).count();
+        }
+        return copies;
+    }
+
+    @Test
+    public void test_re_recording_a_transaction_marker_updates_in_place() throws Exception {
+        final var payload = new JsonObject();
+        payload.addProperty("outcome", "COMMITTED");
+        final var marker = org.techhouse.data.admin.AdminTransactionEntry.marker("dtx-l19", "outcome",
+                "TRANSACTION_OUTCOME", payload);
+
+        AdminOperationHelper.saveTransactionOp(marker);
+        AdminOperationHelper.saveTransactionOp(marker);
+
+        assertEquals(1L, storedCopiesOf(marker.get_id()),
+                "an insert-only write orphans the first copy forever: nothing deletes it and admin/pages keeps"
+                        + " counting it");
+        assertEquals(1, AdminOperationHelper.readTransactionOps(List.of(marker.get_id())).size());
+    }
 }

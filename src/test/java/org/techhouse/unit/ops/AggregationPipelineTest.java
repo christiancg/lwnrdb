@@ -6,6 +6,8 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Stream;
 import org.jspecify.annotations.NonNull;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -213,5 +215,39 @@ public class AggregationPipelineTest {
         List<JsonObject> result = AggregationOperationHelper.processAggregation(request);
 
         assertEquals(0, result.size());
+    }
+
+    @Test
+    public void test_a_full_scan_fallback_closes_its_directory_stream() throws IOException {
+        final var closed = new AtomicBoolean();
+        final var first = new JsonObject();
+        first.add(Globals.PK_FIELD, new JsonString("s1"));
+        final var second = new JsonObject();
+        second.add(Globals.PK_FIELD, new JsonString("s2"));
+        final var source = Stream.of(first, second).onClose(() -> closed.set(true));
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of());
+
+        final var results = AggregationOperationHelper.processAggregation(request, source);
+
+        assertEquals(2, results.size());
+        assertTrue(closed.get(),
+                "the scan fallback holds a Files.list directory handle, and a terminal operation does not close"
+                        + " a stream, so every query on a collection without page metadata leaks one descriptor");
+    }
+
+    @Test
+    public void test_a_pipeline_with_steps_still_closes_its_source() throws IOException {
+        final var closed = new AtomicBoolean();
+        final var document = new JsonObject();
+        document.add(Globals.PK_FIELD, new JsonString("s1"));
+        document.add("n", new JsonNumber(1));
+        final var source = Stream.of(document).onClose(() -> closed.set(true));
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new LimitAggregationStep(10)));
+
+        AggregationOperationHelper.processAggregation(request, source);
+
+        assertTrue(closed.get());
     }
 }

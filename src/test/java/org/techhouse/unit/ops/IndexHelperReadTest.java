@@ -62,7 +62,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_get_index_entries_for_field_returns_entries_when_indexed() throws IOException {
+    public void test_get_index_entries_for_field_returns_entries_when_indexed()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("n1", "tag", new JsonString("alpha")),
                 entryWith("n2", "tag", new JsonString("beta")), entryWith("n3", "tag", new JsonString("alpha")));
@@ -92,7 +93,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_mixed_scalar_and_object_includes_all_docs() throws IOException {
+    public void test_getIndexEntriesForField_mixed_scalar_and_object_includes_all_docs()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("s1", "data", new JsonString("hello")),
                 entryWith("s2", "data", new JsonString("world")), entryWith("o1", "data", objectValue(1)),
@@ -111,7 +113,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_mixed_scalar_and_array_includes_all_docs() throws IOException {
+    public void test_getIndexEntriesForField_mixed_scalar_and_array_includes_all_docs()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("s1", "data", new JsonNumber(42)),
                 entryWith("a1", "data", arrayValue("x", "y")), entryWith("a2", "data", arrayValue("z")));
@@ -126,7 +129,7 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_pure_scalar_field_unchanged() throws IOException {
+    public void test_getIndexEntriesForField_pure_scalar_field_unchanged() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("n1", "score", new JsonNumber(10)),
                 entryWith("n2", "score", new JsonNumber(20)), entryWith("n3", "score", new JsonNumber(10)));
@@ -141,7 +144,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_pure_object_field_returns_entries() throws IOException {
+    public void test_getIndexEntriesForField_pure_object_field_returns_entries()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("o1", "data", objectValue(1)), entryWith("o2", "data", objectValue(1)),
                 entryWith("o3", "data", objectValue(2)));
@@ -157,7 +161,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_same_object_value_grouped_into_one_entry() throws IOException {
+    public void test_getIndexEntriesForField_same_object_value_grouped_into_one_entry()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("o1", "data", objectValue(5)), entryWith("o2", "data", objectValue(5)),
                 entryWith("o3", "data", objectValue(5)));
@@ -180,7 +185,7 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_get_matching_ids_for_join_returns_matching_ids() throws IOException {
+    public void test_get_matching_ids_for_join_returns_matching_ids() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(42)),
                 entryWith("r2", "refKey", new JsonNumber(7)), entryWith("r3", "refKey", new JsonNumber(42)));
@@ -229,7 +234,7 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_getIndexEntriesForField_records_analyze_context() throws IOException {
+    public void test_getIndexEntriesForField_records_analyze_context() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("a1", "tag", new JsonString("alpha")));
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "tag");
@@ -252,7 +257,7 @@ public class IndexHelperReadTest {
     // whose value changed from object to a scalar without the index having been updated yet (the
     // background-processing lag the object/array hash index tolerates)
     @Test
-    public void test_getIndexEntriesForField_hash_index_skips_stale_entries() throws IOException {
+    public void test_getIndexEntriesForField_hash_index_skips_stale_entries() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("keep1", "data", objectValue(1)), entryWith("gone1", "data", objectValue(2)),
                 entryWith("scalarNow1", "data", objectValue(3)));
@@ -277,7 +282,7 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_get_matching_ids_for_join_skips_null_and_object_values() throws IOException {
+    public void test_get_matching_ids_for_join_skips_null_and_object_values() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(42)),
                 entryWith("r2", "refKey", new JsonNumber(7)));

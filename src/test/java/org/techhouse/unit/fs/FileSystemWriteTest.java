@@ -356,4 +356,35 @@ public class FileSystemWriteTest {
         assertEquals("updated-longer-value-for-b", FileSystemPages.readValueFromDisk(fs, "b"));
         assertEquals("updated-longer-value-for-c", FileSystemPages.readValueFromDisk(fs, "c"));
     }
+
+    private static File pageFile() {
+        return new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
+    }
+
+    private static DbEntry entry(String id) {
+        final var object = new JsonObject();
+        object.addProperty("_id", id);
+        object.addProperty("name", "value");
+        return DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, object);
+    }
+
+    @Test
+    public void test_a_failed_index_write_truncates_the_page() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        fileSystem.insertIntoCollection(entry("kept"));
+        final var lengthBefore = pageFile().length();
+        final var folder = pageFile().getParentFile();
+        final var indexFile = new File(folder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
+        assertTrue(indexFile.delete() || !indexFile.exists());
+        assertTrue(indexFile.mkdir(), "the index path must be unwritable for this test to inject a failure");
+
+        assertThrows(IOException.class, () -> fileSystem.insertIntoCollection(entry("orphan")));
+
+        assertEquals(lengthBefore, pageFile().length(),
+                "a document whose index entry could not be written must not stay in the page: full scans would"
+                        + " return it while FIND_BY_ID says it does not exist");
+    }
 }

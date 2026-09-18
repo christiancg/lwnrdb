@@ -122,13 +122,13 @@ public class AggregationDistinctStepTest {
         cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void enableIndex(Cache cache, String field) {
+    private void enableIndex(Cache cache, String field) throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(field));
     }
 
     @Test
-    public void test_distinct_uses_index_returns_same_values_as_scan() throws IOException {
+    public void test_distinct_uses_index_returns_same_values_as_scan() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", "color", new JsonString("red"));
         addDoc(cache, "c2", "color", new JsonString("blue"));
@@ -149,7 +149,7 @@ public class AggregationDistinctStepTest {
     }
 
     @Test
-    public void test_distinct_indexed_reads_no_documents() throws IOException {
+    public void test_distinct_indexed_reads_no_documents() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", "color", new JsonString("red"));
         addDoc(cache, "c2", "color", new JsonString("blue"));
@@ -165,7 +165,7 @@ public class AggregationDistinctStepTest {
     }
 
     @Test
-    public void test_distinct_null_field_ignores_index() throws IOException {
+    public void test_distinct_null_field_ignores_index() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "d1", "color", new JsonString("red"));
         addDoc(cache, "d2", "color", new JsonString("red"));
@@ -194,7 +194,7 @@ public class AggregationDistinctStepTest {
     // Option B: documents whose indexed field holds an object/array are not in the index, so an
     // index-backed DISTINCT includes both scalar and object-valued docs on a mixed-type field
     @Test
-    public void test_object_valued_field_included_in_indexed_distinct() throws IOException {
+    public void test_object_valued_field_included_in_indexed_distinct() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "o1", "data", new JsonString("scalar"));
         final var objVal = new JsonObject();
@@ -214,7 +214,7 @@ public class AggregationDistinctStepTest {
     }
 
     @Test
-    public void test_indexed_distinct_on_empty_collection_returns_empty() throws IOException {
+    public void test_indexed_distinct_on_empty_collection_returns_empty() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         enableIndex(cache, "color");
 
@@ -226,7 +226,8 @@ public class AggregationDistinctStepTest {
     }
 
     @Test
-    public void test_distinct_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
+    public void test_distinct_mixed_type_indexed_field_includes_object_valued_docs()
+            throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "s1", "meta", new JsonString("plain"));
         final var obj = new JsonObject();
@@ -255,7 +256,7 @@ public class AggregationDistinctStepTest {
     }
 
     @Test
-    public void test_distinct_includes_the_explicit_null_group() throws IOException {
+    public void test_distinct_includes_the_explicit_null_group() throws IOException, InterruptedException {
         saveDoc("n1", new JsonString("x"));
         saveDoc("n2", JsonNull.INSTANCE);
 
