@@ -14,6 +14,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.DigestEntry;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -28,6 +29,7 @@ public class AntiEntropyService implements MembershipListener {
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final CoalescingSweep sweep = new CoalescingSweep(logger, "cluster-anti-entropy", "Anti-entropy",
             this::reconcileAllCollections);
 
@@ -78,11 +80,16 @@ public class AntiEntropyService implements MembershipListener {
         final var payload = new AntiEntropyPayload(dbName, collName);
         final var entries = new ArrayList<DigestEntry>();
         final var selfNodeId = selfNodeId();
-        for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
-            entries.add(new DigestEntry(entry.getValue(), entry.getVersion(), false, selfNodeId));
-        }
-        for (final var tombstone : fs.readTombstones(dbName, collName).entrySet()) {
-            entries.add(new DigestEntry(tombstone.getKey(), tombstone.getValue(), true, selfNodeId));
+        locks.lockRead(dbName, collName);
+        try {
+            for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
+                entries.add(new DigestEntry(entry.getValue(), entry.getVersion(), false, selfNodeId));
+            }
+            for (final var tombstone : fs.readTombstones(dbName, collName).entrySet()) {
+                entries.add(new DigestEntry(tombstone.getKey(), tombstone.getValue(), true, selfNodeId));
+            }
+        } finally {
+            locks.releaseRead(dbName, collName);
         }
         final var summary = summaryOf(entries);
         payload.setSummary(summary);
@@ -107,14 +114,19 @@ public class AntiEntropyService implements MembershipListener {
         final var payload = new AntiEntropyPayload(dbName, collName);
         final var documents = new ArrayList<JsonObject>();
         final var versions = new ArrayList<String>();
-        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        for (final var id : ids) {
-            final var position = Collections.binarySearch(pkIndex, id);
-            if (position >= 0) {
-                final var indexEntry = pkIndex.get(position);
-                documents.add(cache.getById(dbName, collName, indexEntry).getData());
-                versions.add(Long.toString(indexEntry.getVersion()));
+        locks.lockRead(dbName, collName);
+        try {
+            final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            for (final var id : ids) {
+                final var position = Collections.binarySearch(pkIndex, id);
+                if (position >= 0) {
+                    final var indexEntry = pkIndex.get(position).detachedCopy();
+                    documents.add(cache.getById(dbName, collName, indexEntry).getData());
+                    versions.add(Long.toString(indexEntry.getVersion()));
+                }
             }
+        } finally {
+            locks.releaseRead(dbName, collName);
         }
         payload.setDocuments(documents);
         payload.setVersions(versions);
@@ -123,10 +135,16 @@ public class AntiEntropyService implements MembershipListener {
 
     void reconcile(String dbName, String collName) throws Exception {
         final var localLive = new HashMap<String, Long>();
-        for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
-            localLive.put(entry.getValue(), entry.getVersion());
+        final Map<String, Long> localTombstones;
+        locks.lockRead(dbName, collName);
+        try {
+            for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
+                localLive.put(entry.getValue(), entry.getVersion());
+            }
+            localTombstones = fs.readTombstones(dbName, collName);
+        } finally {
+            locks.releaseRead(dbName, collName);
         }
-        final var localTombstones = fs.readTombstones(dbName, collName);
 
         final var selfNodeId = selfNodeId();
         final var best = new HashMap<String, Best>();

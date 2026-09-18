@@ -126,6 +126,31 @@ public class AggregationCountStepTest {
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status"));
     }
 
+    @Test
+    public void test_index_only_count_matches_the_scan_for_case_variants() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        addDoc(cache, "a", new JsonString("Bob"));
+        addDoc(cache, "b", new JsonString("bob"));
+        addDoc(cache, "c", new JsonString("carol"));
+        registerPkIndex("a", "b", "c");
+        final var scanEquals = countOf(countByName(FieldOperatorType.EQUALS));
+        final var scanNotEquals = countOf(countByName(FieldOperatorType.NOT_EQUALS));
+        enableIndex(cache);
+
+        assertEquals(scanEquals, countOf(countByName(FieldOperatorType.EQUALS)));
+        assertEquals(scanNotEquals, countOf(countByName(FieldOperatorType.NOT_EQUALS)));
+        assertEquals(2, countOf(countByName(FieldOperatorType.EQUALS)));
+        assertEquals(1, countOf(countByName(FieldOperatorType.NOT_EQUALS)));
+    }
+
+    private List<JsonObject> countByName(FieldOperatorType type) throws IOException {
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(
+                List.of(new FilterAggregationStep(new FieldOperator(type, "status", new JsonString("bob"))),
+                        new CountAggregationStep()));
+        return AggregationOperationHelper.processAggregation(request);
+    }
+
     private static int countOf(List<JsonObject> result) {
         assertEquals(1, result.size());
         assertTrue(result.getFirst().has("count"));

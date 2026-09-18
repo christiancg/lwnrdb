@@ -285,9 +285,7 @@ public class UserCache {
         for (var id : missingIds) {
             final var pos = Collections.binarySearch(pkIndex, id);
             if (pos >= 0) {
-                final var e = pkIndex.get(pos);
-                toRead.add(new PkIndexEntry(e.getDatabaseName(), e.getCollectionName(), e.getValue(), e.getPosition(),
-                        e.getLength(), e.getPage(), e.getVersion()));
+                toRead.add(pkIndex.get(pos).detachedCopy());
             }
         }
         if (toRead.isEmpty()) {

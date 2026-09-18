@@ -310,11 +310,9 @@ public class OperationProcessor {
                     if (hookError != null) {
                         return hookError;
                     }
-                    final var response = ClusterWriteHelper.afterBulkSave(dbName, collName,
-                            SaveOperationHelper.executeBulkSave(bulkSaveRequest));
-                    TriggerHelper.afterBulkSave(dbName, collName, response, actingUser,
-                            bulkSaveRequest.getTriggerDepth());
-                    return response;
+                    final var local = SaveOperationHelper.executeBulkSave(bulkSaveRequest);
+                    TriggerHelper.afterBulkSave(dbName, collName, local, actingUser, bulkSaveRequest.getTriggerDepth());
+                    return ClusterWriteHelper.afterBulkSave(dbName, collName, local);
                 });
     }
 
@@ -329,7 +327,6 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
-        final var isInsert = saveRequest.get_id() == null || saveRequest.get_id().isBlank();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
             final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.SAVE, dbName, collName);
             if (ownershipError != null) {
@@ -339,19 +336,17 @@ public class OperationProcessor {
             if (readinessError != null) {
                 return readinessError;
             }
-            final var hookError = BeforeHookHelper.beforeSave(saveRequest,
-                    isInsert ? EventType.CREATED : EventType.UPDATED, actingUser);
+            final var hookError = BeforeHookHelper.beforeSave(saveRequest, actingUser);
             if (hookError != null) {
                 return hookError;
             }
-            final var response = ClusterWriteHelper.afterSave(dbName, collName,
-                    SaveOperationHelper.executeSave(saveRequest));
-            if (response instanceof SaveResponse saveResponse) {
+            final var local = SaveOperationHelper.executeSave(saveRequest);
+            if (local instanceof SaveResponse saveResponse) {
                 TriggerHelper.afterWriteIds(dbName, collName,
                         saveResponse.isInserted() ? EventType.CREATED : EventType.UPDATED,
                         List.of(saveResponse.get_id()), actingUser, saveRequest.getTriggerDepth());
             }
-            return response;
+            return ClusterWriteHelper.afterSave(dbName, collName, local);
         });
     }
 
@@ -386,13 +381,13 @@ public class OperationProcessor {
                     }
                     final var reservedVersion = ClusterWriteHelper.reserveDelete(dbName, collName,
                             deleteRequest.get_id());
-                    final var response = ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
-                            reservedVersion, DeleteOperationHelper.executeDelete(deleteRequest));
-                    if (response instanceof DeleteResponse) {
+                    final var local = DeleteOperationHelper.executeDelete(deleteRequest);
+                    if (local instanceof DeleteResponse) {
                         TriggerHelper.afterWrite(dbName, collName, EventType.DELETED, deleted, actingUser,
                                 deleteRequest.getTriggerDepth());
                     }
-                    return response;
+                    return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(), reservedVersion,
+                            local);
                 });
     }
 

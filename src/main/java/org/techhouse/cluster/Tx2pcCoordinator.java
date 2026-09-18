@@ -13,6 +13,7 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
@@ -56,19 +57,27 @@ public class Tx2pcCoordinator {
             logger.error("Failed to record the 2PC commit decision for " + dtxId, e);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         }
+        var localApplied = true;
         if (local) {
-            TransactionOperationHelper.commitPrepared(clientId);
+            final var localResult = TransactionOperationHelper.commitPrepared(clientId);
+            localApplied = localResult.getStatus() == OperationStatus.OK;
+            if (!localApplied) {
+                logger.error("The coordinator's own slice of " + dtxId
+                        + " failed to apply; keeping the commit marker for recovery to re-drive");
+            }
         }
         final var allAcked = sendToAll(remotes, ClusterMessageType.COMMIT_TX, sessionId, dtxId,
                 ClusterMessageType.COMMIT_TX_ACK, null);
-        if (allAcked) {
+        if (allAcked && localApplied) {
             deleteCoordinatorMarkerQuietly(dtxId);
         } else {
             logger.warning("Not every participant acknowledged the commit of " + dtxId
                     + "; keeping the coordinator marker so recovery can re-drive it");
         }
         finishEdge(clientId, local);
-        return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
+        return localApplied
+                ? OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed")
+                : new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_INDETERMINATE);
     }
 
     public OperationResponse forceResolve(String dtxId, boolean commit) {

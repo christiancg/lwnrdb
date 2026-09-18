@@ -70,6 +70,75 @@ public class AggregationSortViaIndexTest {
         enableIndex();
     }
 
+    private void save(String id, Double value) {
+        final var request = new org.techhouse.ops.req.SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        if (value != null) {
+            obj.addProperty(FIELD, value);
+        }
+        request.setObject(obj);
+        request.set_id(id);
+        IocContainer.get(org.techhouse.ops.OperationProcessor.class).processMessage(request);
+    }
+
+    private void saveNullField(String id) {
+        final var request = new org.techhouse.ops.req.SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add(FIELD, org.techhouse.ejson.elements.JsonNull.INSTANCE);
+        request.setObject(obj);
+        request.set_id(id);
+        IocContainer.get(org.techhouse.ops.OperationProcessor.class).processMessage(request);
+    }
+
+    private List<String> runIds(BaseAggregationStep... steps) throws IOException {
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(steps));
+        return AggregationOperationHelper.processAggregation(request).stream()
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue()).toList();
+    }
+
+    @Test
+    public void test_sort_includes_documents_missing_the_field() throws IOException {
+        save("s1", 3d);
+        save("s2", 1d);
+        save("s3", null);
+        enableIndex();
+
+        final var ids = runIds(new SortAggregationStep(FIELD, true));
+
+        assertEquals(3, ids.size(), "a document without the sort field must not be filtered out: " + ids);
+        assertTrue(ids.containsAll(List.of("s1", "s2", "s3")), ids.toString());
+    }
+
+    @Test
+    public void test_sort_includes_explicit_nulls() throws IOException {
+        save("n1", 3d);
+        save("n2", 1d);
+        saveNullField("n3");
+        enableIndex();
+
+        final var ids = runIds(new SortAggregationStep(FIELD, true));
+
+        assertEquals(3, ids.size(), "an explicit null must not be filtered out: " + ids);
+        assertTrue(ids.containsAll(List.of("n1", "n2", "n3")), ids.toString());
+    }
+
+    @Test
+    public void test_indexed_sort_matches_unindexed_sort() throws IOException {
+        save("m1", 3d);
+        save("m2", 1d);
+        save("m3", null);
+        saveNullField("m4");
+        final var unindexed = runIds(new SortAggregationStep(FIELD, true));
+
+        enableIndex();
+        final var indexed = runIds(new SortAggregationStep(FIELD, true));
+
+        assertEquals(unindexed, indexed, "the index fast path must answer exactly what the full scan answers");
+    }
+
     @Test
     public void test_index_sort_spanning_several_fetch_chunks_stays_ordered() throws IOException {
         seed(700);

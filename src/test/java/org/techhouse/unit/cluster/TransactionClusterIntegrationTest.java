@@ -168,6 +168,25 @@ public class TransactionClusterIntegrationTest {
     }
 
     @Test
+    public void test_forwarded_transaction_preserves_the_trigger_depth() throws Exception {
+        final var sessionId = "sess-depth";
+        final var request = saveRequest(TestGlobals.COLL, "depth-doc");
+        request.setTriggerDepth(2);
+
+        final var response = pool.request(cluster.serverAddress(), forwardTx(sessionId, request), 2000);
+
+        assertEquals(ClusterMessageType.FORWARD_RESPONSE, response.getType());
+        final var session = clientTracker.txSession(sessionId);
+        assertNotNull(session, "the forwarded op must have opened a session");
+        final var transaction = clientTracker.getActiveTransaction(session.clientId());
+        assertNotNull(transaction);
+        assertEquals(2, transaction.getTriggerDepth(),
+                "a slice started for a forwarded trigger write must inherit its depth, or the cascade is unbounded");
+        pool.request(cluster.serverAddress(),
+                control(ClusterMessageType.ABORT_TX, sessionId, session.clientId().toString()), 2000);
+    }
+
+    @Test
     public void test_replicate_tx_applies_batch() throws Exception {
         final var entry = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
                 List.of(doc("rep-tx")), null, List.of("7"));

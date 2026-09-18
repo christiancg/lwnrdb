@@ -124,7 +124,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         }
     }
 
-    private int pkIndexSize(String dbName, String collName) {
+    public int pkIndexSize(String dbName, String collName) {
         try {
             return userCache.getPkIndexAndLoadIfNecessary(dbName, collName).size();
         } catch (IOException e) {

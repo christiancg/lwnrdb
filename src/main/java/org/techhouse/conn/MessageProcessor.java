@@ -179,6 +179,7 @@ public class MessageProcessor implements Runnable {
     private Handled handleAuthorized(OperationRequest parsedMessage, String rawMessage, UUID clientId) {
         // A cascade depth that arrived on the wire is never trusted: only a running trigger may set one.
         parsedMessage.setTriggerDepth(0);
+        parsedMessage.setReplicated(false);
         final var schemaError = org.techhouse.ops.SchemaValidationHelper.check(parsedMessage);
         if (schemaError != null) {
             return new Handled(eJson.toJson(schemaError), false);

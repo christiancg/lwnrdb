@@ -150,7 +150,8 @@ public class ClusterConnectionHandler implements Runnable {
 
     private ClusterMessage handleForward(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.FORWARD_RESPONSE, "Failed to execute forwarded request",
-                response -> response.setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request)))));
+                response -> response
+                        .setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request, false)))));
     }
 
     private ClusterMessage handleListScripts() {
@@ -196,7 +197,7 @@ public class ClusterConnectionHandler implements Runnable {
     private ClusterMessage handleReplicateAdmin(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.REPLICATE_ADMIN_ACK, "Failed to apply replicated admin op",
                 response -> {
-                    final var result = executeForwarded(request);
+                    final var result = executeForwarded(request, true);
                     if (result.getStatus() == OperationStatus.OK) {
                         adminEpoch.adopt(request.getAdminEpoch());
                     } else {
@@ -208,11 +209,12 @@ public class ClusterConnectionHandler implements Runnable {
 
     // Goes straight to OperationProcessor, bypassing the router, so a forwarded request cannot forward
     // again. The synthetic client carries the acting user so admin ops apply with the correct identity.
-    private OperationResponse executeForwarded(ClusterMessage request) {
+    private OperationResponse executeForwarded(ClusterMessage request, boolean replicated) {
         final var actingUser = request.getActingUser();
         final var clientId = actingUser != null ? clientTracker.registerForwardedClient(actingUser) : null;
         try {
             final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            parsed.setReplicated(replicated);
             final var schemaError = SchemaValidationHelper.check(parsed);
             if (schemaError != null) {
                 return schemaError;

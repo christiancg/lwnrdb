@@ -50,12 +50,15 @@ public final class TransactionRecovery {
             ops.sort(Comparator.comparingLong(AdminTransactionEntry::getSeq));
             final var reconstructed = new Transaction(UUID.fromString(txId), UUID.randomUUID());
             for (final var op : ops) {
-                applyBufferedOp(op);
                 recordIntoOverlay(reconstructed, op);
+            }
+            final var reservedTombstones = coordinator.reserveTransactionTombstones(reconstructed);
+            for (final var op : ops) {
+                applyBufferedOp(op);
             }
             AdminOperationHelper.deleteTransactionOps(opIds);
             markerCleanup.run();
-            coordinator.replicateTransaction(reconstructed);
+            coordinator.replicateTransaction(reconstructed, reservedTombstones);
             return null;
         });
     }

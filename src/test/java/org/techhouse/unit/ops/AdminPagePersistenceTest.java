@@ -13,6 +13,7 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminPageHelper;
@@ -87,6 +88,51 @@ public class AdminPagePersistenceTest {
         final var entries = cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL);
         assertTrue(entries.stream().anyMatch(e -> e.getPage() == 0L), "page 0 must still describe page 0");
         assertTrue(entries.stream().anyMatch(e -> e.getPage() == 1L), "page 1 must still describe page 1");
+    }
+
+    @Test
+    public void test_delete_decrements_the_documents_own_page() throws Exception {
+        final var onPageZero = entryOnPage("d0", 0L);
+        final var onPageThree = entryOnPage("d3", 3L);
+        for (final var entry : List.of(onPageZero, onPageThree)) {
+            cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, entry.getPage(), entry.byteSize());
+            AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry),
+                    true);
+        }
+        final var before = sizeOfPage(3L);
+
+        AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.DELETED, List.of(onPageThree),
+                true);
+
+        assertTrue(sizeOfPage(3L) < before, "deleting a document on page 3 must decrement page 3");
+        assertTrue(sizeOfPage(0L) > 0, "page 0 must not absorb another page's decrement");
+    }
+
+    @Test
+    public void test_page_size_never_goes_negative_after_repeated_deletes_across_pages() throws Exception {
+        final var entries = new java.util.ArrayList<DbEntry>();
+        for (long page = 0; page < 4; page++) {
+            final var entry = entryOnPage("n" + page, page);
+            entries.add(entry);
+            cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, page, entry.byteSize());
+            AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry),
+                    true);
+        }
+
+        for (final var entry : entries) {
+            AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.DELETED, List.of(entry),
+                    true);
+        }
+
+        for (final var pageEntry : cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL)) {
+            assertTrue(pageEntry.getPageSize() >= 0,
+                    "page " + pageEntry.getPage() + " went negative: " + pageEntry.getPageSize());
+        }
+    }
+
+    private long sizeOfPage(long page) {
+        return cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream().filter(e -> e.getPage() == page)
+                .mapToLong(AdminPageEntry::getPageSize).findFirst().orElse(0L);
     }
 
     @Test

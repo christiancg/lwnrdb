@@ -67,7 +67,7 @@ final class PkIndexStore {
         lock.lock();
         try {
             final List<String> existingLines = indexFile.exists()
-                    ? Files.readAllLines(indexFile.toPath(), StandardCharsets.UTF_8)
+                    ? FileLocks.decodeLines(Files.readAllBytes(indexFile.toPath()))
                     : List.of();
             // Rewritten in full because the entries needing a position shift are not contiguous in the
             // id-sorted file: a same-page, later-positioned row can sort before the updated id.
@@ -129,7 +129,7 @@ final class PkIndexStore {
         lock.lock();
         final List<String> indexLines;
         try {
-            indexLines = Files.readAllLines(indexFile.toPath(), StandardCharsets.UTF_8);
+            indexLines = FileLocks.decodeLines(Files.readAllBytes(indexFile.toPath()));
         } finally {
             lock.unlock();
         }

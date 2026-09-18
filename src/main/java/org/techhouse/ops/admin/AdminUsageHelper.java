@@ -92,6 +92,7 @@ public final class AdminUsageHelper {
                 final var usage = AdminCollectionUsageEntry.fromJsonObject(data);
                 if (usage.getLastAccessMillis() < threshold) {
                     usage.setPreviousByteSize(pk.getLength());
+                    usage.setPage(pk.getPage());
                     final var compaction = fs.deleteFromCollection(pk);
                     cache.shiftPkPositionsAfterCompaction(compaction);
                     cache.removePkIndexCollectionUsage(pk.getValue());

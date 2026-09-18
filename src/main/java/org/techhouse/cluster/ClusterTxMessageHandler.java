@@ -8,6 +8,7 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.ReplicatedTxApplyHelper;
 import org.techhouse.ops.SchemaValidationHelper;
@@ -47,7 +48,8 @@ final class ClusterTxMessageHandler {
                 if (startsTransaction(type) && clientTracker.getActiveTransaction(clientId) == null) {
                     // Start with the coordinator's distributed-tx id so the buffered slice and 2PC markers
                     // key on the same id everywhere.
-                    TransactionOperationHelper.start(clientId, java.util.UUID.fromString(txId));
+                    TransactionOperationHelper.start(clientId, java.util.UUID.fromString(txId),
+                            parsed.getTriggerDepth());
                 }
                 return operationProcessor.processMessage(parsed, clientId);
             }).get();
@@ -121,10 +123,15 @@ final class ClusterTxMessageHandler {
         final var session = clientTracker.txSession(sessionId);
         try {
             if (session != null) {
-                session.submit(() -> commit
+                final var result = session.submit(() -> commit
                         ? TransactionOperationHelper.commitPrepared(session.clientId())
                         : TransactionOperationHelper.abort(session.clientId())).get();
                 clientTracker.removeTxSession(sessionId);
+                if (result != null && result.getStatus() != OperationStatus.OK) {
+                    response.setType(ClusterMessageType.ERROR);
+                    response.setErrorMessage("Participant failed to resolve transaction: " + result.getMessage());
+                    return response;
+                }
             } else {
                 TransactionOperationHelper.resolveFromDurable(request.getTxId(), commit);
             }

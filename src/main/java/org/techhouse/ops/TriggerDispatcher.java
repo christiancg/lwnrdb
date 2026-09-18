@@ -181,7 +181,7 @@ public final class TriggerDispatcher {
         database.beginTransaction();
         try {
             body.run();
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
             rollbackQuietly(database, triggerName);
             throw e;
         }

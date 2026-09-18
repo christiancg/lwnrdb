@@ -743,6 +743,9 @@ REG_SINGLE = "idxagg_reg_single"
 REG_CONJ = "idxagg_reg_conj"
 REG_NUMERIC = "idxagg_reg_numeric"
 REG_BULK = "idxagg_reg_bulk"
+REG_CASE = "idxagg_reg_case"
+REG_SORT = "idxagg_reg_sort"
+REG_MIXED = "idxagg_reg_mixed"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -940,6 +943,82 @@ def probe_bulk_save_indexes_every_doc_sharing_a_value(c):
               detail=f"expected {len(expected)}, got {got_count}")
 
 
+def probe_case_variants_agree_between_index_and_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CASE})
+    for doc_id, name in (("a", "Bob"), ("b", "bob"), ("c", "bob"), ("d", "carol")):
+        save_doc(c, REG_CASE, {"_id": doc_id, "name": name})
+
+    scan_equals = reg_filter(c, REG_CASE, "name", "bob")
+    scan_not_equals = reg_filter(c, REG_CASE, "name", "bob", op="NOT_EQUALS")
+    scan_count = agg(c, REG_CASE, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "name", "value": "bob"}},
+        {"type": "COUNT"}])
+    scan_count = ((scan_count.get("results") or [{}])[0]).get("count")
+
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_CASE, "fieldName": "name"})
+    wait_for_indexes(c, [(REG_CASE, "name")])
+    wait_for_background()
+
+    got_equals = reg_filter(c, REG_CASE, "name", "bob")
+    got_not_equals = reg_filter(c, REG_CASE, "name", "bob", op="NOT_EQUALS")
+    counted = agg(c, REG_CASE, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "name", "value": "bob"}},
+        {"type": "COUNT"}])
+    got_count = ((counted.get("results") or [{}])[0]).get("count")
+
+    check("indexed EQUALS returns every case variant", got_equals == scan_equals == ["a", "b", "c"],
+          detail=f"scan={scan_equals} indexed={got_equals}")
+    check("indexed NOT_EQUALS excludes every case variant", got_not_equals == scan_not_equals == ["d"],
+          detail=f"scan={scan_not_equals} indexed={got_not_equals}")
+    check("the index-only COUNT matches the scan for case variants", got_count == scan_count == 1,
+          detail=f"scan={scan_count} indexed={got_count}")
+
+
+def probe_sort_keeps_documents_without_the_field(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_SORT})
+    total = 20
+    for i in range(total):
+        if i % 3 == 0:
+            save_doc(c, REG_SORT, {"_id": f"s{i:03d}", "other": i})
+        else:
+            save_doc(c, REG_SORT, {"_id": f"s{i:03d}", "score": i})
+
+    scanned = agg(c, REG_SORT, [{"type": "SORT", "fieldName": "score", "ascending": True}])
+    scanned_ids = sorted(d.get("_id") for d in (scanned.get("results") or []))
+
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_SORT, "fieldName": "score"})
+    wait_for_indexes(c, [(REG_SORT, "score")])
+    wait_for_background()
+
+    indexed = agg(c, REG_SORT, [{"type": "SORT", "fieldName": "score", "ascending": True}])
+    indexed_ids = sorted(d.get("_id") for d in (indexed.get("results") or []))
+
+    check("an indexed SORT returns the whole collection, not only the documents that have the field",
+          len(indexed_ids) == total, detail=f"expected {total}, got {len(indexed_ids)}")
+    check("an indexed SORT returns exactly what the full scan returns", indexed_ids == scanned_ids,
+          detail=f"scan={len(scanned_ids)} indexed={len(indexed_ids)}")
+
+
+def probe_mixed_type_field_falls_back_to_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_MIXED})
+    save_doc(c, REG_MIXED, {"_id": "m1", "tags": "alpha"})
+    save_doc(c, REG_MIXED, {"_id": "m2", "tags": ["alpha", "beta"]})
+    save_doc(c, REG_MIXED, {"_id": "m3", "tags": "beta"})
+
+    scan_contains = reg_filter(c, REG_MIXED, "tags", "alpha", op="CONTAINS")
+
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_MIXED, "fieldName": "tags"})
+    wait_for_indexes(c, [(REG_MIXED, "tags")])
+    wait_for_background()
+
+    indexed_contains = reg_filter(c, REG_MIXED, "tags", "alpha", op="CONTAINS")
+
+    check("CONTAINS on a mixed-type field answers the same with and without the index",
+          indexed_contains == scan_contains, detail=f"scan={scan_contains} indexed={indexed_contains}")
+    check("CONTAINS still finds the array-valued document", "m2" in indexed_contains,
+          detail=f"got {indexed_contains}")
+
+
 def regression_suite(c):
     section("Correctness regressions: non-ASCII index values, index values containing the file's own "
             "delimiters, repeated CREATE_INDEX, single-valued index ranges, low-cardinality numeric "
@@ -951,6 +1030,9 @@ def regression_suite(c):
     probe_low_cardinality_numeric_index(c)
     probe_conjunction_after_a_filter_step(c)
     probe_bulk_save_indexes_every_doc_sharing_a_value(c)
+    probe_case_variants_agree_between_index_and_scan(c)
+    probe_sort_keeps_documents_without_the_field(c)
+    probe_mixed_type_field_falls_back_to_scan(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════

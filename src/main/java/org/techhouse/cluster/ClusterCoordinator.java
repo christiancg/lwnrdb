@@ -1,7 +1,9 @@
 package org.techhouse.cluster;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -93,7 +95,40 @@ public class ClusterCoordinator {
         return clusterConfig.isEnabled() && !ownershipManager.hasQuorum();
     }
 
+    public Map<String, Long> reserveTransactionTombstones(Transaction transaction) throws IOException {
+        if (!clusterConfig.isEnabled()) {
+            return Map.of();
+        }
+        final var reserved = new HashMap<String, Long>();
+        for (final var collId : transaction.touchedCollections()) {
+            final var overlay = transaction.overlayFor(collId);
+            if (overlay == null) {
+                continue;
+            }
+            final var deleteIds = new ArrayList<String>();
+            for (final var overlayEntry : overlay.entrySet()) {
+                if (Transaction.isTombstone(overlayEntry.getValue())) {
+                    deleteIds.add(overlayEntry.getKey());
+                }
+            }
+            if (deleteIds.isEmpty()) {
+                continue;
+            }
+            final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
+            final var version = hybridClock.next();
+            for (final var id : deleteIds) {
+                fs.appendTombstone(parts[0], parts[1], id, version);
+            }
+            reserved.put(collId, version);
+        }
+        return reserved;
+    }
+
     public ReplicationOutcome replicateTransaction(Transaction transaction) {
+        return replicateTransaction(transaction, Map.of());
+    }
+
+    public ReplicationOutcome replicateTransaction(Transaction transaction, Map<String, Long> reservedVersions) {
         if (!clusterConfig.isEnabled()) {
             return ReplicationOutcome.NOT_CLUSTERED;
         }
@@ -104,7 +139,8 @@ public class ClusterCoordinator {
                 // Only replicate collections this node owns — a 2PC participant owns its slice's collections
                 // and replicates them to their replicas; a collection owned elsewhere is that owner's to ship.
                 if (ownershipManager.isOwner(parts[0], parts[1])) {
-                    buildCollectionEntries(parts[0], parts[1], transaction.overlayFor(collId), entries);
+                    buildCollectionEntries(parts[0], parts[1], transaction.overlayFor(collId), entries,
+                            reservedVersions.get(collId));
                 }
             }
         } catch (Exception e) {
@@ -118,7 +154,7 @@ public class ClusterCoordinator {
     }
 
     private void buildCollectionEntries(String dbName, String collName, Map<String, JsonObject> overlay,
-            List<ReplicationPayload> entries) throws Exception {
+            List<ReplicationPayload> entries, Long reservedVersion) throws Exception {
         final var upsertIds = new ArrayList<String>();
         final var deleteIds = new ArrayList<String>();
         for (final var overlayEntry : overlay.entrySet()) {
@@ -135,13 +171,16 @@ public class ClusterCoordinator {
             entries.add(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions));
         }
         if (!deleteIds.isEmpty()) {
-            final var version = hybridClock.next();
-            final var versions = new ArrayList<String>(deleteIds.size());
-            final var versionText = Long.toString(version);
-            for (final var id : deleteIds) {
-                fs.appendTombstone(dbName, collName, id, version);
-                versions.add(versionText);
+            final long version;
+            if (reservedVersion != null) {
+                version = reservedVersion;
+            } else {
+                version = hybridClock.next();
+                for (final var id : deleteIds) {
+                    fs.appendTombstone(dbName, collName, id, version);
+                }
             }
+            final var versions = new ArrayList<>(Collections.nCopies(deleteIds.size(), Long.toString(version)));
             entries.add(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, versions));
         }
     }

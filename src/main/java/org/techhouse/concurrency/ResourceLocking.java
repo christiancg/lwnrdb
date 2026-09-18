@@ -25,11 +25,13 @@ public class ResourceLocking {
         lockFor(lockName).writeLock().lockInterruptibly();
     }
 
-    public void releaseWrite(String lockName) {
+    public boolean releaseWrite(String lockName) {
         final var lock = locks.get(lockName);
         if (lock != null && lock.isWriteLockedByCurrentThread()) {
             lock.writeLock().unlock();
+            return true;
         }
+        return false;
     }
 
     public void lockReadByName(String lockName) throws InterruptedException {
@@ -51,8 +53,8 @@ public class ResourceLocking {
         releaseWrite(dbName, collName);
     }
 
-    public void releaseWrite(String dbName, String collName) {
-        releaseWrite(Cache.getCollectionIdentifier(dbName, collName));
+    public boolean releaseWrite(String dbName, String collName) {
+        return releaseWrite(Cache.getCollectionIdentifier(dbName, collName));
     }
 
     public boolean tryLockWrite(String dbName, String collName) {

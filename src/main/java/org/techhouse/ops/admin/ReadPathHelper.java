@@ -55,7 +55,8 @@ public final class ReadPathHelper {
                     if (foundIndexEntry < 0) {
                         return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
                     }
-                    final var entry = cache.getById(dbName, collName, primaryKeyIndex.get(foundIndexEntry));
+                    final var entry = cache.getById(dbName, collName,
+                            primaryKeyIndex.get(foundIndexEntry).detachedCopy());
                     CollectionAccessHelper.recordPkIndexAccess(dbName, collName);
                     CollectionAccessHelper.recordCollectionAccess(dbName, collName);
                     return new FindByIdResponse("Ok", entry.getData());

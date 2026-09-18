@@ -68,6 +68,34 @@ public class TransactionCrashAtomicityTest {
     }
 
     @Test
+    public void test_an_unfinishable_commit_fences_its_collections() throws Exception {
+        final var clientTracker = IocContainer.get(org.techhouse.conn.ClientTracker.class);
+        final var clientId = clientTracker.registerForwardedClient("fencer");
+        TransactionOperationHelper.start(clientId);
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(document("fenced"));
+        request.set_id("fenced");
+        TransactionOperationHelper.bufferSave(request, transaction);
+        final var corrupt = new org.techhouse.data.admin.AdminTransactionEntry(
+                transaction.getTransactionId().toString(), "client", 99,
+                org.techhouse.data.admin.AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL,
+                new JsonObject());
+        AdminOperationHelper.saveTransactionOp(corrupt);
+        transaction.getBufferedOpIds().add(corrupt.get_id());
+
+        final var response = TransactionOperationHelper.commit(clientId);
+
+        assertEquals("500-33", response.getErrorCode(),
+                "an unfinishable commit must surface its own code, not a generic transaction error");
+        assertNotNull(clientTracker.getActiveTransaction(clientId),
+                "the transaction stays registered so its collections stay fenced rather than serving a half-state");
+        assertTrue(TxCommitLog.isLocallyCommitted(transaction.getTransactionId().toString()),
+                "the commit log must survive so restart recovery can finish the slice");
+        TransactionOperationHelper.abortInPlace(clientId);
+    }
+
+    @Test
     public void test_partially_applied_commit_is_finished_at_startup() throws Exception {
         final var transaction = bufferSlice("a", "b", "c");
         final var txId = transaction.getTransactionId().toString();

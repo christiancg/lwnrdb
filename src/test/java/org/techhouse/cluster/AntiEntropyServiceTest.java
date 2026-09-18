@@ -118,6 +118,41 @@ public class AntiEntropyServiceTest {
     }
 
     @Test
+    public void test_build_digest_survives_a_concurrent_save() throws Exception {
+        seed();
+        final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        final var stop = new java.util.concurrent.atomic.AtomicBoolean();
+        final var writer = new Thread(() -> {
+            for (var i = 0; i < 400 && !stop.get(); i++) {
+                final var object = new JsonObject();
+                object.addProperty("_id", "w" + i);
+                object.addProperty("v", i);
+                final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+                request.setObject(object);
+                request.set_id("w" + i);
+                processor.processMessage(request);
+            }
+        });
+        writer.start();
+        try {
+            for (var i = 0; i < 200; i++) {
+                try {
+                    service.buildDigest(TestGlobals.DB, TestGlobals.COLL);
+                } catch (Throwable t) {
+                    failure.compareAndSet(null, t);
+                    break;
+                }
+            }
+        } finally {
+            stop.set(true);
+            writer.join(10_000);
+        }
+
+        assertNull(failure.get(),
+                "a digest built while the collection is being written must not blow up: " + failure.get());
+    }
+
+    @Test
     public void test_build_pull_returns_documents_and_versions() throws Exception {
         seed();
         final var pull = service.buildPull(TestGlobals.DB, TestGlobals.COLL, List.of("a", "missing"));

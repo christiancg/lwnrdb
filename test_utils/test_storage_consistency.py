@@ -157,6 +157,10 @@ def test_scan_is_complete_after_the_first_write(conn: Conn):
 
 def test_page_cap_is_enforced_after_restart(conn: Conn, work_dir: str):
     section("Page cap after a restart")
+    # Delete across several pages first: the DELETE path used to charge every decrement to page 0, whose
+    # recorded size then went negative and made first-fit pile every later insert into it.
+    for i in range(0, SEEDED_DOCS, 3):
+        conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": f"id{i:03d}"})
     for i in range(SEEDED_DOCS):
         conn.save({"_id": f"post{i:03d}", "pad": PAD})
     folder = os.path.join(work_dir, "db", DB, COLL)

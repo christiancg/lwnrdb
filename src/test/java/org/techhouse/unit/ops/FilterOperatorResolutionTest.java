@@ -41,6 +41,83 @@ public class FilterOperatorResolutionTest {
         TestUtils.standardTearDown();
     }
 
+    private void addTyped(Cache cache, String id, String field, JsonBaseElement value) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add(field, value);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id(id);
+        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+    }
+
+    private Cache mixedTypeFixture() {
+        final var cache = IocContainer.get(Cache.class);
+        cache.putAdminCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL),
+                new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "seed", 0, 100, 0));
+        return cache;
+    }
+
+    private void indexField(Cache cache, String field) {
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(field));
+    }
+
+    private Set<String> matched(FieldOperator op) throws IOException {
+        return FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+    }
+
+    private static JsonArray arrayOf(JsonBaseElement... values) {
+        final var array = new JsonArray();
+        for (final var value : values) {
+            array.add(value);
+        }
+        return array;
+    }
+
+    @Test
+    public void test_contains_falls_back_to_scan_on_a_mixed_type_field() throws IOException {
+        final var cache = mixedTypeFixture();
+        addTyped(cache, "c1", "tags", new JsonString("alpha"));
+        addTyped(cache, "c2", "tags", arrayOf(new JsonString("alpha"), new JsonString("beta")));
+        final var scanned = matched(new FieldOperator(FieldOperatorType.CONTAINS, "tags", new JsonString("alpha")));
+        indexField(cache, "tags");
+
+        final var indexed = matched(new FieldOperator(FieldOperatorType.CONTAINS, "tags", new JsonString("alpha")));
+
+        assertEquals(Set.of("c1", "c2"), indexed);
+        assertEquals(scanned, indexed);
+    }
+
+    @Test
+    public void test_not_in_falls_back_to_scan_on_a_mixed_type_field() throws IOException {
+        final var cache = mixedTypeFixture();
+        addTyped(cache, "n1", "status", new JsonString("active"));
+        addTyped(cache, "n2", "status", new JsonString("inactive"));
+        addTyped(cache, "n3", "status", new JsonNumber(5));
+        final var operand = arrayOf(new JsonString("active"));
+        final var scanned = matched(new FieldOperator(FieldOperatorType.NOT_IN, "status", operand));
+        indexField(cache, "status");
+
+        final var indexed = matched(new FieldOperator(FieldOperatorType.NOT_IN, "status", operand));
+
+        assertEquals(Set.of("n2", "n3"), indexed);
+        assertEquals(scanned, indexed);
+    }
+
+    @Test
+    public void test_contains_still_uses_the_index_on_a_homogeneous_field() throws IOException {
+        final var cache = mixedTypeFixture();
+        addTyped(cache, "h1", "tags", new JsonString("alpha"));
+        addTyped(cache, "h2", "tags", new JsonString("alphabet"));
+        addTyped(cache, "h3", "tags", new JsonString("beta"));
+        indexField(cache, "tags");
+
+        assertEquals(Set.of("h1", "h2"),
+                matched(new FieldOperator(FieldOperatorType.CONTAINS, "tags", new JsonString("alpha"))));
+    }
+
     @Test
     public void test_process_operator_with_index_returns_indexed_results() throws Exception {
         final var cache = IocContainer.get(Cache.class);

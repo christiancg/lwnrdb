@@ -1,7 +1,9 @@
 package org.techhouse.fs;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
@@ -30,7 +32,7 @@ final class FileLocks {
         final var lock = lockFor(file).readLock();
         lock.lock();
         try {
-            return Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+            return decodeLines(Files.readAllBytes(file.toPath()));
         } catch (NoSuchFileException e) {
             return null;
         } finally {
@@ -42,9 +44,15 @@ final class FileLocks {
         final var lock = lockFor(file).readLock();
         lock.lock();
         try {
-            return Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+            return decodeLines(Files.readAllBytes(file.toPath()));
         } finally {
             lock.unlock();
+        }
+    }
+
+    static List<String> decodeLines(byte[] bytes) throws IOException {
+        try (var reader = new BufferedReader(new StringReader(new String(bytes, StandardCharsets.UTF_8)))) {
+            return reader.lines().toList();
         }
     }
 

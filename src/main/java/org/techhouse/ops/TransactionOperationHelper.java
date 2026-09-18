@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cluster.ClusterCoordinator;
@@ -14,6 +16,7 @@ import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.TxSession;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
@@ -36,6 +39,7 @@ public final class TransactionOperationHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
+    private static final int COMMIT_APPLY_ATTEMPTS = 3;
     private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
     private static final Logger logger = Logger.logFor(TransactionOperationHelper.class);
 
@@ -61,10 +65,6 @@ public final class TransactionOperationHelper {
 
     public static OperationResponse start(UUID clientId) {
         return start(clientId, UUID.randomUUID(), 0);
-    }
-
-    public static OperationResponse start(UUID clientId, UUID transactionId) {
-        return start(clientId, transactionId, 0);
     }
 
     // A forwarded 2PC participant passes the coordinator's tx id, so slice and recovery markers key on the same id.
@@ -105,6 +105,7 @@ public final class TransactionOperationHelper {
                         + (transaction.getBufferedOpIds().size() - ops.size()) + " buffered op(s) before commit");
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
             }
+            final var reservedTombstones = coordinator.reserveTransactionTombstones(transaction);
             for (final var op : ops) {
                 TransactionRecovery.applyBufferedOp(op);
             }
@@ -114,7 +115,7 @@ public final class TransactionOperationHelper {
                     transaction.getTriggerDepth(), transaction);
             TransactionRecovery.resolveMarkers(transaction.getTransactionId().toString(), true);
             // A replication timeout does not fail the commit; anti-entropy reconciles the lagging replicas.
-            coordinator.replicateTransaction(transaction);
+            coordinator.replicateTransaction(transaction, reservedTombstones);
             return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
         } catch (Exception e) {
             logger.error(OperationType.COMMIT_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(), e);
@@ -176,6 +177,7 @@ public final class TransactionOperationHelper {
             clientTracker.clearTransactionState(clientId);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_NOT_USABLE);
         }
+        var fenced = false;
         try {
             // A clustered commit must still hold a write quorum: abort before applying if it was lost.
             if (coordinator.hasNotTransactionQuorum()) {
@@ -188,8 +190,10 @@ public final class TransactionOperationHelper {
             // cleanupOrphansAtStartup instead of leaving the transaction half-applied.
             TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(),
                     new ArrayList<>(transaction.getHeldLocks()));
-            for (final var op : ops) {
-                TransactionRecovery.applyBufferedOp(op);
+            final var reservedTombstones = coordinator.reserveTransactionTombstones(transaction);
+            if (!applyBufferedOps(ops, txId)) {
+                fenced = true;
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             TxCommitLog.clearLocalCommit(txId);
@@ -198,7 +202,7 @@ public final class TransactionOperationHelper {
             fireTriggersForCommittedOps(ops, clientTracker.getAuthenticatedUsername(clientId),
                     transaction.getTriggerDepth(), transaction);
             // The local commit stands even on a replication timeout; anti-entropy reconciles the replicas.
-            if (coordinator.replicateTransaction(transaction) == ReplicationOutcome.TIMEOUT) {
+            if (coordinator.replicateTransaction(transaction, reservedTombstones) == ReplicationOutcome.TIMEOUT) {
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT);
             }
             return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
@@ -206,10 +210,29 @@ public final class TransactionOperationHelper {
             logger.error(OperationType.COMMIT_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(), e);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
-            releaseHeldLocks(transaction);
-            clientTracker.clearActiveTransaction(clientId);
-            clientTracker.clearTransactionState(clientId);
+            if (!fenced) {
+                releaseHeldLocks(transaction);
+                clientTracker.clearActiveTransaction(clientId);
+                clientTracker.clearTransactionState(clientId);
+            }
         }
+    }
+
+    private static boolean applyBufferedOps(List<AdminTransactionEntry> ops, String txId) {
+        var next = 0;
+        for (var attempt = 1; attempt <= COMMIT_APPLY_ATTEMPTS; attempt++) {
+            try {
+                while (next < ops.size()) {
+                    TransactionRecovery.applyBufferedOp(ops.get(next));
+                    next++;
+                }
+                return true;
+            } catch (Exception e) {
+                logger.warning("Transaction " + txId + " failed to apply op " + next + " on attempt " + attempt + ": "
+                        + e.getMessage());
+            }
+        }
+        return false;
     }
 
     public static void abortInPlace(UUID clientId) {
@@ -248,6 +271,14 @@ public final class TransactionOperationHelper {
 
     // Runs on the connection's own thread - the only thread allowed to release its write locks.
     public static void cleanupOnDisconnect(UUID clientId) {
+        try {
+            releaseOnDisconnect(clientId);
+        } finally {
+            ShutdownRollbackWaits.complete(clientId);
+        }
+    }
+
+    private static void releaseOnDisconnect(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
             return;
@@ -266,15 +297,23 @@ public final class TransactionOperationHelper {
         }
     }
 
-    // The rollback runs on each session's own executor thread - the holder of its locks.
-    // A PREPARED 2PC slice is left alone: its coordinator may already have committed; only recovery resolves it.
     public static void rollbackOpenTransactionsAtShutdown() {
         var rolledBack = 0;
+        final var sessionClientIds = clientTracker.txSessionsSnapshot().values().stream().map(TxSession::clientId)
+                .collect(Collectors.toSet());
+        final var signalled = new ArrayList<CountDownLatch>();
         for (final var clientId : clientTracker.clientIdsSnapshot()) {
             final var transaction = clientTracker.getActiveTransaction(clientId);
-            if (transaction == null || Tx2pcLog.isPrepared(transaction.getTransactionId().toString())) {
+            if (transaction == null || sessionClientIds.contains(clientId)
+                    || Tx2pcLog.isPrepared(transaction.getTransactionId().toString())) {
                 continue;
             }
+            final var wait = ShutdownRollbackWaits.register(clientId);
+            if (clientTracker.signalDisconnect(clientId)) {
+                signalled.add(wait);
+                continue;
+            }
+            ShutdownRollbackWaits.cancel(clientId);
             try {
                 rollback(clientId);
                 rolledBack++;
@@ -282,6 +321,7 @@ public final class TransactionOperationHelper {
                 logger.warning("Failed to roll back an open transaction during shutdown: " + e.getMessage());
             }
         }
+        rolledBack += ShutdownRollbackWaits.await(signalled);
         for (final var entry : clientTracker.txSessionsSnapshot().entrySet()) {
             final var session = entry.getValue();
             final var transaction = clientTracker.getActiveTransaction(session.clientId());
@@ -419,10 +459,18 @@ public final class TransactionOperationHelper {
     }
 
     private static void releaseHeldLocks(Transaction transaction) {
+        final var stranded = new ArrayList<String>();
         for (final var collId : transaction.getHeldLocks()) {
-            locks.releaseWrite(collId);
+            if (!locks.releaseWrite(collId)) {
+                stranded.add(collId);
+            }
         }
         transaction.getHeldLocks().clear();
+        if (!stranded.isEmpty()) {
+            transaction.getHeldLocks().addAll(stranded);
+            logger.warning("Could not release " + stranded.size() + " write lock(s) from this thread; they stay "
+                    + "recorded on the transaction for their owner to release");
+        }
     }
 
 }

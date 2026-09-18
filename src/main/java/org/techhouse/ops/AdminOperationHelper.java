@@ -84,6 +84,7 @@ public final class AdminOperationHelper {
     private static void eraseAdminEntry(String collName, DbEntry entry, PkIndexEntry pk)
             throws IOException, InterruptedException {
         entry.setPreviousByteSize(pk.getLength());
+        entry.setPage(pk.getPage());
         cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(pk));
         AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, collName, EventType.DELETED, List.of(entry), false);
     }

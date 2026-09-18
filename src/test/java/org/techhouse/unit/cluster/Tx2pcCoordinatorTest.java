@@ -1,6 +1,7 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.atLeastOnce;
@@ -127,6 +128,41 @@ public class Tx2pcCoordinatorTest {
         final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         request.set_id(id);
         return processor.processMessage(request).getStatus();
+    }
+
+    private String breakLocalSlice(UUID clientId) throws Exception {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var txId = transaction.getTransactionId().toString();
+        final var corrupt = new org.techhouse.data.admin.AdminTransactionEntry(txId, "client", 99,
+                org.techhouse.data.admin.AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL,
+                new JsonObject());
+        org.techhouse.ops.AdminOperationHelper.saveTransactionOp(corrupt);
+        transaction.getBufferedOpIds().add(corrupt.get_id());
+        return txId;
+    }
+
+    @Test
+    public void test_a_failed_local_commit_does_not_report_success() throws Exception {
+        poolReplies(ClusterMessageType.PREPARE_TX_ACK);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-localfail");
+        breakLocalSlice(clientId);
+
+        final var response = coordinator.commit(clientId);
+
+        assertEquals("409-10", response.getErrorCode(),
+                "a coordinator whose own slice did not apply must not answer OK");
+    }
+
+    @Test
+    public void test_a_failed_local_commit_keeps_the_coordinator_marker() throws Exception {
+        poolReplies(ClusterMessageType.PREPARE_TX_ACK);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-localfail2");
+        final var txId = breakLocalSlice(clientId);
+
+        coordinator.commit(clientId);
+
+        assertTrue(org.techhouse.ops.Tx2pcLog.isCommitted(txId),
+                "the commit decision must survive so recovery can re-drive the failed slice");
     }
 
     @Test

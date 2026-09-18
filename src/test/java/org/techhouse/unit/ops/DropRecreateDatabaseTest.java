@@ -1,5 +1,7 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,8 +23,6 @@ import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class DropRecreateDatabaseTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);

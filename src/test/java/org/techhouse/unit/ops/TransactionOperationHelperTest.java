@@ -47,6 +47,31 @@ public class TransactionOperationHelperTest {
     final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
 
+    @Test
+    public void test_held_locks_survive_a_failed_cross_thread_release() throws Exception {
+        final var coll = "cross_thread_coll";
+        processor.processMessage(new org.techhouse.ops.req.CreateCollectionRequest(TestGlobals.DB, coll));
+        final var clientId = clientTracker.registerForwardedClient("cross");
+        final var holder = new Thread(() -> {
+            TransactionOperationHelper.start(clientId);
+            final var request = new SaveRequest(TestGlobals.DB, coll);
+            final var object = new JsonObject();
+            object.add("_id", new JsonString("stranded"));
+            request.setObject(object);
+            request.set_id("stranded");
+            TransactionOperationHelper.bufferSave(request, clientTracker.getActiveTransaction(clientId));
+        });
+        holder.start();
+        holder.join(5000);
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        org.junit.jupiter.api.Assertions.assertFalse(transaction.getHeldLocks().isEmpty());
+
+        TransactionOperationHelper.rollback(clientId);
+
+        org.junit.jupiter.api.Assertions.assertFalse(transaction.getHeldLocks().isEmpty(),
+                "a release that could not run on this thread must keep the record so the owner can still free it");
+    }
+
     @BeforeAll
     static void setUpBeforeClass() throws Exception {
         TestUtils.standardInitialSetup();

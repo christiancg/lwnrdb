@@ -207,7 +207,7 @@ public final class DbModule {
         try {
             result = ops.call(callback, JsUndefined.getInstance(), List.of());
             rejectThenable(result);
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
             database.rollbackTransaction();
             throw e;
         }

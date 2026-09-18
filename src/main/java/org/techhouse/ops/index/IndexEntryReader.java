@@ -74,7 +74,7 @@ public final class IndexEntryReader {
         if (!pendingIds.isEmpty() && !reconcilePending(combined, dbName, collName, fieldName, pendingIds)) {
             return null;
         }
-        if (combined.isEmpty()) {
+        if (combined.isEmpty() || doesNotCoverEveryDocument(combined, dbName, collName)) {
             return null;
         }
         if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
@@ -110,7 +110,7 @@ public final class IndexEntryReader {
             for (var customType : CustomTypeFactory.getCustomTypes().values()) {
                 addCachedEntriesOfType(entries, dbName, collName, fieldName, customType);
             }
-            if (entries.isEmpty()) {
+            if (entries.isEmpty() || doesNotCoverEveryDocument(entries, dbName, collName)) {
                 return null;
             }
             entries.sort(order);
@@ -126,6 +126,14 @@ public final class IndexEntryReader {
         }
         recordAnalyzeIndexUse(dbName, collName, fieldName);
         return ordered;
+    }
+
+    private static boolean doesNotCoverEveryDocument(List<FieldIndexEntry<?>> entries, String dbName, String collName) {
+        final var covered = new HashSet<String>();
+        for (final var entry : entries) {
+            covered.addAll(entry.getIds());
+        }
+        return covered.size() < cache.pkIndexSize(dbName, collName);
     }
 
     private static List<String> collectIds(List<FieldIndexEntry<?>> entries, long maxIds) {

@@ -1,6 +1,7 @@
 package org.techhouse.conn;
 
 import java.io.BufferedWriter;
+import java.io.IOException;
 import java.net.Socket;
 import java.time.LocalDateTime;
 import java.util.HashMap;
@@ -16,6 +17,7 @@ import org.techhouse.data.Transaction;
 
 public class ClientTracker {
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
+    private final Map<UUID, Runnable> disconnectSignals = new ConcurrentHashMap<>();
     private final Map<String, TxSession> txSessions = new ConcurrentHashMap<>();
     private final Configuration configuration = Configuration.getInstance();
 
@@ -24,6 +26,7 @@ public class ClientTracker {
         if (maxConnections == 0 || maxConnections > clients.size()) {
             final var clientId = UUID.randomUUID();
             clients.put(clientId, new Client(socket.getInetAddress().getHostAddress()));
+            disconnectSignals.put(clientId, () -> closeQuietly(socket));
             return clientId;
         }
         return null;
@@ -31,6 +34,23 @@ public class ClientTracker {
 
     public void removeById(UUID clientId) {
         clients.remove(clientId);
+        disconnectSignals.remove(clientId);
+    }
+
+    public boolean signalDisconnect(UUID clientId) {
+        final var signal = disconnectSignals.get(clientId);
+        if (signal == null) {
+            return false;
+        }
+        signal.run();
+        return true;
+    }
+
+    private static void closeQuietly(Socket socket) {
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+        }
     }
 
     // The caller must removeById this transient client when the operation completes, or it leaks.

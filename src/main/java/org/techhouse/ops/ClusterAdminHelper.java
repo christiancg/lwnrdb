@@ -57,7 +57,7 @@ public final class ClusterAdminHelper {
     public static OperationResponse afterAdminOp(OperationRequest request, String actingUser,
             OperationResponse response) {
         final var type = request.getType();
-        if (!isCoordinatedAdminOp(type) || response.getStatus() != OperationStatus.OK) {
+        if (!isCoordinatedAdminOp(type) || request.isReplicated() || response.getStatus() != OperationStatus.OK) {
             return response;
         }
         // Bump the epoch before replicating so the new value ships on the replication message.

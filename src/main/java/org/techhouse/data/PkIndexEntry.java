@@ -15,6 +15,10 @@ public class PkIndexEntry extends CollectionScopedEntry implements Comparable<St
         this(databaseName, collectionName, value, position, length, page, 0L);
     }
 
+    public PkIndexEntry detachedCopy() {
+        return new PkIndexEntry(databaseName, collectionName, value, position, length, page, version);
+    }
+
     public PkIndexEntry(String databaseName, String collectionName, String value, long position, long length, long page,
             long version) {
         super(databaseName, collectionName);

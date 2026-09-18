@@ -1,5 +1,6 @@
 package org.techhouse.unit.cluster;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.membership.MembershipService;
+import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
@@ -53,6 +55,62 @@ public class MembershipEvictionTest {
     private void seedPeer(String id, int port, long lastSeenMillis) throws Exception {
         members().put(id, node(id, port));
         lastSeen().put(id, lastSeenMillis);
+    }
+
+    private static ClusterMessage gossipCarrying(NodeInfo... members) {
+        final var message = new ClusterMessage();
+        message.setMembers(java.util.List.of(members));
+        return message;
+    }
+
+    @Test
+    public void test_an_evicted_node_is_not_resurrected_by_a_stale_gossip_snapshot() throws Exception {
+        final var now = System.currentTimeMillis();
+        final var evictionWindow = IocContainer.get(org.techhouse.cluster.ClusterConfig.class).deadEvictionMs();
+        seedPeer("gone", 9991, now - evictionWindow - 1000);
+
+        membership.detectFailures(now);
+        assertFalse(members().containsKey("gone"), "the peer must have been evicted first");
+
+        membership.handleGossip(gossipCarrying(node("gone", 9991)));
+
+        assertFalse(members().containsKey("gone"),
+                "a peer that has not evicted it yet must not be able to relay a corpse back as ALIVE");
+    }
+
+    @Test
+    public void test_merge_honours_the_incoming_state_for_an_unknown_node() throws Exception {
+        final var suspect = node("suspect", 9992);
+        suspect.setState(NodeState.SUSPECT);
+
+        membership.handleGossip(gossipCarrying(suspect));
+
+        assertEquals(NodeState.SUSPECT, members().get("suspect").getState(),
+                "a node first learned about while SUSPECT must not be admitted as ALIVE");
+    }
+
+    @Test
+    public void test_a_genuinely_new_node_is_still_admitted_as_alive() throws Exception {
+        membership.handleGossip(gossipCarrying(node("fresh", 9993)));
+
+        assertTrue(members().containsKey("fresh"));
+        assertEquals(NodeState.ALIVE, members().get("fresh").getState());
+    }
+
+    @Test
+    public void test_a_restarted_node_with_a_higher_incarnation_is_readmitted() throws Exception {
+        final var now = System.currentTimeMillis();
+        final var evictionWindow = IocContainer.get(org.techhouse.cluster.ClusterConfig.class).deadEvictionMs();
+        seedPeer("restarted", 9994, now - evictionWindow - 1000);
+        membership.detectFailures(now);
+        assertFalse(members().containsKey("restarted"));
+
+        final var rebooted = node("restarted", 9994);
+        rebooted.setIncarnation(System.currentTimeMillis() + 10_000);
+        membership.handleGossip(gossipCarrying(rebooted));
+
+        assertTrue(members().containsKey("restarted"),
+                "a genuine restart bumps the incarnation and must be readmitted");
     }
 
     @Test
