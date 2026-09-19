@@ -41,7 +41,11 @@ public class AntiEntropyService implements MembershipListener {
     }
 
     public void stop() {
-        sweep.stop(clusterConfig.antiEntropyIntervalMs());
+        stop(clusterConfig.antiEntropyIntervalMs());
+    }
+
+    public void stop(long awaitMillis) {
+        sweep.stop(awaitMillis);
     }
 
     @Override

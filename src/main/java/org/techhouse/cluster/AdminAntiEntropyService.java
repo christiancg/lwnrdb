@@ -40,10 +40,14 @@ public class AdminAntiEntropyService implements MembershipListener {
     }
 
     public void stop() {
+        stop(clusterConfig.antiEntropyIntervalMs());
+    }
+
+    public void stop(long awaitMillis) {
         started = false;
         adminSyncCompleted.set(false);
         publishSyncState();
-        sweep.stop(clusterConfig.antiEntropyIntervalMs());
+        sweep.stop(awaitMillis);
     }
 
     public boolean hasCompletedAdminSync() {

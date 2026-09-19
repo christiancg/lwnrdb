@@ -155,4 +155,20 @@ public class QueueDrainTest {
         parkedOnAnEmptyQueue(executor);
         assertTrue(executor.drain(2_000L), "a worker parked on an empty queue is idle");
     }
+
+    @Test
+    public void test_a_pending_retry_does_not_hold_the_drain_open() {
+        final var executor = new TriggerExecutor();
+        executor.start(_ -> {
+        });
+        executor.submitAfter(event("retry-later"), 60_000L);
+
+        final var start = System.nanoTime();
+        final var drained = executor.drain(1_000L);
+        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
+
+        assertTrue(drained, "a retry waiting on the scheduler is durable in the run log, so the drain must drop it"
+                + " rather than wait out a backoff that can be four times the whole shutdown budget");
+        assertTrue(elapsedMillis < 900L, "the drain waited " + elapsedMillis + "ms for a scheduled retry");
+    }
 }

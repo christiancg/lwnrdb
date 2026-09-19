@@ -125,6 +125,7 @@ public class TriggerExecutor {
 
     public boolean drain(long timeoutMillis) {
         draining = true;
+        cancelPendingRetries();
         try {
             if (idleSignal.awaitIdle(this::isIdle, timeoutMillis)) {
                 stop();
@@ -147,14 +148,18 @@ public class TriggerExecutor {
         return queue.size() + inFlight.get() + scheduled.get();
     }
 
-    public synchronized void stop() {
-        workerCount.set(0);
+    private void cancelPendingRetries() {
         final var scheduler = retryScheduler;
         retryScheduler = null;
         if (scheduler != null) {
             scheduler.shutdownNow();
         }
         scheduled.set(0);
+    }
+
+    public synchronized void stop() {
+        workerCount.set(0);
+        cancelPendingRetries();
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Trigger");
         queue.clear();
         dispatcher = null;

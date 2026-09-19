@@ -476,7 +476,12 @@ collections against the live members:
 1. It builds a local **digest** (`id → version` for live documents, plus tombstones) and
    requests each peer's digest.
 2. It computes, per id, the **highest version seen anywhere** — a tombstone wins a tie with
-   a live document, so a delete beats a concurrent write at the same version.
+   a live document, so a delete beats a concurrent write at the same version. Two live copies at
+   exactly equal versions are ordered by node id, and the pull gate and the replicated-apply check
+   use that same total order so the two paths cannot disagree. One caveat: the id compared is the
+   one stamped by the node **answering** the digest, not the node that wrote the version, so the
+   tie-break is not yet a stable property of the write. Persisting the writer's id beside the
+   version would make it one, and is a disk-format change that has not been made.
 3. Where a peer holds the winning live version it pulls that document and applies it as a
    versioned upsert; where a tombstone wins it deletes locally and records the tombstone. It
    never overwrites an id it already holds at the winning version.

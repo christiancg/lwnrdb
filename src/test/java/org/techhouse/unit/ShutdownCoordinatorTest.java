@@ -188,4 +188,29 @@ public class ShutdownCoordinatorTest {
 
         assertNotNull(IocContainer.get(Cache.class).getUserDatabaseNames());
     }
+
+    @Test
+    public void test_shutdown_stays_inside_its_budget_with_a_retry_pending() throws Exception {
+        final var configuration = org.techhouse.config.Configuration.getInstance();
+        final var original = configuration.getShutdownTimeoutMs();
+        TestUtils.setPrivateField(configuration, "shutdownTimeoutMs", 3_000L);
+        final var triggerExecutor = IocContainer.get(org.techhouse.bckg_ops.TriggerExecutor.class);
+        triggerExecutor.start(_ -> {
+        });
+        triggerExecutor.submitAfter(
+                new org.techhouse.bckg_ops.events.TriggerEvent(org.techhouse.bckg_ops.events.EventType.CREATED,
+                        TestGlobals.DB, TestGlobals.COLL, "t", "p", false, java.util.List.of(), "alice", 0, null),
+                60_000L);
+        try {
+            final var start = System.currentTimeMillis();
+            new ShutdownCoordinator().shutdown(null, null);
+            final var elapsed = System.currentTimeMillis() - start;
+
+            assertTrue(elapsed < 3_000L,
+                    "a retry parked on the backoff scheduler must not hold the shutdown to its full budget, but it"
+                            + " took " + elapsed + "ms");
+        } finally {
+            TestUtils.setPrivateField(configuration, "shutdownTimeoutMs", original);
+        }
+    }
 }
