@@ -3,11 +3,16 @@
 Like the RUN_SCRIPT suite this script is **self-contained**: it starts its own LWNRDB
 instance on a dedicated port and working directory, because the feature needs both
 `scriptsEnabled=true` and `triggersEnabled=true`, which the shared CI server does not have.
-It runs in two phases:
+It runs in four phases:
 
   phase 1 — scripts and triggers enabled, with a deliberately tight sandbox so every limit
             is reachable in a test rather than only in theory;
-  phase 2 — the same data directory restarted with `scriptsEnabled=false` and
+  phase 2 — the same data directory with retries on: a commit is fenced past its commit point
+            and the server killed with no drain, so startup recovery is what finishes it, and
+            a deterministically failing trigger is attempted twice and then dead-lettered;
+  phase 3 — a retry backoff longer than the shutdown budget, so a retry is still pending when
+            the server is asked to stop;
+  phase 4 — the same data directory restarted with `scriptsEnabled=false` and
             `triggersEnabled=false`, proving each master switch refuses independently.
 
 What is covered:
@@ -32,6 +37,11 @@ What is covered:
     trigger nothing here is asynchronous;
   * dry run: TEST_TRIGGER reports accept/replace/reject, captures console output the live
     path discards, and writes nothing;
+  * durability: a commit finished by startup recovery still fires the after triggers the
+    online commit would have, and reports the CREATED the original decided on; a trigger file
+    that cannot be read refuses the write instead of silently firing nothing, and neither
+    SAVE_TRIGGER nor DELETE_TRIGGER erases the definitions it could not read; a shutdown with
+    a trigger retry still pending finishes inside its budget rather than waiting it out;
   * stats: GET_DATABASE_STATS reports the trigger counters.
 
 The server lifecycle is managed via a tracked subprocess handle (not pgrep), so stopping it
@@ -56,6 +66,10 @@ DB = "proc_test_db"
 OTHER_DB = "proc_other_db"
 COLL = "orders"
 AUDIT = "audit"
+UNREADABLE_COLL = "broken_triggers"
+RECOVERED_COLL = "tx_recovered"
+FENCED_COLL = "tx_fenced"
+RETRY_COLL = "retry_shutdown"
 
 RUNNER = "proc_runner"
 MANAGER = "proc_manager"
@@ -78,6 +92,12 @@ TRIGGER_MAX_DEPTH = 2
 TRIGGER_TIMEOUT_MS = 4_000
 BEFORE_HOOK_BUDGET = 200_000
 BEFORE_HOOK_TIMEOUT_MS = 500
+
+# A retry backoff far beyond the shutdown budget, so a drain that waits for the retry has no choice
+# but to burn the whole budget - which is what phase 3 times.
+SHUTDOWN_BUDGET_MS = 15_000
+LONG_RETRY_BACKOFF_MS = 60_000
+SHUTDOWN_CEILING_SECONDS = 7.0
 
 
 
@@ -144,7 +164,8 @@ def await_absent(conn: Conn, doc_id: str, coll=AUDIT, settle=2.0):
 
 def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
                  history_enabled: bool = True, history_kinds: str = "CALL_PROCEDURE,TRIGGER,SCHEDULE",
-                 history_retention_ms: int = 604800000, max_attempts: int = 1, retry_backoff_ms: int = 0):
+                 history_retention_ms: int = 604800000, max_attempts: int = 1, retry_backoff_ms: int = 0,
+                 retry_max_backoff_ms: int = 2000, shutdown_timeout_ms: int = SHUTDOWN_BUDGET_MS):
     cfg = (
         f"port={PORT}\n"
         "filePath=db\n"
@@ -178,8 +199,9 @@ def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
         "scriptRunHistoryMaxErrorChars=2000\n"
         f"triggerMaxAttempts={max_attempts}\n"
         f"triggerRetryBackoffMs={retry_backoff_ms}\n"
-        "triggerRetryMaxBackoffMs=2000\n"
+        f"triggerRetryMaxBackoffMs={retry_max_backoff_ms}\n"
         "triggerDeadLetterRetentionMs=604800000\n"
+        f"shutdownTimeoutMs={shutdown_timeout_ms}\n"
     )
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write(cfg)
@@ -406,6 +428,18 @@ def test_triggers(conn: Conn):
     disabled = await_absent(conn, "UPDATED-t3")
     check("a disabled trigger fires nothing", disabled.get("status") != "OK", f"got {disabled}")
     check_status("re-enable it", conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "auditor"), "OK")
+
+
+def install_the_trigger_whose_file_will_break(conn: Conn):
+    section("The collection whose trigger file phase 2 makes unreadable")
+    check_status("create the collection", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": UNREADABLE_COLL}), "OK")
+    check_status("install a trigger on it",
+                 conn.save_trigger("audit_unreadable", ["CREATED", "UPDATED"], "auditor", coll=UNREADABLE_COLL), "OK")
+    check_status("write a document", conn.save_doc({"_id": "ur-seed", "n": 1}, coll=UNREADABLE_COLL), "OK")
+    check("the trigger really fires while its file is intact",
+          await_doc(conn, "CREATED-ur-seed").get("status") == "OK",
+          "the fixture never fired, so what phase 2 asserts about it would prove nothing")
 
 
 BIG_RESULT_PROCEDURE = (
@@ -1132,6 +1166,149 @@ def test_run_history_failures(conn: Conn):
                             "name": "ghost_trigger"}), "OK")
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# Phase 2 — an interrupted commit, an unreadable trigger file, retries
+# ══════════════════════════════════════════════════════════════════════════
+
+def fenced_collection_folder(work_dir: str) -> str:
+    return os.path.join(work_dir, "db", DB, FENCED_COLL)
+
+
+def local_commit_markers(work_dir: str) -> int:
+    """Durable commit markers still on disk: `{txId}|localcommit` rows in admin/transactions."""
+    folder = os.path.join(work_dir, "db", "admin", "transactions")
+    if not os.path.isdir(folder):
+        return 0
+    total = 0
+    for name in sorted(os.listdir(folder)):
+        if not name.endswith(".dat"):
+            continue
+        with open(os.path.join(folder, name), "r", encoding="utf-8", errors="replace") as fp:
+            total += sum(1 for line in fp if "|localcommit" in line)
+    return total
+
+
+def arrange_a_commit_interrupted_past_its_commit_point(conn: Conn, work_dir: str):
+    section("A commit that cannot finish applying, then a kill with no drain")
+    for coll in (RECOVERED_COLL, FENCED_COLL):
+        check_status(f"create {coll}", conn.send(
+            {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    check_status("install an after trigger on the recovered collection",
+                 conn.save_trigger("audit_recovered", ["CREATED", "UPDATED"], "auditor", coll=RECOVERED_COLL), "OK")
+
+    check_status("start a warm-up transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("buffer a save", conn.save_doc({"_id": "tx-warmup", "n": 1}, coll=RECOVERED_COLL), "OK")
+    check_status("commit it", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("an ordinary transactional commit fires the trigger",
+          await_doc(conn, "CREATED-tx-warmup").get("status") == "OK",
+          "the fixture never fired, so the recovered commit below would prove nothing")
+
+    check_status("start the transaction that will not finish", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("buffer the audited save", conn.save_doc({"_id": "tx-recovered", "n": 1}, coll=RECOVERED_COLL), "OK")
+    check_status("buffer a save into a second collection",
+                 conn.save_doc({"_id": "tx-blocker", "n": 1}, coll=FENCED_COLL), "OK")
+    # Only now: buffering reads that collection's pk index, and the commit is what has to fail on it.
+    os.chmod(fenced_collection_folder(work_dir), 0o000)
+    check_code("the commit fences past its commit point",
+               conn.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
+
+
+def test_a_recovered_commit_fires_its_triggers(conn: Conn):
+    section("A commit finished by startup recovery fires its after triggers")
+    check("recovery applied the interrupted commit",
+          conn.find("tx-recovered", coll=RECOVERED_COLL).get("status") == "OK",
+          f"got {conn.find('tx-recovered', coll=RECOVERED_COLL)}")
+    check("including the op that could not apply before the kill",
+          conn.find("tx-blocker", coll=FENCED_COLL).get("status") == "OK",
+          f"got {conn.find('tx-blocker', coll=FENCED_COLL)}")
+
+    # The durable run is re-queued at startup rather than fired inline, so this polls.
+    row = await_doc(conn, "CREATED-tx-recovered", timeout=30.0)
+    check("the recovered commit fired the after trigger the online commit would have",
+          row.get("status") == "OK", f"got {row}")
+    check("and reported the insert the original commit decided on, not an update",
+          conn.find("UPDATED-tx-recovered", coll=AUDIT).get("status") != "OK",
+          "the recovered commit re-derived CREATED/UPDATED from disk, where the document already existed")
+    if row.get("status") == "OK":
+        check("the row names the user whose transaction it was",
+              row["object"].get("by") == ADMIN_USERNAME, f"got {row['object']}")
+
+
+def test_an_unreadable_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: str):
+    section("A trigger file that cannot be read is not 'no triggers'")
+    # Nothing may have touched this collection since the restart, or the cached trigger list answers from
+    # memory and the file broken below is never read at all.
+    trigger_file = os.path.join(work_dir, "db", DB, UNREADABLE_COLL, f"{UNREADABLE_COLL}-triggers.json")
+    check("the trigger file survived the restart", os.path.isfile(trigger_file), trigger_file)
+    with open(trigger_file, "rb") as fp:
+        original = fp.read()
+    check("and still names the trigger installed before it", b"audit_unreadable" in original, f"got {original!r}")
+
+    # Mode 000 rather than a directory of the same name: the read must fail while an *erasing* rewrite
+    # would still succeed, or the definitions surviving below would prove nothing about the fix.
+    os.chmod(trigger_file, 0o000)
+    try:
+        refused = conn.save_doc({"_id": "ur1", "n": 1}, coll=UNREADABLE_COLL)
+        check_code("a write is refused rather than quietly firing no triggers", refused, "ERROR", "500-7")
+        check("and nothing was written", conn.find("ur1", coll=UNREADABLE_COLL).get("status") != "OK")
+        check_code("saving a trigger is refused",
+                   conn.save_trigger("audit_second", ["CREATED"], "auditor", coll=UNREADABLE_COLL), "ERROR", "500-29")
+        check_code("deleting one is refused", conn.send(
+            {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": UNREADABLE_COLL,
+             "name": "audit_unreadable"}), "ERROR", "500-30")
+    finally:
+        os.chmod(trigger_file, 0o644)
+
+    with open(trigger_file, "rb") as fp:
+        after = fp.read()
+    check("neither DDL call erased the definitions it could not read", after == original,
+          f"the file changed while it was unreadable: {after!r}")
+    listed = conn.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": UNREADABLE_COLL})
+    check("the trigger is still installed once the file can be read again",
+          any(t.get("name") == "audit_unreadable" for t in (listed.get("triggers") or [])), f"got {listed}")
+    check_status("and a write fires it again", conn.save_doc({"_id": "ur2", "n": 2}, coll=UNREADABLE_COLL), "OK")
+    check("the audit row is back", await_doc(conn, "CREATED-ur2").get("status") == "OK")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Phase 3 — a retry outliving the shutdown budget
+# ══════════════════════════════════════════════════════════════════════════
+
+def retries_scheduled(conn: Conn) -> int:
+    return conn.send({"type": "GET_DATABASE_STATS"}).get("stats", {}).get("triggers", {}).get("retried", 0)
+
+
+def arrange_a_pending_trigger_retry(conn: Conn):
+    section("A trigger retry still waiting out its backoff")
+    check_status("create a collection for it", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": RETRY_COLL}), "OK")
+    check_status("install a procedure that always throws",
+                 conn.save_procedure("shutdown_boom", "throw new Error('shutdown boom');"), "OK")
+    check_status("point a trigger at it",
+                 conn.save_trigger("shutdown_retry", ["CREATED", "UPDATED"], "shutdown_boom", coll=RETRY_COLL), "OK")
+
+    before = retries_scheduled(conn)
+    check_status("write a document so it fires", conn.save_doc({"_id": "sr1", "n": 1}, coll=RETRY_COLL), "OK")
+    deadline = time.time() + 30.0
+    while retries_scheduled(conn) <= before and time.time() < deadline:
+        time.sleep(0.2)
+    check("the failed run scheduled a retry", retries_scheduled(conn) > before,
+          f"retried stayed at {before}, so nothing is pending and the timing below would prove nothing")
+    pending = [run for run in trigger_runs(conn, "PENDING") if run.get("trigger") == "shutdown_retry"]
+    check(f"and the run is still pending, {LONG_RETRY_BACKOFF_MS}ms from its next attempt",
+          len(pending) == 1, f"runs={pending!r}")
+
+
+def test_shutdown_does_not_wait_out_its_budget(proc):
+    section("Shutdown with a retry still pending")
+    started = time.time()
+    bu.stop_server(proc)
+    elapsed = time.time() - started
+    check("the server stopped well inside its shutdown budget", elapsed < SHUTDOWN_CEILING_SECONDS,
+          f"took {elapsed:.1f}s of a {SHUTDOWN_BUDGET_MS}ms budget with a retry pending; a drain that waits"
+          " for a retry that cannot come back takes the whole budget and abandons the background queue")
+
+
 def trigger_runs(conn: Conn, status: str = None) -> list:
     payload = {"type": "LIST_TRIGGER_RUNS"}
     if status:
@@ -1277,7 +1454,7 @@ def test_cascade_deletes(conn: Conn, work_dir: str):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-# Phase 2 — both switches off
+# Phase 4 — both switches off
 # ══════════════════════════════════════════════════════════════════════════
 
 def test_switches_off(conn: Conn):
@@ -1332,6 +1509,7 @@ def main():
         test_permissions()
         with admin_conn() as conn:
             test_triggers(conn)
+            install_the_trigger_whose_file_will_break(conn)
             test_trigger_validation(conn)
             test_before_hooks(conn)
             test_before_hook_veto(conn)
@@ -1370,12 +1548,38 @@ def main():
         proc = None
         write_config(work_dir, scripts_enabled=True, triggers_enabled=True, max_attempts=2, retry_backoff_ms=200)
         proc = bu.start_server(work_dir, log_path)
+
+        # The connection stays open until the process is gone: closing it first would let
+        # cleanupOnDisconnect roll the fenced transaction back, which is the state being preserved.
+        interrupted = admin_conn()
+        arrange_a_commit_interrupted_past_its_commit_point(interrupted, work_dir)
+        print("\n  Killing the server without a drain ...")
+        proc.kill()
+        proc.wait(timeout=30)
+        proc = None
+        interrupted.close()
+        os.chmod(fenced_collection_folder(work_dir), 0o755)
+        check("the durable commit marker outlived the kill", local_commit_markers(work_dir) == 1,
+              "with no marker there is nothing for the restart to finish, so what follows would be vacuous")
+        proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
+            test_a_recovered_commit_fires_its_triggers(conn)
+            test_an_unreadable_trigger_file_is_not_an_empty_one(conn, work_dir)
             test_retry_and_dead_letters(conn)
 
-        # Phase 3: same data directory, both switches off
+        # Phase 3: a retry backoff far beyond the shutdown budget, so the stop below is timed with a
+        # retry that cannot possibly come back before the budget expires.
         bu.stop_server(proc)
         proc = None
+        write_config(work_dir, scripts_enabled=True, triggers_enabled=True, max_attempts=3,
+                     retry_backoff_ms=LONG_RETRY_BACKOFF_MS, retry_max_backoff_ms=LONG_RETRY_BACKOFF_MS)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            arrange_a_pending_trigger_retry(conn)
+        test_shutdown_does_not_wait_out_its_budget(proc)
+        proc = None
+
+        # Phase 4: same data directory, both switches off
         write_config(work_dir, scripts_enabled=False, triggers_enabled=False)
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:

@@ -24,8 +24,24 @@ What is covered:
     lost mutual exclusion entirely. This case is inherently timing-dependent — it can miss the
     window, but it can never fail when the engine is correct, so it is safe in CI. The
     deterministic proof lives in ResourceLockingTest.
+
+  * page-occupancy metadata keeps up with an admin row that grows on update. The update branch of
+    `AdminOperationHelper.writeAdminEntry` emitted no `UPDATED` delta while its insert and erase
+    branches always did, so the recorded size in `admin/pages/admin_<coll>` drifted below the real
+    page file, first-fit kept packing rows into a page it believed still had room, and the page
+    grew past `maxPageSize`. Nothing recomputes page sizes except a restart.
+
+  * a PK-index self-heal never erases a write that committed while it was reading.
+    `PkIndexStore.readWholePkIndexFile` rewrote `{coll}-_id-String.idx` in full from a snapshot
+    taken before it released the read lock, so an append that landed in between was dropped — and
+    the loss is permanent, because `REINDEX` rebuilds field indexes only and nothing rebuilds the
+    PK index from the document store. The last phase restarts with the cache disabled so that every
+    read really reaches the file rather than the one cached copy. Like the lock case above, this is
+    timing-dependent: it can miss the window, but it can never fail when the engine is correct. The
+    deterministic proof lives in FileSystemPkIndexTest.
 """
 
+import json
 import os
 import sys
 import tempfile
@@ -47,6 +63,7 @@ RECREATE_DB = "recreate_db"
 SCHEMA_COLL = "schema_guarded"
 LOCK_COLL = "items"
 DIRTY_COLL = "dirty_index_docs"
+HEAL_COLL = "heal_race_docs"
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
@@ -59,6 +76,18 @@ MAX_PAGE_SIZE = "4kb"
 MAX_ENTRY_SIZE = "1kb"
 SEEDED_DOCS = 40
 PAD = "p" * 300
+
+# -1 disables the user cache outright, which is what makes every read in the last phase reach
+# the PK index file instead of the single copy the first read would otherwise cache.
+CACHE_DISABLED = "-1"
+
+HEAL_SEEDED = 1000
+RACE_SECONDS = 3.0
+
+PERM_USER_PREFIX = "page_grow_user_"
+PERM_FILL_PREFIX = "page_fill_user_"
+PERM_USERS = 6
+PERM_ROUNDS = 10
 
 
 class Conn(bu.Conn):
@@ -86,12 +115,12 @@ def admin_conn() -> Conn:
     return conn
 
 
-def write_config(work_dir: str):
+def write_config(work_dir: str, max_memory: str = "256mb"):
     cfg = (
         f"port={PORT}\n"
         "filePath=db\n"
         "logPath=logs\n"
-        "maxMemory=256mb\n"
+        f"maxMemory={max_memory}\n"
         f"maxPageSize={MAX_PAGE_SIZE}\n"
         f"maxEntrySize={MAX_ENTRY_SIZE}\n"
         f"defaultAdminUsername={ADMIN_USERNAME}\n"
@@ -116,6 +145,58 @@ def page_metadata_bytes(work_dir: str, db=DB, coll=COLL) -> int:
                for f in os.listdir(folder) if f.endswith(".dat"))
 
 
+def recorded_pages(work_dir: str, db=DB, coll=COLL) -> dict:
+    """What the engine believes each page of `db|coll` holds, keyed by page number."""
+    folder = os.path.join(work_dir, "db", "admin", "pages", f"{db}_{coll}")
+    # The folder name is ambiguous (names admit "_"), so rows are identified by their own id.
+    prefix = f"{db}|{coll}|"
+    rows = {}
+    if not os.path.isdir(folder):
+        return rows
+    for name in sorted(f for f in os.listdir(folder) if f.endswith(".dat")):
+        with open(os.path.join(folder, name), "r", encoding="utf-8", errors="replace") as fp:
+            for line in fp:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if str(row.get("_id", "")).startswith(prefix):
+                    rows[int(row["page"])] = row
+    return rows
+
+
+def actual_pages(work_dir: str, db=DB, coll=COLL) -> dict:
+    folder = os.path.join(work_dir, "db", db, coll)
+    pages = {}
+    for name in page_files(work_dir, db, coll):
+        with open(os.path.join(folder, name), "rb") as fp:
+            content = fp.read()
+        pages[int(name[len(coll) + 1:-len(".dat")])] = (len(content), content.count(b"\n"))
+    return pages
+
+
+def pk_index_file(work_dir: str, db=DB, coll=COLL) -> str:
+    return os.path.join(work_dir, "db", db, coll, f"{coll}-_id-String.idx")
+
+
+def pk_index_ids(index_file: str) -> set:
+    ids = set()
+    with open(index_file, "r", encoding="utf-8", errors="replace") as fp:
+        for line in fp:
+            line = line.strip()
+            if line.count("|") >= 4:
+                ids.add(line.rsplit("|", 4)[0])
+    return ids
+
+
+def append_torn_pk_line(work_dir: str, db=DB, coll=COLL) -> None:
+    with open(pk_index_file(work_dir, db, coll), "a", encoding="utf-8") as fp:
+        fp.write("torn pk index line\n")
+
+
 # ── phase 1: seed ────────────────────────────────────────────────────────────
 
 def seed(conn: Conn, work_dir: str):
@@ -137,6 +218,15 @@ def seed(conn: Conn, work_dir: str):
     check_status("give it a schema", conn.send({
         "type": "SAVE_SCHEMA", "databaseName": DB, "collectionName": SCHEMA_COLL,
         "schema": {"type": "object", "required": ["name"], "properties": {"name": {"type": "string"}}}}), "OK")
+
+    check_status("create the collection whose PK index gets corrupted",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": HEAL_COLL}), "OK")
+    for start in range(0, HEAL_SEEDED, 200):
+        conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": HEAL_COLL,
+                   "objects": [{"_id": f"seed{i:05d}", "pad": "x"}
+                               for i in range(start, min(start + 200, HEAL_SEEDED))]})
+    check("it holds every seeded document", conn.count_via_pk(coll=HEAL_COLL) == HEAL_SEEDED,
+          f"got {conn.count_via_pk(coll=HEAL_COLL)} of {HEAL_SEEDED}")
 
     files = page_files(work_dir)
     check("the collection really spans several pages", len(files) > 1, f"got {files}")
@@ -179,6 +269,47 @@ def test_page_cap_is_enforced_after_restart(conn: Conn, work_dir: str):
     pk = conn.count_via_pk()
     scan = conn.count_via_scan()
     check("the collection is still fully scannable", pk == scan, f"pk={pk} scan={scan}")
+
+
+def change_permissions(conn: Conn, username: str, db_perms: dict) -> dict:
+    return conn.send({"type": "CHANGE_PERMISSIONS", "username": username, "admin": False,
+                      "globalPermissions": [], "databasePermissions": db_perms,
+                      "collectionPermissions": {}, "scriptPermissions": {}})
+
+
+def create_user(conn: Conn, username: str) -> dict:
+    return conn.send({"type": "CREATE_USER", "username": username, "password": "page_grow_1234",
+                      "admin": False, "globalPermissions": [], "databasePermissions": {},
+                      "collectionPermissions": {}, "scriptPermissions": {}})
+
+
+def test_page_metadata_follows_an_admin_row_that_grows_on_update(conn: Conn, work_dir: str):
+    section("Page occupancy for an admin row that grows on update")
+    refused = []
+    for user in range(PERM_USERS):
+        refused.append(create_user(conn, f"{PERM_USER_PREFIX}{user}"))
+    for round_index in range(1, PERM_ROUNDS + 1):
+        granted = {f"perm_db_{i:04d}": "READ" for i in range(round_index * 3)}
+        for user in range(PERM_USERS):
+            refused.append(change_permissions(conn, f"{PERM_USER_PREFIX}{user}", granted))
+        refused.append(create_user(conn, f"{PERM_FILL_PREFIX}{round_index:02d}"))
+    refused = [response for response in refused if response.get("status") != "OK"]
+    check(f"{PERM_USERS} admin rows grew over {PERM_ROUNDS} rounds of updates", not refused,
+          f"{len(refused)} requests failed; first: {refused[:1]}")
+
+    recorded = recorded_pages(work_dir, "admin", "users")
+    actual = actual_pages(work_dir, "admin", "users")
+    check("every admin/users page on disk is described by page metadata",
+          set(recorded) == set(actual), f"recorded={sorted(recorded)} on disk={sorted(actual)}")
+
+    drifted = [f"page {page}: recorded {recorded[page]['size']}B/{recorded[page]['entryCount']} entries,"
+               f" on disk {actual[page][0]}B/{actual[page][1]} entries"
+               for page in sorted(actual)
+               if page not in recorded
+               or recorded[page]["size"] != actual[page][0]
+               or recorded[page]["entryCount"] != actual[page][1]]
+    check("the recorded page occupancy still matches the page on disk", not drifted,
+          "first-fit is packing rows into a page it believes has room — " + "; ".join(drifted) if drifted else "")
 
 
 def test_drop_database_does_not_strand_a_collection_lock(conn: Conn):
@@ -269,7 +400,7 @@ def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
 
 
 
-# ── phase 3: an unclean stop ─────────────────────────────────────────────────
+# ── phase 3: an unclean stop, then a restart with the cache disabled ─────────
 
 def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
     folder = os.path.join(work_dir, "db", db, coll)
@@ -307,6 +438,86 @@ def test_an_unclean_stop_is_reported_at_the_next_startup(work_dir: str, log_path
           "the restart log does not name the collection, so an operator has no signal to rebuild it")
 
 
+def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, log_path: str):
+    section("A PK-index self-heal racing committed writes")
+
+    index_file = pk_index_file(work_dir, DB, HEAL_COLL)
+    check("the corrupted PK index is where the suite expects it", os.path.isfile(index_file), index_file)
+
+    log_offset = os.path.getsize(log_path)
+    committed = []
+    errors = []
+    stop = threading.Event()
+    guard = threading.Lock()
+
+    def writer(index: int):
+        try:
+            with admin_conn() as writer_conn:
+                counter = 0
+                while not stop.is_set():
+                    doc_id = f"race{index}-{counter:05d}"
+                    counter += 1
+                    if writer_conn.save({"_id": doc_id, "pad": "x"}, coll=HEAL_COLL).get("status") == "OK":
+                        with guard:
+                            committed.append(doc_id)
+        except Exception as exc:
+            errors.append(f"writer {index}: {exc}")
+
+    def reader():
+        try:
+            with admin_conn() as reader_conn:
+                while not stop.is_set():
+                    # Dirty, so it takes no collection lock and really overlaps the writers above.
+                    reader_conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": HEAL_COLL,
+                                      "dirtyRead": True, "aggregationSteps": [{"type": "COUNT"}]})
+        except Exception as exc:
+            errors.append(f"reader: {exc}")
+
+    def corrupter():
+        while not stop.is_set():
+            try:
+                append_torn_pk_line(work_dir, DB, HEAL_COLL)
+            except OSError:
+                pass
+            time.sleep(0.005)
+
+    threads = [threading.Thread(target=reader, daemon=True) for _ in range(2)]
+    threads += [threading.Thread(target=writer, args=(n,), daemon=True) for n in range(3)]
+    threads.append(threading.Thread(target=corrupter, daemon=True))
+    for thread in threads:
+        thread.start()
+    time.sleep(RACE_SECONDS)
+    stop.set()
+    for thread in threads:
+        thread.join(timeout=60)
+
+    check("every racing client finished cleanly", not errors, "; ".join(errors))
+    check("the race committed enough writes to be worth asserting on", len(committed) > 100,
+          f"only {len(committed)} writes committed in {RACE_SECONDS}s")
+
+    # Without this the suite could pass by never entering the window it is here to guard.
+    with open(log_path, "rb") as fp:
+        fp.seek(log_offset)
+        heals = fp.read().decode(errors="replace").count(f"PK index entry in {HEAL_COLL}-_id-String")
+    check("the writes really did race a self-heal", heals > 20,
+          f"only {heals} self-heals fired, so the assertions below prove little")
+
+    missing = sorted(set(committed) - pk_index_ids(index_file))
+    check("no committed write was erased from the PK index by a self-heal", not missing,
+          f"{len(missing)} of {len(committed)} committed ids are gone from the index for good "
+          f"(REINDEX does not rebuild it); first: {missing[:5]}")
+
+    pk = conn.count_via_pk(coll=HEAL_COLL)
+    scan = conn.count_via_scan(coll=HEAL_COLL)
+    check("a PK-index count and a full scan still agree", pk == scan,
+          f"pk={pk} scan={scan}, expected {HEAL_SEEDED + len(committed)}")
+
+    for doc_id in committed[-3:]:
+        check_status(f"FIND_BY_ID still finds {doc_id}",
+                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": HEAL_COLL,
+                                "_id": doc_id}), "OK")
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -335,6 +546,7 @@ def main():
             test_scan_is_complete_after_restart(conn)
             test_scan_is_complete_after_the_first_write(conn)
             test_page_cap_is_enforced_after_restart(conn, work_dir)
+            test_page_metadata_follows_an_admin_row_that_grows_on_update(conn, work_dir)
             test_drop_database_does_not_strand_a_collection_lock(conn)
             test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
             test_writes_to_an_unknown_collection_are_refused_cleanly(conn)
@@ -349,9 +561,13 @@ def main():
         log_offset = os.path.getsize(log_path)
         proc = None
 
-        print(f"  Restarting server on {HOST}:{PORT} ...")
+        append_torn_pk_line(work_dir, DB, HEAL_COLL)
+        write_config(work_dir, max_memory=CACHE_DISABLED)
+        print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
         proc = bu.start_server(work_dir, log_path)
         test_an_unclean_stop_is_reported_at_the_next_startup(work_dir, log_path, log_offset)
+        with admin_conn() as conn:
+            test_a_self_heal_never_erases_a_committed_write(conn, work_dir, log_path)
     finally:
         bu.stop_server(proc)
 
