@@ -43,17 +43,23 @@ public final class CollectionOperationHelper {
                     }
                     final var result = fs.createCollectionFile(dbName, collName);
                     if (result) {
+                        final var existingEntry = AdminOperationHelper.getCollectionEntry(dbName, collName);
+                        if (existingEntry != null) {
+                            if (createCollectionRequest.getIncarnation() == 0) {
+                                createCollectionRequest.setIncarnation(existingEntry.getIncarnation());
+                            }
+                            return OperationResponse.ok(OperationType.CREATE_COLLECTION,
+                                    "Collection created successfully");
+                        }
                         // Registration must be synchronous: a lagging background task lets CREATE_INDEX run
                         // first, find no admin PK entry and silently skip registering the index.
-                        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
-                            if (createCollectionRequest.getIncarnation() == 0) {
-                                createCollectionRequest.setIncarnation(hybridClock.next());
-                            }
-                            AdminOperationHelper.createPageCollections(dbName, collName);
-                            final var entry = new AdminCollEntry(dbName, collName);
-                            entry.setIncarnation(createCollectionRequest.getIncarnation());
-                            AdminOperationHelper.saveCollectionEntry(entry);
+                        if (createCollectionRequest.getIncarnation() == 0 && !createCollectionRequest.isReplicated()) {
+                            createCollectionRequest.setIncarnation(hybridClock.next());
                         }
+                        AdminOperationHelper.createPageCollections(dbName, collName);
+                        final var entry = new AdminCollEntry(dbName, collName);
+                        entry.setIncarnation(createCollectionRequest.getIncarnation());
+                        AdminOperationHelper.saveCollectionEntry(entry);
                         return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
                     }
                     return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);

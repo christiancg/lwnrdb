@@ -210,4 +210,19 @@ public class CacheTest extends CacheFixtureSupport {
         verifyNoMoreInteractions(adminMock, userMock);
     }
 
+    @Test
+    public void test_hash_index_identifier_does_not_collide_with_the_typed_identifier() {
+        final var typed = Cache.getIndexIdentifier("score", Number.class);
+        final var hash = Cache.getHashIndexIdentifier("score", org.techhouse.data.IndexKind.NUMBER.label());
+        assertNotEquals(typed, hash,
+                "both slots resolved to score|Number, and the two loaders parse the same .idx file into"
+                        + " Double and String values, so whichever loaded first poisoned the other");
+    }
+
+    @Test
+    public void test_hash_index_identifier_still_shares_the_field_eviction_prefix() {
+        final var hash = Cache.getHashIndexIdentifier("score", org.techhouse.data.IndexKind.OBJECT.label());
+        assertTrue(hash.startsWith("score" + org.techhouse.config.Globals.COLL_IDENTIFIER_SEPARATOR),
+                "evictFieldIndexAllTypes removes by the field| prefix, so the namespaced key must keep it");
+    }
 }

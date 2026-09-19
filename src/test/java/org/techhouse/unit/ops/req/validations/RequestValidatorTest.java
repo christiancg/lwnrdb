@@ -288,4 +288,29 @@ public class RequestValidatorTest {
         assertFalse(result.isValid());
         assertEquals("COUNT must be the last aggregation step", result.getErrorMessage());
     }
+
+    @Test
+    public void validate_createIndex_rejectsThePkField() {
+        final var request = new org.techhouse.ops.req.CreateIndexRequest("testDb", "testColl", "_id");
+        assertFalse(RequestValidator.validate(request).isValid(),
+                "the pk index is named like a field index on _id, so an accepted request deletes it");
+    }
+
+    @Test
+    public void validate_dropIndex_rejectsThePkField() {
+        final var request = new org.techhouse.ops.req.DropIndexRequest("testDb", "testColl", "_id");
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_dropIndex_rejectsTheTombstoneName() {
+        final var request = new org.techhouse.ops.req.DropIndexRequest("testDb", "testColl", "tombstones");
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_dropIndex_acceptsAnOrdinaryField() {
+        final var request = new org.techhouse.ops.req.DropIndexRequest("testDb", "testColl", "score");
+        assertTrue(RequestValidator.validate(request).isValid());
+    }
 }

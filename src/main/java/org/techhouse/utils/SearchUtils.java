@@ -166,14 +166,21 @@ public final class SearchUtils {
     }
 
     private static <T> Set<String> findingMembership(List<FieldIndexEntry<T>> entries, List<T> value, boolean present) {
-        final var operands = new HashSet<>(value);
+        final var operands = new HashSet<>();
+        for (final var operand : value) {
+            operands.add(membershipKey(operand));
+        }
         final var ids = new HashSet<String>();
         for (final var entry : entries) {
-            if (operands.contains(entry.getValue()) == present) {
+            if (operands.contains(membershipKey(entry.getValue())) == present) {
                 ids.addAll(entry.getIds());
             }
         }
         return ids;
+    }
+
+    private static Object membershipKey(Object value) {
+        return value instanceof Number number ? number.doubleValue() : value;
     }
 
     private static <T> Set<String> findingContains(List<FieldIndexEntry<T>> entries, T value) {

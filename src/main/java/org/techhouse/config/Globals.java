@@ -13,6 +13,7 @@ public final class Globals {
     public static final String INDEX_TYPE_NULL = "JsonNull";
     public static final String INDEX_TYPE_OBJECT = "Object";
     public static final String INDEX_TYPE_ARRAY = "Array";
+    public static final String HASH_INDEX_KEY_PREFIX = "#";
     public static final int BUFFER_SIZE = 32768;
     public static final String DB_FILE_EXTENSION = ".dat";
     public static final String JSON_FILE_EXTENSION = ".json";

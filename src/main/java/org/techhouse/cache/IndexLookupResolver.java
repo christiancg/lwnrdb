@@ -19,6 +19,8 @@ import org.techhouse.utils.JsonUtils;
 import org.techhouse.utils.SearchUtils;
 
 final class IndexLookupResolver {
+    private static final List<IndexKind> HASH_INDEX_KINDS = List.of(IndexKind.OBJECT, IndexKind.ARRAY);
+
     private IndexLookupResolver() {
     }
 
@@ -156,7 +158,7 @@ final class IndexLookupResolver {
                 return true;
             }
         }
-        for (final var kind : IndexKind.values()) {
+        for (final var kind : HASH_INDEX_KINDS) {
             if (kind != chosenKind
                     && userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind) != null) {
                 return true;

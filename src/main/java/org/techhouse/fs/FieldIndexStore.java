@@ -65,8 +65,10 @@ final class FieldIndexStore {
     boolean dropIndex(String dbName, String collName, String fieldName) {
         final var collFolder = paths.collectionFolder(dbName, collName);
         if (collFolder.exists()) {
-            final var indexFiles = collFolder.listFiles((_, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION) && name
-                    .contains(Globals.INDEX_FILE_NAME_SEPARATOR + fieldName + Globals.INDEX_FILE_NAME_SEPARATOR));
+            final var prefix = collName + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName
+                    + Globals.INDEX_FILE_NAME_SEPARATOR;
+            final var indexFiles = collFolder
+                    .listFiles((_, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION) && name.startsWith(prefix));
             if (indexFiles != null) {
                 final var deleted = new ArrayList<Boolean>();
                 for (var index : indexFiles) {

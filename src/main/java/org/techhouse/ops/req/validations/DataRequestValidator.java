@@ -128,6 +128,13 @@ public final class DataRequestValidator {
         if (request.getFieldName() == null || request.getFieldName().isBlank()) {
             return ValidationResult.fail("CREATE_INDEX request requires a non-blank fieldName");
         }
+        return validateIndexFieldNotReserved("CREATE_INDEX", request.getFieldName());
+    }
+
+    private static ValidationResult validateIndexFieldNotReserved(String operation, String fieldName) {
+        if (Globals.PK_FIELD.equals(fieldName) || Globals.TOMBSTONE_FILE_NAME.equals(fieldName)) {
+            return ValidationResult.fail(operation + " cannot target the reserved field name " + fieldName);
+        }
         return ValidationResult.ok();
     }
 
@@ -150,7 +157,7 @@ public final class DataRequestValidator {
         if (request.getFieldName() == null || request.getFieldName().isBlank()) {
             return ValidationResult.fail("DROP_INDEX request requires a non-blank fieldName");
         }
-        return ValidationResult.ok();
+        return validateIndexFieldNotReserved("DROP_INDEX", request.getFieldName());
     }
 
     static ValidationResult validateReindex(ReindexRequest request) {

@@ -117,7 +117,7 @@ public class UserCache {
 
     public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, IndexKind kind) throws IOException {
-        return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, kind.label()),
+        return loadIndex(dbName, collName, Cache.getHashIndexIdentifier(fieldName, kind.label()),
                 () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind));
     }
 

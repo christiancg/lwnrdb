@@ -178,10 +178,10 @@ public class FileSystemFieldIndexTest {
         File mockCollFolder = new File(
                 TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL);
 
-        File indexFile1 = new File(mockCollFolder, "1" + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName
-                + Globals.INDEX_FILE_NAME_SEPARATOR + "idx" + Globals.INDEX_FILE_EXTENSION);
-        File indexFile2 = new File(mockCollFolder, "2" + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName
-                + Globals.INDEX_FILE_NAME_SEPARATOR + "idx" + Globals.INDEX_FILE_EXTENSION);
+        File indexFile1 = new File(mockCollFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_NUMBER + Globals.INDEX_FILE_EXTENSION);
+        File indexFile2 = new File(mockCollFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
 
         assertTrue(indexFile1.createNewFile());
         assertTrue(indexFile2.createNewFile());
@@ -191,6 +191,62 @@ public class FileSystemFieldIndexTest {
         assertTrue(result);
         assertFalse(indexFile1.exists());
         assertFalse(indexFile2.exists());
+    }
+
+    @Test
+    public void test_drop_index_does_not_delete_the_pk_index_or_tombstones()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
+
+        File mockCollFolder = new File(
+                TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL);
+
+        File pkIndex = new File(mockCollFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
+        File tombstones = new File(mockCollFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.TOMBSTONE_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
+        File target = new File(mockCollFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + "score"
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_NUMBER + Globals.INDEX_FILE_EXTENSION);
+
+        assertTrue(pkIndex.createNewFile());
+        assertTrue(tombstones.createNewFile());
+        assertTrue(target.createNewFile());
+
+        assertTrue(fs.dropIndex(TestGlobals.DB, TestGlobals.COLL, "score"));
+
+        assertFalse(target.exists());
+        assertTrue(pkIndex.exists());
+        assertTrue(tombstones.exists());
+    }
+
+    @Test
+    public void test_drop_index_on_a_hyphenated_collection_spares_the_pk_index()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
+
+        String collName = "user-data";
+        File collFolder = new File(
+                TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + collName);
+        assertTrue(collFolder.mkdirs());
+
+        File pkIndex = new File(collFolder, collName + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
+        File tombstones = new File(collFolder, collName + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.TOMBSTONE_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
+        File target = new File(collFolder, collName + Globals.INDEX_FILE_NAME_SEPARATOR + "data"
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_NUMBER + Globals.INDEX_FILE_EXTENSION);
+
+        assertTrue(pkIndex.createNewFile());
+        assertTrue(tombstones.createNewFile());
+        assertTrue(target.createNewFile());
+
+        assertTrue(fs.dropIndex(TestGlobals.DB, collName, "data"));
+
+        assertFalse(target.exists());
+        assertTrue(pkIndex.exists());
+        assertTrue(tombstones.exists());
     }
 
     @Test

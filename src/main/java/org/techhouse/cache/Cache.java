@@ -51,6 +51,10 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + typeLabel;
     }
 
+    public static String getHashIndexIdentifier(String fieldName, String typeLabel) {
+        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + Globals.HASH_INDEX_KEY_PREFIX + typeLabel;
+    }
+
     public void shiftPkPositionsAfterCompaction(PkCompaction compaction) {
         if (compaction == null) {
             return;
