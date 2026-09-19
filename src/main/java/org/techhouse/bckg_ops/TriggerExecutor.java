@@ -98,6 +98,15 @@ public class TriggerExecutor {
     }
 
     private void runWorker() {
+        try {
+            workLoop();
+        } finally {
+            workerCount.updateAndGet(live -> Math.max(0, live - 1));
+            idleSignal.signal();
+        }
+    }
+
+    private void workLoop() {
         while (!Thread.currentThread().isInterrupted()) {
             final TriggerEvent event;
             parked.incrementAndGet();
@@ -127,7 +136,7 @@ public class TriggerExecutor {
         draining = true;
         cancelPendingRetries();
         try {
-            if (idleSignal.awaitIdle(this::isIdle, timeoutMillis)) {
+            if (idleSignal.awaitIdle(this::isIdle, workerCount.get() > 0 ? timeoutMillis : 0L)) {
                 stop();
                 return true;
             }

@@ -128,6 +128,15 @@ public class ScheduleExecutor {
     }
 
     private void runWorker() {
+        try {
+            workLoop();
+        } finally {
+            workerCount.updateAndGet(live -> Math.max(0, live - 1));
+            idleSignal.signal();
+        }
+    }
+
+    private void workLoop() {
         while (!Thread.currentThread().isInterrupted()) {
             final ScheduleRegistry.Entry entry;
             parked.incrementAndGet();
@@ -157,7 +166,7 @@ public class ScheduleExecutor {
     public boolean drain(long timeoutMillis) {
         draining = true;
         try {
-            if (idleSignal.awaitIdle(this::isIdle, timeoutMillis)) {
+            if (idleSignal.awaitIdle(this::isIdle, workerCount.get() > 0 ? timeoutMillis : 0L)) {
                 stop();
                 return true;
             }

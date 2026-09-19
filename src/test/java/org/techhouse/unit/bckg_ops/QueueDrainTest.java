@@ -171,4 +171,37 @@ public class QueueDrainTest {
                 + " rather than wait out a backoff that can be four times the whole shutdown budget");
         assertTrue(elapsedMillis < 900L, "the drain waited " + elapsedMillis + "ms for a scheduled retry");
     }
+
+    @Test
+    public void test_a_worker_that_died_does_not_wedge_the_drain() throws Exception {
+        final var executor = new ScheduleExecutor();
+        executor.start(_ -> {
+        });
+        final var pool = TestUtils.getPrivateField(executor, "pool", java.util.concurrent.ExecutorService.class);
+        pool.shutdownNow();
+        assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS), "the worker never exited");
+
+        final var start = System.nanoTime();
+        final var drained = executor.drain(2_000L);
+        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
+
+        assertTrue(drained, "a worker that exited must stop being counted, or every later drain in this process"
+                + " waits out its whole budget for a parked worker that no longer exists");
+        assertTrue(elapsedMillis < 1_500L, "the drain waited " + elapsedMillis + "ms for a dead worker");
+    }
+
+    @Test
+    public void test_a_queue_with_no_live_worker_does_not_burn_the_budget() {
+        final var manager = new BackgroundTaskManager();
+        manager.submitBackgroundTask(new org.techhouse.bckg_ops.events.UsageProfileCleanupEvent());
+
+        final var start = System.nanoTime();
+        final var drained = manager.drain(5_000L);
+        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
+
+        assertFalse(drained, "the events really were abandoned, so the drain must still report that");
+        assertTrue(elapsedMillis < 1_000L,
+                "nothing is running to consume the queue, so waiting the whole budget delays the shutdown"
+                        + " without draining anything, but it took " + elapsedMillis + "ms");
+    }
 }

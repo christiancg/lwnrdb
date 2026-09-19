@@ -32,7 +32,7 @@ public class BackgroundTaskManager {
         workerCount.set(threadCount);
         parked.set(0);
         for (int i = 0; i < threadCount; i++) {
-            final var thread = new BackgroundProcessorThread(queue, inFlight, parked, idleSignal);
+            final var thread = new BackgroundProcessorThread(queue, inFlight, parked, workerCount, idleSignal);
             pool.execute(thread);
         }
         logger.info("Started listening for background tasks");
@@ -41,7 +41,7 @@ public class BackgroundTaskManager {
     public boolean drain(long timeoutMillis) {
         draining = true;
         try {
-            if (idleSignal.awaitIdle(this::isIdle, timeoutMillis)) {
+            if (idleSignal.awaitIdle(this::isIdle, workerCount.get() > 0 ? timeoutMillis : 0L)) {
                 stopBackgroundWorkers();
                 return true;
             }

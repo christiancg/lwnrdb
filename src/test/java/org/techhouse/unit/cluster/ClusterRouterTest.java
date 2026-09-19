@@ -46,9 +46,17 @@ public class ClusterRouterTest {
     }
 
     @BeforeEach
-    public void setUp() {
+    public void setUp() throws Exception {
         origEnabled = config.isClusterEnabled();
         origRouting = config.isScriptRoutingEnabled();
+        resetOwnership();
+    }
+
+    private void resetOwnership() throws Exception {
+        ownership.setSelfNodeId(null);
+        ownership.onMembershipChanged(new MembershipView(List.of()));
+        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(membershipService, "self", null);
     }
 
     @AfterEach
@@ -56,10 +64,7 @@ public class ClusterRouterTest {
         pool.closeAll();
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", origRouting);
-        ownership.setSelfNodeId(null);
-        ownership.onMembershipChanged(new MembershipView(List.of()));
-        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(membershipService, "self", null);
+        resetOwnership();
     }
 
     // An unreachable peer at port 1, caught up on admin metadata and with no script load at all, so
