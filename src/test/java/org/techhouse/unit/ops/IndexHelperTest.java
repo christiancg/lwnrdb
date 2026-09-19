@@ -60,9 +60,9 @@ public class IndexHelperTest {
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
-        cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
-        cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
-        cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj3));
+        TestUtils.cacheEntry(cache, dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
+        TestUtils.cacheEntry(cache, dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
+        TestUtils.cacheEntry(cache, dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj3));
 
         IndexHelper.createIndex(dbName, collName, fieldName);
         final var index = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
@@ -92,8 +92,8 @@ public class IndexHelperTest {
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
-        cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
-        cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
+        TestUtils.cacheEntry(cache, dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
+        TestUtils.cacheEntry(cache, dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
 
         IndexHelper.createIndex(dbName, collName, fieldName);
         final var index = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
@@ -144,12 +144,12 @@ public class IndexHelperTest {
         return e;
     }
 
-    private void setupCollection(Cache cache, DbEntry... entries) {
+    private void setupCollection(Cache cache, DbEntry... entries) throws IOException {
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "x", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, pk);
         for (var entry : entries) {
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
     }
 

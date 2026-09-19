@@ -41,13 +41,13 @@ public class FilterOperatorResolutionTest {
         TestUtils.standardTearDown();
     }
 
-    private void addTyped(Cache cache, String id, String field, JsonBaseElement value) {
+    private void addTyped(Cache cache, String id, String field, JsonBaseElement value) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add(field, value);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
     private Cache mixedTypeFixture() {
@@ -133,8 +133,8 @@ public class FilterOperatorResolutionTest {
         e1.set_id("idx1");
         DbEntry e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
         e2.set_id("idx2");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e1);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e2);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, e1);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, e2);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         cache.putAdminCollectionEntry(adminCollEntry,
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "idx1", 0, 100, 0));
@@ -166,8 +166,8 @@ public class FilterOperatorResolutionTest {
         e1.set_id("is1");
         DbEntry e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
         e2.set_id("is2");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e1);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e2);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, e1);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, e2);
         final var adminCollEntry2 = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         cache.putAdminCollectionEntry(adminCollEntry2,
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "is1", 0, 100, 0));
@@ -184,13 +184,13 @@ public class FilterOperatorResolutionTest {
         assertEquals(5, result.getFirst().get("level").asJsonNumber().asInteger());
     }
 
-    private void addIndexedDoc(Cache cache, String id, JsonBaseElement value) {
+    private void addIndexedDoc(Cache cache, String id, JsonBaseElement value) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("status", value);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
     private void index(Cache cache, String... fields) throws InterruptedException {
@@ -338,14 +338,14 @@ public class FilterOperatorResolutionTest {
         assertTrue(ids.isEmpty());
     }
 
-    private void addTwoFieldDoc(Cache cache, String id, String status, int level) {
+    private void addTwoFieldDoc(Cache cache, String id, String status, int level) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.addProperty("status", status);
         obj.addProperty("level", level);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
     private static JsonObject objField(int n) {
@@ -408,21 +408,21 @@ public class FilterOperatorResolutionTest {
         assertEquals(Set.of("a1", "a2"), matched);
     }
 
-    private void addObjEntry(Cache cache, String id, int n) {
+    private void addObjEntry(Cache cache, String id, int n) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("data", objField(n));
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void addArrEntry(Cache cache, String id, String... items) {
+    private void addArrEntry(Cache cache, String id, String... items) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("data", arrField(items));
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 }

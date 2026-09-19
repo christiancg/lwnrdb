@@ -54,13 +54,13 @@ public class IndexConsistencyPipelineTest {
         TestUtils.standardTearDown();
     }
 
-    private void addDoc(String coll, String id, String field, JsonBaseElement value) {
+    private void addDoc(String coll, String id, String field, JsonBaseElement value) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add(field, value);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, coll, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, coll, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, coll, entry);
     }
 
     private void enableIndex(String coll, String field) throws InterruptedException {
@@ -70,7 +70,7 @@ public class IndexConsistencyPipelineTest {
 
     // Simulates a committed-but-not-yet-indexed write: in cache + marked pending, but not in the index
     // (because it is added after enableIndex).
-    private void addPendingDoc(String coll, String id, String field, JsonBaseElement value) {
+    private void addPendingDoc(String coll, String id, String field, JsonBaseElement value) throws IOException {
         addDoc(coll, id, field, value);
         pending.mark(TestGlobals.DB, coll, id);
     }
@@ -216,7 +216,7 @@ public class IndexConsistencyPipelineTest {
         main.addProperty("ref", 42);
         final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
         mainEntry.set_id("m1");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, mainEntry);
 
         addDoc(TestGlobals.JOIN_COLL, "j0", "refKey", new JsonNumber(7));
         enableIndex(TestGlobals.JOIN_COLL, "refKey");

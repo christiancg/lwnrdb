@@ -44,12 +44,12 @@ public class IndexHelperReadTest {
         return e;
     }
 
-    private void setupCollection(Cache cache, DbEntry... entries) {
+    private void setupCollection(Cache cache, DbEntry... entries) throws IOException {
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "x", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, pk);
         for (var entry : entries) {
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
     }
 
@@ -268,17 +268,15 @@ public class IndexHelperReadTest {
         withoutField.add(Globals.PK_FIELD, new JsonString("gone1"));
         final var goneEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, withoutField);
         goneEntry.set_id("gone1");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, goneEntry);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL,
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, goneEntry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL,
                 entryWith("scalarNow1", "data", new JsonString("no-longer-an-object")));
 
         final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "data");
-        assertNotNull(entries);
-        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
-                .collect(java.util.stream.Collectors.toSet());
-        assertTrue(allIds.contains("keep1"));
-        assertFalse(allIds.contains("gone1"));
-        assertFalse(allIds.contains("scalarNow1"));
+
+        assertNull(entries,
+                "a document that lost the field is no longer covered by the index, and an index that does not"
+                        + " cover every document answers nothing rather than a partial set");
     }
 
     @Test

@@ -107,7 +107,7 @@ public class CacheTest {
 
     @Test
     public void test_returns_whole_collection_from_cache_if_exists_and_complete()
-            throws NoSuchFieldException, IllegalAccessException {
+            throws NoSuchFieldException, IllegalAccessException, java.io.IOException {
         Cache cache = new Cache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -138,6 +138,9 @@ public class CacheTest {
         final var userCache = IocContainer.get(org.techhouse.cache.UserCache.class);
         final var collectionMap = TestUtils.getPrivateField(userCache, "collectionMap", typeCollMap);
         collectionMap.put(collectionIdentifier, wholeCollection);
+        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        pkIndex.add(new org.techhouse.data.PkIndexEntry(dbName, collName, "1", 0, 1, 0));
+        pkIndex.add(new org.techhouse.data.PkIndexEntry(dbName, collName, "2", 1, 1, 0));
 
         Map<String, DbEntry> result = cache.getWholeCollection(dbName, collName);
 
@@ -185,13 +188,15 @@ public class CacheTest {
     }
 
     @Test
-    public void test_get_whole_collection_returns_cached_when_pages_metadata_missing() {
+    public void test_get_whole_collection_returns_cached_when_pages_metadata_missing() throws IOException {
         Cache cache = new Cache();
         String dbName = "myDb";
         String collName = "myColl";
         DbEntry e = new DbEntry();
         e.set_id("1");
         cache.addEntryToCache(dbName, collName, e);
+        cache.getPkIndexAndLoadIfNecessary(dbName, collName)
+                .add(new org.techhouse.data.PkIndexEntry(dbName, collName, "1", 0, 1, 0));
 
         Map<String, DbEntry> result = cache.getWholeCollection(dbName, collName);
         assertEquals(1, result.size());
@@ -446,5 +451,26 @@ public class CacheTest {
         verify(adminMock).shiftPkPositionsAfterCompaction(Globals.ADMIN_PAGES_DB_NAME, "userDb_userColl", 2, 30, 9);
         verify(userMock).shiftPkPositionsAfterCompaction("userDb", "userColl", 1, 20, 7);
         verifyNoMoreInteractions(adminMock, userMock);
+    }
+
+    @Test
+    public void test_the_completeness_gate_rejects_a_superset() throws Exception {
+        final var cache = new Cache();
+        final var dbName = "supersetDb";
+        final var collName = "supersetColl";
+        final var live = new DbEntry();
+        live.set_id("live");
+        final var deleted = new DbEntry();
+        deleted.set_id("deleted");
+        cache.addEntryToCache(dbName, collName, live);
+        cache.addEntryToCache(dbName, collName, deleted);
+        cache.getPkIndexAndLoadIfNecessary(dbName, collName)
+                .add(new org.techhouse.data.PkIndexEntry(dbName, collName, "live", 0, 1, 0));
+
+        final var result = cache.getWholeCollection(dbName, collName);
+
+        assertFalse(result.containsKey("deleted"),
+                "a cached map holding more documents than the PK index is not complete, it is poisoned: serving"
+                        + " it returns a deleted document from every later fully locked scan");
     }
 }

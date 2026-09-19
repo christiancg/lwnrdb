@@ -17,6 +17,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -45,7 +46,7 @@ final class AdminSnapshotConformer {
         final var snapshotDbs = conformDatabases(snapshot);
         conformProcedures(snapshot, snapshotDbs);
         conformSchedules(snapshot, snapshotDbs);
-        final var snapshotColls = conformCollections(snapshot, snapshotDbs);
+        final var snapshotColls = conformCollections(snapshot, snapshotDbs, epochAtStart);
         if (adminEpoch.current() != epochAtStart) {
             logger.warning("Skipping the quarantine phase of the admin conform: a local admin op committed"
                     + " during it. The next round reconciles from the newer local state.");
@@ -96,8 +97,8 @@ final class AdminSnapshotConformer {
         return snapshotDbs;
     }
 
-    private HashSet<String> conformCollections(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs)
-            throws Exception {
+    private HashSet<String> conformCollections(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs,
+            long epochAtStart) throws Exception {
         final var snapshotColls = new HashSet<String>();
         for (final var collJson : snapshot.getCollections()) {
             final var coll = AdminCollEntry.fromJsonObject(collJson);
@@ -110,7 +111,7 @@ final class AdminSnapshotConformer {
             snapshotColls.add(coll.get_id());
             final var schemaEl = snapshot.getSchemas().get(coll.get_id());
             final var desiredSchema = schemaEl != null && schemaEl.isJsonObject() ? schemaEl.asJsonObject() : null;
-            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema, snapshot.getTriggers());
+            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema, snapshot.getTriggers(), epochAtStart);
         }
         return snapshotColls;
     }
@@ -137,7 +138,7 @@ final class AdminSnapshotConformer {
                         continue;
                     }
                     final var definition = ProcedureDefinition.fromJsonObject(entry.getValue());
-                    if (!definition.equals(cache.loadProcedureUncached(dbName, parts[1]))) {
+                    if (!definition.equals(localProcedure(dbName, parts[1]))) {
                         fs.writeProcedure(dbName, parts[1], eJson.toJson(entry.getValue()));
                         cache.removeProcedure(dbName, parts[1]);
                         compiledProcedures.invalidateProcedure(dbName, parts[1]);
@@ -146,6 +147,22 @@ final class AdminSnapshotConformer {
             } finally {
                 locks.release(dbName, Globals.PROCEDURES_FOLDER);
             }
+        }
+    }
+
+    private ProcedureDefinition localProcedure(String dbName, String name) {
+        try {
+            return cache.loadProcedureUncached(dbName, name);
+        } catch (MetadataReadException e) {
+            return null;
+        }
+    }
+
+    private ScheduleDefinition localSchedule(String dbName, String name) {
+        try {
+            return cache.loadScheduleUncached(dbName, name);
+        } catch (MetadataReadException e) {
+            return null;
         }
     }
 
@@ -172,7 +189,7 @@ final class AdminSnapshotConformer {
                         continue;
                     }
                     final var definition = ScheduleDefinition.fromJsonObject(entry.getValue());
-                    if (!definition.equals(cache.loadScheduleUncached(dbName, parts[1]))) {
+                    if (!definition.equals(localSchedule(dbName, parts[1]))) {
                         fs.writeSchedule(dbName, parts[1], eJson.toJson(entry.getValue()));
                         cache.removeSchedule(dbName, parts[1]);
                         changed = true;
@@ -206,9 +223,14 @@ final class AdminSnapshotConformer {
     }
 
     private void conformCollection(String dbName, String collName, java.util.Set<String> desiredIndexes,
-            JsonObject desiredSchema, JsonObject snapshotTriggers) throws Exception {
+            JsonObject desiredSchema, JsonObject snapshotTriggers, long epochAtStart) throws Exception {
         locks.lock(dbName, collName);
         try {
+            if (adminEpoch.current() != epochAtStart) {
+                logger.warning("Skipping the conform of " + dbName + "|" + collName + ": a local admin op committed"
+                        + " during it. The next round reconciles from the newer local state.");
+                return;
+            }
             // Same reason as the database folder above: idempotent, and run on every sweep so a collection
             // whose directory went missing under a live admin entry is repaired rather than left unwritable.
             fs.createCollectionFile(dbName, collName);

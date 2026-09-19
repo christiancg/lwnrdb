@@ -67,7 +67,7 @@ public class AggregationCountStepTest {
         assertEquals(0, countResult.get("count").asJsonNumber().asInteger());
     }
 
-    private void insertEntry(Cache cache, String id, String fieldName, Object fieldValue) {
+    private void insertEntry(Cache cache, String id, String fieldName, Object fieldValue) throws IOException {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         if (fieldValue instanceof String s)
@@ -76,7 +76,7 @@ public class AggregationCountStepTest {
             obj.addProperty(fieldName, n);
         DbEntry entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
     }
 
@@ -112,13 +112,13 @@ public class AggregationCountStepTest {
         assertEquals(3, result.getFirst().get("count").asJsonNumber().asInteger());
     }
 
-    private void addDoc(Cache cache, String id, JsonBaseElement value) {
+    private void addDoc(Cache cache, String id, JsonBaseElement value) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("status", value);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
     private void enableIndex(Cache cache) throws InterruptedException {
@@ -157,14 +157,15 @@ public class AggregationCountStepTest {
         return result.getFirst().get("count").asJsonNumber().asInteger();
     }
 
-    private void addDocWithFields(Cache cache, String id, JsonBaseElement v1, String f2, JsonBaseElement v2) {
+    private void addDocWithFields(Cache cache, String id, JsonBaseElement v1, String f2, JsonBaseElement v2)
+            throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("status", v1);
         obj.add(f2, v2);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
     @Test

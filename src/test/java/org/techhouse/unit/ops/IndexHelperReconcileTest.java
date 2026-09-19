@@ -46,12 +46,12 @@ public class IndexHelperReconcileTest {
         return e;
     }
 
-    private void setupCollection(Cache cache, DbEntry... entries) {
+    private void setupCollection(Cache cache, DbEntry... entries) throws IOException {
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "x", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, pk);
         for (var entry : entries) {
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
     }
 
@@ -137,11 +137,10 @@ public class IndexHelperReconcileTest {
                 "missing1");
 
         final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "status");
-        assertNotNull(entries);
-        final var allIds = entries.stream().flatMap(e -> e.getIds().stream())
-                .collect(java.util.stream.Collectors.toSet());
-        assertFalse(allIds.contains("missing1"));
-        assertTrue(allIds.contains("has1"));
+
+        assertNull(entries,
+                "the pending document has no value for the field, so the index cannot cover every document and"
+                        + " must fall back to a full scan rather than answer without it");
     }
 
     // reconcilePending adds a second pending null-valued document to the null entry created by the
@@ -155,8 +154,8 @@ public class IndexHelperReconcileTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "status");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("status"));
 
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("null1", "status", JsonNull.INSTANCE));
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("null2", "status", JsonNull.INSTANCE));
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entryWith("null1", "status", JsonNull.INSTANCE));
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entryWith("null2", "status", JsonNull.INSTANCE));
         final var pendingWrites = IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class);
         pendingWrites.mark(TestGlobals.DB, TestGlobals.COLL, "null1");
         pendingWrites.mark(TestGlobals.DB, TestGlobals.COLL, "null2");
@@ -175,7 +174,7 @@ public class IndexHelperReconcileTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "flag");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("flag"));
 
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entryWith("b2", "flag", new JsonBoolean(false)));
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entryWith("b2", "flag", new JsonBoolean(false)));
         IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL, "b2");
 
         final var entries = IndexHelper.getIndexEntriesForField(TestGlobals.DB, TestGlobals.COLL, "flag");
@@ -194,7 +193,7 @@ public class IndexHelperReconcileTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "startTime");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("startTime"));
 
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL,
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL,
                 entryWith("ct2", "startTime", new JsonTime("#time(09:00:00)")));
         IocContainer.get(org.techhouse.bckg_ops.PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL, "ct2");
 

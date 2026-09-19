@@ -304,7 +304,8 @@ public class AdminCache {
         } catch (Exception e) {
             logger.warning(
                     "Failed to load procedure " + Cache.getCollectionIdentifier(dbName, name) + ": " + e.getMessage());
-            return null;
+            throw new MetadataReadException(
+                    "Failed to read the procedure " + Cache.getCollectionIdentifier(dbName, name), e);
         }
     }
 
@@ -334,7 +335,8 @@ public class AdminCache {
         } catch (Exception e) {
             logger.warning(
                     "Failed to load schedule " + Cache.getCollectionIdentifier(dbName, name) + ": " + e.getMessage());
-            return null;
+            throw new MetadataReadException(
+                    "Failed to read the schedule " + Cache.getCollectionIdentifier(dbName, name), e);
         }
     }
 

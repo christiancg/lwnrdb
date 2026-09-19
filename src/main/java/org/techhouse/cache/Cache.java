@@ -112,7 +112,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         // Gate completeness on the synchronous PK index size, never on the admin page entry counts:
         // those lag behind committed writes and would accept an incomplete cached map.
         if (wholeCollection != null && !wholeCollection.isEmpty()
-                && wholeCollection.size() >= pkIndexSize(dbName, collName)) {
+                && wholeCollection.size() == pkIndexSize(dbName, collName)) {
             recordScanned(wholeCollection.size());
             return wholeCollection;
         }

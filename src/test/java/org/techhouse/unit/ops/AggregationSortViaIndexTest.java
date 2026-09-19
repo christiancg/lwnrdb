@@ -42,13 +42,13 @@ public class AggregationSortViaIndexTest {
         TestUtils.standardTearDown();
     }
 
-    private void insert(String id, double value) {
+    private void insert(String id, double value) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.addProperty(FIELD, value);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
     private void enableIndex() throws InterruptedException {
@@ -63,7 +63,7 @@ public class AggregationSortViaIndexTest {
                 .map(o -> o.get(FIELD).asJsonNumber().getValue().doubleValue()).toList();
     }
 
-    private void seed(int count) throws InterruptedException {
+    private void seed(int count) throws InterruptedException, IOException {
         for (var i = 0; i < count; i++) {
             insert(String.format("d%04d", i), (i * 37) % count);
         }
@@ -199,7 +199,7 @@ public class AggregationSortViaIndexTest {
     @Test
     public void test_index_sort_drops_ids_whose_document_is_gone() throws IOException, InterruptedException {
         seed(300);
-        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "d0005");
+        TestUtils.uncacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, "d0005");
 
         final var sorted = run(new SortAggregationStep(FIELD, true));
 
@@ -251,7 +251,7 @@ public class AggregationSortViaIndexTest {
             obj.add("tags", tags);
             final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
             entry.set_id("h" + i);
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "tags");
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("tags"));

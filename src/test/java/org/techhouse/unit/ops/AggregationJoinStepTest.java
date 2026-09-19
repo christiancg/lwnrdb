@@ -56,7 +56,7 @@ public class AggregationJoinStepTest {
         mainDoc.addProperty("ref", 42);
         DbEntry mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, mainDoc);
         mainEntry.set_id("main1");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, mainEntry);
 
         JsonObject joinDoc = new JsonObject();
         joinDoc.add(Globals.PK_FIELD, new JsonString("join1"));
@@ -64,7 +64,7 @@ public class AggregationJoinStepTest {
         joinDoc.addProperty("label", "matched");
         DbEntry joinEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.JOIN_COLL, joinDoc);
         joinEntry.set_id("join1");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.JOIN_COLL, joinEntry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.JOIN_COLL, joinEntry);
 
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")));
@@ -84,7 +84,7 @@ public class AggregationJoinStepTest {
         noField.addProperty("other", "value");
         DbEntry nfEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, noField);
         nfEntry.set_id("nf1");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, nfEntry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, nfEntry);
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
 
         AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -96,14 +96,14 @@ public class AggregationJoinStepTest {
         assertTrue(result.stream().allMatch(r -> !r.has("joined") || r.get("joined").asJsonArray().isEmpty()));
     }
 
-    private void addJoinDoc(Cache cache, String id, int refKey, String label) {
+    private void addJoinDoc(Cache cache, String id, int refKey, String label) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.addProperty("refKey", refKey);
         obj.addProperty("label", label);
         final var e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.JOIN_COLL, obj);
         e.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.JOIN_COLL, e);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.JOIN_COLL, e);
     }
 
     @Test
@@ -114,7 +114,7 @@ public class AggregationJoinStepTest {
         main.addProperty("ref", 42);
         final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
         mainEntry.set_id("m1");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, mainEntry);
 
         addJoinDoc(cache, "j1", 42, "matched");
         addJoinDoc(cache, "j2", 7, "nope");
@@ -140,7 +140,7 @@ public class AggregationJoinStepTest {
         main.addProperty("ref", 99);
         final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
         mainEntry.set_id("m1");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, mainEntry);
 
         addJoinDoc(cache, "j1", 1, "no-match");
         addJoinDoc(cache, "j2", 2, "also-no");
@@ -165,7 +165,7 @@ public class AggregationJoinStepTest {
         main.addProperty("ref", 5);
         final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
         mainEntry.set_id("m1");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, mainEntry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, mainEntry);
 
         addJoinDoc(cache, "j1", 5, "match");
         addJoinDoc(cache, "j2", 9, "no-match");

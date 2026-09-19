@@ -58,13 +58,13 @@ public class IndexConsistencyTest {
         TestUtils.standardTearDown();
     }
 
-    private void addDoc(String id, JsonBaseElement value) {
+    private void addDoc(String id, JsonBaseElement value) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add(STATUS, value);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
     private void enableIndex() throws InterruptedException {
@@ -87,7 +87,7 @@ public class IndexConsistencyTest {
         obj.addProperty("status", "active");
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id("2");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         pending.mark(TestGlobals.DB, TestGlobals.COLL, "2");
 
         runEntityEvent(entry);
@@ -128,7 +128,7 @@ public class IndexConsistencyTest {
     public void test_update_indexes_removes_when_doc_absent() throws IOException, InterruptedException {
         addDoc("1", new JsonString("active"));
         enableIndex();
-        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "1");
+        TestUtils.uncacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, "1");
 
         IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "1");
 
@@ -153,7 +153,7 @@ public class IndexConsistencyTest {
         addDoc("p", new JsonString("present"));
         addDoc("g", new JsonString("gone"));
         enableIndex();
-        cache.evictEntry(TestGlobals.DB, TestGlobals.COLL, "g");
+        TestUtils.uncacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, "g");
 
         IndexHelper.bulkUpdateIndexes(TestGlobals.DB, TestGlobals.COLL, List.of("p", "g"));
 

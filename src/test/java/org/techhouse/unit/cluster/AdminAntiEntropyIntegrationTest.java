@@ -148,4 +148,39 @@ public class AdminAntiEntropyIntegrationTest {
                 "a CREATE_COLLECTION that commits during a conform must not be quarantined by a snapshot taken"
                         + " before it, or the client was told it succeeded and it silently disappears");
     }
+
+    @Test
+    public void test_a_drop_during_a_conform_is_not_reregistered() throws Exception {
+        final var service = IocContainer.get(AdminAntiEntropyService.class);
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, "droppedcoll"));
+        final var snapshot = service.buildSnapshot();
+        AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, "droppedcoll");
+
+        final var locks = IocContainer.get(ResourceLocking.class);
+        final var failure = new AtomicReference<Throwable>();
+        final var done = new CountDownLatch(1);
+        locks.lock(TestGlobals.DB, Globals.PROCEDURES_FOLDER);
+        final var worker = new Thread(() -> {
+            try {
+                conform(service, snapshot);
+            } catch (Throwable t) {
+                failure.set(t);
+            } finally {
+                done.countDown();
+            }
+        }, "conformer");
+        worker.start();
+        try {
+            assertFalse(done.await(300, TimeUnit.MILLISECONDS), "the conform should be parked in the procedures phase");
+            adminEpoch.bump();
+        } finally {
+            locks.release(TestGlobals.DB, Globals.PROCEDURES_FOLDER);
+        }
+        assertTrue(done.await(10, TimeUnit.SECONDS));
+        assertNull(failure.get());
+
+        assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, "droppedcoll"),
+                "a DROP_COLLECTION that commits during a conform must not be re-registered from a snapshot taken"
+                        + " before it, or the client was told it succeeded and it silently comes back");
+    }
 }
