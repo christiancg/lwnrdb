@@ -30,9 +30,8 @@ public final class ListenOperationHelper {
         return OperationLocks.withReadLocks(false, AggregationOperationHelper.aggregateLockSet(aggReq),
                 OperationType.LISTEN, ErrorCode.ERROR_LISTEN, () -> {
                     final var results = AggregationOperationHelper.processAggregation(aggReq);
-                    final var initialHash = ResultHasher.hash(results);
-                    // Re-runs use dirty reads: timeliness beats strict consistency here, and the per-file
-                    // locks still ensure valid data.
+                    final var ordered = ResultHasher.ordersResults(listenRequest.getAggregationSteps());
+                    final var initialHash = ResultHasher.hash(results, ordered);
                     final var dirtyReq = new AggregateRequest(dbName, collName);
                     dirtyReq.setAggregationSteps(listenRequest.getAggregationSteps());
                     dirtyReq.setDirtyRead(true);

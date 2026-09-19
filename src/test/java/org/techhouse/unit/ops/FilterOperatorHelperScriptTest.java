@@ -141,7 +141,7 @@ public class FilterOperatorHelperScriptTest {
         }
     }
 
-    private void seedCollection() {
+    private void seedCollection() throws IOException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         var position = 0;
@@ -152,7 +152,7 @@ public class FilterOperatorHelperScriptTest {
             entry.setCollectionName(TestGlobals.COLL);
             entry.setData(document);
             entry.set_id(id);
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
             cache.putAdminCollectionEntry(adminCollEntry,
                     new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, id, position, 100, 0));
             position += 100;

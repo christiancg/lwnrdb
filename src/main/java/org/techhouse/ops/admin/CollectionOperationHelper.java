@@ -25,15 +25,17 @@ public final class CollectionOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private static final org.techhouse.cluster.HybridClock hybridClock = IocContainer
+            .get(org.techhouse.cluster.HybridClock.class);
 
     private CollectionOperationHelper() {
     }
 
     public static OperationResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
-        return OperationResponse.respondOrError(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION,
-                () -> {
-                    final var dbName = createCollectionRequest.getDatabaseName();
-                    final var collName = createCollectionRequest.getCollectionName();
+        final var dbName = createCollectionRequest.getDatabaseName();
+        final var collName = createCollectionRequest.getCollectionName();
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_COLLECTION,
+                ErrorCode.ERROR_CREATING_COLLECTION, () -> {
                     // A node can hold the database's admin entry without its folder (a replicated
                     // CREATE_DATABASE returns early), and createCollectionFile only mkdirs one level.
                     if (cache.getAdminDbEntry(dbName) != null) {
@@ -44,8 +46,13 @@ public final class CollectionOperationHelper {
                         // Registration must be synchronous: a lagging background task lets CREATE_INDEX run
                         // first, find no admin PK entry and silently skip registering the index.
                         if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+                            if (createCollectionRequest.getIncarnation() == 0) {
+                                createCollectionRequest.setIncarnation(hybridClock.next());
+                            }
                             AdminOperationHelper.createPageCollections(dbName, collName);
-                            AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
+                            final var entry = new AdminCollEntry(dbName, collName);
+                            entry.setIncarnation(createCollectionRequest.getIncarnation());
+                            AdminOperationHelper.saveCollectionEntry(entry);
                         }
                         return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
                     }

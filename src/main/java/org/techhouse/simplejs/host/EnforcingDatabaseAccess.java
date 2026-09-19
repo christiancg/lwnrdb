@@ -30,6 +30,7 @@ import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
+import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
@@ -208,7 +209,11 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
             throw jsError("No transaction is active on this script");
         }
         try {
-            requireOk(dispatch(request));
+            final var response = dispatch(request);
+            if (response.getStatus() != OperationStatus.OK
+                    && !ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode())) {
+                throw jsError(response.getMessage());
+            }
         } finally {
             clearSession();
         }
@@ -271,6 +276,10 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         final var user = cache.getAdminUserEntry(username);
         if (user == null) {
             throw jsError("User '" + username + "' not found");
+        }
+        final var validation = RequestValidator.validate(request);
+        if (!validation.isValid()) {
+            throw jsError(validation.getErrorMessage());
         }
         if (!isTransactionControl(request)) {
             final var authorization = AuthorizationChecker.check(request, user);

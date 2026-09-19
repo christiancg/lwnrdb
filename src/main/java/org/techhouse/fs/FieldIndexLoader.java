@@ -59,7 +59,8 @@ final class FieldIndexLoader {
             } catch (Exception e) {
                 dropped = true;
                 logger.warning("Removing malformed " + label + " index entry in " + indexFile.getName() + ": "
-                        + e.getMessage());
+                        + e.getMessage() + ". Dropped line was: " + line
+                        + ". Run REINDEX on this collection to rebuild it from the stored documents.");
             }
         }
         if (dropped) {

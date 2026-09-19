@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.config.Configuration;
@@ -20,9 +21,12 @@ import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
+import org.techhouse.log.Logger;
 
 public class FileSystem {
+    private final Logger logger = Logger.logFor(FileSystem.class);
     private final FilePaths paths = new FilePaths();
+    private final DirtyIndexMarkers dirtyIndexMarkers = new DirtyIndexMarkers(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
     private final DocumentPageStore documentPageStore = new DocumentPageStore(paths);
@@ -122,6 +126,17 @@ public class FileSystem {
         }
     }
 
+    public boolean quarantineCollectionFiles(String dbName, String collectionName, long incarnation) {
+        final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
+        final var collectionFolder = new File(collectionFile.getParent());
+        if (!collectionFolder.exists()) {
+            return false;
+        }
+        final var target = new File(collectionFolder.getParent(),
+                collectionName + ".quarantined-" + incarnation + "-" + System.currentTimeMillis());
+        return collectionFolder.renameTo(target);
+    }
+
     public boolean deleteCollectionFiles(String dbName, String collectionName) {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
@@ -194,6 +209,18 @@ public class FileSystem {
         return MetadataFileStore.delete(paths.triggersFile(dbName, collName));
     }
 
+    public void markIndexesDirty(String dbName, String collName) {
+        dirtyIndexMarkers.mark(dbName, collName);
+    }
+
+    public void clearIndexesDirty(String dbName, String collName) {
+        dirtyIndexMarkers.clear(dbName, collName);
+    }
+
+    public List<String> listDirtyIndexCollections() {
+        return dirtyIndexMarkers.listMarked();
+    }
+
     public void appendTombstone(String dbName, String collName, String id, long version) throws IOException {
         TombstoneStore.append(paths.tombstoneFile(dbName, collName), id, version);
     }
@@ -220,9 +247,14 @@ public class FileSystem {
 
     public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName,
             final List<T> entries) throws IOException {
+        return bulkInsertIntoCollection(dbName, collName, entries, DbEntry::getPage);
+    }
+
+    public <T extends DbEntry> List<IndexedDbEntry> bulkInsertIntoCollection(final String dbName, final String collName,
+            final List<T> entries, final Function<? super T, Long> storagePageResolver) throws IOException {
         final var indexEntries = new ArrayList<IndexedDbEntry>();
         final var pkEntriesToIndex = new ArrayList<PkIndexEntry>();
-        final var entrySet = entries.stream().collect(Collectors.groupingBy(DbEntry::getPage)).entrySet();
+        final var entrySet = entries.stream().collect(Collectors.groupingBy(storagePageResolver)).entrySet();
         for (var groupedEntry : entrySet) {
             final var page = groupedEntry.getKey();
             final var pageEntries = groupedEntry.getValue();
@@ -264,17 +296,32 @@ public class FileSystem {
         final var file = paths.collectionPage(dbName, collName, page);
         final var lock = FileLocks.lockFor(file).writeLock();
         lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE)) {
+        try {
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
-            final var bytes = strData.getBytes(StandardCharsets.UTF_8);
-            final var length = bytes.length;
-            var totalFileLength = file.length();
-            writer.append(strData);
-            final var entryId = entry.get_id();
-            return pkIndexStore.indexNewPKValue(entry.getDatabaseName(), entry.getCollectionName(), entryId,
-                    totalFileLength, length, page, entry.getVersion());
+            final var length = strData.getBytes(StandardCharsets.UTF_8).length;
+            final var totalFileLength = file.length();
+            try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
+                    Globals.BUFFER_SIZE)) {
+                writer.append(strData);
+            }
+            try {
+                return pkIndexStore.indexNewPKValue(dbName, collName, entry.get_id(), totalFileLength, length, page,
+                        entry.getVersion());
+            } catch (IOException e) {
+                truncateTo(file, totalFileLength);
+                throw e;
+            }
         } finally {
             lock.unlock();
+        }
+    }
+
+    private void truncateTo(File file, long length) {
+        try (var channel = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
+            channel.setLength(length);
+        } catch (IOException e) {
+            logger.error("Could not roll back the page append for " + file.getAbsolutePath()
+                    + " after its index write failed; run REINDEX on this collection", e);
         }
     }
 
@@ -433,6 +480,10 @@ public class FileSystem {
 
     public Stream<DbEntry> streamEntries(String dbName, String collName) throws IOException {
         return documentPageStore.streamEntries(dbName, collName);
+    }
+
+    public long pageFileCount(String dbName, String collName) throws IOException {
+        return documentPageStore.pageFileCount(dbName, collName);
     }
 
 }

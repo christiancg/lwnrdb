@@ -89,9 +89,6 @@ public final class DatabaseOperationHelper {
             final var result = fs.deleteDatabase(dbName);
             if (result) {
                 cache.evictDatabase(dbName);
-                for (final var collName : lockedColls) {
-                    locks.removeLock(dbName, collName);
-                }
                 // Synchronous, mirroring creation: a background delete lets an immediate re-CREATE hit the
                 // duplicate guard and wrongly return DATABASE_ALREADY_EXISTS.
                 AdminOperationHelper.deleteDatabaseEntry(dbName);
@@ -109,6 +106,9 @@ public final class DatabaseOperationHelper {
         } finally {
             for (final var collName : lockedColls) {
                 locks.release(dbName, collName);
+            }
+            for (final var collName : lockedColls) {
+                locks.removeLock(dbName, collName);
             }
         }
     }

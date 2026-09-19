@@ -128,6 +128,6 @@ public final class TriggerRunRecovery {
         }
         return new TriggerEvent(first.getEventType(), first.getDbName(), first.getCollName(), first.getTriggerName(),
                 first.getProcedureName(), first.isBatchMode(), entries, first.getActingUser(), first.getDepth(),
-                first.getRunId());
+                first.getRunId(), Math.max(1, first.getAttempts()));
     }
 }

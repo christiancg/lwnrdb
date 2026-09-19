@@ -16,11 +16,13 @@ import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.ScriptRunHistory;
 
 public class EventProcessorHelper {
+    private static final Logger logger = Logger.logFor(EventProcessorHelper.class);
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
@@ -40,10 +42,24 @@ public class EventProcessorHelper {
             }
         }
         for (final var group : entityGroups.values()) {
-            processEntityGroup(group);
+            try {
+                processEntityGroup(group);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (Exception e) {
+                logger.warning("Failed to process a background entity group: " + e.getMessage());
+            }
         }
         for (final var event : others) {
-            processEvent(event);
+            try {
+                processEvent(event);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            } catch (Exception e) {
+                logger.warning("Failed to process a background event: " + e.getMessage());
+            }
         }
     }
 
@@ -54,11 +70,10 @@ public class EventProcessorHelper {
         }
         final var dbName = group.getFirst().getDbName();
         final var collName = group.getFirst().getCollName();
-        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
-            clearPendingEvents(group);
-            return;
-        }
         try {
+            if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+                return;
+            }
             final var ids = new LinkedHashSet<String>();
             for (final var event : group) {
                 ids.add(event.getDbEntry().get_id());

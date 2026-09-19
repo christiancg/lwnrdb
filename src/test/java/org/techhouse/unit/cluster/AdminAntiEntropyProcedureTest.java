@@ -19,6 +19,7 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -204,5 +205,20 @@ public class AdminAntiEntropyProcedureTest {
                 "building a snapshot must not warm the procedure cache");
         assertEquals(before.triggerEntries(), after.triggerEntries(),
                 "building a snapshot must not warm the trigger cache");
+    }
+
+    @Test
+    public void test_a_conformed_procedure_source_invalidates_the_compiled_cache() throws Exception {
+        final var compiled = IocContainer.get(CompiledProcedureCache.class);
+        compiled.invalidateDatabase(TestGlobals.DB);
+        writeProcedure("drift", 1L, "return 'peer';");
+        final var snapshot = service.buildSnapshot();
+        writeProcedure("drift", 1L, "return 'local';");
+        final var stale = compiled.get(TestGlobals.DB, "drift", 1L, "return 'local';");
+
+        conform(service, snapshot);
+
+        assertNotSame(stale, compiled.get(TestGlobals.DB, "drift", 1L, "return 'peer';"),
+                "a snapshot that replaces the source at the same version must drop the compiled program too");
     }
 }

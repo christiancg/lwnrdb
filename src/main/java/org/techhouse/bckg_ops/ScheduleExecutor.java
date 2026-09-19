@@ -29,21 +29,25 @@ public class ScheduleExecutor {
     private final LongAdder skipped = new LongAdder();
     private final LongAdder dropped = new LongAdder();
     private final AtomicInteger inFlight = new AtomicInteger();
+    private final AtomicInteger parked = new AtomicInteger();
+    private final AtomicInteger workerCount = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
     private final Set<String> running = ConcurrentHashMap.newKeySet();
     private volatile boolean draining;
-    private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
-    private ScheduledExecutorService scheduler;
-    private Consumer<ScheduleRegistry.Entry> dispatcher;
+    private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private volatile ScheduledExecutorService scheduler;
+    private volatile Consumer<ScheduleRegistry.Entry> dispatcher;
 
     public ScheduleExecutor() {
         this.queue = new LinkedBlockingQueue<>(Math.max(1, Configuration.getInstance().getScheduleQueueSize()));
     }
 
-    public void start(Consumer<ScheduleRegistry.Entry> scheduleDispatcher) {
+    public synchronized void start(Consumer<ScheduleRegistry.Entry> scheduleDispatcher) {
         draining = false;
         this.dispatcher = scheduleDispatcher;
         final var threadCount = Math.max(1, configuration.getScheduleThreads());
+        workerCount.set(threadCount);
+        parked.set(0);
         for (var i = 0; i < threadCount; i++) {
             pool.execute(this::runWorker);
         }
@@ -81,14 +85,15 @@ public class ScheduleExecutor {
     public void tick(long now) {
         for (final var entry : registry.entries()) {
             final var definition = entry.getDefinition();
-            if (!isOwner(entry)) {
-                continue;
-            }
             if (!definition.isEnabled()) {
                 continue;
             }
             final var nextRunAt = entry.getNextRunAt();
             if (nextRunAt <= 0 || now < nextRunAt) {
+                continue;
+            }
+            if (!isOwner(entry)) {
+                entry.setNextRunAt(registry.nextRunAfter(entry, now));
                 continue;
             }
             entry.setNextRunAt(registry.nextRunAfter(entry, now));
@@ -123,13 +128,25 @@ public class ScheduleExecutor {
     }
 
     private void runWorker() {
+        try {
+            workLoop();
+        } finally {
+            workerCount.updateAndGet(live -> Math.max(0, live - 1));
+            idleSignal.signal();
+        }
+    }
+
+    private void workLoop() {
         while (!Thread.currentThread().isInterrupted()) {
             final ScheduleRegistry.Entry entry;
+            parked.incrementAndGet();
             try {
                 entry = queue.take();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
+            } finally {
+                parked.decrementAndGet();
             }
             inFlight.incrementAndGet();
             try {
@@ -149,7 +166,7 @@ public class ScheduleExecutor {
     public boolean drain(long timeoutMillis) {
         draining = true;
         try {
-            if (idleSignal.awaitIdle(this::isIdle, timeoutMillis)) {
+            if (idleSignal.awaitIdle(this::isIdle, workerCount.get() > 0 ? timeoutMillis : 0L)) {
                 stop();
                 return true;
             }
@@ -163,14 +180,15 @@ public class ScheduleExecutor {
     }
 
     private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0;
+        return queue.isEmpty() && inFlight.get() == 0 && parked.get() >= workerCount.get();
     }
 
     public int pending() {
         return queue.size() + inFlight.get();
     }
 
-    public void stop() {
+    public synchronized void stop() {
+        workerCount.set(0);
         draining = true;
         if (scheduler != null) {
             scheduler.shutdownNow();

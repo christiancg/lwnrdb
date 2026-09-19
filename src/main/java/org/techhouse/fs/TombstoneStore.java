@@ -67,7 +67,7 @@ final class TombstoneStore {
     }
 
     private static void forEachEntry(File file, ObjLongConsumer<String> consumer) throws IOException {
-        for (final var line : Files.readAllLines(file.toPath(), StandardCharsets.UTF_8)) {
+        for (final var line : FileLocks.decodeLines(Files.readAllBytes(file.toPath()))) {
             final var cleaned = line.trim();
             final var sep = cleaned.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
             if (sep <= 0) {

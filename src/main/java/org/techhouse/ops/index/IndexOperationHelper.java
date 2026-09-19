@@ -29,6 +29,10 @@ public final class IndexOperationHelper {
         final var fieldName = createIndexRequest.getFieldName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_INDEX,
                 ErrorCode.ERROR_CREATING_INDEX, () -> {
+                    if (!cache.hasNoIndex(dbName, collName, fieldName)) {
+                        return OperationResponse.ok(OperationType.CREATE_INDEX,
+                                "Index already exists for field: " + fieldName);
+                    }
                     IndexHelper.createIndex(dbName, collName, fieldName);
                     AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);
                     return OperationResponse.ok(OperationType.CREATE_INDEX, "Created index for field: " + fieldName);

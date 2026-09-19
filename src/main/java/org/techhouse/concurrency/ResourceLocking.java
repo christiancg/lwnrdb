@@ -25,11 +25,18 @@ public class ResourceLocking {
         lockFor(lockName).writeLock().lockInterruptibly();
     }
 
-    public void releaseWrite(String lockName) {
+    public boolean holdsCollectionLock(String dbName, String collName) {
+        final var lock = locks.get(Cache.getCollectionIdentifier(dbName, collName));
+        return lock != null && (lock.getReadHoldCount() > 0 || lock.isWriteLockedByCurrentThread());
+    }
+
+    public boolean releaseWrite(String lockName) {
         final var lock = locks.get(lockName);
         if (lock != null && lock.isWriteLockedByCurrentThread()) {
             lock.writeLock().unlock();
+            return true;
         }
+        return false;
     }
 
     public void lockReadByName(String lockName) throws InterruptedException {
@@ -51,8 +58,8 @@ public class ResourceLocking {
         releaseWrite(dbName, collName);
     }
 
-    public void releaseWrite(String dbName, String collName) {
-        releaseWrite(Cache.getCollectionIdentifier(dbName, collName));
+    public boolean releaseWrite(String dbName, String collName) {
+        return releaseWrite(Cache.getCollectionIdentifier(dbName, collName));
     }
 
     public boolean tryLockWrite(String dbName, String collName) {
@@ -144,12 +151,16 @@ public class ResourceLocking {
 
     public void removeLock(String dbName, String collName) {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        locks.remove(collIdentifier);
+        locks.computeIfPresent(collIdentifier, (_, lock) -> isEvictable(lock) ? null : lock);
         final var indexPrefix = collIdentifier + Globals.COLL_IDENTIFIER_SEPARATOR;
-        locks.entrySet().removeIf(entry -> entry.getKey().startsWith(indexPrefix) && isUnheld(entry.getValue()));
+        for (final var key : List.copyOf(locks.keySet())) {
+            if (key.startsWith(indexPrefix)) {
+                locks.computeIfPresent(key, (_, lock) -> isEvictable(lock) ? null : lock);
+            }
+        }
     }
 
-    private static boolean isUnheld(ReentrantReadWriteLock lock) {
-        return !lock.isWriteLocked() && lock.getReadLockCount() == 0;
+    private static boolean isEvictable(ReentrantReadWriteLock lock) {
+        return !lock.isWriteLocked() && lock.getReadLockCount() == 0 && !lock.hasQueuedThreads();
     }
 }

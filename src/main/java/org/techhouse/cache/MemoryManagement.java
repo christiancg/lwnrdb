@@ -27,7 +27,7 @@ public class MemoryManagement {
     private final BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private final UsageTracker usageTracker = IocContainer.get(UsageTracker.class);
     private final AtomicBoolean sweepRunning = new AtomicBoolean(false);
-    private ScheduledExecutorService scheduler;
+    private volatile ScheduledExecutorService scheduler;
 
     public static String buildKey(AccessKind kind, String dbName, String collName, String indexKey) {
         return UsageTracker.buildKey(kind, dbName, collName, indexKey);

@@ -478,18 +478,39 @@ def test_formation_and_quorum_writes():
     section("Cluster formation + synchronous quorum writes")
 
     p0 = nodes[0].client_port
-    check_status("CREATE_DATABASE on the seed node commits under quorum", create_db(p0, DB), "OK")
-    check_status("CREATE_COLLECTION commits under quorum", create_coll(p0, DB, "docs"), "OK")
-    r = save(p0, DB, "docs", {"_id": "q1", "v": 1})
-    check_status("SAVE reaches the replication quorum (not 503-2/503-3)", r, "OK")
+    check_status("CREATE_DATABASE on the seed node commits under quorum",
+                 op_with_retry(lambda: create_db(p0, DB)), "OK")
+    check_status("CREATE_COLLECTION commits under quorum",
+                 op_with_retry(lambda: create_coll(p0, DB, "docs")), "OK")
+
+    check_status("SAVE reaches the replication quorum (not 503-2/503-3)",
+                 op_with_retry(lambda: save(p0, DB, "docs", {"_id": "q1", "v": 1})), "OK")
+
+
+# Refusals a settling cluster is entitled to give: the admin-coordinator ring slot is still moving
+# (503-2/503-5/503-9), or a write reached the collection's owner before the CREATE_COLLECTION did
+# (503-10). Retry those, and only those — anything else must fail the assertion immediately, since
+# an unreplicated DDL acknowledged as OK is exactly the divergence this suite exists to catch.
+RETRYABLE_CODES = {"503-2", "503-5", "503-9", "503-10"}
+
+
+def op_with_retry(fn, timeout_s=30.0, interval_s=1.0):
+    deadline = time.time() + timeout_s
+    response = fn()
+    while response.get("errorCode") in RETRYABLE_CODES and time.time() < deadline:
+        time.sleep(interval_s)
+        response = fn()
+    return response
 
 
 def test_ddl_replication():
     section("DDL replication — CREATE/DROP propagate to every node")
 
     # Create a database + collection on node-1; it must appear on all nodes.
-    check_status("CREATE_DATABASE via node-1", create_db(nodes[1].client_port, "ddl_repl_db"), "OK")
-    check_status("CREATE_COLLECTION via node-1", create_coll(nodes[1].client_port, "ddl_repl_db", "widgets"), "OK")
+    check_status("CREATE_DATABASE via node-1",
+                 op_with_retry(lambda: create_db(nodes[1].client_port, "ddl_repl_db")), "OK")
+    check_status("CREATE_COLLECTION via node-1",
+                 op_with_retry(lambda: create_coll(nodes[1].client_port, "ddl_repl_db", "widgets")), "OK")
 
     seen_db = wait_until(
         lambda: all("ddl_repl_db" in (list_databases(p).get("databases") or []) for p in all_ports()),
@@ -504,10 +525,11 @@ def test_ddl_replication():
 
     # A duplicate CREATE routed through a different node still conflicts (shared metadata).
     check_code("duplicate CREATE_DATABASE via node-2 conflicts (409-2)",
-               create_db(nodes[2].client_port, "ddl_repl_db"), "ERROR", "409-2")
+               op_with_retry(lambda: create_db(nodes[2].client_port, "ddl_repl_db")), "ERROR", "409-2")
 
     # DROP replicates too.
-    check_status("DROP_DATABASE via node-2", drop_db(nodes[2].client_port, "ddl_repl_db"), "OK")
+    check_status("DROP_DATABASE via node-2",
+                 op_with_retry(lambda: drop_db(nodes[2].client_port, "ddl_repl_db")), "OK")
     dropped = wait_until(
         lambda: all("ddl_repl_db" not in (list_databases(p).get("databases") or []) for p in all_ports()),
         timeout_s=15.0)
@@ -548,6 +570,19 @@ def test_bulk_delete_and_upsert():
     # Upsert (same _id) via a different node overwrites, and the new value replicates.
     check_status("upsert b1 via node-2", save(nodes[2].client_port, DB, "bulk", {"_id": "b1", "v": 99}), "OK")
     check("upserted value is visible on every node", all_nodes_see(DB, "bulk", "b1", 99))
+
+    # A bulk UPDATE must ship the version it assigned. When it shipped 0 instead, every replica
+    # dropped the document as superseded while the owner still answered OK, and the next
+    # anti-entropy sweep pulled the stale copy back over the acknowledged write.
+    check_status("bulk-update every doc via node-1",
+                 bulk_save(nodes[1].client_port, DB, "bulk",
+                           [{"_id": "b1", "v": 111}, {"_id": "b3", "v": 333}]), "OK")
+    check("the bulk-updated values are visible on every node",
+          all_nodes_see(DB, "bulk", "b1", 111) and all_nodes_see(DB, "bulk", "b3", 333))
+    time.sleep(5)
+    check("the bulk-updated values survive an anti-entropy sweep rather than reverting",
+          all_nodes_see(DB, "bulk", "b1", 111, timeout_s=5.0)
+          and all_nodes_see(DB, "bulk", "b3", 333, timeout_s=5.0))
 
     # DELETE via yet another node removes it everywhere (tombstone → no resurrection).
     check_status("DELETE b2 via node-0", delete(nodes[0].client_port, DB, "bulk", "b2"), "OK")
@@ -1260,6 +1295,173 @@ def test_node_rejoin():
                wait_until(_rejoined, timeout_s=45.0, interval_s=1.0))
 
 
+def test_restart_does_not_regress_write_versions():
+    section("Write versions do not regress across a restart")
+
+    # The write clock lives in memory. Before it was seeded at startup a restarted node assigned
+    # versions below ones it had already replicated, and anti-entropy then pulled the older
+    # document back over the acknowledged write.
+    coll = "version_regression"
+
+    # CREATE_COLLECTION is a coordinated admin op and reaches the owner asynchronously, so a write
+    # fired immediately after it can land on a node that has not seen the collection yet.
+    def _seeded():
+        if create_coll(nodes[0].client_port, DB, coll).get("status") != "OK":
+            return False
+        if save(nodes[0].client_port, DB, coll, {"_id": "r1", "v": 1}).get("status") != "OK":
+            return False
+        return all_nodes_see(DB, coll, "r1", 1, ports=all_ports(), timeout_s=2.0)
+
+    check("seed is committed and visible everywhere before the restart",
+          wait_until(_seeded, timeout_s=30.0, interval_s=1.0))
+
+    restarted = nodes[1]
+    print(f"  Restarting node-{restarted.index} ...")
+    restarted.stop()
+    restarted.start()
+
+    def _back():
+        return save(nodes[0].client_port, DB, coll, {"_id": "r1", "v": 2}).get("status") == "OK"
+
+    check("the cluster accepts a write after the restart", wait_until(_back, timeout_s=45.0, interval_s=1.0))
+    check("the newer write survives anti-entropy rather than being pulled back",
+          all_nodes_see(DB, coll, "r1", 2, ports=all_ports(), timeout_s=30.0))
+
+    # A burst inside one millisecond only differs in the version's logical counter. That counter used
+    # to be rounded away in transit, so distinct writes arrived at the replicas as equal versions --
+    # and equal versions have no repair path, leaving the nodes permanently divergent.
+    burst_ids = [f"burst{i}" for i in range(12)]
+    for index, doc_id in enumerate(burst_ids):
+        check_status(f"burst write {doc_id}", save(nodes[0].client_port, DB, coll, {"_id": doc_id, "v": index}), "OK")
+    for index, doc_id in enumerate(burst_ids):
+        check(f"every node agrees on {doc_id} after a same-millisecond burst",
+              all_nodes_see(DB, coll, doc_id, index, ports=all_ports(), timeout_s=30.0))
+    time.sleep(5)
+    for index, doc_id in enumerate(burst_ids):
+        check(f"{doc_id} still agrees after an anti-entropy sweep",
+              all_nodes_see(DB, coll, doc_id, index, ports=all_ports(), timeout_s=5.0))
+
+
+def tombstone_ids(node, db, coll):
+    path = os.path.join(node.work_dir, "db", db, coll, f"{coll}-tombstones.idx")
+    if not os.path.isfile(path):
+        return set()
+    ids = set()
+    with open(path, encoding="utf-8") as fp:
+        for line in fp:
+            line = line.strip()
+            if line:
+                ids.add(line.rsplit("|", 1)[0])
+    return ids
+
+
+def test_a_fresh_tombstone_survives_anti_entropy_sweeps():
+    section("Tombstones inside the retention window are not collected")
+
+    # The GC cutoff is a version, not a wall-clock instant. When the two were compared in different
+    # units a just-written tombstone was collected on the first sweep, after which any peer still
+    # holding the document resurrected it.
+    coll = "tombstone_retention"
+
+    def _written():
+        if create_coll(nodes[0].client_port, DB, coll).get("status") != "OK":
+            return False
+        if save(nodes[0].client_port, DB, coll, {"_id": "gone", "v": 1}).get("status") != "OK":
+            return False
+        return all_nodes_see(DB, coll, "gone", 1, ports=all_ports(), timeout_s=2.0)
+
+    check("the document is committed on every node", wait_until(_written, timeout_s=30.0, interval_s=1.0))
+
+    check_status("delete it", delete(nodes[0].client_port, DB, coll, "gone"), "OK")
+
+    owner = next((n for n in nodes if "gone" in tombstone_ids(n, DB, coll)), None)
+    check("the delete wrote a tombstone", owner is not None,
+          "no node recorded a tombstone for the deleted document")
+
+    # antiEntropyIntervalMs is 3000 here, so this spans several sweeps.
+    time.sleep(10)
+
+    if owner is not None:
+        check("the tombstone is still there after several sweeps", "gone" in tombstone_ids(owner, DB, coll),
+              "a tombstone inside tombstoneRetentionMs was garbage collected")
+    for node in nodes:
+        r = find_by_id(node.client_port, DB, coll, "gone")
+        check(f"node-{node.index} still reports the document deleted", r.get("status") == "NOT_FOUND",
+              f"got {r}")
+
+
+def test_delete_of_an_unreplicated_id_does_not_destroy_it():
+    section("A DELETE for an id this node does not hold writes no tombstone")
+
+    # The tombstone used to be reserved before the existence check, so a DELETE that answered
+    # 404 still buried the id at a fresh version -- and anti-entropy then propagated that
+    # tombstone over the live copy every other node still held.
+    coll = "spurious_tombstone"
+    candidates = [f"{coll}_w{i}" for i in range(6)]
+
+    def _created():
+        for name in [coll] + candidates:
+            if create_coll(nodes[0].client_port, DB, name).get("status") != "OK":
+                return False
+        return True
+
+    check("the collections exist on every node", wait_until(_created, timeout_s=30.0, interval_s=1.0))
+
+    for node in nodes:
+        r = delete(node.client_port, DB, coll, "never-existed")
+        check(f"node-{node.index} answers NOT_FOUND for an id nothing holds", r.get("status") == "NOT_FOUND",
+              f"got {r}")
+
+    holders = [n.index for n in nodes if "never-existed" in tombstone_ids(n, DB, coll)]
+    check("a refused DELETE wrote no tombstone anywhere", not holders,
+          f"node(s) {holders} buried an id they never held")
+
+    # The rejoin window: a node that owns the collection again before anti-entropy has caught it up
+    # does not hold the document yet, which is when this fired in practice. The collection has to be
+    # one whose owner is still alive while the node is down, or the write itself cannot commit.
+    absent = nodes[2]
+    print(f"  Stopping node-{absent.index} ...")
+    absent.stop()
+    written = next((name for name in candidates
+                    if save(nodes[0].client_port, DB, name, {"_id": "while-down", "v": 1}).get("status") == "OK"),
+                   None)
+    check("a write commits while one node is down", written is not None,
+          "no candidate collection had a live owner")
+    print(f"  Restarting node-{absent.index} ...")
+    absent.start()
+
+    if written is not None:
+        r = delete(absent.client_port, DB, written, "absent-during-rejoin")
+        check("the rejoining node refuses an id nothing holds rather than burying it",
+              r.get("status") != "OK", f"got {r}")
+        holders = [n.index for n in nodes if "absent-during-rejoin" in tombstone_ids(n, DB, written)]
+        check("the rejoining node wrote no tombstone for it", not holders,
+              f"node(s) {holders} buried an id nothing ever held")
+        check("the document written while that node was down is still readable everywhere",
+              all_nodes_see(DB, written, "while-down", 1, ports=all_ports(), timeout_s=45.0))
+
+
+def test_forwarded_write_ignores_a_client_supplied_trigger_depth():
+    section("A client-supplied triggerDepth does not survive forwarding")
+
+    coll = "depth_guard"
+
+    # Sent to every node so at least one of them is forwarding rather than owning the collection.
+    def _all_accepted():
+        if create_coll(nodes[0].client_port, DB, coll).get("status") != "OK":
+            return False
+        for node in nodes:
+            response = op(node.client_port, {"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                                             "triggerDepth": -2000000000,
+                                             "object": {"_id": f"d{node.index}", "v": node.index}})
+            if response.get("status") != "OK":
+                return False
+        return all_nodes_see(DB, coll, "d0", 0, ports=all_ports(), timeout_s=2.0)
+
+    check("a client-supplied triggerDepth is ignored and every write commits",
+          wait_until(_all_accepted, timeout_s=30.0, interval_s=1.0))
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Scheduled procedures
 # ══════════════════════════════════════════════════════════════════════════
@@ -1430,6 +1632,69 @@ def test_schedule_rejoin_catch_up():
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
+
+def test_drop_and_recreate_does_not_resurrect_documents():
+    section("DROP_COLLECTION + CREATE_COLLECTION while one node is down")
+    # A drop deletes the whole collection folder, tombstones included, so it leaves no per-document
+    # evidence. A node outside the drop's replication keeps both its admin entry and its documents,
+    # and anti-entropy then sees ids the survivors lack and seeds the dead collection back
+    # cluster-wide. The collection incarnation is what tells that node its documents are dead.
+    coll = "incarnation_coll"
+    check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
+    for i in range(5):
+        save(nodes[0].client_port, DB, coll, {"_id": f"pre{i}", "v": i})
+
+    def _all_see_five():
+        return all(len(ids_of(aggregate(p, DB, coll, []))) == 5 for p in all_ports())
+
+    check("every node holds the pre-drop documents", wait_until(_all_see_five, timeout_s=30.0))
+
+    victim = nodes[2]
+    print(f"  Killing node-{victim.index} so it misses the drop ...")
+    victim.kill()
+
+    def _dropped():
+        return op(nodes[0].client_port, {"type": "DROP_COLLECTION", "databaseName": DB,
+                                         "collectionName": coll}).get("status") == "OK"
+
+    check("the survivors drop the collection", wait_until(_dropped, timeout_s=30.0, interval_s=1.0))
+
+    def _recreated():
+        return create_coll(nodes[0].client_port, DB, coll).get("status") == "OK"
+
+    check("the survivors re-create the same name", wait_until(_recreated, timeout_s=30.0, interval_s=1.0))
+
+    print(f"  Restarting node-{victim.index} ...")
+    victim.start()
+
+    # An aggregate over an empty collection answers NOT_FOUND/404-3, which is "no documents" and not
+    # an error; anything else means the collection is unreadable rather than empty.
+    def _empty_everywhere():
+        for port in all_ports():
+            r = aggregate(port, DB, coll, [])
+            if r.get("status") not in ("OK", "NOT_FOUND"):
+                return False
+            if ids_of(r):
+                return False
+        return True
+
+    # antiEntropyIntervalMs is 3000 here, so this spans several sweeps: if the rejoined node were
+    # going to seed its pre-drop documents back, it would have done so well inside this window.
+    ok = wait_until(_empty_everywhere, timeout_s=90.0, interval_s=1.0)
+    per_node = {}
+    for port in all_ports():
+        r = aggregate(port, DB, coll, [])
+        per_node[port] = (r.get("status"), r.get("errorCode"), ids_of(r))
+    check("the re-created collection stays empty on every node", ok, f"per-node: {per_node}")
+
+    # The re-created collection is still usable: quarantining the dead incarnation must not take
+    # the live one down with it.
+    check_status("a write to the re-created collection succeeds",
+                 save(nodes[0].client_port, DB, coll, {"_id": "after", "v": 1}), "OK")
+    check("the write converges on every node",
+          all_nodes_see(DB, coll, "after", 1, ports=all_ports(), timeout_s=30.0))
+
+
 def main():
     bu.banner("Clustering (multi-node) integration suite")
 
@@ -1476,6 +1741,11 @@ def main():
         test_node_failure_quorum_maintained()
         test_schedule_failover()
         test_node_rejoin()
+        test_restart_does_not_regress_write_versions()
+        test_forwarded_write_ignores_a_client_supplied_trigger_depth()
+        test_a_fresh_tombstone_survives_anti_entropy_sweeps()
+        test_delete_of_an_unreplicated_id_does_not_destroy_it()
+        test_drop_and_recreate_does_not_resurrect_documents()
         test_schedule_rejoin_catch_up()
         # Last: it parks a long run on one node, which leaves that node's gossiped script load
         # elevated for a round or two. Placement takes the *less* loaded of two samples, so running

@@ -35,7 +35,7 @@ public final class TriggerDispatcher {
     }
 
     public static void dispatch(TriggerEvent event) {
-        if (event.getDepth() >= configuration.getTriggerMaxDepth()) {
+        if (event.getDepth() < 0 || event.getDepth() >= configuration.getTriggerMaxDepth()) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             triggerExecutor.countFailure();
             final var reason = "cascade depth " + event.getDepth() + " reached triggerMaxDepth";
@@ -117,6 +117,15 @@ public final class TriggerDispatcher {
         final var attempt = event.getAttempt();
         final var maxAttempts = Math.max(1, configuration.getTriggerMaxAttempts());
         final var error = errorName + ": " + errorMessage;
+        if (retryable && event.getRunId() != null && isClusterUnavailable(errorMessage)) {
+            final var delay = backoffFor(attempt);
+            TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
+                    System.currentTimeMillis() + delay);
+            triggerExecutor.submitAfter(event, delay);
+            logger.info("Trigger '" + trigger.getName() + "' is waiting for the cluster; retrying in " + delay
+                    + "ms without consuming an attempt");
+            return;
+        }
         if (retryable && event.getRunId() != null && attempt < maxAttempts) {
             final var delay = backoffFor(attempt);
             TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
@@ -154,6 +163,11 @@ public final class TriggerDispatcher {
         return delay < 0 || delay > ceiling ? ceiling : delay;
     }
 
+    private static boolean isClusterUnavailable(String errorMessage) {
+        return errorMessage != null && (errorMessage.contains(ErrorCode.NO_QUORUM.getDefaultMessage())
+                || errorMessage.contains(ErrorCode.NOT_COLLECTION_OWNER.getDefaultMessage()));
+    }
+
     private static TriggerEvent retryOf(TriggerEvent event) {
         return new TriggerEvent(event.getType(), event.getDbName(), event.getCollName(), event.getTriggerName(),
                 event.getProcedureName(), event.isBatchMode(), event.getEntries(), event.getActingUser(),
@@ -181,7 +195,7 @@ public final class TriggerDispatcher {
         database.beginTransaction();
         try {
             body.run();
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
             rollbackQuietly(database, triggerName);
             throw e;
         }
@@ -248,7 +262,14 @@ public final class TriggerDispatcher {
     }
 
     private static TriggerDefinition findTrigger(TriggerEvent event) {
-        final List<TriggerDefinition> triggers = cache.getTriggersFor(event.getDbName(), event.getCollName());
+        final List<TriggerDefinition> triggers;
+        try {
+            triggers = cache.getTriggersFor(event.getDbName(), event.getCollName());
+        } catch (org.techhouse.ex.MetadataReadException e) {
+            logger.warning("Could not read the triggers for " + event.getDbName() + "|" + event.getCollName()
+                    + "; the run stays pending for a later attempt: " + e.getMessage());
+            return null;
+        }
         for (final var trigger : triggers) {
             if (trigger.getName().equals(event.getTriggerName())) {
                 return trigger;

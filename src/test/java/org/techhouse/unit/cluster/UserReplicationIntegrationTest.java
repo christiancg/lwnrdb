@@ -120,7 +120,7 @@ public class UserReplicationIntegrationTest {
     @Test
     public void test_replicate_user_op_not_applicable_when_disabled() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", false);
-        assertEquals(ReplicationOutcome.NOT_APPLICABLE, coordinator.replicateUserOp("nobody", false));
+        assertEquals(ReplicationOutcome.NOT_CLUSTERED, coordinator.replicateUserOp("nobody", false));
     }
 
     @Test

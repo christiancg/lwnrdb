@@ -33,7 +33,7 @@ public class FieldIndexCopyTest {
             obj.addProperty(FIELD, i % 2);
             final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
             entry.set_id("d" + i);
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, FIELD);
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(FIELD));

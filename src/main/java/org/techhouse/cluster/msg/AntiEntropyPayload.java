@@ -9,7 +9,7 @@ public class AntiEntropyPayload {
     private List<DigestEntry> digest;
     private List<String> ids;
     private List<JsonObject> documents;
-    private List<Long> versions;
+    private List<String> versions;
     private String summary;
     private boolean summaryMatch;
 
@@ -61,11 +61,11 @@ public class AntiEntropyPayload {
         this.documents = documents;
     }
 
-    public List<Long> getVersions() {
+    public List<String> getVersions() {
         return versions;
     }
 
-    public void setVersions(List<Long> versions) {
+    public void setVersions(List<String> versions) {
         this.versions = versions;
     }
 

@@ -1,14 +1,17 @@
 package org.techhouse.cluster;
 
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
-import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerRunRecovery;
+import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 
 public class Tx2pcRecovery implements MembershipListener {
@@ -16,6 +19,9 @@ public class Tx2pcRecovery implements MembershipListener {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
+    private final AtomicBoolean pendingRecovery = new AtomicBoolean();
+    private final ExecutorService membershipWorker = Executors
+            .newSingleThreadExecutor(Thread.ofVirtual().name("tx2pc-membership-", 0).factory());
     private ScheduledExecutorService sweeper;
 
     private enum Decision {
@@ -24,7 +30,22 @@ public class Tx2pcRecovery implements MembershipListener {
 
     @Override
     public void onMembershipChanged(MembershipView view) {
-        recover();
+        if (!pendingRecovery.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            membershipWorker.execute(() -> {
+                pendingRecovery.set(false);
+                try {
+                    recover();
+                } catch (Exception e) {
+                    logger.warning("Membership-triggered transaction recovery failed: " + e.getMessage());
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            pendingRecovery.set(false);
+            logger.info("Skipping membership-triggered transaction recovery: this node is shutting down");
+        }
     }
 
     public void start() {
@@ -40,6 +61,7 @@ public class Tx2pcRecovery implements MembershipListener {
         if (sweeper != null) {
             sweeper.shutdownNow();
         }
+        membershipWorker.shutdownNow();
     }
 
     private void sweep() {
@@ -70,8 +92,8 @@ public class Tx2pcRecovery implements MembershipListener {
                     continue;
                 }
                 switch (resolve(marker.coordinatorAddress(), marker.participants(), dtxId)) {
-                    case COMMIT -> TransactionOperationHelper.commitPreparedFromDurable(dtxId, marker.collections());
-                    case ABORT -> TransactionOperationHelper.abortFromDurable(dtxId);
+                    case COMMIT -> TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
+                    case ABORT -> TwoPhaseParticipant.abortFromDurable(dtxId);
                     default -> logger.info("Transaction " + dtxId + " still in-doubt; will retry");
                 }
             } catch (Exception e) {
@@ -101,15 +123,17 @@ public class Tx2pcRecovery implements MembershipListener {
     }
 
     private void resolveLocalCommitted(String dtxId) throws Exception {
-        TransactionOperationHelper.resolveFromDurable(dtxId, true);
+        TwoPhaseParticipant.resolveFromDurable(dtxId, true);
     }
 
-    // The coordinator is authoritative when reachable (commit marker ⇒ commit, otherwise presumed-abort);
-    // only when it is unreachable do we fall back to cooperative termination among the other participants.
     private Decision resolve(String coordinatorAddress, java.util.List<String> participants, String dtxId) {
         final var fromCoordinator = statusFrom(coordinatorAddress, dtxId);
         if (fromCoordinator != null) {
-            return fromCoordinator == Tx2pcLog.Status.COMMITTED ? Decision.COMMIT : Decision.ABORT;
+            return switch (fromCoordinator) {
+                case COMMITTED -> Decision.COMMIT;
+                case ABORTED, NO_RECORD -> Decision.ABORT;
+                case PREPARED, UNKNOWN -> Decision.UNKNOWN;
+            };
         }
         for (final var peer : participants) {
             if (isSelf(peer) || peer.equals(coordinatorAddress)) {

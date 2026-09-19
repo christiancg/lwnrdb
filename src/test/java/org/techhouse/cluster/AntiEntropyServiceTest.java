@@ -13,6 +13,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,6 +25,7 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.DigestEntry;
 import org.techhouse.config.Configuration;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -36,6 +39,7 @@ public class AntiEntropyServiceTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final EJson eJson = IocContainer.get(EJson.class);
     private MembershipService realMembership;
     private PeerConnectionPool realPool;
 
@@ -97,7 +101,61 @@ public class AntiEntropyServiceTest {
         assertFalse(live.isDeleted());
         final var tombstone = digest.stream().filter(e -> e.getId().equals("gone")).findFirst().orElseThrow();
         assertTrue(tombstone.isDeleted());
-        assertEquals(555L, tombstone.getVersion());
+        assertEquals("555", tombstone.getVersion());
+        assertEquals(555L, tombstone.versionValue());
+    }
+
+    @Test
+    public void test_summary_matches_between_owner_and_replica_after_a_write() throws Exception {
+        seed();
+        for (var logical = 1; logical <= 8; logical++) {
+            fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "gone-" + logical,
+                    HybridClock.pack(System.currentTimeMillis(), logical));
+        }
+        final var owner = service.buildDigest(TestGlobals.DB, TestGlobals.COLL);
+
+        final var asReceived = eJson.fromJson(eJson.toJson(owner), AntiEntropyPayload.class);
+
+        assertEquals(owner.getSummary(), AntiEntropyService.summaryOf(asReceived.getDigest()));
+    }
+
+    private Thread backgroundWriter(AtomicBoolean stop) {
+        return new Thread(() -> {
+            for (var i = 0; i < 400 && !stop.get(); i++) {
+                final var object = new JsonObject();
+                object.addProperty("_id", "w" + i);
+                object.addProperty("v", i);
+                final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+                request.setObject(object);
+                request.set_id("w" + i);
+                processor.processMessage(request);
+            }
+        }, "digest-writer");
+    }
+
+    @Test
+    public void test_build_digest_survives_a_concurrent_save() throws Exception {
+        seed();
+        final var failure = new AtomicReference<Throwable>();
+        final var stop = new AtomicBoolean();
+        final var writer = backgroundWriter(stop);
+        writer.start();
+        try {
+            for (var i = 0; i < 200; i++) {
+                try {
+                    service.buildDigest(TestGlobals.DB, TestGlobals.COLL);
+                } catch (Throwable t) {
+                    failure.compareAndSet(null, t);
+                    break;
+                }
+            }
+        } finally {
+            stop.set(true);
+            writer.join(10_000);
+        }
+
+        assertNull(failure.get(),
+                "a digest built while the collection is being written must not blow up: " + failure.get());
     }
 
     @Test
@@ -124,7 +182,7 @@ public class AntiEntropyServiceTest {
             } else {
                 response.setType(ClusterMessageType.PULL_ACK);
                 payload.setDocuments(List.of(doc));
-                payload.setVersions(List.of(1000L));
+                payload.setVersions(List.of("1000"));
             }
             response.setAntiEntropy(payload);
             return response;
@@ -140,7 +198,7 @@ public class AntiEntropyServiceTest {
     @Test
     public void test_reconcile_applies_newer_tombstone_from_peer() throws Exception {
         seed();
-        final var tombstoneVersion = System.currentTimeMillis() + 1_000_000L;
+        final var tombstoneVersion = HybridClock.pack(System.currentTimeMillis() + 1_000_000L, 0);
         final var pool = mock(PeerConnectionPool.class);
         when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
             final var response = new ClusterMessage();
@@ -267,10 +325,55 @@ public class AntiEntropyServiceTest {
     }
 
     @Test
+    public void test_gc_is_skipped_when_a_peer_did_not_answer() throws Exception {
+        seed();
+        final var config = Configuration.getInstance();
+        final var originalRetention = config.getTombstoneRetentionMs();
+        TestUtils.setPrivateField(config, "tombstoneRetentionMs", 1L);
+        try {
+            fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "old", HybridClock.pack(1L, 0));
+            final var pool = mock(PeerConnectionPool.class);
+            when(pool.request(any(), any(), anyLong())).thenThrow(new java.io.IOException("unreachable"));
+            injectPeer(pool);
+
+            service.reconcile(TestGlobals.DB, TestGlobals.COLL);
+
+            assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("old"),
+                    "a tombstone must survive a round no peer answered: collecting it while partitioned is"
+                            + " exactly when a peer still holding the document resurrects it");
+        } finally {
+            TestUtils.setPrivateField(config, "tombstoneRetentionMs", originalRetention);
+        }
+    }
+
+    @Test
+    public void test_gc_is_skipped_when_there_are_no_peers() throws Exception {
+        seed();
+        final var config = Configuration.getInstance();
+        final var originalRetention = config.getTombstoneRetentionMs();
+        TestUtils.setPrivateField(config, "tombstoneRetentionMs", 1L);
+        try {
+            fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "lonely", HybridClock.pack(1L, 0));
+            final var self = node("self", 5000);
+            final var membership = mock(MembershipService.class);
+            when(membership.getSelf()).thenReturn(self);
+            when(membership.membershipView()).thenReturn(new MembershipView(List.of(self)));
+            TestUtils.setPrivateField(service, "membershipService", membership);
+
+            service.reconcile(TestGlobals.DB, TestGlobals.COLL);
+
+            assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("lonely"),
+                    "a node that can see nobody may itself be the partitioned side");
+        } finally {
+            TestUtils.setPrivateField(config, "tombstoneRetentionMs", originalRetention);
+        }
+    }
+
+    @Test
     public void test_reconcile_garbage_collects_expired_tombstones() throws Exception {
         final var retention = Configuration.getInstance().getTombstoneRetentionMs();
-        final var expired = System.currentTimeMillis() - (2L * retention);
-        final var recent = System.currentTimeMillis();
+        final var expired = HybridClock.pack(System.currentTimeMillis() - (2L * retention), 0);
+        final var recent = HybridClock.pack(System.currentTimeMillis(), 0);
         fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "old", expired);
         fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "recent", recent);
         injectPeer(emptyDigestPool());
@@ -280,5 +383,60 @@ public class AntiEntropyServiceTest {
         final var tombstones = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
         assertNull(tombstones.get("old"));
         assertEquals(recent, tombstones.get("recent"));
+    }
+
+    private String peerValueOf() {
+        final var request = new org.techhouse.ops.req.FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("a");
+        final var response = processor.processMessage(request);
+        if (response instanceof org.techhouse.ops.resp.FindByIdResponse found && found.getObject() != null) {
+            return found.getObject().get("v").asJsonNumber().getValue().toString();
+        }
+        return null;
+    }
+
+    private PeerConnectionPool peerAtEqualVersion(String peerNodeId, long version) throws Exception {
+        final var peerDocument = new JsonObject();
+        peerDocument.addProperty("_id", "a");
+        peerDocument.addProperty("v", 9);
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(invocation -> {
+            final ClusterMessage message = invocation.getArgument(1);
+            final var response = new ClusterMessage();
+            final var payload = new AntiEntropyPayload(TestGlobals.DB, TestGlobals.COLL);
+            if (message.getType() == ClusterMessageType.DIGEST) {
+                response.setType(ClusterMessageType.DIGEST_ACK);
+                payload.setDigest(List.of(new DigestEntry("a", version, false, peerNodeId)));
+            } else {
+                response.setType(ClusterMessageType.PULL_ACK);
+                payload.setDocuments(List.of(peerDocument));
+                payload.setVersions(List.of(Long.toString(version)));
+            }
+            response.setAntiEntropy(payload);
+            return response;
+        });
+        return pool;
+    }
+
+    @Test
+    public void test_equal_versions_converge_on_the_higher_node_id() throws Exception {
+        seed();
+        injectPeer(peerAtEqualVersion("zeta", versionOf()));
+
+        service.reconcile(TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals("9", peerValueOf(),
+                "a winner that wins only on the node-id tie-break is still a winner and must be pulled");
+    }
+
+    @Test
+    public void test_both_directions_reach_the_same_state() throws Exception {
+        seed();
+        injectPeer(peerAtEqualVersion("aaa", versionOf()));
+
+        service.reconcile(TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals("1", peerValueOf(),
+                "the same total order run from the other side keeps this node's copy, so the two agree");
     }
 }

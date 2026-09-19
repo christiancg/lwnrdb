@@ -8,16 +8,20 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -53,7 +57,7 @@ public class AggregationDistinctStepTest {
         assertEquals(0, result.size());
     }
 
-    private void insertEntry(Cache cache, String id, String fieldName, Object fieldValue) {
+    private void insertEntry(Cache cache, String id, String fieldName, Object fieldValue) throws IOException {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         if (fieldValue instanceof String s)
@@ -62,7 +66,7 @@ public class AggregationDistinctStepTest {
             obj.addProperty(fieldName, n);
         DbEntry entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
     }
 
@@ -109,22 +113,22 @@ public class AggregationDistinctStepTest {
         assertEquals(1, result.size());
     }
 
-    private void addDoc(Cache cache, String id, String field, JsonBaseElement value) {
+    private void addDoc(Cache cache, String id, String field, JsonBaseElement value) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add(field, value);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void enableIndex(Cache cache, String field) {
+    private void enableIndex(Cache cache, String field) throws InterruptedException {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
         cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of(field));
     }
 
     @Test
-    public void test_distinct_uses_index_returns_same_values_as_scan() throws IOException {
+    public void test_distinct_uses_index_returns_same_values_as_scan() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", "color", new JsonString("red"));
         addDoc(cache, "c2", "color", new JsonString("blue"));
@@ -145,7 +149,7 @@ public class AggregationDistinctStepTest {
     }
 
     @Test
-    public void test_distinct_indexed_reads_no_documents() throws IOException {
+    public void test_distinct_indexed_reads_no_documents() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "c1", "color", new JsonString("red"));
         addDoc(cache, "c2", "color", new JsonString("blue"));
@@ -161,7 +165,7 @@ public class AggregationDistinctStepTest {
     }
 
     @Test
-    public void test_distinct_null_field_ignores_index() throws IOException {
+    public void test_distinct_null_field_ignores_index() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "d1", "color", new JsonString("red"));
         addDoc(cache, "d2", "color", new JsonString("red"));
@@ -190,7 +194,7 @@ public class AggregationDistinctStepTest {
     // Option B: documents whose indexed field holds an object/array are not in the index, so an
     // index-backed DISTINCT includes both scalar and object-valued docs on a mixed-type field
     @Test
-    public void test_object_valued_field_included_in_indexed_distinct() throws IOException {
+    public void test_object_valued_field_included_in_indexed_distinct() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "o1", "data", new JsonString("scalar"));
         final var objVal = new JsonObject();
@@ -210,7 +214,7 @@ public class AggregationDistinctStepTest {
     }
 
     @Test
-    public void test_indexed_distinct_on_empty_collection_returns_empty() throws IOException {
+    public void test_indexed_distinct_on_empty_collection_returns_empty() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         enableIndex(cache, "color");
 
@@ -222,7 +226,8 @@ public class AggregationDistinctStepTest {
     }
 
     @Test
-    public void test_distinct_mixed_type_indexed_field_includes_object_valued_docs() throws IOException {
+    public void test_distinct_mixed_type_indexed_field_includes_object_valued_docs()
+            throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         addDoc(cache, "s1", "meta", new JsonString("plain"));
         final var obj = new JsonObject();
@@ -237,5 +242,32 @@ public class AggregationDistinctStepTest {
         assertEquals(2, result.size());
         final var hasObjectValue = result.stream().anyMatch(r -> r.get("meta") != null && r.get("meta").isJsonObject());
         assertTrue(hasObjectValue);
+    }
+
+    private static void saveDoc(String id, JsonBaseElement value) {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add("kind", value);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id(id);
+        request.setObject(obj);
+        IocContainer.get(OperationProcessor.class).processMessage(request);
+        IocContainer.get(PendingIndexWrites.class).clear(TestGlobals.DB, TestGlobals.COLL, id);
+    }
+
+    @Test
+    public void test_distinct_includes_the_explicit_null_group() throws IOException, InterruptedException {
+        saveDoc("n1", new JsonString("x"));
+        saveDoc("n2", JsonNull.INSTANCE);
+
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new DistinctAggregationStep("kind")));
+        final var scanned = AggregationOperationHelper.processAggregation(req).size();
+
+        enableIndex(IocContainer.get(Cache.class), "kind");
+        final var indexed = AggregationOperationHelper.processAggregation(req).size();
+
+        assertEquals(2, scanned, "the scan path keeps the explicit null as its own value");
+        assertEquals(scanned, indexed, "an index that cannot hold explicit nulls must not answer DISTINCT");
     }
 }

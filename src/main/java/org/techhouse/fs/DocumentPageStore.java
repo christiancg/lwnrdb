@@ -77,6 +77,7 @@ final class DocumentPageStore {
                 continue;
             try {
                 final var entry = DbEntry.fromString(dbName, collectionName, line);
+                entry.setPage(page);
                 result.put(entry.get_id(), entry);
             } catch (Exception e) {
                 // Skip-and-log only: the .idx files store byte offsets into this .dat, so dropping a
@@ -109,6 +110,16 @@ final class DocumentPageStore {
         return streamPages(dbName, collName).flatMap(map -> map.values().stream());
     }
 
+    long pageFileCount(String dbName, String collName) throws IOException {
+        final var collectionFolder = paths.collectionFolder(dbName, collName).toPath();
+        if (!Files.exists(collectionFolder)) {
+            return 0;
+        }
+        try (var pathStream = Files.list(collectionFolder)) {
+            return pathStream.filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION)).count();
+        }
+    }
+
     DbEntry readEntryFromOpenFile(RandomAccessFile reader, PkIndexEntry pkIndexEntry) throws IOException {
         reader.seek(pkIndexEntry.getPosition());
         final var entryLength = (int) pkIndexEntry.getLength();
@@ -116,11 +127,19 @@ final class DocumentPageStore {
         reader.readFully(buffer, 0, entryLength);
         final var strEntry = new String(buffer, StandardCharsets.UTF_8);
         final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
+        final var storedId = jsonObject.get(Globals.PK_FIELD);
+        if (storedId != null && storedId.isJsonString()
+                && !storedId.asJsonString().getValue().equals(pkIndexEntry.getValue())) {
+            throw new IOException("Index entry for '" + pkIndexEntry.getValue() + "' in "
+                    + pkIndexEntry.getCollectionName() + " points at '" + storedId.asJsonString().getValue()
+                    + "'; run REINDEX on this collection");
+        }
         final var entry = new DbEntry();
         entry.setDatabaseName(pkIndexEntry.getDatabaseName());
         entry.setCollectionName(pkIndexEntry.getCollectionName());
         entry.set_id(pkIndexEntry.getValue());
         entry.setData(jsonObject);
+        entry.setPage(pkIndexEntry.getPage());
         return entry;
     }
 }

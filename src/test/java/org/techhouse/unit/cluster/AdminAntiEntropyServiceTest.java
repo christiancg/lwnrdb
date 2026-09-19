@@ -3,6 +3,7 @@ package org.techhouse.unit.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -37,6 +38,7 @@ import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class AdminAntiEntropyServiceTest {
@@ -122,13 +124,14 @@ public class AdminAntiEntropyServiceTest {
     }
 
     @Test
-    public void test_reconcile_sets_sync_completed_and_skips_unreachable_peer() throws Exception {
+    public void test_sync_is_incomplete_when_no_peer_answered() throws Exception {
         when(mockPool.request(any(), any(), anyLong())).thenThrow(new RuntimeException("unreachable"));
 
         service.reconcile();
 
         assertNull(cache.getAdminDbEntry("newdb"));
-        assertTrue(service.hasCompletedAdminSync());
+        assertFalse(service.hasCompletedAdminSync(),
+                "a node no peer answered has conformed to nothing and must not advertise itself as synced");
     }
 
     @Test
@@ -147,12 +150,23 @@ public class AdminAntiEntropyServiceTest {
     @Test
     public void test_reconcile_publishes_the_caught_up_state_to_membership() throws Exception {
         membershipService.setAdminSyncing(true);
-        when(mockPool.request(any(), any(), anyLong())).thenThrow(new RuntimeException("unreachable"));
+        stubSnapshot(List.of(dbJson(List.of())), List.of(), List.of());
 
         service.reconcile();
 
         assertTrue(service.hasCompletedAdminSync());
         assertFalse(syncingFlag());
+    }
+
+    @Test
+    public void test_an_unreachable_peer_leaves_the_node_advertising_itself_as_syncing() throws Exception {
+        membershipService.setAdminSyncing(true);
+        when(mockPool.request(any(), any(), anyLong())).thenThrow(new RuntimeException("unreachable"));
+
+        service.reconcile();
+
+        assertFalse(service.hasCompletedAdminSync());
+        assertTrue(syncingFlag(), "a node that conformed to nothing must keep advertising that it is syncing");
     }
 
     private boolean syncingFlag() throws Exception {
@@ -180,7 +194,7 @@ public class AdminAntiEntropyServiceTest {
         service.reconcile();
 
         assertNull(cache.getAdminDbEntry("newdb"));
-        assertTrue(service.hasCompletedAdminSync());
+        assertFalse(service.hasCompletedAdminSync(), "a peer that answered with an error is not a completed sync");
     }
 
     @Test
@@ -206,6 +220,7 @@ public class AdminAntiEntropyServiceTest {
     public void test_start_membership_trigger_and_stop() throws Exception {
         TestUtils.setPrivateField(config, "antiEntropyIntervalMs", 3600000L);
         TestUtils.setPrivateField(service, "adminSyncCompleted", new AtomicBoolean(false));
+        stubSnapshot(List.of(dbJson(List.of())), List.of(), List.of());
         service.start();
         try {
             service.onMembershipChanged(membershipService.membershipView());
@@ -218,5 +233,31 @@ public class AdminAntiEntropyServiceTest {
         } finally {
             service.stop();
         }
+    }
+
+    private static void conform(AdminAntiEntropyService target, AdminSnapshotPayload snapshot) throws Exception {
+        final var field = AdminAntiEntropyService.class.getDeclaredField("conformer");
+        field.setAccessible(true);
+        final var conformer = field.get(target);
+        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class);
+        method.setAccessible(true);
+        method.invoke(conformer, snapshot);
+    }
+
+    @Test
+    public void test_a_converged_conform_writes_nothing() throws Exception {
+        TestUtils.createTestDatabaseAndCollection();
+        AdminOperationHelper.saveUserEntry(new AdminUserEntry("l14user", "hash", false, Set.of(), Map.of(), Map.of()));
+        final var snapshot = service.buildSnapshot();
+        conform(service, snapshot);
+        final var databasePk = cache.getPkIndexAdminDbEntry(TestGlobals.DB);
+        final var userPk = cache.getPkIndexAdminUserEntry("l14user");
+
+        conform(service, snapshot);
+
+        assertSame(databasePk, cache.getPkIndexAdminDbEntry(TestGlobals.DB),
+                "a converged node rewrote every database entry on every sweep, forever");
+        assertSame(userPk, cache.getPkIndexAdminUserEntry("l14user"),
+                "a converged node rewrote the whole admin/users collection on every sweep, forever");
     }
 }

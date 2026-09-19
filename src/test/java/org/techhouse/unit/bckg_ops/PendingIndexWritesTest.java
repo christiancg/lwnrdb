@@ -17,6 +17,25 @@ public class PendingIndexWritesTest {
     }
 
     @Test
+    public void test_the_dirty_marker_is_set_on_enqueue_and_cleared_on_drain() throws Exception {
+        org.techhouse.test.TestUtils.standardInitialSetup();
+        org.techhouse.test.TestUtils.createTestDatabaseAndCollection();
+        final var fs = org.techhouse.ioc.IocContainer.get(org.techhouse.fs.FileSystem.class);
+        try {
+            pending.mark(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, "1");
+            assertEquals(List.of(org.techhouse.test.TestGlobals.DB + "|" + org.techhouse.test.TestGlobals.COLL),
+                    fs.listDirtyIndexCollections(),
+                    "queued index work must leave an on-disk marker an unclean stop can be seen by");
+
+            pending.clear(org.techhouse.test.TestGlobals.DB, org.techhouse.test.TestGlobals.COLL, "1");
+
+            assertTrue(fs.listDirtyIndexCollections().isEmpty(), "draining the collection clears its marker");
+        } finally {
+            org.techhouse.test.TestUtils.standardTearDown();
+        }
+    }
+
+    @Test
     public void test_mark_then_clear_lifecycle() {
         pending.mark("db", "coll", "1");
         assertEquals(Set.of("1"), pending.idsFor("db", "coll"));

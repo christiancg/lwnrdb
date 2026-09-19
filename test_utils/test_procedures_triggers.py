@@ -374,11 +374,15 @@ def test_triggers(conn: Conn):
     check("the definer is recorded", installed.get("definer") == ADMIN_USERNAME, f"got {installed}")
 
     check_status("write a document", conn.save_doc({"_id": "t1", "n": 1}), "OK")
-    row = await_doc(conn, "UPDATED-t1")
-    check("the trigger produced an audit row", row.get("status") == "OK", f"got {row}")
+    row = await_doc(conn, "CREATED-t1")
+    check("a first write with an explicit _id audits as CREATED", row.get("status") == "OK", f"got {row}")
     if row.get("status") == "OK":
         check("the row names the writer", row["object"].get("by") == ADMIN_USERNAME, f"got {row['object']}")
         check("and the definer", row["object"].get("definer") == ADMIN_USERNAME, f"got {row['object']}")
+
+    check_status("overwrite the same document", conn.save_doc({"_id": "t1", "n": 2}), "OK")
+    updated = await_doc(conn, "UPDATED-t1")
+    check("overwriting the same _id audits as UPDATED", updated.get("status") == "OK", f"got {updated}")
 
     check_status("delete a document",
                  conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "t1"}), "OK")
@@ -452,7 +456,7 @@ def test_definer_rights():
                    writer.save_doc({"_id": "direct", "x": 1}, coll=AUDIT), "FORBIDDEN", "403-1")
         check_status("but may write the source collection", writer.save_doc({"_id": "by-writer", "n": 1}), "OK")
     with admin_conn() as conn:
-        row = await_doc(conn, "UPDATED-by-writer")
+        row = await_doc(conn, "CREATED-by-writer")
         check("the audit row still appears", row.get("status") == "OK",
               f"definer rights must let the trigger write where the writer cannot: {row}")
         if row.get("status") == "OK":
@@ -538,7 +542,7 @@ def test_trigger_imports(conn: Conn):
     check("the trigger's import resolved and it wrote the audit row", row.get("status") == "OK", f"got {row}")
     if row.get("status") == "OK":
         check("the library computed the note",
-              row["object"].get("note") == f"UPDATED on imp1 by {WRITER}", f"got {row['object']}")
+              row["object"].get("note") == f"CREATED on imp1 by {WRITER}", f"got {row['object']}")
         check("definer rights survive the import",
               row["object"].get("definer") == ADMIN_USERNAME, f"got {row['object']}")
 

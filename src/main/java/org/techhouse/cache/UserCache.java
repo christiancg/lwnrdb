@@ -233,7 +233,7 @@ public class UserCache {
         var entry = coll.get(pk);
         if (entry == null) {
             entry = fs.getById(idxEntry);
-            if (shouldCache(dbName, entry.byteSize())) {
+            if (rl.holdsCollectionLock(dbName, collName) && shouldCache(dbName, entry.byteSize())) {
                 trackPut(collectionIdentifier, coll.put(pk, entry), entry);
             }
         }
@@ -285,9 +285,7 @@ public class UserCache {
         for (var id : missingIds) {
             final var pos = Collections.binarySearch(pkIndex, id);
             if (pos >= 0) {
-                final var e = pkIndex.get(pos);
-                toRead.add(new PkIndexEntry(e.getDatabaseName(), e.getCollectionName(), e.getValue(), e.getPosition(),
-                        e.getLength(), e.getPage(), e.getVersion()));
+                toRead.add(pkIndex.get(pos).detachedCopy());
             }
         }
         if (toRead.isEmpty()) {
@@ -295,7 +293,7 @@ public class UserCache {
         }
         final var read = fs.getByIndexEntries(toRead);
         result.addAll(read);
-        if (!cachingDisabled) {
+        if (!cachingDisabled && rl.holdsCollectionLock(dbName, collName)) {
             long bytes = 0L;
             for (var e : read) {
                 bytes += e.byteSize();
@@ -319,14 +317,15 @@ public class UserCache {
     }
 
     public void evictDatabase(String dbName) {
-        final var toRemove = collectionMap.keySet().stream()
-                .filter(s -> s.startsWith(dbName + Globals.COLL_IDENTIFIER_SEPARATOR)).toList();
-        for (var entryKeyToRemove : toRemove) {
-            pkIndexMap.remove(entryKeyToRemove);
-            collectionMap.remove(entryKeyToRemove);
-            collectionBytes.remove(entryKeyToRemove);
-            fieldIndexMap.remove(entryKeyToRemove);
-        }
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        removeByPrefix(pkIndexMap, prefix);
+        removeByPrefix(collectionMap, prefix);
+        removeByPrefix(collectionBytes, prefix);
+        removeByPrefix(fieldIndexMap, prefix);
+    }
+
+    private static void removeByPrefix(Map<String, ?> map, String prefix) {
+        map.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
     public void evictCollection(String dbName, String collName) {
@@ -415,9 +414,10 @@ public class UserCache {
 
     public boolean hasLoadedIndex(String dbName, String collName, String fieldName) {
         final var fieldIndexes = fieldIndexMap.get(Cache.getCollectionIdentifier(dbName, collName));
-        if (fieldIndexes != null) {
-            return fieldIndexes.containsKey(fieldName);
+        if (fieldIndexes == null) {
+            return false;
         }
-        return false;
+        final var prefix = fieldName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        return fieldIndexes.keySet().stream().anyMatch(key -> key.equals(fieldName) || key.startsWith(prefix));
     }
 }

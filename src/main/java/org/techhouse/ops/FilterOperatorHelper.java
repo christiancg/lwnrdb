@@ -238,18 +238,20 @@ public class FilterOperatorHelper {
             args.put(entry.getKey(), entry.getValue());
         }
         final var heap = new PriorityQueue<>(Comparator.comparingDouble(ScoredDocument::score));
-        candidates.forEach(document -> {
-            final var score = scoreDocument(document, fieldName, operatorName, args);
-            if (score == null) {
-                return;
-            }
-            if (heap.size() < k) {
-                heap.offer(new ScoredDocument(document, score));
-            } else if (heap.peek().score() < score) {
-                heap.poll();
-                heap.offer(new ScoredDocument(document, score));
-            }
-        });
+        try (var scored = candidates) {
+            scored.forEach(document -> {
+                final var score = scoreDocument(document, fieldName, operatorName, args);
+                if (score == null) {
+                    return;
+                }
+                if (heap.size() < k) {
+                    heap.offer(new ScoredDocument(document, score));
+                } else if (heap.peek().score() < score) {
+                    heap.poll();
+                    heap.offer(new ScoredDocument(document, score));
+                }
+            });
+        }
         return heap.stream().sorted(Comparator.comparingDouble(ScoredDocument::score).reversed())
                 .map(ScoredDocument::document);
     }

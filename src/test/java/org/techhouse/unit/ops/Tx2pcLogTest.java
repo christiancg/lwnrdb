@@ -45,14 +45,14 @@ public class Tx2pcLogTest {
     public void test_outcome_marker_and_status() throws Exception {
         final var committed = "aaaa1111-0000-0000-0000-000000000000";
         final var aborted = "bbbb2222-0000-0000-0000-000000000000";
-        assertEquals(Tx2pcLog.Status.UNKNOWN, Tx2pcLog.status(committed));
+        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(committed));
         Tx2pcLog.recordOutcome(committed, true);
         Tx2pcLog.recordOutcome(aborted, false);
         assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(committed));
         assertEquals(Tx2pcLog.Status.ABORTED, Tx2pcLog.status(aborted));
         assertTrue(Tx2pcLog.outcomeDtxIds().contains(committed));
         Tx2pcLog.deleteOutcomeMarker(committed);
-        assertEquals(Tx2pcLog.Status.UNKNOWN, Tx2pcLog.status(committed));
+        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(committed));
     }
 
     @Test

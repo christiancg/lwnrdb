@@ -89,4 +89,48 @@ public class AdminCacheTriggerTest {
         fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, "definitely not json");
         assertTrue(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
     }
+
+    private static java.io.File triggersFile() {
+        return new java.io.File(TestGlobals.PATH + java.io.File.separator + TestGlobals.DB + java.io.File.separator
+                + TestGlobals.COLL + java.io.File.separator + TestGlobals.COLL + "-triggers.json");
+    }
+
+    @Test
+    public void test_a_read_failure_is_not_cached_as_absence() throws Exception {
+        writeTriggers(definition("kept"));
+        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+        final var file = triggersFile();
+        assertTrue(file.delete());
+        assertTrue(file.mkdirs(), "a directory in the file's place makes the read fail rather than report absence");
+        try {
+            assertThrows(org.techhouse.ex.MetadataReadException.class,
+                    () -> cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL));
+        } finally {
+            assertTrue(file.delete());
+        }
+
+        writeTriggers(definition("kept"));
+        assertEquals(1, cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).size(),
+                "a failed read must not be remembered as a definitive absence, or every later write on this"
+                        + " collection silently fires no triggers until eviction or restart");
+    }
+
+    @Test
+    public void test_a_read_failure_does_not_erase_the_trigger_file() throws Exception {
+        writeTriggers(definition("kept"));
+        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+        final var file = triggersFile();
+        final var original = java.nio.file.Files.readString(file.toPath());
+        assertTrue(file.delete());
+        assertTrue(file.mkdirs());
+        try {
+            assertThrows(org.techhouse.ex.MetadataReadException.class,
+                    () -> cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL));
+        } finally {
+            assertTrue(file.delete());
+        }
+        java.nio.file.Files.writeString(file.toPath(), original);
+
+        assertEquals(1, cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).size());
+    }
 }

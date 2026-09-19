@@ -2,6 +2,8 @@ package org.techhouse.ops.req.validations;
 
 import java.util.List;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CreateIndexRequest;
@@ -15,6 +17,8 @@ import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 
 public final class DataRequestValidator {
+    private static final String ID_PATTERN_MESSAGE = "_id must be 1-64 alphanumeric characters, underscores, or hyphens";
+
     private DataRequestValidator() {
     }
 
@@ -27,7 +31,21 @@ public final class DataRequestValidator {
             return ValidationResult.fail("SAVE request requires an object");
         }
         if (request.get_id() != null && !request.get_id().matches(NameValidations.ID_PATTERN)) {
-            return ValidationResult.fail("_id must be 1-64 alphanumeric characters, underscores, or hyphens");
+            return ValidationResult.fail(ID_PATTERN_MESSAGE);
+        }
+        return validateEmbeddedId(request.getObject());
+    }
+
+    private static ValidationResult validateEmbeddedId(JsonObject object) {
+        if (!object.has(Globals.PK_FIELD)) {
+            return ValidationResult.ok();
+        }
+        final var element = object.get(Globals.PK_FIELD);
+        if (!(element instanceof JsonString jsonString)) {
+            return ValidationResult.fail("_id must be a string");
+        }
+        if (!jsonString.getValue().matches(NameValidations.ID_PATTERN)) {
+            return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return ValidationResult.ok();
     }
@@ -41,11 +59,9 @@ public final class DataRequestValidator {
             return ValidationResult.fail("BULK_SAVE request requires at least one object");
         }
         for (var obj : request.getObjects()) {
-            if (obj.has(Globals.PK_FIELD)) {
-                final var id = obj.get(Globals.PK_FIELD).asJsonString().getValue();
-                if (!id.matches(NameValidations.ID_PATTERN)) {
-                    return ValidationResult.fail("_id must be 1-64 alphanumeric characters, underscores, or hyphens");
-                }
+            final var embedded = validateEmbeddedId(obj);
+            if (!embedded.isValid()) {
+                return embedded;
             }
         }
         return ValidationResult.ok();
@@ -60,7 +76,7 @@ public final class DataRequestValidator {
             return ValidationResult.fail("FIND_BY_ID request requires an _id");
         }
         if (!request.get_id().matches(NameValidations.ID_PATTERN)) {
-            return ValidationResult.fail("_id must be 1-64 alphanumeric characters, underscores, or hyphens");
+            return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return ValidationResult.ok();
     }
@@ -74,7 +90,7 @@ public final class DataRequestValidator {
             return ValidationResult.fail("DELETE request requires an _id");
         }
         if (!request.get_id().matches(NameValidations.ID_PATTERN)) {
-            return ValidationResult.fail("_id must be 1-64 alphanumeric characters, underscores, or hyphens");
+            return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
         return ValidationResult.ok();
     }

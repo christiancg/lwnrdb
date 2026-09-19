@@ -12,6 +12,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
@@ -37,17 +38,23 @@ public final class AggregationOperationHelper {
 
     public static List<JsonObject> processStepsOnStream(List<BaseAggregationStep> steps,
             Stream<JsonObject> initialStream) throws IOException {
-        return applySteps(steps, initialStream, "", "");
+        return applySteps(steps, initialStream, "", "", null);
     }
 
     public static List<JsonObject> processAggregation(AggregateRequest request) throws IOException {
-        return applySteps(request.getAggregationSteps(), null, request.getDatabaseName(), request.getCollectionName());
+        return applySteps(request.getAggregationSteps(), null, request.getDatabaseName(), request.getCollectionName(),
+                null);
     }
 
     public static List<JsonObject> processAggregation(AggregateRequest request, Stream<JsonObject> source)
             throws IOException {
-        return applySteps(request.getAggregationSteps(), source, request.getDatabaseName(),
-                request.getCollectionName());
+        return processAggregation(request, source, null);
+    }
+
+    public static List<JsonObject> processAggregation(AggregateRequest request, Stream<JsonObject> source,
+            Transaction transaction) throws IOException {
+        return applySteps(request.getAggregationSteps(), source, request.getDatabaseName(), request.getCollectionName(),
+                transaction);
     }
 
     public static List<String> aggregateLockSet(AggregateRequest request) {
@@ -66,14 +73,14 @@ public final class AggregationOperationHelper {
 
     // A Stream is lazy, so a SCRIPT callable runs during toList(): the context must wrap the terminal op too.
     private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
-            String dbName, String collName) throws IOException {
+            String dbName, String collName, Transaction transaction) throws IOException {
         try (var context = new PipelineScriptContext()) {
-            return applySteps(steps, initialStream, dbName, collName, context);
+            return applySteps(steps, initialStream, dbName, collName, context, transaction);
         }
     }
 
     private static List<JsonObject> applySteps(List<BaseAggregationStep> steps, Stream<JsonObject> initialStream,
-            String dbName, String collName, PipelineScriptContext context) throws IOException {
+            String dbName, String collName, PipelineScriptContext context, Transaction transaction) throws IOException {
         Stream<JsonObject> resultStream = initialStream;
         var startIndex = 0;
         if (resultStream == null) {
@@ -89,7 +96,7 @@ public final class AggregationOperationHelper {
                 case FILTER -> processFilterStep(step, resultStream, dbName, collName, context);
                 case MAP -> processMapStep(step, resultStream, dbName, collName, context);
                 case GROUP_BY -> processGroupByStep(step, resultStream, dbName, collName);
-                case JOIN -> processJoinStep(step, resultStream, dbName, collName);
+                case JOIN -> processJoinStep(step, resultStream, dbName, collName, transaction);
                 case COUNT -> processCountStep(resultStream, dbName, collName);
                 case DISTINCT -> processDistinctStep(step, resultStream, dbName, collName);
                 case LIMIT -> processLimitStep(step, resultStream, dbName, collName);
@@ -106,7 +113,9 @@ public final class AggregationOperationHelper {
                 }
                 resultStream = cache.initializeStreamIfNecessary(null, dbName, collName);
             }
-            return resultStream.toList();
+            try (var stream = resultStream) {
+                return stream.toList();
+            }
         } catch (java.io.UncheckedIOException e) {
             throw e.getCause();
         }
@@ -221,7 +230,7 @@ public final class AggregationOperationHelper {
     }
 
     private static Stream<JsonObject> processJoinStep(BaseAggregationStep baseJoinStep, Stream<JsonObject> resultStream,
-            String dbName, String collName) throws IOException {
+            String dbName, String collName, Transaction transaction) throws IOException {
         resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var joinStep = (JoinAggregationStep) baseJoinStep;
         final var joinCollectionName = joinStep.getJoinCollection();
@@ -231,7 +240,7 @@ public final class AggregationOperationHelper {
         // Blocking step (documented exception): JOIN groups the remote side in memory before the per-row attach.
         final var leftEntries = resultStream.toList();
         final var joinedCollection = buildJoinLookup(dbName, joinCollectionName, joinCollectionRemoteField, leftEntries,
-                joinCollectionLocalField);
+                joinCollectionLocalField, transaction);
         return leftEntries.stream().map(jsonObject -> {
             final var localValue = JsonUtils.resolvePath(jsonObject, joinCollectionLocalField);
             if (localValue != null) {
@@ -244,7 +253,8 @@ public final class AggregationOperationHelper {
     }
 
     private static Map<JsonBaseElement, JsonArray> buildJoinLookup(String dbName, String joinCollectionName,
-            String remoteField, List<JsonObject> leftEntries, String localField) throws IOException {
+            String remoteField, List<JsonObject> leftEntries, String localField, Transaction transaction)
+            throws IOException {
         final var localValues = new HashSet<JsonBaseElement>();
         for (var left : leftEntries) {
             final var localValue = JsonUtils.resolvePath(left, localField);
@@ -252,17 +262,16 @@ public final class AggregationOperationHelper {
                 localValues.add(localValue);
             }
         }
+        final var joinCollId = Cache.getCollectionIdentifier(dbName, joinCollectionName);
+        final var overlay = transaction != null ? transaction.overlayFor(joinCollId) : null;
+        if (overlay != null && !overlay.isEmpty()) {
+            return groupByRemoteField(TransactionOperationHelper.applyOverlayToStream(transaction, joinCollId,
+                    cache.initializeStreamIfNecessary(null, dbName, joinCollectionName)), remoteField);
+        }
         final var matchingIds = IndexHelper.getMatchingIdsForJoin(dbName, joinCollectionName, remoteField, localValues);
         if (matchingIds == null) {
             final var joinCollectionMap = cache.getWholeCollection(dbName, joinCollectionName);
-            return joinCollectionMap.values().stream().map(DbEntry::getData)
-                    .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, remoteField))
-                    .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, remoteField),
-                            HashMap::new, Collectors.collectingAndThen(Collectors.toList(), jsonObjects -> {
-                                final var jsonArray = new JsonArray();
-                                jsonObjects.forEach(jsonArray::add);
-                                return jsonArray;
-                            })));
+            return groupByRemoteField(joinCollectionMap.values().stream().map(DbEntry::getData), remoteField);
         }
         final var matchedDocs = cache.getEntriesByIds(dbName, joinCollectionName, matchingIds);
         final var lookup = new HashMap<JsonBaseElement, JsonArray>();
@@ -274,6 +283,17 @@ public final class AggregationOperationHelper {
             }
         }
         return lookup;
+    }
+
+    private static Map<JsonBaseElement, JsonArray> groupByRemoteField(Stream<JsonObject> documents,
+            String remoteField) {
+        return documents.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, remoteField))
+                .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, remoteField),
+                        HashMap::new, Collectors.collectingAndThen(Collectors.toList(), jsonObjects -> {
+                            final var jsonArray = new JsonArray();
+                            jsonObjects.forEach(jsonArray::add);
+                            return jsonArray;
+                        })));
     }
 
     private static Stream<JsonObject> processDistinctStep(BaseAggregationStep baseDistinctStep,

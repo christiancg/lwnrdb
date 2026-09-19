@@ -23,6 +23,7 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -148,8 +149,20 @@ public class AdminCache {
         return pageCache.getAdminPagePkIndexes(dbName, collName);
     }
 
-    public void shiftPkPositionsAfterCompaction(String collName, long page, long removedPosition, long removedLength) {
-        final Collection<PkIndexEntry> entries = switch (collName) {
+    public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,
+            long removedLength) {
+        final Collection<PkIndexEntry> entries = Globals.ADMIN_DB_NAME.equals(dbName)
+                ? adminCollectionPkIndex(collName)
+                : pageCache.pkIndexesForPagesCollection(collName);
+        for (final var entry : entries) {
+            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
+                entry.setPosition(entry.getPosition() - removedLength);
+            }
+        }
+    }
+
+    private Collection<PkIndexEntry> adminCollectionPkIndex(String collName) {
+        return switch (collName) {
             case Globals.ADMIN_DATABASES_COLLECTION_NAME -> databasesPkIndex.values();
             case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> collectionsPkIndex.values();
             case Globals.ADMIN_USERS_COLLECTION_NAME -> usersPkIndex.values();
@@ -158,11 +171,6 @@ public class AdminCache {
             case Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME -> triggerRunsPkIndex.values();
             case null, default -> pageCache.pkIndexesForPagesCollection(collName);
         };
-        for (final var entry : entries) {
-            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
-                entry.setPosition(entry.getPosition() - removedLength);
-            }
-        }
     }
 
     public void removeAdminPageEntries(String dbName, String collName) {
@@ -265,7 +273,8 @@ public class AdminCache {
         } catch (Exception e) {
             logger.warning("Failed to load schema for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
                     + e.getMessage());
-            return null;
+            throw new MetadataReadException(
+                    "Failed to read the schema for " + Cache.getCollectionIdentifier(dbName, collName), e);
         }
     }
 
@@ -295,7 +304,8 @@ public class AdminCache {
         } catch (Exception e) {
             logger.warning(
                     "Failed to load procedure " + Cache.getCollectionIdentifier(dbName, name) + ": " + e.getMessage());
-            return null;
+            throw new MetadataReadException(
+                    "Failed to read the procedure " + Cache.getCollectionIdentifier(dbName, name), e);
         }
     }
 
@@ -325,7 +335,8 @@ public class AdminCache {
         } catch (Exception e) {
             logger.warning(
                     "Failed to load schedule " + Cache.getCollectionIdentifier(dbName, name) + ": " + e.getMessage());
-            return null;
+            throw new MetadataReadException(
+                    "Failed to read the schedule " + Cache.getCollectionIdentifier(dbName, name), e);
         }
     }
 
@@ -358,14 +369,22 @@ public class AdminCache {
     }
 
     public List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
+        final String raw;
         try {
-            final var raw = fs.readTriggers(dbName, collName);
-            if (raw == null || raw.isBlank()) {
-                return List.of();
-            }
+            raw = fs.readTriggers(dbName, collName);
+        } catch (Exception e) {
+            logger.warning("Failed to read triggers for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
+                    + e.getMessage());
+            throw new MetadataReadException(
+                    "Failed to read the triggers for " + Cache.getCollectionIdentifier(dbName, collName), e);
+        }
+        if (raw == null || raw.isBlank()) {
+            return List.of();
+        }
+        try {
             return List.copyOf(TriggerDefinition.fromFileJson(eJson.fromJson(raw, JsonObject.class)));
         } catch (Exception e) {
-            logger.warning("Failed to load triggers for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
+            logger.warning("Failed to parse triggers for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
                     + e.getMessage());
             return List.of();
         }

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -18,6 +19,8 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.SizeParser;
 import org.techhouse.config.ValueType;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
@@ -193,6 +196,24 @@ public class TestUtils {
         final var field = clazz.getDeclaredField(fieldName);
         field.setAccessible(true);
         field.set(null, fieldValue);
+    }
+
+    public static void cacheEntry(Cache cache, String dbName, String collName, DbEntry entry) throws IOException {
+        cache.addEntryToCache(dbName, collName, entry);
+        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        final var position = Collections.binarySearch(pkIndex, entry.get_id());
+        if (position < 0) {
+            pkIndex.add(-(position + 1), new PkIndexEntry(dbName, collName, entry.get_id(), 0, 1, entry.getPage()));
+        }
+    }
+
+    public static void uncacheEntry(Cache cache, String dbName, String collName, String id) throws IOException {
+        cache.evictEntry(dbName, collName, id);
+        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        final var position = Collections.binarySearch(pkIndex, id);
+        if (position >= 0) {
+            pkIndex.remove(position);
+        }
     }
 
     public static void setDbPath(Object fileSystem, String path) throws NoSuchFieldException, IllegalAccessException {

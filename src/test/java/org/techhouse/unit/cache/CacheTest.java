@@ -5,37 +5,21 @@ import static org.mockito.Mockito.*;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
-import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
-public class CacheTest {
-
-    @BeforeEach
-    public void setUp() throws NoSuchFieldException, IllegalAccessException, IOException {
-        TestUtils.standardInitialSetup();
-    }
-
-    @AfterEach
-    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
-        TestUtils.standardTearDown();
-    }
+public class CacheTest extends CacheFixtureSupport {
 
     @Test
     public void test_concatenates_dbname_and_coll_name_correctly() {
@@ -107,7 +91,7 @@ public class CacheTest {
 
     @Test
     public void test_returns_whole_collection_from_cache_if_exists_and_complete()
-            throws NoSuchFieldException, IllegalAccessException {
+            throws NoSuchFieldException, IllegalAccessException, java.io.IOException {
         Cache cache = new Cache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -138,6 +122,9 @@ public class CacheTest {
         final var userCache = IocContainer.get(org.techhouse.cache.UserCache.class);
         final var collectionMap = TestUtils.getPrivateField(userCache, "collectionMap", typeCollMap);
         collectionMap.put(collectionIdentifier, wholeCollection);
+        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        pkIndex.add(new org.techhouse.data.PkIndexEntry(dbName, collName, "1", 0, 1, 0));
+        pkIndex.add(new org.techhouse.data.PkIndexEntry(dbName, collName, "2", 1, 1, 0));
 
         Map<String, DbEntry> result = cache.getWholeCollection(dbName, collName);
 
@@ -185,13 +172,15 @@ public class CacheTest {
     }
 
     @Test
-    public void test_get_whole_collection_returns_cached_when_pages_metadata_missing() {
+    public void test_get_whole_collection_returns_cached_when_pages_metadata_missing() throws IOException {
         Cache cache = new Cache();
         String dbName = "myDb";
         String collName = "myColl";
         DbEntry e = new DbEntry();
         e.set_id("1");
         cache.addEntryToCache(dbName, collName, e);
+        cache.getPkIndexAndLoadIfNecessary(dbName, collName)
+                .add(new org.techhouse.data.PkIndexEntry(dbName, collName, "1", 0, 1, 0));
 
         Map<String, DbEntry> result = cache.getWholeCollection(dbName, collName);
         assertEquals(1, result.size());
@@ -199,190 +188,6 @@ public class CacheTest {
 
     // Regression: the completeness gate must use the synchronous PK index size, not the
     // background-updated (lagging) admin page entry count.
-    @Test
-    public void test_get_whole_collection_reloads_when_cache_incomplete_vs_pk_index() throws Exception {
-        final var cache = new Cache();
-        final var fs = IocContainer.get(FileSystem.class);
-        TestUtils.createTestDatabaseAndCollection();
-
-        for (int i = 1; i <= 2; i++) {
-            final var o = new JsonObject();
-            o.addProperty(Globals.PK_FIELD, "id" + i);
-            final var e = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, o);
-            e.setPage(0L);
-            fs.insertIntoCollection(e);
-        }
-
-        final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
-        final var cachedObj = new JsonObject();
-        cachedObj.addProperty(Globals.PK_FIELD, "id1");
-        injectCachedEntry(collId, DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, cachedObj));
-        // A lagging page count of 1 would previously have wrongly accepted the 1-entry cache as complete.
-        final var pageEntry = new org.techhouse.data.admin.AdminPageEntry(TestGlobals.DB, TestGlobals.COLL, 0);
-        pageEntry.setEntryCount(1);
-        injectPages(collId, new ArrayList<>(List.of(pageEntry)));
-
-        final var result = cache.getWholeCollection(TestGlobals.DB, TestGlobals.COLL);
-
-        assertEquals(2, result.size(), "PK index size (2) must force a reload of the incomplete cache");
-        assertTrue(result.containsKey("id1"));
-        assertTrue(result.containsKey("id2"));
-    }
-
-    @Test
-    public void test_initializeStreamIfNecessary_skips_cache_when_disabled() throws Exception {
-        final var config = Configuration.getInstance();
-        final long original = config.getMaxMemoryBytes();
-        TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
-        try {
-            Cache cache = IocContainer.get(Cache.class);
-            TestUtils.createTestDatabaseAndCollection();
-            final var stream = cache.initializeStreamIfNecessary(null, TestGlobals.DB, TestGlobals.COLL);
-            assertNotNull(stream);
-            stream.close();
-            final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-            };
-            final var userCache = IocContainer.get(org.techhouse.cache.UserCache.class);
-            final var collectionMap = TestUtils.getPrivateField(userCache, "collectionMap", collType);
-            assertFalse(collectionMap.containsKey(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
-        } finally {
-            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
-        }
-    }
-
-    private static void injectCachedEntry(String collId, DbEntry entry)
-            throws NoSuchFieldException, IllegalAccessException {
-        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var userCache = IocContainer.get(org.techhouse.cache.UserCache.class);
-        final var collectionMap = TestUtils.getPrivateField(userCache, "collectionMap", type);
-        final var inner = collectionMap.computeIfAbsent(collId, _ -> new ConcurrentHashMap<>());
-        inner.put(entry.get_id(), entry);
-    }
-
-    private static void injectPages(String collId, List<org.techhouse.data.admin.AdminPageEntry> pageList)
-            throws NoSuchFieldException, IllegalAccessException {
-        final var type = new ReflectionUtils.TypeToken<Map<String, List<org.techhouse.data.admin.AdminPageEntry>>>() {
-        };
-        final var adminCache = IocContainer.get(org.techhouse.cache.AdminCache.class);
-        final var pages = TestUtils.getPrivateField(TestUtils.pageCacheOf(adminCache), "pages", type);
-        pages.put(collId, pageList);
-    }
-
-    @Test
-    public void test_streamCollection_fully_cached_streams_from_cache() throws Exception {
-        Cache cache = new Cache();
-        FileSystem fsMock = mock(FileSystem.class);
-        TestUtils.setPrivateField(cache, "fs", fsMock);
-
-        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
-        final var obj = new JsonObject();
-        obj.addProperty(Globals.PK_FIELD, "id1");
-        injectCachedEntry(collId, DbEntry.fromJsonObject("userDb", "c1", obj));
-        final var pageEntry = new org.techhouse.data.admin.AdminPageEntry("userDb", "c1", 0);
-        pageEntry.setEntryCount(1);
-        injectPages(collId, new ArrayList<>(List.of(pageEntry)));
-
-        final List<DbEntry> result;
-        try (var stream = cache.streamCollection("userDb", "c1")) {
-            result = stream.toList();
-        }
-
-        assertEquals(1, result.size());
-        assertEquals("id1", result.getFirst().get_id());
-        verify(fsMock, never()).readWholeCollectionPage(anyString(), anyString(), anyLong());
-        verify(fsMock, never()).streamEntries(anyString(), anyString());
-    }
-
-    @Test
-    public void test_streamCollection_not_cached_streams_pages_with_headroom_check() throws Exception {
-        Cache cache = new Cache();
-        FileSystem fsMock = mock(FileSystem.class);
-        TestUtils.setPrivateField(cache, "fs", fsMock);
-        org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
-        TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
-
-        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
-        final var pageEntry = new org.techhouse.data.admin.AdminPageEntry("userDb", "c1", 0);
-        pageEntry.setEntryCount(2);
-        pageEntry.setPageSize(1234L);
-        injectPages(collId, new ArrayList<>(List.of(pageEntry)));
-
-        final var page = new HashMap<String, DbEntry>();
-        final var o1 = new JsonObject();
-        o1.addProperty(Globals.PK_FIELD, "id1");
-        final var o2 = new JsonObject();
-        o2.addProperty(Globals.PK_FIELD, "id2");
-        page.put("id1", DbEntry.fromJsonObject("userDb", "c1", o1));
-        page.put("id2", DbEntry.fromJsonObject("userDb", "c1", o2));
-        when(fsMock.readWholeCollectionPage("userDb", "c1", 0L)).thenReturn(page);
-
-        final List<DbEntry> result;
-        try (var stream = cache.streamCollection("userDb", "c1")) {
-            result = stream.toList();
-        }
-
-        assertEquals(2, result.size());
-        verify(mmMock).ensureHeadroomForBytes(1234L);
-        verify(fsMock).readWholeCollectionPage("userDb", "c1", 0L);
-    }
-
-    @Test
-    public void test_streamCollection_no_page_metadata_falls_back_to_stream_entries() throws Exception {
-        Cache cache = new Cache();
-        FileSystem fsMock = mock(FileSystem.class);
-        TestUtils.setPrivateField(cache, "fs", fsMock);
-
-        final var o1 = new JsonObject();
-        o1.addProperty(Globals.PK_FIELD, "id1");
-        when(fsMock.streamEntries("userDb", "c1")).thenReturn(Stream.of(DbEntry.fromJsonObject("userDb", "c1", o1)));
-
-        final List<DbEntry> result;
-        try (var stream = cache.streamCollection("userDb", "c1")) {
-            result = stream.toList();
-        }
-
-        assertEquals(1, result.size());
-        verify(fsMock).streamEntries("userDb", "c1");
-    }
-
-    @Test
-    public void test_streamCollection_caching_disabled_uses_disk_path() throws Exception {
-        final var config = Configuration.getInstance();
-        final long original = config.getMaxMemoryBytes();
-        TestUtils.setPrivateField(config, "maxMemoryBytes", -1L);
-        try {
-            Cache cache = new Cache();
-            FileSystem fsMock = mock(FileSystem.class);
-            TestUtils.setPrivateField(cache, "fs", fsMock);
-            org.techhouse.cache.MemoryManagement mmMock = mock(org.techhouse.cache.MemoryManagement.class);
-            TestUtils.setPrivateField(cache, "memoryManagement", mmMock);
-
-            final var collId = Cache.getCollectionIdentifier("userDb", "c1");
-            final var cachedObj = new JsonObject();
-            cachedObj.addProperty(Globals.PK_FIELD, "stale");
-            injectCachedEntry(collId, DbEntry.fromJsonObject("userDb", "c1", cachedObj));
-            final var pageEntry = new org.techhouse.data.admin.AdminPageEntry("userDb", "c1", 0);
-            pageEntry.setEntryCount(1);
-            injectPages(collId, new ArrayList<>(List.of(pageEntry)));
-            final var page = new HashMap<String, DbEntry>();
-            final var o1 = new JsonObject();
-            o1.addProperty(Globals.PK_FIELD, "fromDisk");
-            page.put("fromDisk", DbEntry.fromJsonObject("userDb", "c1", o1));
-            when(fsMock.readWholeCollectionPage("userDb", "c1", 0L)).thenReturn(page);
-
-            final List<DbEntry> result;
-            try (var stream = cache.streamCollection("userDb", "c1")) {
-                result = stream.toList();
-            }
-
-            assertEquals(1, result.size());
-            assertEquals("fromDisk", result.getFirst().get_id());
-            verify(fsMock).readWholeCollectionPage("userDb", "c1", 0L);
-        } finally {
-            TestUtils.setPrivateField(config, "maxMemoryBytes", original);
-        }
-    }
 
     @Test
     public void test_shift_pk_positions_routes_admin_vs_user() throws NoSuchFieldException, IllegalAccessException {
@@ -399,9 +204,10 @@ public class CacheTest {
         cache.shiftPkPositionsAfterCompaction(new org.techhouse.fs.PkCompaction("userDb", "userColl", 1, 20, 7));
         cache.shiftPkPositionsAfterCompaction(null);
 
-        verify(adminMock).shiftPkPositionsAfterCompaction("collections", 0, 10, 5);
-        verify(adminMock).shiftPkPositionsAfterCompaction("userDb_userColl", 2, 30, 9);
+        verify(adminMock).shiftPkPositionsAfterCompaction(Globals.ADMIN_DB_NAME, "collections", 0, 10, 5);
+        verify(adminMock).shiftPkPositionsAfterCompaction(Globals.ADMIN_PAGES_DB_NAME, "userDb_userColl", 2, 30, 9);
         verify(userMock).shiftPkPositionsAfterCompaction("userDb", "userColl", 1, 20, 7);
         verifyNoMoreInteractions(adminMock, userMock);
     }
+
 }

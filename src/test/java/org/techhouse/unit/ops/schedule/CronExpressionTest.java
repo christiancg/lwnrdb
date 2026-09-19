@@ -158,4 +158,34 @@ public class CronExpressionTest {
         assertEquals(2, second.getDayOfMonth());
         assertEquals(1, second.getHour());
     }
+
+    @Test
+    public void test_sub_hourly_fires_through_a_fall_back_overlap() {
+        final var newYork = ZoneId.of("America/New_York");
+        final var expression = CronExpression.parse("*/5 * * * *");
+        final var from = ZonedDateTime.of(2026, 11, 1, 1, 10, 0, 0, newYork).withLaterOffsetAtOverlap();
+        assertTrue(newYork.getRules().getDaylightSavings(from.toInstant()).isZero(), "from must be the EST pass");
+
+        final var next = expression.nextAfter(from);
+
+        assert next != null;
+        assertEquals(1, next.getHour(), "the loop used to run out of the repeated hour entirely");
+        assertEquals(15, next.getMinute());
+        assertTrue(newYork.getRules().getDaylightSavings(next.toInstant()).isZero(),
+                "every candidate inside the overlap resolved to the earlier offset, which is already behind the"
+                        + " cursor, so the twelve occurrences in the repeated hour never fired");
+    }
+
+    @Test
+    public void test_spring_forward_still_skips_the_missing_hour() {
+        final var newYork = ZoneId.of("America/New_York");
+        final var expression = CronExpression.parse("*/15 * * * *");
+        var current = ZonedDateTime.of(2026, 3, 8, 1, 50, 0, 0, newYork);
+
+        current = expression.nextAfter(current);
+        assert current != null;
+
+        assertEquals(3, current.getHour(), "02:00-02:59 does not exist on this day");
+        assertEquals(0, current.getMinute());
+    }
 }

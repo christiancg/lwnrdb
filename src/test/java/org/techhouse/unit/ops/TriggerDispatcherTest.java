@@ -23,6 +23,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.TriggerDefinition;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -30,8 +31,10 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
+import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
@@ -348,5 +351,59 @@ public class TriggerDispatcherTest {
         TriggerDispatcher.dispatch(event("slow", OWNER, 0));
         assertTrue(System.currentTimeMillis() - start < 4_000, "the trigger budget, not scriptTimeoutMs, applied");
         assertEquals(failedBefore + 1, triggerExecutor.getFailed());
+    }
+
+    private void storeThrowingProcedure(String message) throws Exception {
+        ProcedureOperationHelper.executeSave(
+                new SaveProcedureRequest(TestGlobals.DB, "audit", "throw new Error('" + message + "');"), OWNER);
+    }
+
+    private static String recordRunFor(String id) {
+        return TriggerRunLog.record(new TriggerRunLog.TriggerRunDescriptor(TestGlobals.DB, TestGlobals.COLL, "audit",
+                "audit", EventType.CREATED, false, OWNER, 0, System.currentTimeMillis(), List.of(entry(id))));
+    }
+
+    private static TriggerRunStatus statusOf(String runId) throws Exception {
+        for (final var run : TriggerRunLog.pending()) {
+            if (runId.equals(run.getRunId())) {
+                return run.getStatus();
+            }
+        }
+        return null;
+    }
+
+    private static TriggerEvent lastAttemptEvent(String id, String runId) {
+        return new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "audit", "audit", false,
+                List.of(entry(id)), OWNER, 0, runId, 1);
+    }
+
+    @Test
+    public void test_no_quorum_does_not_consume_an_attempt() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
+        TestUtils.setPrivateField(configuration, "triggerMaxAttempts", 1);
+        TestUtils.setPrivateField(configuration, "triggerRetryBackoffMs", 60_000L);
+        TestUtils.setPrivateField(configuration, "triggerRetryMaxBackoffMs", 60_000L);
+        try {
+            installTrigger(OWNER, true, false);
+            storeThrowingProcedure(ErrorCode.NO_QUORUM.getDefaultMessage());
+            final var waitingRun = recordRunFor("waiting");
+            TriggerDispatcher.dispatch(lastAttemptEvent("waiting", waitingRun));
+            assertEquals(TriggerRunStatus.PENDING, statusOf(waitingRun),
+                    "a write refused for lack of quorum must not burn the run's last attempt");
+
+            IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(TestGlobals.DB);
+            storeThrowingProcedure("something the trigger itself got wrong");
+            final var brokenRun = recordRunFor("broken");
+            TriggerDispatcher.dispatch(lastAttemptEvent("broken", brokenRun));
+            assertEquals(TriggerRunStatus.DEAD, statusOf(brokenRun),
+                    "a genuine trigger failure on the last attempt is dead-lettered");
+        } finally {
+            TestUtils.setPrivateField(configuration, "triggerMaxAttempts", 3);
+            TestUtils.setPrivateField(configuration, "triggerRetryBackoffMs", 1_000L);
+            TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", false);
+            for (final var run : TriggerRunLog.pending()) {
+                TriggerDispatcher.consumeQuietly(run.getRunId(), run.getTriggerName());
+            }
+        }
     }
 }

@@ -18,9 +18,41 @@ There is **no single master**. Every collection is consistent-hashed to an **own
 and ownership is spread across all nodes — one owner per collection. The owner is both the
 collection's **cache home** (reads route there) and its **write coordinator** (writes route
 there, are serialized by the existing per-collection lock, then replicated). A client may
-connect to **any** node, which transparently routes to the owner. Because each collection
-has exactly one serializing owner at a time, concurrent writes to the same document never
-conflict, preserving the engine's linearizable-per-collection guarantees.
+connect to **any** node, which transparently routes to the owner.
+
+### What the cluster actually guarantees
+
+The delivered model is **eventual consistency with per-document last-write-wins**, not
+linearizability. Ownership is derived from each node's own gossip view, and nothing agrees on a
+total order of views, so two nodes can briefly disagree about who owns a collection.
+
+Three mechanisms bound the damage rather than eliminate the disagreement:
+
+- **A hybrid logical clock** (`cluster/HybridClock`) supplies every write version: 48 bits of
+  physical milliseconds and 16 bits of logical counter packed into one `long`, seeded at startup
+  from the highest version on disk and advanced by every version received from a peer. This is
+  what makes "newer" well-defined across nodes and across restarts.
+- **An ownership re-check under the lock.** `guardWrite` runs before the collection lock is taken,
+  so ownership can move while a write waits for it. The write handlers therefore re-check
+  `isOwner` *after* acquiring the lock and refuse with `421-1` if it moved, and a write that
+  commits locally but can no longer be replicated answers `421-1` rather than `OK` — that
+  silent success was the defect this closes.
+- **Version-checked applies**: a replica refuses any upsert or delete older than what it stores,
+  which makes an out-of-order arrival and a stale anti-entropy decision harmless.
+
+The residual is two nodes holding genuinely concurrent, incomparable views. The re-check narrows
+the window — an owner notices the loss before it writes — but cannot close it, because nothing
+orders the two views against each other. Resolving that needs consensus, which this design does not
+introduce; a write accepted under such a split is reconciled by last-write-wins rather than
+rejected.
+
+A ring-generation fencing token was tried and removed: a generation is a *per-node* counter, so a
+replica comparing a coordinator's value against its own is comparing unrelated numbers, and in
+testing it refused legitimate replication outright. A correct fence would have to compare something
+both ends can evaluate — ownership by node id — and has not been designed.
+
+A cluster must also run a single build throughout: there is no mixed-version negotiation, and data
+written by an older build is not carried forward.
 
 ## Membership and discovery
 
@@ -90,6 +122,14 @@ that collection resident, so total cache capacity is the sum of the nodes' budge
 owner is unreachable and `readFallbackToLocal=true`, the edge serves the read from its own
 complete on-disk replica instead of failing; a write to an unreachable owner returns
 `503-4 OWNER_UNREACHABLE`.
+
+A forwarded write can also arrive at the owner **before the collection does**: admin replication
+only waits for a quorum, and the collection's owner need not be in that quorum, so a client that
+creates a collection and immediately writes to it can beat the `CREATE_COLLECTION` to the owner.
+That write is refused with a retryable `503-10 COLLECTION_NOT_READY` rather than being attempted
+and failing on the missing page folder. A clustered node deliberately never answers `404-11
+COLLECTION_NOT_FOUND` for this, because it cannot tell a collection that was never created from
+one whose metadata has not reached it yet — only a node with clustering off can make that call.
 
 Forwarded bodies are Base64-wrapped (`cluster/msg/ForwardBody`) because EJson does not
 escape string values, so raw JSON cannot be embedded directly in the outer message.
@@ -351,9 +391,13 @@ Each participant's commit reuses the same atomic `REPLICATE_TX` batch to its own
 **Durable recovery log.** The PREPARED markers and the coordinator's commit decision are
 records in `admin/transactions` (keyed `{dtxId}|part` / `{dtxId}|coord`, alongside the
 transaction's buffered slice). Presence of the coordinator marker is the commit point:
-present ⇒ commit, absent ⇒ **presumed abort**. On restart a prepared participant
-re-acquires its write locks and asks the coordinator via `TX_STATUS` what to do, and a
-coordinator that recorded a commit re-drives `COMMIT_TX`. Recovery re-runs on every
+present ⇒ commit, absent ⇒ **presumed abort**, and a coordinator that is reachable but has not
+decided yet leaves the slice in doubt rather than being read as an abort. On restart a prepared
+participant asks the coordinator via `TX_STATUS` what to do, and a coordinator that recorded a
+commit re-drives `COMMIT_TX`. The participant does **not** hold its write locks while in doubt —
+clients may write those collections meanwhile — so the replay is version-aware instead: the marker
+records the write-clock version at prepare time, and any document written above that version is
+left alone rather than overwritten with the pre-crash value. Recovery re-runs on every
 membership change and on a periodic sweep, which also GCs old outcome markers and logs
 long in-doubt transactions.
 
@@ -405,7 +449,24 @@ Every document write is stamped with a **version** — a node-global monotonic e
 value assigned by the coordinating owner and persisted as an extra trailing column of the
 PK index (`id|position|length|page|version`). It ships in the `REPLICATE` payload so
 replicas store the *owner's* version rather than assigning their own, and a node advances
-its clock past any version it receives so it never later assigns a lower one. A **delete**
+its clock past any version it receives so it never later assigns a lower one.
+
+**Versions travel as text, never as JSON numbers.** A packed version is around 2^57, well past
+the 2^53 a double represents exactly, so a numeric field lost the low bits of the logical counter
+on every hop: distinct writes arrived as equal versions (which last-write-wins cannot repair), a
+replica's stored version never matched the owner's so the digest-summary fast path could never
+hit, and a rounded-up version could outrank a newer write. The `version` field of `DigestEntry`
+and the `versions` lists of `ReplicationPayload` and `AntiEntropyPayload` are therefore strings
+on the wire. This is a cluster protocol change: nodes on either side of it do not interoperate,
+which the single-build rule above already requires. Document numbers are untouched — they are
+still stored and treated as `double`.
+
+Tombstones are only garbage-collected on a round in which **every** currently known peer answered
+the digest request. A node that is partitioned — or alone — keeps them: collecting a tombstone
+while a peer still holds the document live is what lets the next rejoin resurrect a committed
+delete.
+
+A **delete**
 records a versioned **tombstone** (`{coll}-tombstones.idx`), needed because a plain delete
 cannot converge — a lagging replica still holding the document would resurrect it.
 
@@ -415,7 +476,12 @@ collections against the live members:
 1. It builds a local **digest** (`id → version` for live documents, plus tombstones) and
    requests each peer's digest.
 2. It computes, per id, the **highest version seen anywhere** — a tombstone wins a tie with
-   a live document, so a delete beats a concurrent write at the same version.
+   a live document, so a delete beats a concurrent write at the same version. Two live copies at
+   exactly equal versions are ordered by node id, and the pull gate and the replicated-apply check
+   use that same total order so the two paths cannot disagree. One caveat: the id compared is the
+   one stamped by the node **answering** the digest, not the node that wrote the version, so the
+   tie-break is not yet a stable property of the write. Persisting the writer's id beside the
+   version would make it one, and is a disk-format change that has not been made.
 3. Where a peer holds the winning live version it pulls that document and applies it as a
    versioned upsert; where a tombstone wins it deletes locally and records the tombstone. It
    never overwrites an id it already holds at the winning version.
@@ -447,8 +513,10 @@ behind.
 
 On a membership change and on the same periodic sweep, `cluster/AdminAntiEntropyService`
 pulls each live peer's `ADMIN_SNAPSHOT` (`{epoch, databases, collections, users, schemas,
-procedures, triggers, schedules}`, built from disk), keeps the **highest-epoch** one, and —
-only when it exceeds this node's own epoch — **conforms** local state to it: upsert
+procedures, triggers, schedules}`, built from disk) and keeps the winner under the
+`(epoch, nodeId)` order — a higher epoch wins, and at an **equal** epoch the higher node id
+does, so two nodes at the same epoch converge instead of conforming to each other forever.
+When that winner is a peer rather than this node, it **conforms** local state to it: upsert
 snapshot users then delete absent ones; create missing databases and reconcile owners;
 create missing collections and reconcile their indexes; then drop collections and databases
 absent from the snapshot. Each create/drop takes the target collection's write lock,
@@ -459,6 +527,19 @@ never overwrites live state — it catches up instead.
 To close the window where a stale node becomes the admin coordinator before it has caught
 up, a coordinator rejects coordinated admin ops with a retryable `503-5 ADMIN_SYNCING`
 until it has completed one admin reconciliation since starting.
+
+## Listenable queries in a cluster
+
+`LISTEN` and `STOP_LISTEN` are **not** owner-routed: they are served by whichever node the client is
+connected to, and the registration lives on that node. Replication is full rather than partial, so
+notifications are delivered everywhere — what is weaker is their *consistency*. An `AGGREGATE` is
+forwarded to the collection's owner and sees authoritative state, while a `LISTEN` on the same
+connection reads this node's replica, and a commit the owner acknowledged is only quorum-replicated.
+A client that runs `AGGREGATE` and then `LISTEN` can therefore watch the result set go **backwards**.
+
+Re-runs are deliberately dirty reads (timeliness over strict consistency), but a transactional commit
+defers its notifications until every buffered op has applied, so a listener never sees a frame holding
+half a transaction.
 
 ## Wire protocol
 
@@ -497,8 +578,10 @@ See the *Clustering* row of the configuration table in the main
 Two classes of key have cluster-wide constraints: `scriptsEnabled` and the `script*`
 sandbox keys must be **uniform**, because the sandbox comes from the executing node; and
 `clusterExpectedSize` should match the steady-state node count so the write-quorum majority
-is computed correctly before membership stabilizes. `scriptLocalityWeight` is explicitly
-per-node.
+is computed correctly before membership stabilizes; it must be **at least 2** whenever
+`clusterEnabled=true`, because a lone node evicts its peers after `deadEvictionMs` and then
+satisfies its own quorum, letting both sides of a partition accept divergent writes.
+`scriptLocalityWeight` is explicitly per-node.
 
 ## Operations runbook
 

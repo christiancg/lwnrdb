@@ -18,6 +18,8 @@ import org.techhouse.ioc.IocContainer;
 final class AdminPageCache {
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final org.techhouse.concurrency.ResourceLocking locks = IocContainer
+            .get(org.techhouse.concurrency.ResourceLocking.class);
     private final Map<String, List<AdminPageEntry>> pages = new ConcurrentHashMap<>();
     private final Map<String, List<PkIndexEntry>> pagesPkIndexes = new ConcurrentHashMap<>();
 
@@ -27,8 +29,10 @@ final class AdminPageCache {
         final var pkIdx = fs.readWholePkIndexFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
         pagesPkIndexes.put(pagesCollectionKey(pagesCollName), new ArrayList<>(pkIdx));
         final var pageEntries = new ArrayList<AdminPageEntry>();
+        final var idPrefix = collId + Globals.COLL_IDENTIFIER_SEPARATOR;
         try (var pagesStream = fs.streamPages(Globals.ADMIN_PAGES_DB_NAME, pagesCollName)) {
             pagesStream.forEach(map -> map.values().stream()
+                    .filter(e -> e.get_id() != null && e.get_id().startsWith(idPrefix))
                     .map(e -> AdminPageEntry.fromJsonObject(dbName, collName, e.getData())).forEach(pageEntries::add));
         }
         pages.put(collId, new CopyOnWriteArrayList<>(pageEntries));
@@ -85,16 +89,27 @@ final class AdminPageCache {
     }
 
     void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
-        final var pageEntries = pageList(dbName, collName);
-        final var existing = findPage(pageEntries, page);
-        if (existing != null) {
-            existing.setPageSize(existing.getPageSize() + bytesDelta);
-            existing.setEntryCount(existing.getEntryCount() + 1);
-        } else {
-            final var newEntry = new AdminPageEntry(dbName, collName, page);
-            newEntry.setPageSize(bytesDelta);
-            newEntry.setEntryCount(1);
-            pageEntries.add(newEntry);
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        try {
+            locks.lock(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return;
+        }
+        try {
+            final var pageEntries = pageList(dbName, collName);
+            final var existing = findPage(pageEntries, page);
+            if (existing != null) {
+                existing.setPageSize(existing.getPageSize() + bytesDelta);
+                existing.setEntryCount(existing.getEntryCount() + 1);
+            } else {
+                final var newEntry = new AdminPageEntry(dbName, collName, page);
+                newEntry.setPageSize(bytesDelta);
+                newEntry.setEntryCount(1);
+                pageEntries.add(newEntry);
+            }
+        } finally {
+            locks.release(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
         }
     }
 

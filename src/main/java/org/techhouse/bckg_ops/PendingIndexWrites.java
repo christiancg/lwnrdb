@@ -5,6 +5,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.cache.Cache;
+import org.techhouse.fs.FileSystem;
+import org.techhouse.ioc.IocContainer;
 
 /**
  * A pending document's field-index entry is untrustworthy: index-backed reads must re-evaluate it
@@ -13,10 +15,16 @@ import org.techhouse.cache.Cache;
  */
 public class PendingIndexWrites {
     private final Map<String, Map<String, Integer>> pending = new ConcurrentHashMap<>();
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
 
     public void mark(String dbName, String collName, String id) {
-        pending.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ConcurrentHashMap<>())
-                .merge(id, 1, Integer::sum);
+        final var byId = pending.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
+                _ -> new ConcurrentHashMap<>());
+        final var wasEmpty = byId.isEmpty();
+        byId.merge(id, 1, Integer::sum);
+        if (wasEmpty) {
+            fs.markIndexesDirty(dbName, collName);
+        }
     }
 
     public void mark(String dbName, String collName, Iterable<String> ids) {
@@ -29,6 +37,9 @@ public class PendingIndexWrites {
         final var byId = pending.get(Cache.getCollectionIdentifier(dbName, collName));
         if (byId != null) {
             byId.computeIfPresent(id, (_, current) -> current - 1 <= 0 ? null : current - 1);
+            if (byId.isEmpty()) {
+                fs.clearIndexesDirty(dbName, collName);
+            }
         }
     }
 

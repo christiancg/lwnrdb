@@ -22,12 +22,14 @@ public class TriggerExecutor {
     private final LongAdder retried = new LongAdder();
     private final LongAdder deadLettered = new LongAdder();
     private final AtomicInteger inFlight = new AtomicInteger();
+    private final AtomicInteger parked = new AtomicInteger();
+    private final AtomicInteger workerCount = new AtomicInteger();
     private final AtomicInteger scheduled = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
     private volatile boolean draining;
-    private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
-    private ScheduledExecutorService retryScheduler;
-    private Consumer<TriggerEvent> dispatcher;
+    private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private volatile ScheduledExecutorService retryScheduler;
+    private volatile Consumer<TriggerEvent> dispatcher;
 
     public TriggerExecutor() {
         this.queue = new LinkedBlockingQueue<>(Math.max(1, Configuration.getInstance().getTriggerQueueSize()));
@@ -65,11 +67,11 @@ public class TriggerExecutor {
                 try {
                     submit(event);
                 } finally {
-                    scheduled.decrementAndGet();
+                    decrementScheduled();
                 }
             }, delayMillis, TimeUnit.MILLISECONDS);
         } catch (RuntimeException rejected) {
-            scheduled.decrementAndGet();
+            decrementScheduled();
             submit(event);
         }
     }
@@ -78,7 +80,7 @@ public class TriggerExecutor {
         deadLettered.increment();
     }
 
-    public void start(Consumer<TriggerEvent> triggerDispatcher) {
+    public synchronized void start(Consumer<TriggerEvent> triggerDispatcher) {
         draining = false;
         this.dispatcher = triggerDispatcher;
         retryScheduler = Executors.newSingleThreadScheduledExecutor(runnable -> {
@@ -87,6 +89,8 @@ public class TriggerExecutor {
             return thread;
         });
         final var threadCount = Math.max(1, Configuration.getInstance().getTriggerThreads());
+        workerCount.set(threadCount);
+        parked.set(0);
         for (int i = 0; i < threadCount; i++) {
             pool.execute(this::runWorker);
         }
@@ -94,13 +98,25 @@ public class TriggerExecutor {
     }
 
     private void runWorker() {
+        try {
+            workLoop();
+        } finally {
+            workerCount.updateAndGet(live -> Math.max(0, live - 1));
+            idleSignal.signal();
+        }
+    }
+
+    private void workLoop() {
         while (!Thread.currentThread().isInterrupted()) {
             final TriggerEvent event;
+            parked.incrementAndGet();
             try {
                 event = queue.take();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
+            } finally {
+                parked.decrementAndGet();
             }
             inFlight.incrementAndGet();
             try {
@@ -118,8 +134,9 @@ public class TriggerExecutor {
 
     public boolean drain(long timeoutMillis) {
         draining = true;
+        cancelPendingRetries();
         try {
-            if (idleSignal.awaitIdle(this::isIdle, timeoutMillis)) {
+            if (idleSignal.awaitIdle(this::isIdle, workerCount.get() > 0 ? timeoutMillis : 0L)) {
                 stop();
                 return true;
             }
@@ -132,21 +149,30 @@ public class TriggerExecutor {
         return false;
     }
 
+    private void decrementScheduled() {
+        scheduled.updateAndGet(current -> current > 0 ? current - 1 : 0);
+    }
+
     private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0 && scheduled.get() == 0;
+        return queue.isEmpty() && inFlight.get() == 0 && scheduled.get() <= 0 && parked.get() >= workerCount.get();
     }
 
     public int pending() {
         return queue.size() + inFlight.get() + scheduled.get();
     }
 
-    public void stop() {
+    private void cancelPendingRetries() {
         final var scheduler = retryScheduler;
         retryScheduler = null;
         if (scheduler != null) {
             scheduler.shutdownNow();
         }
         scheduled.set(0);
+    }
+
+    public synchronized void stop() {
+        workerCount.set(0);
+        cancelPendingRetries();
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Trigger");
         queue.clear();
         dispatcher = null;

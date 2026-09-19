@@ -108,6 +108,10 @@ All messages are line-delimited JSON sent over a TCP connection. Every request m
 ```json
 {"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","object":{"_id":"user-1","name":"Alice"}}
 ```
+The id may also be sent beside the object instead of inside it; the two forms address the same document. When both are present the object's `_id` wins.
+```json
+{"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","_id":"user-1","object":{"name":"Alice"}}
+```
 
 #### `BULK_SAVE`
 At least one object required.
@@ -405,6 +409,8 @@ The connection's own reads (`FIND_BY_ID`, `AGGREGATE`) see its buffered writes (
 See [Concurrency & locking](#concurrency--locking).
 
 While a transaction is open only `SAVE`, `BULK_SAVE`, `DELETE`, `FIND_BY_ID`, `AGGREGATE`, `COMMIT_TRANSACTION`, `ROLLBACK_TRANSACTION` and `CLOSE_CONNECTION` are accepted; any other operation is rejected with `409-6`. 
+
+If a buffered write cannot take a collection's write lock within `transactionLockTimeoutMs` the transaction is aborted: that statement answers `409-5`, its buffered writes are discarded and its locks released. The transaction stays open but unusable — every further `SAVE`, `BULK_SAVE`, `DELETE`, `FIND_BY_ID` and `AGGREGATE` answers `409-9`, and so does `COMMIT_TRANSACTION`. Send `ROLLBACK_TRANSACTION` to end it and start again. This is deliberate: a retried statement must never silently commit on its own outside the transaction the client still believes it is in.
 
 If the connection closes with a transaction still open, it is automatically rolled back.
 
@@ -1102,6 +1108,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-8` | `NOT_FOUND` | Procedure not found |
 | `404-9` | `NOT_FOUND` | Trigger not found |
 | `404-10` | `NOT_FOUND` | Schedule not found |
+| `404-11` | `NOT_FOUND` | Collection not found — a write (`SAVE`, `BULK_SAVE`, `DELETE`) named a collection this node has no metadata for. Definitive only when clustering is off; a clustered node answers `503-10` instead, since it cannot tell "never existed" from "not replicated here yet" |
 | `408-1` | `ERROR` | Script exceeded its time budget |
 | `408-2` | `ERROR` | Script was cancelled |
 | `409-1` | `ERROR` | User already exists |
@@ -1112,6 +1119,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-6` | `ERROR` | Operation not allowed while a transaction is open |
 | `409-7` | `ERROR` | Transaction aborted: a participant could not prepare |
 | `409-8` | `ERROR` | The procedure, trigger or schedule was modified by someone else |
+| `409-9` | `ERROR` | The transaction was aborted and must be rolled back before continuing |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |
@@ -1153,6 +1161,9 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-5` | `ERROR` | Admin coordinator is synchronizing, retry shortly |
 | `503-6` | `ERROR` | Too many scripts running, retry shortly *(the message names the scope that refused it: `node`, `user` or `database`)* |
 | `503-7` | `ERROR` | The node the script was placed on did not report an outcome; it was not run again in case it already had *(only raised when a placed script's outcome could not be established; it is never re-run locally, so whether to retry is the caller's decision)* |
+| `503-8` | `ERROR` | The collection's owner did not report an outcome; the write may already have been applied, so retrying is only safe for an idempotent write *(distinct from `503-4`, which means the owner was provably never reached)* |
+| `503-9` | `ERROR` | The admin coordinator could not be resolved, retry shortly *(a coordinated admin op is never applied locally when no coordinator can be reached: an unreplicated DDL answered with `OK` would diverge the cluster silently)* |
+| `503-10` | `ERROR` | The collection has not reached this node yet, retry shortly *(a write routed to the collection's owner can arrive before the `CREATE_COLLECTION` that created it, since admin replication only waits for a quorum and the owner need not be in it — retryable, not a server fault)* |
 
 ### Bootstrap
 
@@ -1180,6 +1191,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `defaultAdminPassword` | Non-blank string, at least 8 characters |
 | `maxMemory` | Human-readable size; `0` (unlimited) and `-1` (caching disabled) are also valid |
 | `transactionLockTimeoutMs` | Valid number ≥ 1. Milliseconds a write inside a transaction waits to acquire a busy collection's write lock before the transaction is aborted (`409-5`) |
+| `deadEvictionMs` | Valid number ≥ 1, and greater than `deadTimeoutMs`. Milliseconds a node must stay DEAD before it is dropped from the membership view. Until then it still counts towards the quorum denominator, so this must comfortably exceed any outage a node is expected to return from |
 | `shutdownTimeoutMs` | Valid number ≥ 1 (default `15000`). Total budget for a graceful shutdown — refusing new connections, releasing open transactions, draining the trigger and background-index queues. Work still outstanding when it expires is abandoned with a warning naming what was dropped |
 | `tlsEnabled` | `true` or `false`. When `true`, every connection is encrypted and plaintext clients are rejected |
 | `tlsKeystorePath` | Path to a PKCS12 keystore. Used only when `tlsEnabled=true`; its parent directory must be writable. If the file is absent a self-signed keystore is generated there |
@@ -1410,7 +1422,7 @@ Locking is two-tier and applies to **both reads and writes** (earlier versions l
 - **Collection-level read/write locks.** Each collection (and each field index) has a read/write lock. Reads acquire a *shared* read lock; writes (`SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`) acquire an *exclusive* write lock. While a writer holds a collection, nobody else may read or write it; multiple readers run concurrently. An `AGGREGATE` with `JOIN` steps read-locks the primary collection and every joined collection, acquiring them in a deterministic order so overlapping queries cannot deadlock. Cache eviction only evicts a resource it can exclusively (write) lock, so it never races an in-flight read or write.
 - **File-level read/write locks.** Below the collection tier, each physical `.dat`/`.idx` file has its own read/write lock, so a file's bytes are never read while they are being rewritten.
 
-**Dirty reads.** Read operations (`FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LIST_USERS`) accept an optional `"dirtyRead": true` (default `false` = fully locked). A dirty read **skips the collection-level read lock**, so it can proceed even while a long write holds the collection. It still goes through the file-level read locks, so every page/index file it reads is individually valid (never half-written). A dirty read may observe a mix of pre- and post-write pages across a collection; that is the trade-off for not waiting.
+**Dirty reads.** Read operations (`FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LIST_USERS`) accept an optional `"dirtyRead": true` (default `false` = fully locked). A dirty read **skips the collection-level read lock**, so it can proceed even while a long write holds the collection. It still goes through the file-level read locks, so every page/index file it reads is individually valid (never half-written). A dirty read may observe a mix of pre- and post-write pages across a collection, may see a document that a concurrent write is relocating twice in one full scan (so a dirty `COUNT` can over-count), and may fail with a retryable error when a concurrent write moves a document out from under the offset it was about to read — it never answers with a *different* document than the one asked for. That is the trade-off for not waiting.
 
 **Transactions.** A connection can open a transaction (`START_TRANSACTION`) to make several writes atomic (see [Transactions](#transactions)). Writes inside a transaction are buffered in the internal `admin/transactions` collection rather than applied, and become visible to the real collections only on `COMMIT_TRANSACTION`; `ROLLBACK_TRANSACTION` discards them. Locking is **lazy**: the first buffered write to a collection acquires that collection's exclusive write lock (waiting up to `transactionLockTimeoutMs`, then aborting the transaction with `409-5` so two concurrent transactions can never deadlock) and holds it — on the connection's own virtual thread — until commit/rollback. 
 While held, other connections cannot read or write those collections, which is what keeps the committed batch atomic. The transaction's own reads apply its buffered mutations (**read-your-writes**); there is no snapshot isolation against other connections beyond that write-exclusivity. Committing replays the buffered operations through the normal write path, so field-index maintenance, page metadata and `LISTEN` notifications behave exactly as for ordinary writes. If the connection drops with a transaction open it is auto-rolled-back, and any operation records left behind by a crash are cleared at startup.

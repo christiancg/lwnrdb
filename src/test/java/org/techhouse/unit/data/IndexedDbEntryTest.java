@@ -205,6 +205,16 @@ public class IndexedDbEntryTest {
     }
 
     @Test
+    public void test_to_db_entry_carries_the_version() {
+        IndexedDbEntry entry = new IndexedDbEntry();
+        entry.set_id("id1");
+        entry.setVersion(7L);
+
+        assertEquals(7L, entry.getVersion());
+        assertEquals(7L, entry.toDbEntry().getVersion());
+    }
+
+    @Test
     public void test_previousByteSize_getter_setter() {
         IndexedDbEntry entry = new IndexedDbEntry();
         entry.setPreviousByteSize(512L);

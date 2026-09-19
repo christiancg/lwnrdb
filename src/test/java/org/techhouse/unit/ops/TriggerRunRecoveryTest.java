@@ -94,6 +94,25 @@ public class TriggerRunRecoveryTest {
     }
 
     @Test
+    public void test_recovery_preserves_the_attempt_count() throws Exception {
+        saveDocument();
+        for (final var entry : TriggerRunLog.pending()) {
+            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
+        }
+        captured.clear();
+        writeRecord("run-attempts", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
+                System.currentTimeMillis());
+        TriggerRunLog.markAttempt("run-attempts", org.techhouse.data.admin.TriggerRunStatus.PENDING, 2, "boom", 0L);
+
+        TriggerRunRecovery.recoverLocal();
+        sleep();
+
+        assertEquals(1, captured.size());
+        assertEquals(2, captured.getFirst().getAttempt(),
+                "a replay must carry the durable attempt count, or a poison trigger never reaches DEAD");
+    }
+
+    @Test
     public void test_pending_run_is_resubmitted_at_startup() throws Exception {
         saveDocument();
         for (final var entry : TriggerRunLog.pending()) {

@@ -17,7 +17,6 @@ import java.util.stream.StreamSupport;
 import org.techhouse.cache.Cache;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
-import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
@@ -110,7 +109,7 @@ public final class SortOperatorHelper {
             String collName, boolean ascending, long bound) {
         final var sortedEntries = new ArrayList<>(indexEntries);
         sortedEntries.sort((a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending));
-        final var ids = sortedEntries.stream().flatMap(entry -> entry.getIds().stream()).iterator();
+        final var ids = sortedEntries.stream().flatMap(entry -> IndexHelper.sortedIds(entry).stream()).iterator();
         final var chunks = Spliterators.spliteratorUnknownSize(chunkIterator(ids, firstChunkSize(bound)),
                 Spliterator.ORDERED);
         return StreamSupport.stream(chunks, false).flatMap(chunk -> fetchChunk(chunk, dbName, collName));
@@ -171,42 +170,14 @@ public final class SortOperatorHelper {
     }
 
     private static int compareIndexValues(Object a, Object b, boolean ascending) {
-        if (!ascending) {
-            return compareIndexValues(b, a, true);
-        }
-        final var aIsNull = (a == null || a instanceof JsonNull);
-        final var bIsNull = (b == null || b instanceof JsonNull);
-        if (aIsNull && bIsNull) {
-            return 0;
-        }
-        if (aIsNull) {
-            return 1;
-        }
-        if (bIsNull) {
-            return -1;
-        }
-        switch (a) {
-            case Number na when b instanceof Number nb -> {
-                return Double.compare(na.doubleValue(), nb.doubleValue());
-            }
-            case String sa when b instanceof String sb -> {
-                return sa.compareTo(sb);
-            }
-            case Boolean ba -> {
-                return ba ? -1 : 1;
-            }
-            case JsonCustom<?> ca when b instanceof JsonCustom<?> cb
-                    && ca.getClass().isAssignableFrom(cb.getClass()) -> {
-                return ca.getValue().compareTo(cb.getValue());
-            }
-            default -> {
-            }
-        }
-        final var elemA = IndexHelper.indexValueToElement(a);
-        final var elemB = IndexHelper.indexValueToElement(b);
-        if (elemA.isJsonPrimitive() && !elemB.isJsonPrimitive()) {
-            return 1;
-        }
-        return -1;
+        final var elemA = toSortKey(a);
+        final var elemB = toSortKey(b);
+        return ascending
+                ? JsonUtils.compareSortKeysAscending(elemA, elemB)
+                : JsonUtils.compareSortKeysDescending(elemA, elemB);
+    }
+
+    private static JsonBaseElement toSortKey(Object value) {
+        return value == null || value instanceof JsonNull ? JsonNull.INSTANCE : IndexHelper.indexValueToElement(value);
     }
 }

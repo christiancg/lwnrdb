@@ -38,6 +38,7 @@ public enum ErrorCode {
     PROCEDURE_NOT_FOUND("404-8", "Procedure not found", OperationStatus.NOT_FOUND),
     TRIGGER_NOT_FOUND("404-9", "Trigger not found", OperationStatus.NOT_FOUND),
     SCHEDULE_NOT_FOUND("404-10", "Schedule not found", OperationStatus.NOT_FOUND),
+    COLLECTION_NOT_FOUND("404-11", "Collection not found", OperationStatus.NOT_FOUND),
     SCRIPT_TIMEOUT("408-1", "Script exceeded its time budget", OperationStatus.ERROR),
     SCRIPT_CANCELLED("408-2", "Script was cancelled", OperationStatus.ERROR),
     USER_ALREADY_EXISTS("409-1", "User already exists", OperationStatus.ERROR),
@@ -48,6 +49,11 @@ public enum ErrorCode {
     OPERATION_NOT_ALLOWED_IN_TRANSACTION("409-6", "Operation not allowed while a transaction is open", OperationStatus.ERROR),
     TRANSACTION_ABORTED("409-7", "Transaction aborted: a participant could not prepare", OperationStatus.ERROR),
     PROCEDURE_VERSION_CONFLICT("409-8", "The procedure or trigger was modified by someone else", OperationStatus.ERROR),
+    TRANSACTION_NOT_USABLE("409-9", "The transaction was aborted and must be rolled back before continuing",
+            OperationStatus.ERROR),
+    TRANSACTION_INDETERMINATE("409-10",
+            "The transaction's outcome is indeterminate: part of it did not apply and recovery will re-drive it",
+            OperationStatus.ERROR),
     NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection", OperationStatus.ERROR),
     CROSS_OWNER_TRANSACTION("421-2", "A transaction may only touch collections owned by a single node", OperationStatus.ERROR),
     AUTHENTICATION_ERROR("500-1", "Error during authentication", OperationStatus.ERROR),
@@ -82,6 +88,9 @@ public enum ErrorCode {
     ERROR_DELETING_TRIGGER("500-30", "Error while deleting the trigger", OperationStatus.ERROR),
     ERROR_SAVING_SCHEDULE("500-31", "Error while saving the schedule", OperationStatus.ERROR),
     ERROR_DELETING_SCHEDULE("500-32", "Error while deleting the schedule", OperationStatus.ERROR),
+    TRANSACTION_HALF_APPLIED("500-33",
+            "A committed transaction could not be fully applied; its collections are fenced until it is finished",
+            OperationStatus.ERROR),
     MAX_CONNECTIONS_REACHED("503-1", "Max number of connections reached", OperationStatus.ERROR),
     NO_QUORUM("503-2", "Cluster does not have a write quorum", OperationStatus.ERROR),
     REPLICATION_TIMEOUT("503-3", "Timed out waiting for the replication quorum", OperationStatus.ERROR),
@@ -89,7 +98,15 @@ public enum ErrorCode {
     ADMIN_SYNCING("503-5", "Admin coordinator is synchronizing, retry shortly", OperationStatus.ERROR),
     SCRIPT_CONCURRENCY_LIMIT("503-6", "Too many scripts running, retry shortly", OperationStatus.ERROR),
     SCRIPT_OUTCOME_UNKNOWN("503-7", "The node the script was placed on did not report an outcome; "
-            + "it was not run again in case it already had", OperationStatus.ERROR);
+            + "it was not run again in case it already had", OperationStatus.ERROR),
+    WRITE_OUTCOME_UNKNOWN("503-8", "The collection's owner did not report an outcome; the write may already "
+            + "have been applied, so retrying is only safe for an idempotent write", OperationStatus.ERROR),
+    ADMIN_COORDINATOR_UNAVAILABLE("503-9", "The admin coordinator could not be resolved, retry shortly",
+            OperationStatus.ERROR),
+    SCHEMA_UNAVAILABLE("503-11", "The collection's schema could not be read, so the write cannot be validated;"
+            + " retry shortly", OperationStatus.ERROR),
+    COLLECTION_NOT_READY("503-10", "The collection has not reached this node yet, retry shortly",
+            OperationStatus.ERROR);
     // @formatter:on
 
     private final String code;

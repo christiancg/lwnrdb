@@ -35,6 +35,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.FindByIdRequest;
@@ -51,8 +52,8 @@ public class TransactionClusteringTest {
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
-    private boolean origEnabled;
-    private int origExpected;
+    private volatile boolean origEnabled;
+    private volatile int origExpected;
     private Replicator origReplicator;
 
     private static NodeInfo node(String id, int port) {
@@ -131,9 +132,9 @@ public class TransactionClusteringTest {
         configureMembership(1, node("self", 5000));
         final var clientId = startedClientWithWrite("prep-commit");
         final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
-        assertTrue(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000", java.util.List.of()));
+        assertTrue(TwoPhaseParticipant.prepare(clientId, "127.0.0.1:5000", java.util.List.of()));
         assertTrue(Tx2pcLog.isPrepared(dtxId));
-        assertEquals(OperationStatus.OK, TransactionOperationHelper.commitPrepared(clientId).getStatus());
+        assertEquals(OperationStatus.OK, TwoPhaseParticipant.commitPrepared(clientId).getStatus());
         assertEquals(OperationStatus.OK, findStatus("prep-commit"));
         assertFalse(Tx2pcLog.isPrepared(dtxId));
         assertNull(clientTracker.getActiveTransaction(clientId));
@@ -143,7 +144,7 @@ public class TransactionClusteringTest {
     public void test_prepare_without_quorum_votes_no() throws Exception {
         configureMembership(3, node("self", 5000));
         final var clientId = startedClientWithWrite("prep-nq");
-        assertFalse(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000", java.util.List.of()));
+        assertFalse(TwoPhaseParticipant.prepare(clientId, "127.0.0.1:5000", java.util.List.of()));
     }
 
     @Test
@@ -151,7 +152,7 @@ public class TransactionClusteringTest {
         configureMembership(1, node("self", 5000));
         final var clientId = startedClientWithWrite("prep-abort");
         final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
-        assertTrue(TransactionOperationHelper.prepare(clientId, "127.0.0.1:5000", java.util.List.of()));
+        assertTrue(TwoPhaseParticipant.prepare(clientId, "127.0.0.1:5000", java.util.List.of()));
         TransactionOperationHelper.abort(clientId);
         assertFalse(Tx2pcLog.isPrepared(dtxId));
         assertEquals(OperationStatus.NOT_FOUND, findStatus("prep-abort"));
@@ -224,10 +225,134 @@ public class TransactionClusteringTest {
     }
 
     @Test
+    @SuppressWarnings("BusyWait")
     public void test_reaper_listener_reaps_on_membership_change() throws Exception {
         configureMembership(1, node("self", 5000));
         clientTracker.registerTxSession("listener-session", "admin", "edge-gone");
+
         new TransactionSessionReaper().onMembershipChanged(new MembershipView(List.of(node("self", 5000))));
+
+        for (var i = 0; i < 100 && !clientTracker.txSessionsSnapshot().isEmpty(); i++) {
+            Thread.sleep(20);
+        }
         assertTrue(clientTracker.txSessionsSnapshot().isEmpty());
+    }
+
+    @Test
+    public void test_commit_refuses_when_ownership_moved() throws Exception {
+        configureMembership(1, node("self", 5000));
+        final var clientId = startedClientWithWrite("ownership-moved");
+        final var realOwnership = TestUtils.getPrivateField(coordinator, "ownershipManager", OwnershipManager.class);
+        final var moved = mock(OwnershipManager.class);
+        when(moved.hasQuorum()).thenReturn(true);
+        when(moved.isOwner(any(), any())).thenReturn(false);
+        TestUtils.setPrivateField(coordinator, "ownershipManager", moved);
+        try {
+            final var response = processor.processMessage(new CommitTransactionRequest(), clientId);
+            assertEquals("421-1", response.getErrorCode(),
+                    "a commit whose collections moved to another owner is no longer mutually exclusive with that"
+                            + " owner's writers and must be refused");
+        } finally {
+            TestUtils.setPrivateField(coordinator, "ownershipManager", realOwnership);
+        }
+
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("ownership-moved"),
+                "the refusal must land before the durable commit marker, so nothing is applied");
+    }
+
+    @Test
+    public void test_prepare_votes_no_for_an_aborted_transaction() throws Exception {
+        configureMembership(1, node("self", 5000));
+        final var clientId = startedClientWithWrite("prep-aborted");
+        final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
+        TransactionOperationHelper.abortInPlace(clientId);
+
+        assertFalse(TwoPhaseParticipant.prepare(clientId, "127.0.0.1:5000", java.util.List.of()),
+                "a participant that already aborted in place released its locks and discarded its ops, so voting"
+                        + " yes would report the whole transaction committed while its slice never existed");
+        assertFalse(Tx2pcLog.isPrepared(dtxId));
+    }
+
+    @Test
+    public void test_commit_prepared_refuses_an_aborted_transaction() throws Exception {
+        configureMembership(1, node("self", 5000));
+        final var clientId = startedClientWithWrite("commit-aborted");
+        TransactionOperationHelper.abortInPlace(clientId);
+
+        final var response = TwoPhaseParticipant.commitPrepared(clientId);
+
+        assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals("409-9", response.getErrorCode());
+    }
+
+    @Test
+    public void test_durable_resolution_goes_through_a_live_prepared_session() throws Exception {
+        configureMembership(1, node("self", 5000));
+        final var session = clientTracker.registerTxSession("sess-live", "alice", "edge");
+        final var sessionClient = session.clientId();
+        session.submit(() -> {
+            processor.processMessage(new StartTransactionRequest(), sessionClient);
+            processor.processMessage(saveRequest("live-sess"), sessionClient);
+            return TwoPhaseParticipant.prepare(sessionClient, "127.0.0.1:5000", java.util.List.of());
+        }).get(10, java.util.concurrent.TimeUnit.SECONDS);
+        final var dtxId = clientTracker.getActiveTransaction(sessionClient).getTransactionId().toString();
+        final var marker = Tx2pcLog.readParticipantMarker(dtxId);
+        assertNotNull(marker);
+
+        final var resolved = new java.util.concurrent.atomic.AtomicBoolean();
+        final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        final var worker = new Thread(() -> {
+            try {
+                TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
+                resolved.set(true);
+            } catch (Throwable t) {
+                failure.compareAndSet(null, t);
+            }
+        }, "durable-resolve");
+        worker.setDaemon(true);
+        worker.start();
+        worker.join(15_000L);
+
+        assertNull(failure.get());
+        assertTrue(resolved.get(),
+                "the prepared session still holds the slice's write locks on its own thread, so a durable"
+                        + " replay taking them from the recovery thread would wedge it for the process's life");
+
+        assertEquals(OperationStatus.OK, findStatus("live-sess"));
+        assertNull(clientTracker.getActiveTransaction(sessionClient));
+    }
+
+    @Test
+    public void test_durable_abort_goes_through_a_live_prepared_session() throws Exception {
+        configureMembership(1, node("self", 5000));
+        final var session = clientTracker.registerTxSession("sess-abort", "alice", "edge");
+        final var sessionClient = session.clientId();
+        session.submit(() -> {
+            processor.processMessage(new StartTransactionRequest(), sessionClient);
+            processor.processMessage(saveRequest("abort-sess"), sessionClient);
+            return TwoPhaseParticipant.prepare(sessionClient, "127.0.0.1:5000", java.util.List.of());
+        }).get(10, java.util.concurrent.TimeUnit.SECONDS);
+        final var dtxId = clientTracker.getActiveTransaction(sessionClient).getTransactionId().toString();
+
+        final var resolved = new java.util.concurrent.atomic.AtomicBoolean();
+        final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        final var worker = new Thread(() -> {
+            try {
+                TwoPhaseParticipant.abortFromDurable(dtxId);
+                resolved.set(true);
+            } catch (Throwable t) {
+                failure.compareAndSet(null, t);
+            }
+        }, "durable-abort");
+        worker.setDaemon(true);
+        worker.start();
+        worker.join(15_000L);
+
+        assertNull(failure.get());
+        assertTrue(resolved.get(),
+                "an abort must release the prepared session's write locks on the session's own thread, for the"
+                        + " same reason a commit must");
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("abort-sess"), "the aborted slice must not have applied");
+        assertNull(clientTracker.getActiveTransaction(sessionClient));
     }
 }

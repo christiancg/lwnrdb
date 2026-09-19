@@ -1,9 +1,13 @@
 package org.techhouse.data.admin;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Objects;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 
 public class AdminTransactionEntry extends DbEntry {
     private static final String TRANSACTION_ID_FIELD = "transactionId";
@@ -13,6 +17,8 @@ public class AdminTransactionEntry extends DbEntry {
     private static final String TARGET_DB_FIELD = "targetDb";
     private static final String TARGET_COLL_FIELD = "targetColl";
     private static final String PAYLOAD_FIELD = "payload";
+    private static final String INSERTED_IDS_FIELD = "insertedIds";
+    private static final String ACTING_USER_FIELD = "actingUser";
 
     public static final String OP_TYPE_SAVE = "SAVE";
     public static final String OP_TYPE_BULK_SAVE = "BULK_SAVE";
@@ -38,6 +44,8 @@ public class AdminTransactionEntry extends DbEntry {
     private String targetDb;
     private String targetColl;
     private JsonObject payload;
+    private List<String> insertedIds = List.of();
+    private String actingUser = "";
 
     private AdminTransactionEntry() {
         setDatabaseName(Globals.ADMIN_DB_NAME);
@@ -59,6 +67,20 @@ public class AdminTransactionEntry extends DbEntry {
         set_id(buildId(transactionId, seq));
         setData(new JsonObject());
         syncData();
+    }
+
+    public void setTriggerContext(List<String> ids, String user) {
+        this.insertedIds = ids == null ? List.of() : List.copyOf(ids);
+        this.actingUser = user == null ? "" : user;
+        syncData();
+    }
+
+    public List<String> getInsertedIds() {
+        return insertedIds;
+    }
+
+    public String getActingUser() {
+        return actingUser;
     }
 
     public static String buildId(String transactionId, long seq) {
@@ -91,6 +113,10 @@ public class AdminTransactionEntry extends DbEntry {
         result.targetDb = object.get(TARGET_DB_FIELD).asJsonString().getValue();
         result.targetColl = object.get(TARGET_COLL_FIELD).asJsonString().getValue();
         result.payload = object.get(PAYLOAD_FIELD).asJsonObject();
+        result.insertedIds = readStringArray(object);
+        result.actingUser = object.has(ACTING_USER_FIELD)
+                ? object.get(ACTING_USER_FIELD).asJsonString().getValue()
+                : "";
         return result;
     }
 
@@ -106,7 +132,24 @@ public class AdminTransactionEntry extends DbEntry {
         data.addProperty(TARGET_DB_FIELD, targetDb);
         data.addProperty(TARGET_COLL_FIELD, targetColl);
         data.add(PAYLOAD_FIELD, payload);
+        final var ids = new JsonArray();
+        for (final var id : insertedIds) {
+            ids.add(new JsonString(id));
+        }
+        data.add(INSERTED_IDS_FIELD, ids);
+        data.addProperty(ACTING_USER_FIELD, actingUser);
         setData(data);
+    }
+
+    private static List<String> readStringArray(JsonObject object) {
+        if (!object.has(INSERTED_IDS_FIELD) || !object.get(INSERTED_IDS_FIELD).isJsonArray()) {
+            return List.of();
+        }
+        final var result = new ArrayList<String>();
+        for (final var element : object.get(INSERTED_IDS_FIELD).asJsonArray().asList()) {
+            result.add(element.asJsonString().getValue());
+        }
+        return result;
     }
 
     public String getTransactionId() {

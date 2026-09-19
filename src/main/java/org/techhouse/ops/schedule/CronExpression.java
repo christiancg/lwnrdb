@@ -1,6 +1,7 @@
 package org.techhouse.ops.schedule;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.BitSet;
@@ -59,11 +60,26 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
                 candidate = candidate.plusMinutes(1);
                 continue;
             }
-            final var resolved = candidate.atZone(zone);
-            if (resolved.isAfter(from)) {
+            final var resolved = firstOccurrenceAfter(candidate, zone, from);
+            if (resolved != null) {
                 return resolved;
             }
             candidate = candidate.plusMinutes(1);
+        }
+        return null;
+    }
+
+    private static ZonedDateTime firstOccurrenceAfter(LocalDateTime candidate, ZoneId zone, ZonedDateTime from) {
+        final var offsets = zone.getRules().getValidOffsets(candidate);
+        if (offsets.isEmpty()) {
+            final var shifted = candidate.atZone(zone);
+            return shifted.isAfter(from) ? shifted : null;
+        }
+        for (final var offset : offsets) {
+            final var resolved = ZonedDateTime.ofInstant(candidate.toInstant(offset), zone);
+            if (resolved.isAfter(from)) {
+                return resolved;
+            }
         }
         return null;
     }

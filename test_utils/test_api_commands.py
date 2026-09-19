@@ -274,6 +274,41 @@ def test_crud(c):
                save(c, COLL_CRUD, {"_id": "bad id!", "v": 1}), "ERROR", "400-1")
     check_code("SAVE invalid _id (too long) -> 400-1",
                save(c, COLL_CRUD, {"_id": "x" * 65, "v": 1}), "ERROR", "400-1")
+    check_code("SAVE non-string _id -> 400-1",
+               save(c, COLL_CRUD, {"_id": 123, "v": 1}), "ERROR", "400-1")
+    check_code("BULK_SAVE non-string _id -> 400-1",
+               bulk_save(c, COLL_CRUD, [{"_id": 123, "v": 1}]), "ERROR", "400-1")
+    check_code("BULK_SAVE invalid _id (illegal chars) -> 400-1",
+               bulk_save(c, COLL_CRUD, [{"_id": "bad id!", "v": 1}]), "ERROR", "400-1")
+
+
+def test_top_level_id(c):
+    section("SAVE with a top-level _id")
+
+    check_status("seed the target document", save(c, COLL_CRUD, {"_id": "tl1", "name": "alpha"}), "OK")
+    r = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_CRUD,
+                "_id": "tl1", "object": {"name": "beta"}})
+    check_status("SAVE with only a top-level _id", r, "OK")
+    check("the response names the same document", r.get("_id") == "tl1", detail=f"got {r.get('_id')!r}")
+
+    found = find_by_id(c, COLL_CRUD, "tl1")
+    check_status("the target document still exists", found, "OK")
+    check_field("and carries the new value", found, "object.name", "beta")
+
+    r = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_CRUD,
+                "_id": "tl2", "object": {"name": "gamma"}})
+    check_status("a top-level _id for a new document inserts under that id", r, "OK")
+    check_field("the document is readable under that id", find_by_id(c, COLL_CRUD, "tl2"), "object.name", "gamma")
+
+    # When both ids are present on the wire the parser gives the object's _id precedence, so the two
+    # can never disagree by the time the write runs. What matters is that exactly one document is
+    # written, under the object's id, and no stray document appears under the top-level one.
+    check_status("a top-level _id alongside an object _id is accepted",
+                 c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_CRUD,
+                         "_id": "outside", "object": {"_id": "inside", "name": "x"}}), "OK")
+    check_field("the object's _id wins", find_by_id(c, COLL_CRUD, "inside"), "object.name", "x")
+    check_code("no document is written under the discarded top-level _id",
+               find_by_id(c, COLL_CRUD, "outside"), "NOT_FOUND", "404-2")
 
 
 def test_value_types(c):
@@ -676,6 +711,7 @@ def main():
         test_database_and_collection_ops,
         test_reserved_script_runs_collection,
         test_crud,
+        test_top_level_id,
         test_value_types,
         test_filter_operators,
         test_filter_with_indexes,

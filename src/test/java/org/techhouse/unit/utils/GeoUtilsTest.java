@@ -117,4 +117,55 @@ public class GeoUtilsTest {
         assertFalse(prefixes.isEmpty());
         assertTrue(prefixes.size() <= 32, "covering should stay bounded, was " + prefixes.size());
     }
+
+    @Test
+    public void test_bounding_box_contains_every_point_at_the_radius() {
+        final var radii = new double[]{100, 1_000, 100_000, 1_000_000};
+        final var centers = List.of(new GeoPoint(0.0, 0.0), new GeoPoint(45.0, -73.5), new GeoPoint(-33.9, 151.2),
+                new GeoPoint(70.0, 20.0));
+        for (final var center : centers) {
+            for (final var radius : radii) {
+                final var bbox = GeoUtils.boundingBoxForRadius(center, radius);
+                for (var bearing = 0; bearing < 360; bearing += 5) {
+                    final var point = destination(center, radius, bearing);
+                    if (GeoUtils.haversineMeters(center, point) > radius) {
+                        continue;
+                    }
+                    assertTrue(bbox.contains(point), "a true match at bearing " + bearing + " for radius " + radius
+                            + " around " + center.lat() + "," + center.lng() + " was excluded by the candidate box");
+                }
+            }
+        }
+    }
+
+    @Test
+    public void test_bounding_box_is_sized_from_the_haversine_sphere() {
+        final var bbox = GeoUtils.boundingBoxForRadius(new GeoPoint(0.0, 0.0), 100_000);
+        final var edge = new GeoPoint(bbox.maxLat(), 0.0);
+
+        assertTrue(GeoUtils.haversineMeters(new GeoPoint(0.0, 0.0), edge) >= 100_000,
+                "the box edge must lie at or beyond the requested radius, or true matches near the rim are lost");
+    }
+
+    @Test
+    public void test_bounding_box_covers_a_point_the_rounded_constant_excluded() {
+        final var center = new GeoPoint(0.0, 0.0);
+        final var point = new GeoPoint(0.899, 0.0);
+        final var bbox = GeoUtils.boundingBoxForRadius(center, 100_000);
+
+        assertTrue(GeoUtils.haversineMeters(center, point) < 100_000);
+        assertTrue(bbox.contains(point));
+    }
+
+    private static GeoPoint destination(GeoPoint origin, double distanceMeters, double bearingDegrees) {
+        final var angular = distanceMeters / 6371000.0;
+        final var bearing = Math.toRadians(bearingDegrees);
+        final var lat1 = Math.toRadians(origin.lat());
+        final var lng1 = Math.toRadians(origin.lng());
+        final var lat2 = Math
+                .asin(Math.sin(lat1) * Math.cos(angular) + Math.cos(lat1) * Math.sin(angular) * Math.cos(bearing));
+        final var lng2 = lng1 + Math.atan2(Math.sin(bearing) * Math.sin(angular) * Math.cos(lat1),
+                Math.cos(angular) - Math.sin(lat1) * Math.sin(lat2));
+        return new GeoPoint(Math.toDegrees(lat2), Math.toDegrees(lng2));
+    }
 }

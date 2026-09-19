@@ -15,6 +15,7 @@ ADMIN_PASSWORD = "administrator"
 
 DB = "txn_test_db"
 COLL = "orders"
+JOIN_COLL = "order_configs"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -76,6 +77,7 @@ def aggregate(c, steps=None, coll=COLL, db=DB) -> dict:
 def setup_fixtures(c):
     c.send({"type": "CREATE_DATABASE", "databaseName": DB})
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COLL})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": JOIN_COLL})
 
 
 def teardown_fixtures(c):
@@ -245,6 +247,47 @@ def test_table_locking_blocks_other_clients(c):
                    f"resumed={resumed!r}")
 
 
+def test_lock_timeout_aborts_and_refuses_retries(c):
+    section("A lock timeout aborts the transaction instead of silently ending it")
+
+    check_status("holder: START_TRANSACTION", start_txn(c), "OK")
+    check_status("holder: SAVE takes the collection write lock", save(c, {"_id": "to-holder", "v": 1}), "OK")
+
+    with authed_conn() as bc:
+        check_status("waiter: START_TRANSACTION", start_txn(bc), "OK")
+        timed_out = save(bc, {"_id": "to-waiter", "v": 1})
+        check("waiter: the contended write times out with 409-5",
+              timed_out.get("errorCode") == "409-5", f"got {timed_out}")
+
+        retried = save(bc, {"_id": "to-waiter", "v": 2})
+        check("waiter: retrying the statement is refused rather than silently committed standalone",
+              retried.get("errorCode") == "409-9", f"got {retried}")
+
+        committed = commit_txn(bc)
+        check("waiter: committing an aborted transaction fails",
+              committed.get("errorCode") == "409-9", f"got {committed}")
+
+    check_status("holder: COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    with authed_conn() as reader:
+        orphan = reader.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "to-waiter"})
+        check("the refused write never landed as a standalone document",
+              orphan.get("status") == "NOT_FOUND", f"got {orphan}")
+
+
+def test_entry_size_is_checked_after_the_id_is_assigned(c):
+    section("An oversized-once-identified document is refused at buffer time")
+
+    # 1Mb is the shipped maxEntrySize. A document that fits only until the generated _id is
+    # injected used to pass the buffer check and then be dropped at commit, which reported OK.
+    padding = "x" * (1024 * 1024 - 30)
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    buffered = save(c, {"pad": padding})
+    check("the buffer refuses it rather than reporting success",
+          buffered.get("errorCode") == "400-2", f"got errorCode={buffered.get('errorCode')!r}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+
 def test_auto_rollback_on_disconnect():
     section("Disconnecting with an open transaction auto-rolls-back")
 
@@ -273,6 +316,45 @@ def test_auto_rollback_on_disconnect():
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
+
+def test_join_reads_your_own_writes(c):
+    section("A JOIN inside a transaction reads the transaction's own writes")
+    # The joined collection is read through the same overlay as the source: a document the
+    # transaction wrote there must join, and one it deleted there must not.
+    save(c, {"_id": "jrw_left", "k": "shared"})
+    save(c, {"_id": "jrw_committed", "k": "shared"}, coll=JOIN_COLL)
+
+    join_steps = [{"type": "JOIN", "joinCollection": JOIN_COLL, "localField": "k",
+                   "remoteField": "k", "asField": "cfg"}]
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    save(c, {"_id": "jrw_buffered", "k": "shared"}, coll=JOIN_COLL)
+    r = aggregate(c, join_steps)
+    rows = r.get("results") or []
+    attached = sorted(d.get("_id") for d in (rows[0].get("cfg") or [])) if rows else []
+    check("a document written to the joined collection in this transaction joins",
+          attached == ["jrw_buffered", "jrw_committed"],
+          f"expected=['jrw_buffered', 'jrw_committed']  got={attached!r}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_status("DELETE the committed config inside the transaction",
+                 delete(c, "jrw_committed", coll=JOIN_COLL), "OK")
+    r = aggregate(c, join_steps)
+    rows = r.get("results") or []
+    attached = sorted(d.get("_id") for d in (rows[0].get("cfg") or [])) if rows else []
+    check("a document deleted from the joined collection in this transaction no longer joins",
+          attached == [], f"expected=[]  got={attached!r}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+    # After the rollback the joined collection is back to its committed state.
+    r = aggregate(c, join_steps)
+    rows = r.get("results") or []
+    attached = sorted(d.get("_id") for d in (rows[0].get("cfg") or [])) if rows else []
+    check("the rollback restores the joined collection's committed state",
+          attached == ["jrw_committed"], f"expected=['jrw_committed']  got={attached!r}")
+
+
 def main():
     bu.banner("Transactions test suite", HOST, PORT)
 
@@ -296,6 +378,8 @@ def main():
     with authed_conn() as (c):
         test_buffered_delete_reads_as_not_found(c)
     with authed_conn() as (c):
+        test_join_reads_your_own_writes(c)
+    with authed_conn() as (c):
         test_bulk_save_in_transaction(c)
     with authed_conn() as (c):
         test_control_operation_errors(c)
@@ -303,6 +387,10 @@ def main():
         test_ddl_forbidden_during_transaction(c)
     with authed_conn() as (c):
         test_table_locking_blocks_other_clients(c)
+    with authed_conn() as (c):
+        test_lock_timeout_aborts_and_refuses_retries(c)
+    with authed_conn() as (c):
+        test_entry_size_is_checked_after_the_id_is_assigned(c)
     test_auto_rollback_on_disconnect()
 
     with authed_conn() as (c):

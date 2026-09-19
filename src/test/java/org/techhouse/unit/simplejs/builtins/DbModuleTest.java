@@ -183,6 +183,21 @@ public class DbModuleTest {
     }
 
     @Test
+    public void test_an_error_thrown_by_the_callback_still_rolls_back() {
+        final var fake = new FakeDatabaseAccess();
+        final var ops = org.mockito.Mockito.mock(org.techhouse.simplejs.builtins.InterpreterOps.class);
+        org.mockito.Mockito.when(ops.call(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any())).thenThrow(new StackOverflowError("simulated"));
+        final var db = DbModule.create(fake, ops, null, null);
+        final var callback = new JsNativeFunction("cb", (_, _) -> JsUndefined.getInstance());
+
+        assertThrows(StackOverflowError.class, () -> call(db, "transaction", callback));
+
+        assertEquals(List.of("beginTransaction", "rollbackTransaction"), fake.calls,
+                "an Error out of the callback must still release the transaction's write locks");
+    }
+
+    @Test
     public void test_nested_transaction_is_rejected() {
         final var fake = new FakeDatabaseAccess();
         fake.rejectNestedTransaction = true;

@@ -50,6 +50,10 @@ public class IndexHelper {
         return IndexEntryReader.getMatchingIdsForJoin(dbName, collName, fieldName, localValues);
     }
 
+    public static List<String> sortedIds(FieldIndexEntry<?> entry) {
+        return IndexEntryReader.sortedIds(entry);
+    }
+
     public static JsonBaseElement indexValueToElement(Object value) {
         return IndexValueCodec.indexValueToElement(value);
     }
@@ -58,7 +62,18 @@ public class IndexHelper {
         return IndexValueCodec.elementToLookupValue(element);
     }
 
-    public static void createIndex(String dbName, String collName, String fieldName) {
+    public static void createIndex(String dbName, String collName, String fieldName) throws InterruptedException {
+        rl.lockIndex(dbName, collName, fieldName);
+        try {
+            buildIndex(dbName, collName, fieldName);
+        } finally {
+            cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+            rl.releaseIndex(dbName, collName, fieldName);
+        }
+    }
+
+    private static void buildIndex(String dbName, String collName, String fieldName) {
+        fs.dropIndex(dbName, collName, fieldName);
         final var coll = cache.getWholeCollection(dbName, collName);
         final var entriesToBeIndexed = coll.values().stream().map(DbEntry::getData)
                 .filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName))
@@ -86,8 +101,6 @@ public class IndexHelper {
                                 new FieldIndexEntry<>(dbName, collName, jsonBoolean.getValue(), ids);
                             default -> throw new IllegalStateException("Unexpected value: " + primitive);
                         };
-                    } else if (key.isJsonNull()) {
-                        return new FieldIndexEntry<>(dbName, collName, JsonNull.INSTANCE, ids);
                     } else {
                         return null;
                     }
@@ -100,7 +113,6 @@ public class IndexHelper {
                 }));
         fs.writeIndexFile(dbName, collName, fieldName, indexes);
         writeHashIndexes(dbName, collName, fieldName, entriesToBeIndexed);
-        cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
     }
 
     private static void writeHashIndexes(String dbName, String collName, String fieldName,
@@ -126,10 +138,14 @@ public class IndexHelper {
         fs.writeHashIndexFile(dbName, collName, fieldName, IndexKind.ARRAY, arrayEntries);
     }
 
-    public static boolean dropIndex(String dbName, String collName, String fieldName) {
-        final var result = fs.dropIndex(dbName, collName, fieldName);
-        cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-        return result;
+    public static boolean dropIndex(String dbName, String collName, String fieldName) throws InterruptedException {
+        rl.lockIndex(dbName, collName, fieldName);
+        try {
+            return fs.dropIndex(dbName, collName, fieldName);
+        } finally {
+            cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
+            rl.releaseIndex(dbName, collName, fieldName);
+        }
     }
 
     public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids)
@@ -150,8 +166,8 @@ public class IndexHelper {
                     for (var id : ids) {
                         applyCurrentState(dbName, collName, fieldName, id, byId.get(id));
                     }
-                    cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
                 } finally {
+                    cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
                     rl.releaseIndex(dbName, collName, fieldName);
                 }
             }
@@ -176,9 +192,9 @@ public class IndexHelper {
                 rl.lockIndex(dbName, collName, fieldName);
                 try {
                     applyCurrentState(dbName, collName, fieldName, id, doc);
+                } finally {
                     // Drop the cached index so the next read reloads the rewritten .idx files from disk.
                     cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
-                } finally {
                     rl.releaseIndex(dbName, collName, fieldName);
                 }
             }
@@ -247,6 +263,10 @@ public class IndexHelper {
             fs.updateHashIndexFiles(dbName, collName, fieldName, kind, found, null);
         } else {
             final var indexEntry = new FieldIndexEntry<>(dbName, collName, hash, new HashSet<>(Set.of(entryId)));
+            final var cached = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+            if (cached != null) {
+                cached.add(indexEntry);
+            }
             fs.updateHashIndexFiles(dbName, collName, fieldName, kind, indexEntry, null);
         }
     }
@@ -330,7 +350,9 @@ public class IndexHelper {
             updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
                     toRemoveJsonCustom, found);
         } else {
-            FieldIndexEntry<?> indexEntry = new FieldIndexEntry<>(dbName, collName, value, Set.of(entryId));
+            FieldIndexEntry<?> indexEntry = new FieldIndexEntry<>(dbName, collName, value,
+                    new HashSet<>(Set.of(entryId)));
+            addToCachedIndex(dbName, collName, fieldName, value.getClass(), indexEntry);
             updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
                     toRemoveJsonCustom, indexEntry);
         }
@@ -347,9 +369,23 @@ public class IndexHelper {
             updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
                     toRemoveJsonCustom, found);
         } else {
-            FieldIndexEntry<T> indexEntry = new FieldIndexEntry<>(dbName, collName, value, Set.of(entryId));
+            FieldIndexEntry<T> indexEntry = new FieldIndexEntry<>(dbName, collName, value,
+                    new HashSet<>(Set.of(entryId)));
+            addToCachedIndex(dbName, collName, fieldName, tClass, indexEntry);
             updateFromFiles(dbName, collName, fieldName, toRemoveBoolean, toRemoveNumber, toRemoveString,
                     toRemoveJsonCustom, indexEntry);
+        }
+    }
+
+    private static void addToCachedIndex(String dbName, String collName, String fieldName, Class<?> tClass,
+            FieldIndexEntry<?> indexEntry) throws IOException {
+        @SuppressWarnings("unchecked")
+        final var lookupType = (Class<Object>) tClass;
+        final var cached = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, lookupType);
+        if (cached != null) {
+            @SuppressWarnings("unchecked")
+            final var typed = (FieldIndexEntry<Object>) indexEntry;
+            cached.add(typed);
         }
     }
 
