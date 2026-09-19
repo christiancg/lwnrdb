@@ -76,7 +76,6 @@ public class AbandonedTxSessionTest {
         realPool = TestUtils.getPrivateField(recovery, "pool", PeerConnectionPool.class);
         final var config = mock(ClusterConfig.class);
         when(config.isEnabled()).thenReturn(true);
-        // Zero, so the sweep inspects the session on its first pass rather than after a real idle window.
         when(config.deadTimeoutMs()).thenReturn(0L);
         when(config.replicationAckTimeoutMs()).thenReturn(200L);
         TestUtils.setPrivateField(recovery, "clusterConfig", config);
