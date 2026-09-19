@@ -30,6 +30,7 @@ import org.techhouse.ops.IndexHelper;
 final class AdminSnapshotConformer {
     private final Logger logger = Logger.logFor(AdminSnapshotConformer.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
+    private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -226,7 +227,12 @@ final class AdminSnapshotConformer {
     private void conformCollection(String dbName, String collName, java.util.Set<String> desiredIndexes,
             JsonObject desiredSchema, JsonObject snapshotTriggers, long epochAtStart, long snapshotIncarnation)
             throws Exception {
-        locks.lock(dbName, collName);
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+        if (!locks.tryLockWrite(dbName, collName, waitMillis)) {
+            logger.warning("Skipping the conform of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                    + ": its write lock stayed held for " + waitMillis + "ms. The next round retries it.");
+            return;
+        }
         try {
             if (adminEpoch.current() != epochAtStart) {
                 logger.warning("Skipping the conform of " + dbName + "|" + collName + ": a local admin op committed"

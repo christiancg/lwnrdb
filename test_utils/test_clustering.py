@@ -495,7 +495,10 @@ class Node:
             f"port={self.client_port}\n"
             "filePath=db\n"
             "logPath=logs\n"
-            "maxMemory=256mb\n"
+            # The three nodes share one runner, so each gets a cache budget that actually fits its heap:
+            # at 256mb against -Xmx512m a warm node overran the heap and died with an OutOfMemoryError,
+            # which reads downstream as a node that stopped answering.
+            "maxMemory=96mb\n"
             f"defaultAdminUsername={ADMIN_USERNAME}\n"
             f"defaultAdminPassword={ADMIN_PASSWORD}\n"
             "clusterEnabled=true\n"
@@ -541,7 +544,7 @@ class Node:
         jar = os.path.join(REPO_ROOT, JAR)
         log = open(self.log_path, "ab")
         self.proc = subprocess.Popen(
-            ["java", "-Xmx512m", "-jar", jar],
+            ["java", "-Xmx1g", "-jar", jar],
             stdout=log, stderr=log, cwd=self.work_dir)
         deadline = time.time() + 60.0
         while time.time() < deadline:

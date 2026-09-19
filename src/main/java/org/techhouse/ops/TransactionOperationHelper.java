@@ -298,15 +298,23 @@ public final class TransactionOperationHelper {
             if (transaction != null && Tx2pcLog.isPrepared(transaction.getTransactionId().toString())) {
                 continue;
             }
-            try {
-                session.submit(() -> rollback(session.clientId())).get();
-            } catch (InterruptedException ie) {
-                Thread.currentThread().interrupt();
-            } catch (Exception ex) {
-                logger.warning("Failed to reap forwarded transaction: " + ex.getMessage());
-            }
-            clientTracker.removeTxSession(entry.getKey());
+            abandonSession(entry.getKey());
         }
+    }
+
+    public static void abandonSession(String sessionId) {
+        final var session = clientTracker.txSession(sessionId);
+        if (session == null) {
+            return;
+        }
+        try {
+            session.submit(() -> rollback(session.clientId())).get();
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+        } catch (Exception ex) {
+            logger.warning("Failed to reap forwarded transaction: " + ex.getMessage());
+        }
+        clientTracker.removeTxSession(sessionId);
     }
 
     public static void bufferTriggerRunConsume(Transaction transaction, String runId) throws Exception {

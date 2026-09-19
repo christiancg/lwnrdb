@@ -3,6 +3,7 @@ package org.techhouse.conn;
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.net.Socket;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -119,6 +120,12 @@ public class ClientTracker {
         if (client != null) {
             client.clearTransactionState();
         }
+    }
+
+    public long millisSinceLastCommand(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        final var last = client != null ? client.getLastCommandTime() : null;
+        return last == null ? 0 : Duration.between(last, LocalDateTime.now()).toMillis();
     }
 
     public void updateLastCommandTime(UUID clientId) {

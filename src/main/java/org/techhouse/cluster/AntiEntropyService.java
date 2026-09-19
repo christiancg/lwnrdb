@@ -15,7 +15,9 @@ import org.techhouse.cluster.msg.DigestEntry;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -63,6 +65,13 @@ public class AntiEntropyService implements MembershipListener {
         sweep.schedule();
     }
 
+    private void lockReadOrSkip(String dbName, String collName) throws InterruptedException {
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+        if (!locks.tryLockRead(dbName, collName, waitMillis)) {
+            throw new CollectionBusyException(dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName, waitMillis);
+        }
+    }
+
     private void reconcileAllCollections() {
         for (final var dbName : cache.getUserDatabaseNames()) {
             for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
@@ -84,7 +93,7 @@ public class AntiEntropyService implements MembershipListener {
         final var payload = new AntiEntropyPayload(dbName, collName);
         final var entries = new ArrayList<DigestEntry>();
         final var selfNodeId = selfNodeId();
-        locks.lockRead(dbName, collName);
+        lockReadOrSkip(dbName, collName);
         try {
             for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
                 entries.add(new DigestEntry(entry.getValue(), entry.getVersion(), false, selfNodeId));
@@ -118,7 +127,7 @@ public class AntiEntropyService implements MembershipListener {
         final var payload = new AntiEntropyPayload(dbName, collName);
         final var documents = new ArrayList<JsonObject>();
         final var versions = new ArrayList<String>();
-        locks.lockRead(dbName, collName);
+        lockReadOrSkip(dbName, collName);
         try {
             final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
             for (final var id : ids) {
@@ -140,7 +149,7 @@ public class AntiEntropyService implements MembershipListener {
     void reconcile(String dbName, String collName) throws Exception {
         final var localLive = new HashMap<String, Long>();
         final Map<String, Long> localTombstones;
-        locks.lockRead(dbName, collName);
+        lockReadOrSkip(dbName, collName);
         try {
             for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
                 localLive.put(entry.getValue(), entry.getVersion());

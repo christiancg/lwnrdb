@@ -54,6 +54,7 @@ final class ClusterTxMessageHandler {
                 }
                 return operationProcessor.processMessage(parsed, clientId);
             }).get();
+            clientTracker.updateLastCommandTime(clientId);
             if (type == OperationType.COMMIT_TRANSACTION || type == OperationType.ROLLBACK_TRANSACTION) {
                 clientTracker.removeTxSession(sessionId);
             }

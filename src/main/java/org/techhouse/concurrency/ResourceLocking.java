@@ -98,6 +98,11 @@ public class ResourceLocking {
         lockReadByName(Cache.getCollectionIdentifier(dbName, collName));
     }
 
+    public boolean tryLockRead(String dbName, String collName, long timeoutMillis) throws InterruptedException {
+        return lockFor(Cache.getCollectionIdentifier(dbName, collName)).readLock().tryLock(timeoutMillis,
+                java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
     public void releaseRead(String dbName, String collName) {
         releaseReadByName(Cache.getCollectionIdentifier(dbName, collName));
     }
