@@ -321,4 +321,38 @@ public class TransactionClusteringTest {
         assertEquals(OperationStatus.OK, findStatus("live-sess"));
         assertNull(clientTracker.getActiveTransaction(sessionClient));
     }
+
+    @Test
+    public void test_durable_abort_goes_through_a_live_prepared_session() throws Exception {
+        configureMembership(1, node("self", 5000));
+        final var session = clientTracker.registerTxSession("sess-abort", "alice", "edge");
+        final var sessionClient = session.clientId();
+        session.submit(() -> {
+            processor.processMessage(new StartTransactionRequest(), sessionClient);
+            processor.processMessage(saveRequest("abort-sess"), sessionClient);
+            return TwoPhaseParticipant.prepare(sessionClient, "127.0.0.1:5000", java.util.List.of());
+        }).get(10, java.util.concurrent.TimeUnit.SECONDS);
+        final var dtxId = clientTracker.getActiveTransaction(sessionClient).getTransactionId().toString();
+
+        final var resolved = new java.util.concurrent.atomic.AtomicBoolean();
+        final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        final var worker = new Thread(() -> {
+            try {
+                TwoPhaseParticipant.abortFromDurable(dtxId);
+                resolved.set(true);
+            } catch (Throwable t) {
+                failure.compareAndSet(null, t);
+            }
+        }, "durable-abort");
+        worker.setDaemon(true);
+        worker.start();
+        worker.join(15_000L);
+
+        assertNull(failure.get());
+        assertTrue(resolved.get(),
+                "an abort must release the prepared session's write locks on the session's own thread, for the"
+                        + " same reason a commit must");
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("abort-sess"), "the aborted slice must not have applied");
+        assertNull(clientTracker.getActiveTransaction(sessionClient));
+    }
 }

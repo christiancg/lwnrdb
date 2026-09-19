@@ -209,15 +209,28 @@ public class AdminSnapshotConformerTest {
         conformer.conform(snapshot(List.of(dbJson("incdb", List.of())),
                 List.of(collJson("incdb", "inccoll", Set.of(), 100L)), List.of()));
         assertEquals(100L, cache.getAdminCollectionEntry("incdb", "inccoll").getIncarnation());
+        final var save = new org.techhouse.ops.req.SaveRequest("incdb", "inccoll");
+        final var doc = new JsonObject();
+        doc.add(Globals.PK_FIELD, new JsonString("stale"));
+        save.setObject(doc);
+        save.set_id("stale");
+        IocContainer.get(org.techhouse.ops.OperationProcessor.class).processMessage(save);
 
         conformer.conform(snapshot(List.of(dbJson("incdb", List.of())),
                 List.of(collJson("incdb", "inccoll", Set.of(), 200L)), List.of()));
 
-        assertNull(cache.getAdminCollectionEntry("incdb", "inccoll"),
+        final var entry = cache.getAdminCollectionEntry("incdb", "inccoll");
+        assertNotNull(entry, "the live incarnation must stay registered, or the collection is unwritable here"
+                + " while the rest of the cluster serves it");
+        assertEquals(200L, entry.getIncarnation());
+        assertTrue(cache.getPkIndexAndLoadIfNecessary("incdb", "inccoll").isEmpty(),
                 "documents held under an incarnation the cluster has since dropped must stop serving reads and"
                         + " writes, or anti-entropy seeds the whole pre-drop collection back cluster-wide");
-        final var folder = new File(TestGlobals.PATH + File.separator + "incdb" + File.separator + "inccoll");
-        assertTrue(folder.exists(), "quarantine must leave the documents on disk, never delete them");
+        final var dbFolder = new File(TestGlobals.PATH + File.separator + "incdb");
+        final var quarantined = dbFolder.listFiles((dir, name) -> name.startsWith("inccoll.quarantined-100-"));
+        assertNotNull(quarantined);
+        assertEquals(1, quarantined.length,
+                "the documents are moved aside, never deleted: anti-entropy cannot restore what no node retains");
     }
 
     @Test

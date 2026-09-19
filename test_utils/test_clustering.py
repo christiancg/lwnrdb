@@ -1632,6 +1632,69 @@ def test_schedule_rejoin_catch_up():
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
+
+def test_drop_and_recreate_does_not_resurrect_documents():
+    section("DROP_COLLECTION + CREATE_COLLECTION while one node is down")
+    # A drop deletes the whole collection folder, tombstones included, so it leaves no per-document
+    # evidence. A node outside the drop's replication keeps both its admin entry and its documents,
+    # and anti-entropy then sees ids the survivors lack and seeds the dead collection back
+    # cluster-wide. The collection incarnation is what tells that node its documents are dead.
+    coll = "incarnation_coll"
+    check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
+    for i in range(5):
+        save(nodes[0].client_port, DB, coll, {"_id": f"pre{i}", "v": i})
+
+    def _all_see_five():
+        return all(len(ids_of(aggregate(p, DB, coll, []))) == 5 for p in all_ports())
+
+    check("every node holds the pre-drop documents", wait_until(_all_see_five, timeout_s=30.0))
+
+    victim = nodes[2]
+    print(f"  Killing node-{victim.index} so it misses the drop ...")
+    victim.kill()
+
+    def _dropped():
+        return op(nodes[0].client_port, {"type": "DROP_COLLECTION", "databaseName": DB,
+                                         "collectionName": coll}).get("status") == "OK"
+
+    check("the survivors drop the collection", wait_until(_dropped, timeout_s=30.0, interval_s=1.0))
+
+    def _recreated():
+        return create_coll(nodes[0].client_port, DB, coll).get("status") == "OK"
+
+    check("the survivors re-create the same name", wait_until(_recreated, timeout_s=30.0, interval_s=1.0))
+
+    print(f"  Restarting node-{victim.index} ...")
+    victim.start()
+
+    # An aggregate over an empty collection answers NOT_FOUND/404-3, which is "no documents" and not
+    # an error; anything else means the collection is unreadable rather than empty.
+    def _empty_everywhere():
+        for port in all_ports():
+            r = aggregate(port, DB, coll, [])
+            if r.get("status") not in ("OK", "NOT_FOUND"):
+                return False
+            if ids_of(r):
+                return False
+        return True
+
+    # antiEntropyIntervalMs is 3000 here, so this spans several sweeps: if the rejoined node were
+    # going to seed its pre-drop documents back, it would have done so well inside this window.
+    ok = wait_until(_empty_everywhere, timeout_s=90.0, interval_s=1.0)
+    per_node = {}
+    for port in all_ports():
+        r = aggregate(port, DB, coll, [])
+        per_node[port] = (r.get("status"), r.get("errorCode"), ids_of(r))
+    check("the re-created collection stays empty on every node", ok, f"per-node: {per_node}")
+
+    # The re-created collection is still usable: quarantining the dead incarnation must not take
+    # the live one down with it.
+    check_status("a write to the re-created collection succeeds",
+                 save(nodes[0].client_port, DB, coll, {"_id": "after", "v": 1}), "OK")
+    check("the write converges on every node",
+          all_nodes_see(DB, coll, "after", 1, ports=all_ports(), timeout_s=30.0))
+
+
 def main():
     bu.banner("Clustering (multi-node) integration suite")
 
@@ -1682,6 +1745,7 @@ def main():
         test_forwarded_write_ignores_a_client_supplied_trigger_depth()
         test_a_fresh_tombstone_survives_anti_entropy_sweeps()
         test_delete_of_an_unreplicated_id_does_not_destroy_it()
+        test_drop_and_recreate_does_not_resurrect_documents()
         test_schedule_rejoin_catch_up()
         # Last: it parks a long run on one node, which leaves that node's gossiped script load
         # elevated for a round or two. Placement takes the *less* loaded of two samples, so running

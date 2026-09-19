@@ -387,4 +387,36 @@ public class FileSystemWriteTest {
                 "a document whose index entry could not be written must not stay in the page: full scans would"
                         + " return it while FIND_BY_ID says it does not exist");
     }
+
+    @Test
+    public void test_quarantine_moves_the_collection_folder_aside() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        fileSystem.createDatabaseFolder(TestGlobals.DB);
+        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+        final var data = new JsonObject();
+        data.addProperty("pad", "x");
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("kept");
+        fileSystem.insertIntoCollection(entry);
+
+        assertTrue(fileSystem.quarantineCollectionFiles(TestGlobals.DB, TestGlobals.COLL, 42L));
+
+        final var dbFolder = new File(TestGlobals.PATH + File.separator + TestGlobals.DB);
+        final var moved = dbFolder.listFiles((dir, name) -> name.startsWith(TestGlobals.COLL + ".quarantined-42-"));
+        assertNotNull(moved);
+        assertEquals(1, moved.length, "the documents are moved aside, never deleted");
+        assertTrue(Objects.requireNonNull(moved[0].listFiles()).length > 0);
+        assertFalse(new File(dbFolder, TestGlobals.COLL).exists(),
+                "the live path is cleared so the collection can be re-created empty at the new incarnation");
+    }
+
+    @Test
+    public void test_quarantine_of_a_collection_with_no_folder_reports_nothing_moved() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        fileSystem.createDatabaseFolder(TestGlobals.DB);
+
+        assertFalse(fileSystem.quarantineCollectionFiles(TestGlobals.DB, "never_created", 7L));
+    }
 }

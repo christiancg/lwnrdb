@@ -15,6 +15,7 @@ ADMIN_PASSWORD = "administrator"
 
 DB = "txn_test_db"
 COLL = "orders"
+JOIN_COLL = "order_configs"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -76,6 +77,7 @@ def aggregate(c, steps=None, coll=COLL, db=DB) -> dict:
 def setup_fixtures(c):
     c.send({"type": "CREATE_DATABASE", "databaseName": DB})
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COLL})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": JOIN_COLL})
 
 
 def teardown_fixtures(c):
@@ -314,6 +316,45 @@ def test_auto_rollback_on_disconnect():
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
+
+def test_join_reads_your_own_writes(c):
+    section("A JOIN inside a transaction reads the transaction's own writes")
+    # The joined collection is read through the same overlay as the source: a document the
+    # transaction wrote there must join, and one it deleted there must not.
+    save(c, {"_id": "jrw_left", "k": "shared"})
+    save(c, {"_id": "jrw_committed", "k": "shared"}, coll=JOIN_COLL)
+
+    join_steps = [{"type": "JOIN", "joinCollection": JOIN_COLL, "localField": "k",
+                   "remoteField": "k", "asField": "cfg"}]
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    save(c, {"_id": "jrw_buffered", "k": "shared"}, coll=JOIN_COLL)
+    r = aggregate(c, join_steps)
+    rows = r.get("results") or []
+    attached = sorted(d.get("_id") for d in (rows[0].get("cfg") or [])) if rows else []
+    check("a document written to the joined collection in this transaction joins",
+          attached == ["jrw_buffered", "jrw_committed"],
+          f"expected=['jrw_buffered', 'jrw_committed']  got={attached!r}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_status("DELETE the committed config inside the transaction",
+                 delete(c, "jrw_committed", coll=JOIN_COLL), "OK")
+    r = aggregate(c, join_steps)
+    rows = r.get("results") or []
+    attached = sorted(d.get("_id") for d in (rows[0].get("cfg") or [])) if rows else []
+    check("a document deleted from the joined collection in this transaction no longer joins",
+          attached == [], f"expected=[]  got={attached!r}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+    # After the rollback the joined collection is back to its committed state.
+    r = aggregate(c, join_steps)
+    rows = r.get("results") or []
+    attached = sorted(d.get("_id") for d in (rows[0].get("cfg") or [])) if rows else []
+    check("the rollback restores the joined collection's committed state",
+          attached == ["jrw_committed"], f"expected=['jrw_committed']  got={attached!r}")
+
+
 def main():
     bu.banner("Transactions test suite", HOST, PORT)
 
@@ -336,6 +377,8 @@ def main():
         test_read_your_writes_aggregate(c)
     with authed_conn() as (c):
         test_buffered_delete_reads_as_not_found(c)
+    with authed_conn() as (c):
+        test_join_reads_your_own_writes(c)
     with authed_conn() as (c):
         test_bulk_save_in_transaction(c)
     with authed_conn() as (c):

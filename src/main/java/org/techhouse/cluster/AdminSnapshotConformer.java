@@ -233,11 +233,7 @@ final class AdminSnapshotConformer {
                         + " during it. The next round reconciles from the newer local state.");
                 return;
             }
-            if (quarantineStaleIncarnation(dbName, collName, snapshotIncarnation)) {
-                return;
-            }
-            // Same reason as the database folder above: idempotent, and run on every sweep so a collection
-            // whose directory went missing under a live admin entry is repaired rather than left unwritable.
+            quarantineStaleIncarnation(dbName, collName, snapshotIncarnation);
             fs.createCollectionFile(dbName, collName);
             final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
             if (localEntry == null) {
@@ -269,22 +265,22 @@ final class AdminSnapshotConformer {
         }
     }
 
-    private boolean quarantineStaleIncarnation(String dbName, String collName, long snapshotIncarnation)
-            throws Exception {
+    private void quarantineStaleIncarnation(String dbName, String collName, long snapshotIncarnation) throws Exception {
         final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
         if (localEntry == null || snapshotIncarnation == 0 || localEntry.getIncarnation() == 0
                 || localEntry.getIncarnation() >= snapshotIncarnation) {
-            return false;
+            return;
         }
+        final var stale = localEntry.getIncarnation();
         cache.evictCollection(dbName, collName);
         AdminOperationHelper.deleteCollectionEntry(dbName, collName);
         AdminOperationHelper.deletePageCollections(dbName, collName);
         listenManager.unregisterAllForCollection(dbName, collName);
+        final var moved = fs.quarantineCollectionFiles(dbName, collName, stale);
         logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
-                + ": its documents belong to incarnation " + localEntry.getIncarnation() + ", which was dropped, and"
-                + " the cluster has since re-created the name as incarnation " + snapshotIncarnation + ". They are"
-                + " left on disk and no longer serve reads or writes until an operator reinstates or removes them.");
-        return true;
+                + ": its documents belong to incarnation " + stale + ", which was dropped, and the cluster has since"
+                + " re-created the name as incarnation " + snapshotIncarnation + ". They were "
+                + (moved ? "moved aside on disk" : "left on disk") + " and the collection is now empty here.");
     }
 
     private void conformSchema(String dbName, String collName, JsonObject desiredSchema) throws Exception {

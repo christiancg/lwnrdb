@@ -126,6 +126,17 @@ public class FileSystem {
         }
     }
 
+    public boolean quarantineCollectionFiles(String dbName, String collectionName, long incarnation) {
+        final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
+        final var collectionFolder = new File(collectionFile.getParent());
+        if (!collectionFolder.exists()) {
+            return false;
+        }
+        final var target = new File(collectionFolder.getParent(),
+                collectionName + ".quarantined-" + incarnation + "-" + System.currentTimeMillis());
+        return collectionFolder.renameTo(target);
+    }
+
     public boolean deleteCollectionFiles(String dbName, String collectionName) {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
