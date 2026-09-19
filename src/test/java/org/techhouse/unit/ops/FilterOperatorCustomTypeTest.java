@@ -56,7 +56,7 @@ public class FilterOperatorCustomTypeTest {
         entry.setDatabaseName(TestGlobals.DB);
         entry.setCollectionName(TestGlobals.COLL);
         final var cache = IocContainer.get(Cache.class);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         cache.putAdminCollectionEntry(adminCollEntry,
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "ct1", 0, 100, 0));

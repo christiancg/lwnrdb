@@ -50,15 +50,38 @@ public final class TriggerRunLog {
                         + " durable record, so it will be lost if this node dies before it completes.");
                 return null;
             }
-            for (var chunkSeq = 0; chunkSeq < chunks.size(); chunkSeq++) {
-                AdminOperationHelper
-                        .saveTriggerRun(chunks.get(chunkSeq).toEntry(runId, chunkSeq, currentNodeId(), descriptor));
+            var written = 0;
+            try {
+                for (var chunkSeq = 0; chunkSeq < chunks.size(); chunkSeq++) {
+                    AdminOperationHelper
+                            .saveTriggerRun(chunks.get(chunkSeq).toEntry(runId, chunkSeq, currentNodeId(), descriptor));
+                    written++;
+                }
+            } catch (Exception e) {
+                discardPartialRecord(runId, written);
+                throw e;
             }
             return runId;
         } catch (Exception e) {
             logger.warning("Failed to record the pending trigger run for '" + descriptor.triggerName() + "' on "
                     + descriptor.dbName() + "|" + descriptor.collName() + ": " + e.getMessage());
             return null;
+        }
+    }
+
+    private static void discardPartialRecord(String runId, int written) {
+        if (written == 0) {
+            return;
+        }
+        final var ids = new ArrayList<String>();
+        for (var chunkSeq = 0; chunkSeq < written; chunkSeq++) {
+            ids.add(AdminTriggerRunEntry.buildId(runId, chunkSeq));
+        }
+        try {
+            AdminOperationHelper.deleteTriggerRuns(ids);
+        } catch (Exception e) {
+            logger.error("Failed to discard the partially recorded trigger run '" + runId
+                    + "'; it may replay at the next startup", e);
         }
     }
 

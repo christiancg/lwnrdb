@@ -131,7 +131,7 @@ public class AggregationPipelineTest {
         assertEquals(0, result.size());
     }
 
-    private void insertEntry(Cache cache, String id, String fieldName, Object fieldValue) {
+    private void insertEntry(Cache cache, String id, String fieldName, Object fieldValue) throws IOException {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         if (fieldValue instanceof String s)
@@ -140,7 +140,7 @@ public class AggregationPipelineTest {
             obj.addProperty(fieldName, n);
         DbEntry entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
     }
 

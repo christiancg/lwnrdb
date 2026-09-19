@@ -13,6 +13,7 @@ import org.techhouse.ops.OperationType;
 import org.techhouse.ops.ReplicatedTxApplyHelper;
 import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.RequestParser;
 
@@ -91,8 +92,8 @@ final class ClusterTxMessageHandler {
         var vote = false;
         if (session != null) {
             try {
-                vote = session.submit(
-                        () -> TransactionOperationHelper.prepare(session.clientId(), coordinatorAddress, participants))
+                vote = session
+                        .submit(() -> TwoPhaseParticipant.prepare(session.clientId(), coordinatorAddress, participants))
                         .get();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -124,7 +125,7 @@ final class ClusterTxMessageHandler {
         try {
             if (session != null) {
                 final var result = session.submit(() -> commit
-                        ? TransactionOperationHelper.commitPrepared(session.clientId())
+                        ? TwoPhaseParticipant.commitPrepared(session.clientId())
                         : TransactionOperationHelper.abort(session.clientId())).get();
                 clientTracker.removeTxSession(sessionId);
                 if (result != null && result.getStatus() != OperationStatus.OK) {
@@ -133,7 +134,7 @@ final class ClusterTxMessageHandler {
                     return response;
                 }
             } else {
-                TransactionOperationHelper.resolveFromDurable(request.getTxId(), commit);
+                TwoPhaseParticipant.resolveFromDurable(request.getTxId(), commit);
             }
             response.setType(ackType);
         } catch (InterruptedException e) {

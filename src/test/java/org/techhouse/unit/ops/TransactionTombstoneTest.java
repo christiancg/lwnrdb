@@ -1,6 +1,7 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -111,5 +112,67 @@ public class TransactionTombstoneTest {
 
         assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("moved"),
                 "a tombstone is local durability, not replication: ownership must not gate it");
+    }
+
+    private void save(String id, String value) {
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.add(Globals.PK_FIELD, new JsonString(id));
+        object.add("v", new JsonString(value));
+        request.setObject(object);
+        request.set_id(id);
+        assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+    }
+
+    @Test
+    public void test_a_replay_that_skips_a_delete_reserves_no_tombstone() throws Exception {
+        save("survivor", "before");
+        final var clientId = clientTracker.registerForwardedClient("tx");
+        TransactionOperationHelper.start(clientId);
+        final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
+        final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        delete.set_id("survivor");
+        TransactionOperationHelper.bufferDelete(delete, clientTracker.getActiveTransaction(clientId));
+        assertTrue(org.techhouse.ops.TwoPhaseParticipant.prepare(clientId, "127.0.0.1:5000", List.of()));
+        final var marker = org.techhouse.ops.Tx2pcLog.readParticipantMarker(dtxId);
+        org.junit.jupiter.api.Assertions.assertNotNull(marker);
+
+        clientTracker.clearActiveTransaction(clientId);
+        clientTracker.clearTransactionState(clientId);
+        TestUtils.releaseAllLocks();
+        save("survivor", "after-prepare");
+
+        org.techhouse.ops.TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
+
+        assertFalse(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("survivor"),
+                "the replay skipped this delete because the document was written after the prepare, so reserving a"
+                        + " tombstone at a fresh clock version would outrank the survivor and delete it everywhere");
+        final var find = new org.techhouse.ops.req.FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        find.set_id("survivor");
+        assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus(),
+                "the document written after the prepare is exactly what the version-aware replay exists to protect");
+    }
+
+    @Test
+    public void test_a_replay_that_applies_a_delete_still_reserves_its_tombstone() throws Exception {
+        save("doomed", "before");
+        final var clientId = clientTracker.registerForwardedClient("tx2");
+        TransactionOperationHelper.start(clientId);
+        final var dtxId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
+        final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        delete.set_id("doomed");
+        TransactionOperationHelper.bufferDelete(delete, clientTracker.getActiveTransaction(clientId));
+        assertTrue(org.techhouse.ops.TwoPhaseParticipant.prepare(clientId, "127.0.0.1:5000", List.of()));
+        final var marker = org.techhouse.ops.Tx2pcLog.readParticipantMarker(dtxId);
+        org.junit.jupiter.api.Assertions.assertNotNull(marker);
+
+        clientTracker.clearActiveTransaction(clientId);
+        clientTracker.clearTransactionState(clientId);
+        TestUtils.releaseAllLocks();
+
+        org.techhouse.ops.TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
+
+        assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("doomed"),
+                "a delete the replay actually applies must still leave its tombstone");
     }
 }

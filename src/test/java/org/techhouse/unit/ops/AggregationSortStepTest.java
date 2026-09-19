@@ -40,7 +40,7 @@ public class AggregationSortStepTest {
         TestUtils.standardTearDown();
     }
 
-    private void insertEntry(Cache cache, String id, Object fieldValue) {
+    private void insertEntry(Cache cache, String id, Object fieldValue) throws IOException {
         JsonObject obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         if (fieldValue instanceof String s)
@@ -49,7 +49,7 @@ public class AggregationSortStepTest {
             obj.addProperty("score", n);
         DbEntry entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 100);
     }
 
@@ -89,13 +89,13 @@ public class AggregationSortStepTest {
         assertEquals(10, result.get(2).get("score").asJsonNumber().asInteger());
     }
 
-    private void addDoc(Cache cache, String id, String field, JsonBaseElement value) {
+    private void addDoc(Cache cache, String id, String field, JsonBaseElement value) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add(field, value);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
     private void enableIndex(Cache cache, String field) throws InterruptedException {

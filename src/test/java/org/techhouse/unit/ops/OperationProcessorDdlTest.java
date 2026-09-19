@@ -472,4 +472,5 @@ public class OperationProcessorDdlTest {
         worker.join(5_000L);
         assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, collName));
     }
+
 }

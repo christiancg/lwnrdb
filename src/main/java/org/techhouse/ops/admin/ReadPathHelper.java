@@ -88,9 +88,9 @@ public final class ReadPathHelper {
                 final var committed = cache.initializeStreamIfNecessary(null, dbName, collName);
                 final var source = TransactionOperationHelper.applyOverlayToStream(activeTransaction,
                         Cache.getCollectionIdentifier(dbName, collName), committed);
-                results = AggregationOperationHelper.processAggregation(aggregateRequest, source);
+                results = AggregationOperationHelper.processAggregation(aggregateRequest, source, activeTransaction);
             } else {
-                results = AggregationOperationHelper.processAggregation(aggregateRequest);
+                results = AggregationOperationHelper.processAggregation(aggregateRequest, null, activeTransaction);
             }
             CollectionAccessHelper.recordCollectionAccess(aggregateRequest.getDatabaseName(),
                     aggregateRequest.getCollectionName());

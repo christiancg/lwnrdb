@@ -165,4 +165,23 @@ public class TransactionCrashAtomicityTest {
     public void test_reading_a_missing_marker_returns_null() throws Exception {
         org.junit.jupiter.api.Assertions.assertNull(TxCommitLog.readLocalCommitMarker(UUID.randomUUID().toString()));
     }
+
+    @Test
+    public void test_the_local_commit_marker_records_the_write_version() throws Exception {
+        final var clock = IocContainer.get(org.techhouse.cluster.HybridClock.class);
+        clock.observe(clock.next());
+        final var txId = UUID.randomUUID().toString();
+        TxCommitLog.recordLocalCommit(txId, List.of("op1"), List.of("db|coll"));
+        try {
+            final var marker = TxCommitLog.readLocalCommitMarker(txId);
+            assertNotNull(marker);
+
+            assertTrue(marker.writeVersion() > 0,
+                    "without a recorded version the restart replay skips nothing and overwrites every write made"
+                            + " on the new owner while this node was down");
+            assertTrue(marker.writeVersion() <= clock.current());
+        } finally {
+            TxCommitLog.clearLocalCommit(txId);
+        }
+    }
 }

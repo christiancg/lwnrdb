@@ -280,7 +280,8 @@ public class IndexHelperReadTest {
     }
 
     @Test
-    public void test_get_matching_ids_for_join_skips_null_and_object_values() throws IOException, InterruptedException {
+    public void test_get_matching_ids_for_join_declines_on_null_and_object_values()
+            throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(42)),
                 entryWith("r2", "refKey", new JsonNumber(7)));
@@ -294,7 +295,25 @@ public class IndexHelperReadTest {
 
         final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey", localValues);
 
-        assertNotNull(result);
+        assertNull(result,
+                "an object or null join key has no scalar index entry, so answering from the index would drop every"
+                        + " document it joins: the lookup must decline and let the caller scan");
+    }
+
+    @Test
+    public void test_get_matching_ids_for_join_answers_when_every_key_is_scalar()
+            throws IOException, InterruptedException {
+        Cache cache = IocContainer.get(Cache.class);
+        setupCollection(cache, entryWith("r1", "refKey", new JsonNumber(42)),
+                entryWith("r2", "refKey", new JsonNumber(7)));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "refKey");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL).setIndexes(Set.of("refKey"));
+
+        final var localValues = new java.util.HashSet<JsonBaseElement>();
+        localValues.add(new JsonNumber(42));
+
+        final var result = IndexHelper.getMatchingIdsForJoin(TestGlobals.DB, TestGlobals.COLL, "refKey", localValues);
+
         assertEquals(Set.of("r1"), result);
     }
 }

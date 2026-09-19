@@ -111,7 +111,8 @@ final class AdminSnapshotConformer {
             snapshotColls.add(coll.get_id());
             final var schemaEl = snapshot.getSchemas().get(coll.get_id());
             final var desiredSchema = schemaEl != null && schemaEl.isJsonObject() ? schemaEl.asJsonObject() : null;
-            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema, snapshot.getTriggers(), epochAtStart);
+            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema, snapshot.getTriggers(), epochAtStart,
+                    coll.getIncarnation());
         }
         return snapshotColls;
     }
@@ -223,7 +224,8 @@ final class AdminSnapshotConformer {
     }
 
     private void conformCollection(String dbName, String collName, java.util.Set<String> desiredIndexes,
-            JsonObject desiredSchema, JsonObject snapshotTriggers, long epochAtStart) throws Exception {
+            JsonObject desiredSchema, JsonObject snapshotTriggers, long epochAtStart, long snapshotIncarnation)
+            throws Exception {
         locks.lock(dbName, collName);
         try {
             if (adminEpoch.current() != epochAtStart) {
@@ -231,12 +233,21 @@ final class AdminSnapshotConformer {
                         + " during it. The next round reconciles from the newer local state.");
                 return;
             }
+            if (quarantineStaleIncarnation(dbName, collName, snapshotIncarnation)) {
+                return;
+            }
             // Same reason as the database folder above: idempotent, and run on every sweep so a collection
             // whose directory went missing under a live admin entry is repaired rather than left unwritable.
             fs.createCollectionFile(dbName, collName);
-            if (cache.getAdminCollectionEntry(dbName, collName) == null) {
+            final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
+            if (localEntry == null) {
                 AdminOperationHelper.createPageCollections(dbName, collName);
-                AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
+                final var entry = new AdminCollEntry(dbName, collName);
+                entry.setIncarnation(snapshotIncarnation);
+                AdminOperationHelper.saveCollectionEntry(entry);
+            } else if (localEntry.getIncarnation() != snapshotIncarnation && snapshotIncarnation != 0) {
+                localEntry.setIncarnation(snapshotIncarnation);
+                AdminOperationHelper.saveCollectionEntry(localEntry);
             }
             final var existing = new HashSet<>(cache.getIndexesForCollection(dbName, collName));
             for (final var field : desiredIndexes) {
@@ -256,6 +267,24 @@ final class AdminSnapshotConformer {
         } finally {
             locks.release(dbName, collName);
         }
+    }
+
+    private boolean quarantineStaleIncarnation(String dbName, String collName, long snapshotIncarnation)
+            throws Exception {
+        final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
+        if (localEntry == null || snapshotIncarnation == 0 || localEntry.getIncarnation() == 0
+                || localEntry.getIncarnation() >= snapshotIncarnation) {
+            return false;
+        }
+        cache.evictCollection(dbName, collName);
+        AdminOperationHelper.deleteCollectionEntry(dbName, collName);
+        AdminOperationHelper.deletePageCollections(dbName, collName);
+        listenManager.unregisterAllForCollection(dbName, collName);
+        logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                + ": its documents belong to incarnation " + localEntry.getIncarnation() + ", which was dropped, and"
+                + " the cluster has since re-created the name as incarnation " + snapshotIncarnation + ". They are"
+                + " left on disk and no longer serve reads or writes until an operator reinstates or removes them.");
+        return true;
     }
 
     private void conformSchema(String dbName, String collName, JsonObject desiredSchema) throws Exception {

@@ -67,11 +67,11 @@ public class TriggerExecutor {
                 try {
                     submit(event);
                 } finally {
-                    scheduled.decrementAndGet();
+                    decrementScheduled();
                 }
             }, delayMillis, TimeUnit.MILLISECONDS);
         } catch (RuntimeException rejected) {
-            scheduled.decrementAndGet();
+            decrementScheduled();
             submit(event);
         }
     }
@@ -149,8 +149,12 @@ public class TriggerExecutor {
         return false;
     }
 
+    private void decrementScheduled() {
+        scheduled.updateAndGet(current -> current > 0 ? current - 1 : 0);
+    }
+
     private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0 && scheduled.get() == 0 && parked.get() >= workerCount.get();
+        return queue.isEmpty() && inFlight.get() == 0 && scheduled.get() <= 0 && parked.get() >= workerCount.get();
     }
 
     public int pending() {

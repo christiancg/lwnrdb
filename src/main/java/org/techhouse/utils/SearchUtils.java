@@ -177,16 +177,16 @@ public final class SearchUtils {
     }
 
     private static <T> Set<String> findingContains(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof String s) {
-            final var ids = new HashSet<String>();
-            for (final var entry : entries) {
-                if (((String) entry.getValue()).contains(s)) {
-                    ids.addAll(entry.getIds());
-                }
-            }
-            return ids;
+        if (!(value instanceof String s)) {
+            return null;
         }
-        return Set.of();
+        final var ids = new HashSet<String>();
+        for (final var entry : entries) {
+            if (((String) entry.getValue()).contains(s)) {
+                ids.addAll(entry.getIds());
+            }
+        }
+        return ids;
     }
 
     private enum GreaterSmallerEqualsType {

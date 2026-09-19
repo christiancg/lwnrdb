@@ -179,4 +179,72 @@ public class AggregationJoinStepTest {
         assertEquals(1, joined.size());
         assertEquals("match", joined.get(0).asJsonObject().get("label").asJsonString().getValue());
     }
+
+    private void putKeyed(String coll, String id, org.techhouse.ejson.elements.JsonBaseElement value)
+            throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add("key", value);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, coll, obj);
+        entry.set_id(id);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, coll, entry);
+    }
+
+    private List<JsonObject> join() throws IOException {
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "key", "key", "cfg")));
+        return AggregationOperationHelper.processAggregation(request);
+    }
+
+    private void indexJoinKey() throws InterruptedException {
+        final var cache = IocContainer.get(Cache.class);
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.JOIN_COLL, "key");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.JOIN_COLL).setIndexes(Set.of("key"));
+    }
+
+    private static JsonObject regionKey() {
+        final var key = new JsonObject();
+        key.add("region", new JsonString("eu"));
+        return key;
+    }
+
+    @Test
+    public void test_join_on_an_object_key_matches_the_scan() throws IOException, InterruptedException {
+        putKeyed(TestGlobals.JOIN_COLL, "c1", regionKey());
+        putKeyed(TestGlobals.COLL, "o1", regionKey());
+        final var scanned = join();
+        indexJoinKey();
+
+        final var indexed = join();
+
+        assertEquals(1, indexed.size());
+        assertTrue(indexed.getFirst().get("cfg").isJsonArray(),
+                "an object join key has no scalar index entry, so answering from the index attaches nothing");
+        assertEquals(scanned.toString(), indexed.toString());
+    }
+
+    @Test
+    public void test_join_on_a_null_key_matches_the_scan() throws IOException, InterruptedException {
+        putKeyed(TestGlobals.JOIN_COLL, "c1", org.techhouse.ejson.elements.JsonNull.INSTANCE);
+        putKeyed(TestGlobals.COLL, "o1", org.techhouse.ejson.elements.JsonNull.INSTANCE);
+        final var scanned = join();
+        indexJoinKey();
+
+        assertEquals(scanned.toString(), join().toString());
+    }
+
+    @Test
+    public void test_join_on_a_scalar_key_still_uses_the_index() throws IOException, InterruptedException {
+        putKeyed(TestGlobals.JOIN_COLL, "c1", new JsonString("flat"));
+        putKeyed(TestGlobals.COLL, "o1", new JsonString("flat"));
+        final var scanned = join();
+        indexJoinKey();
+
+        final var indexed = join();
+
+        assertEquals(1, indexed.size());
+        assertTrue(indexed.getFirst().get("cfg").isJsonArray());
+        assertEquals(scanned.toString(), indexed.toString());
+    }
 }

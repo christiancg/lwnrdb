@@ -436,4 +436,43 @@ public class IndexHelperUpdateTest {
                 ? Set.of()
                 : new HashSet<>(((Map<?, ?>) forCollection).keySet().stream().map(String::valueOf).toList());
     }
+
+    private static void realSave(String id) {
+        final var request = new org.techhouse.ops.req.SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var obj = new org.techhouse.ejson.elements.JsonObject();
+        obj.add(Globals.PK_FIELD, new org.techhouse.ejson.elements.JsonString(id));
+        request.setObject(obj);
+        request.set_id(id);
+        IocContainer.get(org.techhouse.ops.OperationProcessor.class).processMessage(request);
+    }
+
+    @Test
+    public void test_a_failed_bulk_insert_leaves_the_pk_index_searchable() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        for (final var id : List.of("a", "b", "d", "e")) {
+            realSave(id);
+        }
+        cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, 10_000_000);
+        final var pageOne = new java.io.File(TestGlobals.PATH + java.io.File.separator + TestGlobals.DB
+                + java.io.File.separator + TestGlobals.COLL + java.io.File.separator + TestGlobals.COLL + "-1.dat");
+        assertTrue(pageOne.mkdirs(), "the insert leg needs a target it cannot write to");
+
+        final var request = new org.techhouse.ops.req.BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var update = new org.techhouse.ejson.elements.JsonObject();
+        update.add(Globals.PK_FIELD, new org.techhouse.ejson.elements.JsonString("a"));
+        update.addProperty("changed", true);
+        final var insert = new org.techhouse.ejson.elements.JsonObject();
+        insert.add(Globals.PK_FIELD, new org.techhouse.ejson.elements.JsonString("c"));
+        request.setObjects(List.of(update, insert));
+
+        assertThrows(Exception.class, () -> org.techhouse.ops.SaveOperationHelper.executeBulkSave(request));
+
+        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL);
+        for (final var id : List.of("a", "b", "d", "e")) {
+            assertTrue(java.util.Collections.binarySearch(pkIndex, id) >= 0,
+                    "an unsorted PK index reports an existing id as missing, and the next save of that id inserts"
+                            + " a second copy of the document: " + id + " was not found in "
+                            + pkIndex.stream().map(org.techhouse.data.PkIndexEntry::getValue).toList());
+        }
+    }
 }

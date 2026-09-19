@@ -233,7 +233,7 @@ public class UserCache {
         var entry = coll.get(pk);
         if (entry == null) {
             entry = fs.getById(idxEntry);
-            if (shouldCache(dbName, entry.byteSize())) {
+            if (rl.holdsCollectionLock(dbName, collName) && shouldCache(dbName, entry.byteSize())) {
                 trackPut(collectionIdentifier, coll.put(pk, entry), entry);
             }
         }
@@ -293,7 +293,7 @@ public class UserCache {
         }
         final var read = fs.getByIndexEntries(toRead);
         result.addAll(read);
-        if (!cachingDisabled) {
+        if (!cachingDisabled && rl.holdsCollectionLock(dbName, collName)) {
             long bytes = 0L;
             for (var e : read) {
                 bytes += e.byteSize();

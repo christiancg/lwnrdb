@@ -193,25 +193,28 @@ public final class SaveOperationHelper {
             primaryKeyIndex.removeIf(pkIndexEntry -> updatedIndexEntries.stream()
                     .anyMatch(pkIndexEntry1 -> pkIndexEntry1.get_id().equals(pkIndexEntry.getValue())));
         }
-        primaryKeyIndex.addAll(updatedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
         final var entriesToInsert = entries.stream().filter(dbEntry -> indexedDbEntriesToUpdate.stream()
                 .noneMatch(indexedDbEntry -> indexedDbEntry.get_id().equals(dbEntry.get_id()))).toList();
         List<IndexedDbEntry> insertedIndexEntries = new ArrayList<>();
-        if (!entriesToInsert.isEmpty()) {
-            final var pendingPageBytes = new HashMap<Long, Long>();
-            for (var e : entriesToInsert) {
-                final var size = e.byteSize();
-                final var target = cache.selectPageForInsert(dbName, collName, size, pendingPageBytes);
-                e.setPage(target);
-                pendingPageBytes.merge(target, (long) size, Long::sum);
+        try {
+            primaryKeyIndex.addAll(updatedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
+            if (!entriesToInsert.isEmpty()) {
+                final var pendingPageBytes = new HashMap<Long, Long>();
+                for (var e : entriesToInsert) {
+                    final var size = e.byteSize();
+                    final var target = cache.selectPageForInsert(dbName, collName, size, pendingPageBytes);
+                    e.setPage(target);
+                    pendingPageBytes.merge(target, (long) size, Long::sum);
+                }
+                insertedIndexEntries = fs.bulkInsertIntoCollection(dbName, collName, entriesToInsert);
+                for (var ie : insertedIndexEntries) {
+                    cache.updatePageSizeInMemory(dbName, collName, ie.getIndex().getPage(), ie.getIndex().getLength());
+                }
             }
-            insertedIndexEntries = fs.bulkInsertIntoCollection(dbName, collName, entriesToInsert);
-            for (var ie : insertedIndexEntries) {
-                cache.updatePageSizeInMemory(dbName, collName, ie.getIndex().getPage(), ie.getIndex().getLength());
-            }
+            primaryKeyIndex.addAll(insertedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
+        } finally {
+            primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
         }
-        primaryKeyIndex.addAll(insertedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
-        primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
         final var updatedDbEntries = updatedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
         cache.addEntriesToCache(dbName, collName, updatedDbEntries);
         final var insertedDbEntries = insertedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();

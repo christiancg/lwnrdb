@@ -57,6 +57,7 @@ public final class TransactionRecovery {
             for (final var op : ops) {
                 recordIntoOverlay(reconstructed, op);
             }
+            dropTombstonesWrittenSincePrepare(reconstructed, preparedVersion);
             final var reservedTombstones = coordinator.reserveTransactionTombstones(reconstructed);
             listenManager.deferNotifications();
             try {
@@ -68,9 +69,23 @@ public final class TransactionRecovery {
             }
             AdminOperationHelper.deleteTransactionOps(opIds);
             markerCleanup.run();
+            // Fired after the durable commit is cleared, exactly as the online commit does. At startup the
+            // executor is not running yet, so the submit is a no-op and the durable run record that
+            // TriggerRunLog writes first is what TriggerRunRecovery replays once it is.
+            org.techhouse.ops.TransactionOperationHelper.fireTriggersForCommittedOps(ops, actingUserOf(ops),
+                    reconstructed.getTriggerDepth(), reconstructed);
             coordinator.replicateTransaction(reconstructed, reservedTombstones);
             return null;
         });
+    }
+
+    private static String actingUserOf(List<AdminTransactionEntry> ops) {
+        for (final var op : ops) {
+            if (!op.getActingUser().isEmpty()) {
+                return op.getActingUser();
+            }
+        }
+        return null;
     }
 
     private interface ThrowingRunnable {
@@ -101,6 +116,30 @@ public final class TransactionRecovery {
         Tx2pcLog.recordOutcome(dtxId, committed);
     }
 
+    private static void dropTombstonesWrittenSincePrepare(Transaction transaction, long preparedVersion)
+            throws java.io.IOException {
+        if (preparedVersion <= 0) {
+            return;
+        }
+        for (final var collId : transaction.touchedCollections()) {
+            final var overlay = transaction.overlayFor(collId);
+            if (overlay == null) {
+                continue;
+            }
+            final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
+            final var stale = new ArrayList<String>();
+            for (final var overlayEntry : overlay.entrySet()) {
+                if (Transaction.isTombstone(overlayEntry.getValue())
+                        && writtenSincePrepare(parts[0], parts[1], overlayEntry.getKey(), preparedVersion)) {
+                    stale.add(overlayEntry.getKey());
+                }
+            }
+            for (final var id : stale) {
+                overlay.remove(id);
+            }
+        }
+    }
+
     private static boolean writtenSincePrepare(String dbName, String collName, String id, long preparedVersion)
             throws java.io.IOException {
         if (preparedVersion <= 0) {
@@ -113,6 +152,9 @@ public final class TransactionRecovery {
 
     public static void recordIntoOverlay(Transaction transaction, AdminTransactionEntry op) {
         final var collId = Cache.getCollectionIdentifier(op.getTargetDb(), op.getTargetColl());
+        if (!op.getInsertedIds().isEmpty()) {
+            transaction.recordInserts(op.getSeq(), op.getInsertedIds());
+        }
         switch (op.getOpType()) {
             case AdminTransactionEntry.OP_TYPE_SAVE -> transaction.recordSave(collId,
                     op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue(), op.getPayload());
@@ -156,7 +198,8 @@ public final class TransactionRecovery {
         for (final var txId : TxCommitLog.localCommitTxIds()) {
             try {
                 final var marker = TxCommitLog.readLocalCommitMarker(txId);
-                commitLocalFromDurable(txId, marker == null ? List.of() : marker.collections());
+                replayDurableSlice(txId, marker == null ? List.of() : marker.collections(),
+                        marker == null ? 0L : marker.writeVersion(), () -> TxCommitLog.clearLocalCommit(txId));
                 logger.info("Finished transaction " + txId + " that was interrupted mid-commit at startup");
             } catch (Exception e) {
                 logger.error("Failed to finish interrupted transaction " + txId + " at startup", e);

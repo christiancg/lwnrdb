@@ -10,8 +10,8 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
-import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerRunRecovery;
+import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 
 public class Tx2pcRecovery implements MembershipListener {
@@ -92,8 +92,8 @@ public class Tx2pcRecovery implements MembershipListener {
                     continue;
                 }
                 switch (resolve(marker.coordinatorAddress(), marker.participants(), dtxId)) {
-                    case COMMIT -> TransactionOperationHelper.commitPreparedFromDurable(dtxId, marker.collections());
-                    case ABORT -> TransactionOperationHelper.abortFromDurable(dtxId);
+                    case COMMIT -> TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
+                    case ABORT -> TwoPhaseParticipant.abortFromDurable(dtxId);
                     default -> logger.info("Transaction " + dtxId + " still in-doubt; will retry");
                 }
             } catch (Exception e) {
@@ -123,7 +123,7 @@ public class Tx2pcRecovery implements MembershipListener {
     }
 
     private void resolveLocalCommitted(String dtxId) throws Exception {
-        TransactionOperationHelper.resolveFromDurable(dtxId, true);
+        TwoPhaseParticipant.resolveFromDurable(dtxId, true);
     }
 
     private Decision resolve(String coordinatorAddress, java.util.List<String> participants, String dtxId) {

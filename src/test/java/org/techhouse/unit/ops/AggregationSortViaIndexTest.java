@@ -272,4 +272,93 @@ public class AggregationSortViaIndexTest {
 
         assertEquals(List.of(10d, 20d, 30d), run(new SortAggregationStep(FIELD, true)));
     }
+
+    private void insertTyped(String id, org.techhouse.ejson.elements.JsonBaseElement value) throws IOException {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add(FIELD, value);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id(id);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
+    }
+
+    private List<String> idsFrom(boolean ascending, Integer limit) throws IOException {
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var steps = new java.util.ArrayList<BaseAggregationStep>();
+        steps.add(new SortAggregationStep(FIELD, ascending));
+        if (limit != null) {
+            steps.add(new LimitAggregationStep(limit));
+        }
+        request.setAggregationSteps(steps);
+        return AggregationOperationHelper.processAggregation(request).stream()
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue()).toList();
+    }
+
+    @Test
+    public void test_boolean_field_sorts_identically_via_index_and_scan() throws Exception {
+        insertTyped("f", new org.techhouse.ejson.elements.JsonBoolean(false));
+        insertTyped("t", new org.techhouse.ejson.elements.JsonBoolean(true));
+        final var scanAscending = idsFrom(true, null);
+        final var scanDescending = idsFrom(false, null);
+        enableIndex();
+
+        assertEquals(scanAscending, idsFrom(true, null),
+                "false sorts before true on the scan, so the index path must agree");
+        assertEquals(scanDescending, idsFrom(false, null));
+    }
+
+    @Test
+    public void test_mixed_type_field_sorts_identically_via_index_and_scan() throws Exception {
+        insertTyped("n1", new org.techhouse.ejson.elements.JsonNumber(5));
+        insertTyped("n2", new org.techhouse.ejson.elements.JsonNumber(7));
+        insertTyped("s1", new JsonString("abc"));
+        insertTyped("b1", new org.techhouse.ejson.elements.JsonBoolean(true));
+        final var scanAscending = idsFrom(true, null);
+        final var scanDescending = idsFrom(false, null);
+        enableIndex();
+
+        assertEquals(scanAscending, idsFrom(true, null),
+                "the index comparator must rank types the same way the in-memory sort does");
+        assertEquals(scanDescending, idsFrom(false, null));
+    }
+
+    @Test
+    public void test_sort_via_index_does_not_violate_the_comparator_contract() throws Exception {
+        for (var i = 0; i < 40; i++) {
+            if (i % 3 == 0) {
+                insertTyped("d" + i, new org.techhouse.ejson.elements.JsonNumber(i));
+            } else if (i % 3 == 1) {
+                insertTyped("d" + i, new JsonString("s" + i));
+            } else {
+                insertTyped("d" + i, new org.techhouse.ejson.elements.JsonBoolean(i % 2 == 0));
+            }
+        }
+        final var scanOrder = ascendingSortKeys();
+        enableIndex();
+
+        assertEquals(scanOrder, ascendingSortKeys(),
+                "a comparator that is not a total order makes TimSort reject the sort outright");
+    }
+
+    private List<String> ascendingSortKeys() throws IOException {
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new SortAggregationStep(FIELD, true)));
+        return AggregationOperationHelper.processAggregation(request).stream().map(o -> {
+            final var primitive = o.get(FIELD).asJsonPrimitive();
+            return primitive.getClass().getSimpleName() + ":" + primitive.getValue();
+        }).toList();
+    }
+
+    @Test
+    public void test_tied_sort_keys_are_ordered_deterministically() throws Exception {
+        insert("a", 5);
+        insert("b", 5);
+        insert("c", 9);
+        enableIndex();
+
+        final var first = idsFrom(true, 1);
+        for (var run = 0; run < 10; run++) {
+            assertEquals(first, idsFrom(true, 1), "SORT + LIMIT must not pick a different tied document per run");
+        }
+    }
 }

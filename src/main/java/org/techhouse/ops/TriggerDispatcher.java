@@ -262,7 +262,14 @@ public final class TriggerDispatcher {
     }
 
     private static TriggerDefinition findTrigger(TriggerEvent event) {
-        final List<TriggerDefinition> triggers = cache.getTriggersFor(event.getDbName(), event.getCollName());
+        final List<TriggerDefinition> triggers;
+        try {
+            triggers = cache.getTriggersFor(event.getDbName(), event.getCollName());
+        } catch (org.techhouse.ex.MetadataReadException e) {
+            logger.warning("Could not read the triggers for " + event.getDbName() + "|" + event.getCollName()
+                    + "; the run stays pending for a later attempt: " + e.getMessage());
+            return null;
+        }
         for (final var trigger : triggers) {
             if (trigger.getName().equals(event.getTriggerName())) {
                 return trigger;

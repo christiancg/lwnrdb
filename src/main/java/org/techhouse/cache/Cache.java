@@ -139,7 +139,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     public Stream<DbEntry> streamCollection(String dbName, String collName) throws IOException {
         if (!userCache.isCachingDisabled(dbName)) {
             final var cached = userCache.getCachedCollection(dbName, collName);
-            if (cached != null && !cached.isEmpty() && cached.size() >= pkIndexSize(dbName, collName)) {
+            if (cached != null && !cached.isEmpty() && cached.size() == pkIndexSize(dbName, collName)) {
                 return decorateScan(cached.values().stream());
             }
         }

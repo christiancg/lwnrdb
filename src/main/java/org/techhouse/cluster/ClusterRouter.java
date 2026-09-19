@@ -61,7 +61,7 @@ public class ClusterRouter {
         if (ownerAddress == null) {
             return null;
         }
-        return forwardToOwner(type, rawJson, ownerAddress, null);
+        return forwardToOwner(type, rawJson, ownerAddress, actingUser);
     }
 
     private String routeActiveTransaction(OperationRequest request, String rawJson, OperationType type,
@@ -162,10 +162,14 @@ public class ClusterRouter {
             logger.warning(
                     "Owner " + ownerAddress + " rejected a forwarded transaction op: " + response.getErrorMessage());
             return eJson.toJson(new OperationResponse(type, outcomeUnknownFor(type)));
+        } catch (PeerUnreachableException e) {
+            logger.warning(
+                    "Could not reach owner " + ownerAddress + " for a forwarded transaction op: " + e.getMessage());
+            return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
         } catch (Exception e) {
             logger.warning("Failed to forward transaction op to owner " + ownerAddress + ": " + e.getMessage());
+            return eJson.toJson(new OperationResponse(type, outcomeUnknownFor(type)));
         }
-        return eJson.toJson(new OperationResponse(type, ErrorCode.OWNER_UNREACHABLE));
     }
 
     private String forwardAdmin(OperationType type, String rawJson, String actingUser) {
@@ -217,6 +221,9 @@ public class ClusterRouter {
     }
 
     private static ErrorCode outcomeUnknownFor(OperationType type) {
+        if (type == OperationType.COMMIT_TRANSACTION) {
+            return ErrorCode.TRANSACTION_INDETERMINATE;
+        }
         return WRITES.contains(type) ? ErrorCode.WRITE_OUTCOME_UNKNOWN : ErrorCode.OWNER_UNREACHABLE;
     }
 

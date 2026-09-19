@@ -417,4 +417,28 @@ public class AdminOperationHelperTest {
                         + " counting it");
         assertEquals(1, AdminOperationHelper.readTransactionOps(List.of(marker.get_id())).size());
     }
+
+    @Test
+    public void test_an_admin_row_that_grows_updates_its_page_size() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        final var dbEntry = new AdminDbEntry(TestGlobals.DB);
+        AdminOperationHelper.saveDatabaseEntry(dbEntry);
+        final var afterInsert = cache.getAdminPageEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME,
+                0);
+        assertNotNull(afterInsert);
+        final var sizeAfterInsert = afterInsert.getPageSize();
+
+        final var collections = new ArrayList<String>();
+        for (var i = 0; i < 40; i++) {
+            collections.add("collection-with-a-long-name-" + i);
+        }
+        dbEntry.setCollections(collections);
+        AdminOperationHelper.saveDatabaseEntry(dbEntry);
+
+        final var afterUpdate = cache.getAdminPageEntry(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME,
+                0);
+        assertTrue(afterUpdate.getPageSize() > sizeAfterInsert,
+                "an admin row that grows on update must move its recorded page size, or first-fit keeps packing"
+                        + " into a page it believes has room and the page file outgrows maxPageSize");
+    }
 }

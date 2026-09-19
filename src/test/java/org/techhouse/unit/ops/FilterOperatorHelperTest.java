@@ -74,13 +74,13 @@ public class FilterOperatorHelperTest {
         assertEquals(Set.of("o2"), matched, "the stale hash hit o1 must be dropped after re-testing the document");
     }
 
-    private void addNamed(Cache cache, String id, String name) {
+    private void addNamed(Cache cache, String id, String name) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("name", new JsonString(name));
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
     private Set<String> filterNames(FieldOperatorType type, String value) throws IOException {
@@ -90,7 +90,7 @@ public class FilterOperatorHelperTest {
                 .collect(java.util.stream.Collectors.toSet());
     }
 
-    private void seedCaseVariants() {
+    private void seedCaseVariants() throws IOException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "a", 0, 100, 0);
@@ -114,7 +114,7 @@ public class FilterOperatorHelperTest {
         obj.add("a", nested);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id("n1");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
 
         final var op = new FieldOperator(FieldOperatorType.EQUALS, "a.scalar.b",
                 new org.techhouse.ejson.elements.JsonNumber(7));
@@ -156,12 +156,12 @@ public class FilterOperatorHelperTest {
         assertEquals(scannedNotEquals, filterNames(FieldOperatorType.NOT_EQUALS, "BOB"));
     }
 
-    private void addObjEntry(Cache cache, String id, int n) {
+    private void addObjEntry(Cache cache, String id, int n) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("data", objField(n));
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 }

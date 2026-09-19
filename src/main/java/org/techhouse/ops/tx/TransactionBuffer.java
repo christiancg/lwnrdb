@@ -81,7 +81,7 @@ public final class TransactionBuffer {
                 return sizeError;
             }
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_SAVE, dbName, collName,
-                    effective);
+                    effective, insert ? List.of(id) : List.of());
             if (insert) {
                 transaction.recordInserts(seq, List.of(id));
             }
@@ -140,7 +140,7 @@ public final class TransactionBuffer {
             }
             payload.add(OBJECTS_FIELD, array);
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_BULK_SAVE, dbName, collName,
-                    payload);
+                    payload, inserted);
             overlayUpdates.forEach((id, document) -> transaction.recordSave(collId, id, document));
             transaction.recordInserts(seq, inserted);
             return new BulkSaveResponse("Successfully saved entries", inserted, updated);
@@ -184,11 +184,17 @@ public final class TransactionBuffer {
         });
     }
 
-    private static long bufferOperation(Transaction transaction, String opType, String dbName, String collName,
+    private static void bufferOperation(Transaction transaction, String opType, String dbName, String collName,
             JsonObject payload) throws Exception {
+        bufferOperation(transaction, opType, dbName, collName, payload, List.of());
+    }
+
+    private static long bufferOperation(Transaction transaction, String opType, String dbName, String collName,
+            JsonObject payload, List<String> insertedIds) throws Exception {
         final var seq = transaction.nextSeq();
         final var opEntry = new AdminTransactionEntry(transaction.getTransactionId().toString(),
                 transaction.getClientId().toString(), seq, opType, dbName, collName, payload);
+        opEntry.setTriggerContext(insertedIds, clientTracker.getAuthenticatedUsername(transaction.getClientId()));
         AdminOperationHelper.saveTransactionOp(opEntry);
         transaction.addBufferedOpId(opEntry.get_id());
         return seq;

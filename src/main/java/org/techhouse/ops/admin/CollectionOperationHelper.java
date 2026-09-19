@@ -25,6 +25,8 @@ public final class CollectionOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private static final org.techhouse.cluster.HybridClock hybridClock = IocContainer
+            .get(org.techhouse.cluster.HybridClock.class);
 
     private CollectionOperationHelper() {
     }
@@ -44,8 +46,13 @@ public final class CollectionOperationHelper {
                         // Registration must be synchronous: a lagging background task lets CREATE_INDEX run
                         // first, find no admin PK entry and silently skip registering the index.
                         if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+                            if (createCollectionRequest.getIncarnation() == 0) {
+                                createCollectionRequest.setIncarnation(hybridClock.next());
+                            }
                             AdminOperationHelper.createPageCollections(dbName, collName);
-                            AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
+                            final var entry = new AdminCollEntry(dbName, collName);
+                            entry.setIncarnation(createCollectionRequest.getIncarnation());
+                            AdminOperationHelper.saveCollectionEntry(entry);
                         }
                         return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
                     }

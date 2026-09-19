@@ -1,6 +1,7 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -152,5 +153,31 @@ public class ReplicatedApplyVersionTest {
         assertEquals("peer", valueOf("eq"),
                 "anti-entropy pulls an equal-version winner, so an equal-version push must overwrite too or the two"
                         + " paths tie-break in opposite directions and the cluster never converges");
+    }
+
+    @Test
+    public void test_an_upsert_older_than_a_local_tombstone_is_refused() {
+        assertTrue(applyUpsert("t", "live", 100L));
+        assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
+                ReplicationOp.DELETE, null, List.of("t"), List.of("200"))));
+        assertNull(valueOf("t"));
+
+        assertTrue(applyUpsert("t", "resurrected", 150L),
+                "a refused apply still reports success: the replica has converged, it has not failed");
+
+        assertNull(valueOf("t"),
+                "an upsert older than the local tombstone must be refused, or the committed delete is undone"
+                        + " until the next anti-entropy round repairs it");
+    }
+
+    @Test
+    public void test_an_upsert_newer_than_a_local_tombstone_is_applied() {
+        assertTrue(applyUpsert("u", "live", 100L));
+        assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
+                ReplicationOp.DELETE, null, List.of("u"), List.of("200"))));
+
+        assertTrue(applyUpsert("u", "rewritten", 300L));
+
+        assertEquals("rewritten", valueOf("u"));
     }
 }

@@ -50,6 +50,10 @@ public class IndexHelper {
         return IndexEntryReader.getMatchingIdsForJoin(dbName, collName, fieldName, localValues);
     }
 
+    public static List<String> sortedIds(FieldIndexEntry<?> entry) {
+        return IndexEntryReader.sortedIds(entry);
+    }
+
     public static JsonBaseElement indexValueToElement(Object value) {
         return IndexValueCodec.indexValueToElement(value);
     }

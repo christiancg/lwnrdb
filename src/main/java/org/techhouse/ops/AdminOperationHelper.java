@@ -72,6 +72,8 @@ public final class AdminOperationHelper {
             entry.setPage(existingPk.getPage());
             final var updateResult = fs.updateFromCollection(entry, existingPk);
             cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
+            AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, collName, EventType.UPDATED, List.of(entry),
+                    false);
             return updateResult.indexEntry();
         }
         entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, collName, entry.byteSize()));

@@ -218,4 +218,98 @@ public class FileSystemPkIndexTest {
         fs.compactTombstones(TestGlobals.DB, "noSuchColl", 0L);
         assertTrue(fs.readTombstones(TestGlobals.DB, "noSuchColl").isEmpty());
     }
+
+    @Test
+    public void test_a_self_heal_does_not_erase_a_concurrent_append() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var seed = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        seed.set_id("seed");
+        fileSystem.insertIntoCollection(seed);
+        final var indexFile = new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator
+                + TestGlobals.COLL + File.separator + TestGlobals.COLL + "-_id-String.idx");
+
+        final var appended = java.util.Collections.synchronizedList(new ArrayList<String>());
+        final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        final var stop = new java.util.concurrent.atomic.AtomicBoolean();
+        final var writer = new Thread(() -> {
+            var i = 0;
+            while (!stop.get()) {
+                try {
+                    final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+                    entry.set_id("appended" + i++);
+                    fileSystem.insertIntoCollection(entry);
+                    appended.add(entry.get_id());
+                } catch (Exception e) {
+                    failure.compareAndSet(null, e);
+                    return;
+                }
+            }
+        }, "pk-append");
+        writer.start();
+        try {
+            for (var round = 0; round < 200; round++) {
+                java.nio.file.Files.writeString(indexFile.toPath(), "torn line " + round + System.lineSeparator(),
+                        java.nio.file.StandardOpenOption.APPEND);
+                fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+            }
+        } finally {
+            stop.set(true);
+            writer.join(10_000L);
+        }
+        if (failure.get() != null) {
+            throw new AssertionError("the appending writer failed", failure.get());
+        }
+
+        final var onDisk = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream()
+                .map(PkIndexEntry::getValue).collect(java.util.stream.Collectors.toSet());
+        final var lost = new ArrayList<String>();
+        for (final var id : List.copyOf(appended)) {
+            if (!onDisk.contains(id)) {
+                lost.add(id);
+            }
+        }
+        assertTrue(lost.isEmpty(), "the self-heal rewrote the whole file from a snapshot taken before these commits,"
+                + " and nothing rebuilds pk.idx from the documents, so the loss is permanent: " + lost);
+    }
+
+    @Test
+    public void test_two_concurrent_heals_do_not_collide() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var seed = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        seed.set_id("seed");
+        fileSystem.insertIntoCollection(seed);
+        final var indexFile = new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator
+                + TestGlobals.COLL + File.separator + TestGlobals.COLL + "-_id-String.idx");
+        java.nio.file.Files.writeString(indexFile.toPath(), "torn" + System.lineSeparator(),
+                java.nio.file.StandardOpenOption.APPEND);
+
+        final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        final var threads = new ArrayList<Thread>();
+        for (var t = 0; t < 4; t++) {
+            final var thread = new Thread(() -> {
+                try {
+                    for (var i = 0; i < 50; i++) {
+                        fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+                    }
+                } catch (Exception e) {
+                    failure.compareAndSet(null, e);
+                }
+            }, "pk-heal-" + t);
+            threads.add(thread);
+            thread.start();
+        }
+        for (final var thread : threads) {
+            thread.join(10_000L);
+        }
+
+        assertNull(failure.get(), "two healers racing on the same file must not fail the read");
+        assertTrue(fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream()
+                .anyMatch(e -> e.getValue().equals("seed")));
+    }
 }

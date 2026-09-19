@@ -69,8 +69,6 @@ final class PkIndexStore {
             final List<String> existingLines = indexFile.exists()
                     ? FileLocks.decodeLines(Files.readAllBytes(indexFile.toPath()))
                     : List.of();
-            // Rewritten in full because the entries needing a position shift are not contiguous in the
-            // id-sorted file: a same-page, later-positioned row can sort before the updated id.
             final var others = new ArrayList<PkIndexEntry>(existingLines.size());
             PkIndexEntry oldEntry = null;
             for (final var line : existingLines) {
@@ -122,25 +120,43 @@ final class PkIndexStore {
         return others;
     }
 
+    private record ParsedPkIndex(List<PkIndexEntry> entries, List<String> lines, boolean dropped) {
+    }
+
     List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collectionName);
         if (!indexFile.exists()) {
             return new ArrayList<>();
         }
-        // A non-atomic write interrupted mid-rewrite leaves a torn line or a duplicate id; both self-heal
-        // here (last occurrence wins, survivors rewritten) so one bad line never fails every PK read.
+        final var readLock = FileLocks.lockFor(indexFile).readLock();
+        readLock.lock();
+        final ParsedPkIndex parsed;
+        try {
+            parsed = parsePkIndex(dbName, collectionName, indexFile);
+        } finally {
+            readLock.unlock();
+        }
+        if (!parsed.dropped()) {
+            return parsed.entries();
+        }
+        final var writeLock = FileLocks.lockFor(indexFile).writeLock();
+        writeLock.lock();
+        try {
+            final var reparsed = parsePkIndex(dbName, collectionName, indexFile);
+            if (reparsed.dropped()) {
+                FileLocks.rewriteFileAtomically(indexFile.toPath(), reparsed.lines());
+            }
+            return reparsed.entries();
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    private ParsedPkIndex parsePkIndex(String dbName, String collectionName, File indexFile) throws IOException {
         final var byValue = new LinkedHashMap<String, PkIndexEntry>();
         final var lineByValue = new LinkedHashMap<String, String>();
         boolean dropped = false;
-        final var lock = FileLocks.lockFor(indexFile).readLock();
-        lock.lock();
-        final List<String> indexLines;
-        try {
-            indexLines = FileLocks.decodeLines(Files.readAllBytes(indexFile.toPath()));
-        } finally {
-            lock.unlock();
-        }
-        for (var line : indexLines) {
+        for (var line : FileLocks.decodeLines(Files.readAllBytes(indexFile.toPath()))) {
             if (line.isEmpty())
                 continue;
             try {
@@ -156,12 +172,9 @@ final class PkIndexStore {
                 logger.warning("Removing malformed PK index entry in " + indexFile.getName() + ": " + e.getMessage());
             }
         }
-        if (dropped) {
-            FileLocks.rewriteFileAtomically(indexFile.toPath(), new ArrayList<>(lineByValue.values()));
-        }
         final var entries = new ArrayList<>(byValue.values());
         entries.sort(Comparator.comparing(PkIndexEntry::getValue));
-        return entries;
+        return new ParsedPkIndex(entries, new ArrayList<>(lineByValue.values()), dropped);
     }
 
 }

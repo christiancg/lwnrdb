@@ -139,20 +139,26 @@ final class IndexLookupResolver {
 
     private static boolean hasAnotherTypeIndex(UserCache userCache, String dbName, String collName, String fieldName,
             Class<?> chosen) throws IOException {
+        return hasAnotherIndex(userCache, dbName, collName, fieldName, chosen, null);
+    }
+
+    private static boolean hasAnotherIndex(UserCache userCache, String dbName, String collName, String fieldName,
+            Class<?> chosenType, IndexKind chosenKind) throws IOException {
         for (final var type : List.of(Number.class, Boolean.class, String.class)) {
-            if (type != chosen
+            if (type != chosenType
                     && userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type) != null) {
                 return true;
             }
         }
         for (final var customType : CustomTypeFactory.getCustomTypes().values()) {
-            if (customType != chosen
+            if (customType != chosenType
                     && userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, customType) != null) {
                 return true;
             }
         }
         for (final var kind : IndexKind.values()) {
-            if (userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind) != null) {
+            if (kind != chosenKind
+                    && userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind) != null) {
                 return true;
             }
         }
@@ -167,6 +173,14 @@ final class IndexLookupResolver {
         return userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, chosen);
     }
 
+    private static List<FieldIndexEntry<String>> complementSafeHashIndex(UserCache userCache, String dbName,
+            String collName, String fieldName, FieldOperatorType opType, IndexKind kind) throws IOException {
+        if (opType == FieldOperatorType.NOT_IN && hasAnotherIndex(userCache, dbName, collName, fieldName, null, kind)) {
+            return null;
+        }
+        return userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+    }
+
     @SuppressWarnings("unchecked")
     private static <T> Set<String> getIdsFromInList(UserCache userCache, String dbName, String collName,
             String fieldName, FieldOperator operator, JsonArray arr) throws IOException {
@@ -177,13 +191,13 @@ final class IndexLookupResolver {
         final var listStream = arr.asList().stream();
         final var opType = operator.getFieldOperatorType();
         if (firstElement.isJsonObject()) {
-            final var hashIndex = userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName,
+            final var hashIndex = complementSafeHashIndex(userCache, dbName, collName, fieldName, opType,
                     IndexKind.OBJECT);
             return hashIndex != null
                     ? SearchUtils.findingInNotIn(hashIndex, opType, listStream.map(JsonUtils::hashElement).toList())
                     : null;
         } else if (firstElement.isJsonArray()) {
-            final var hashIndex = userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName,
+            final var hashIndex = complementSafeHashIndex(userCache, dbName, collName, fieldName, opType,
                     IndexKind.ARRAY);
             return hashIndex != null
                     ? SearchUtils.findingInNotIn(hashIndex, opType, listStream.map(JsonUtils::hashElement).toList())

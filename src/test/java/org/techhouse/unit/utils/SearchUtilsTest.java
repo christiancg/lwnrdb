@@ -188,11 +188,13 @@ public class SearchUtilsTest {
     }
 
     @Test
-    public void test_contains_non_string_value_returns_empty() {
+    public void test_contains_declines_for_a_non_string_operand() {
         List<FieldIndexEntry<Number>> entries = List.of(new FieldIndexEntry<>("db1", "col1", 10, Set.of("id1")),
                 new FieldIndexEntry<>("db1", "col1", 20, Set.of("id2")));
         Set<String> result = SearchUtils.findingByOperator(entries, FieldOperatorType.CONTAINS, 10);
-        assertTrue(result.isEmpty());
+        assertNull(result,
+                "the CONTAINS scan predicate also matches an array-valued document holding the operand, which a"
+                        + " scalar index cannot see, so it must decline and force a scan rather than answer empty");
     }
 
     @Test

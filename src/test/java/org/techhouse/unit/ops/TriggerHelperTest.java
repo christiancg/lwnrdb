@@ -221,4 +221,26 @@ public class TriggerHelperTest {
         assertTrue(capture(() -> TriggerHelper.afterBulkSave(TestGlobals.DB, TestGlobals.COLL,
                 new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING), "alice", 0)).isEmpty());
     }
+
+    @Test
+    public void test_an_unreadable_trigger_file_does_not_fail_a_committed_write() {
+        install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
+        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+        final var file = new java.io.File(
+                TestGlobals.PATH + java.io.File.separator + TestGlobals.DB + java.io.File.separator + TestGlobals.COLL
+                        + java.io.File.separator + TestGlobals.COLL + "-triggers.json");
+        if (file.exists()) {
+            assertTrue(file.delete());
+        }
+        assertTrue(file.mkdirs());
+        try {
+            assertTrue(
+                    capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                            entry("a"), "alice", 0)).isEmpty(),
+                    "the write has already committed, so an unreadable trigger file must not fail it");
+        } finally {
+            assertTrue(file.delete());
+            cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
 }

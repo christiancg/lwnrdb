@@ -58,6 +58,7 @@ public final class ReplicatedApplyHelper {
         final var versions = payload.getVersions();
         final var acceptedDocuments = new ArrayList<JsonObject>();
         final var acceptedVersions = new ArrayList<Long>();
+        final var tombstones = fs.readTombstones(payload.getDbName(), payload.getCollName());
         for (var i = 0; i < documents.size(); i++) {
             final var document = documents.get(i);
             final var version = versionAt(versions, i);
@@ -67,7 +68,7 @@ public final class ReplicatedApplyHelper {
                 continue;
             }
             hybridClock.observe(version);
-            if (isSupersededLocally(payload.getDbName(), payload.getCollName(), document, version)) {
+            if (isSupersededLocally(payload.getDbName(), payload.getCollName(), document, version, tombstones)) {
                 continue;
             }
             acceptedDocuments.add(document);
@@ -81,14 +82,19 @@ public final class ReplicatedApplyHelper {
         return SaveOperationHelper.executeBulkSave(request, acceptedVersions) instanceof BulkSaveResponse;
     }
 
-    private static boolean isSupersededLocally(String dbName, String collName, JsonObject document, long version)
-            throws java.io.IOException {
+    private static boolean isSupersededLocally(String dbName, String collName, JsonObject document, long version,
+            java.util.Map<String, Long> tombstones) throws java.io.IOException {
         final var idElement = document.get(Globals.PK_FIELD);
         if (!(idElement instanceof JsonString jsonString)) {
             return false;
         }
-        final var stored = storedVersionOf(dbName, collName, jsonString.getValue());
-        return stored != null && stored > version;
+        final var id = jsonString.getValue();
+        final var stored = storedVersionOf(dbName, collName, id);
+        if (stored != null && stored > version) {
+            return true;
+        }
+        final var tombstoned = tombstones.get(id);
+        return tombstoned != null && tombstoned > version;
     }
 
     private static Long storedVersionOf(String dbName, String collName, String id) throws java.io.IOException {

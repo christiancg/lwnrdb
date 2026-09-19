@@ -209,7 +209,11 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
             throw jsError("No transaction is active on this script");
         }
         try {
-            requireOk(dispatch(request));
+            final var response = dispatch(request);
+            if (response.getStatus() != OperationStatus.OK
+                    && !ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode())) {
+                throw jsError(response.getMessage());
+            }
         } finally {
             clearSession();
         }

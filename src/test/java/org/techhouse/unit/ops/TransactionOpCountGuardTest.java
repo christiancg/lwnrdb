@@ -16,6 +16,7 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
@@ -80,7 +81,7 @@ public class TransactionOpCountGuardTest {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         AdminOperationHelper.deleteTransactionOps(List.of(transaction.getBufferedOpIds().getLast()));
 
-        final var response = TransactionOperationHelper.commitPrepared(clientId);
+        final var response = TwoPhaseParticipant.commitPrepared(clientId);
 
         assertNotEquals(OperationStatus.OK, response.getStatus());
         assertEquals(OperationStatus.NOT_FOUND, findStatus("kept"));
@@ -93,7 +94,7 @@ public class TransactionOpCountGuardTest {
         bufferSave(clientId, "first");
         bufferSave(clientId, "second");
 
-        assertEquals(OperationStatus.OK, TransactionOperationHelper.commitPrepared(clientId).getStatus());
+        assertEquals(OperationStatus.OK, TwoPhaseParticipant.commitPrepared(clientId).getStatus());
 
         assertEquals(OperationStatus.OK, findStatus("first"));
         assertEquals(OperationStatus.OK, findStatus("second"));
