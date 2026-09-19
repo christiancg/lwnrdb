@@ -9,7 +9,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -89,24 +88,7 @@ public class FileSystem {
 
     public boolean deleteDatabase(String dbName) {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
-        final var fileDeletionResult = new ArrayList<Boolean>();
-        if (dbFolder.exists()) {
-            final var dbFolders = dbFolder.listFiles();
-            if (dbFolders != null) {
-                for (var collFolder : dbFolders) {
-                    final var collFiles = collFolder.listFiles();
-                    if (collFiles != null) {
-                        for (var file : collFiles) {
-                            fileDeletionResult.add(file.delete());
-                        }
-                        fileDeletionResult.add(collFolder.delete());
-                    }
-                }
-            }
-            fileDeletionResult.add(dbFolder.delete());
-            return fileDeletionResult.stream().allMatch(aBoolean -> aBoolean);
-        }
-        return false;
+        return dbFolder.exists() && FileTreeDeleter.delete(dbFolder);
     }
 
     public boolean createCollectionFile(String dbName, String collectionName) throws IOException {
@@ -140,15 +122,7 @@ public class FileSystem {
     public boolean deleteCollectionFiles(String dbName, String collectionName) {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
-        final var fileDeletionResult = new ArrayList<Boolean>();
-        if (collectionFolder.exists()) {
-            for (var file : Objects.requireNonNull(collectionFolder.listFiles())) {
-                fileDeletionResult.add(file.delete());
-            }
-            fileDeletionResult.add(collectionFolder.delete());
-            return fileDeletionResult.stream().allMatch(aBoolean -> aBoolean);
-        }
-        return false;
+        return collectionFolder.exists() && FileTreeDeleter.delete(collectionFolder);
     }
 
     public void writeCollectionSchema(String dbName, String collName, String schemaJson) throws IOException {
