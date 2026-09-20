@@ -91,7 +91,7 @@ public class CacheTest extends CacheFixtureSupport {
 
     @Test
     public void test_returns_whole_collection_from_cache_if_exists_and_complete()
-            throws NoSuchFieldException, IllegalAccessException, java.io.IOException {
+            throws NoSuchFieldException, IllegalAccessException, java.io.IOException, InterruptedException {
         Cache cache = new Cache();
         String dbName = "testDb";
         String collName = "testColl";
@@ -122,9 +122,15 @@ public class CacheTest extends CacheFixtureSupport {
         final var userCache = IocContainer.get(org.techhouse.cache.UserCache.class);
         final var collectionMap = TestUtils.getPrivateField(userCache, "collectionMap", typeCollMap);
         collectionMap.put(collectionIdentifier, wholeCollection);
-        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        pkIndex.add(new org.techhouse.data.PkIndexEntry(dbName, collName, "1", 0, 1, 0));
-        pkIndex.add(new org.techhouse.data.PkIndexEntry(dbName, collName, "2", 1, 1, 0));
+        final var locks = IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
+        locks.lock(dbName, collName);
+        try {
+            final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            pkIndex.add(new org.techhouse.data.PkIndexEntry(dbName, collName, "1", 0, 1, 0));
+            pkIndex.add(new org.techhouse.data.PkIndexEntry(dbName, collName, "2", 1, 1, 0));
+        } finally {
+            locks.release(dbName, collName);
+        }
 
         Map<String, DbEntry> result = cache.getWholeCollection(dbName, collName);
 
@@ -172,15 +178,22 @@ public class CacheTest extends CacheFixtureSupport {
     }
 
     @Test
-    public void test_get_whole_collection_returns_cached_when_pages_metadata_missing() throws IOException {
+    public void test_get_whole_collection_returns_cached_when_pages_metadata_missing()
+            throws IOException, InterruptedException {
         Cache cache = new Cache();
         String dbName = "myDb";
         String collName = "myColl";
         DbEntry e = new DbEntry();
         e.set_id("1");
         cache.addEntryToCache(dbName, collName, e);
-        cache.getPkIndexAndLoadIfNecessary(dbName, collName)
-                .add(new org.techhouse.data.PkIndexEntry(dbName, collName, "1", 0, 1, 0));
+        final var locks = IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
+        locks.lock(dbName, collName);
+        try {
+            cache.getPkIndexAndLoadIfNecessary(dbName, collName)
+                    .add(new org.techhouse.data.PkIndexEntry(dbName, collName, "1", 0, 1, 0));
+        } finally {
+            locks.release(dbName, collName);
+        }
 
         Map<String, DbEntry> result = cache.getWholeCollection(dbName, collName);
         assertEquals(1, result.size());

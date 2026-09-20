@@ -8,12 +8,14 @@ import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.simplejs.SimpleJs;
@@ -43,7 +45,13 @@ public final class TriggerDispatcher {
             recordSkip(event, reason);
             return;
         }
-        final var trigger = findTrigger(event);
+        final TriggerDefinition trigger;
+        try {
+            trigger = findTrigger(event);
+        } catch (MetadataReadException e) {
+            retryUnreadableDefinition(event, e.getMessage());
+            return;
+        }
         if (trigger == null || !trigger.isEnabled() || trigger.isBefore()) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             return;
@@ -261,15 +269,34 @@ public final class TriggerDispatcher {
         return args;
     }
 
-    private static TriggerDefinition findTrigger(TriggerEvent event) {
-        final List<TriggerDefinition> triggers;
-        try {
-            triggers = cache.getTriggersFor(event.getDbName(), event.getCollName());
-        } catch (org.techhouse.ex.MetadataReadException e) {
-            logger.warning("Could not read the triggers for " + event.getDbName() + "|" + event.getCollName()
-                    + "; the run stays pending for a later attempt: " + e.getMessage());
-            return null;
+    private static void retryUnreadableDefinition(TriggerEvent event, String cause) {
+        final var attempt = event.getAttempt();
+        final var maxAttempts = Math.max(1, configuration.getTriggerMaxAttempts());
+        final var error = "MetadataReadException: " + cause;
+        triggerExecutor.countFailure();
+        if (event.getRunId() == null) {
+            logger.warning("Could not read the triggers for " + event.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR
+                    + event.getCollName() + "; the run is not logged and cannot be replayed: " + cause);
+            return;
         }
+        if (attempt < maxAttempts) {
+            final var delay = backoffFor(attempt);
+            TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
+                    System.currentTimeMillis() + delay);
+            triggerExecutor.submitAfter(retryOf(event), delay);
+            logger.warning("Could not read the triggers for " + event.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR
+                    + event.getCollName() + "; the run stays pending and is retried in " + delay + "ms: " + cause);
+            return;
+        }
+        TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.DEAD, attempt, error, 0L);
+        triggerExecutor.countDeadLetter();
+        logger.error("Could not read the triggers for " + event.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR
+                + event.getCollName() + " after " + attempt + " attempt(s); the run was dead-lettered, runId="
+                + event.getRunId() + " - resolve it with RESOLVE_TRIGGER_RUN", null);
+    }
+
+    private static TriggerDefinition findTrigger(TriggerEvent event) {
+        final List<TriggerDefinition> triggers = cache.getTriggersFor(event.getDbName(), event.getCollName());
         for (final var trigger : triggers) {
             if (trigger.getName().equals(event.getTriggerName())) {
                 return trigger;

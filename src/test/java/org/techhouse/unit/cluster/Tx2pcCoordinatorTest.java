@@ -1,6 +1,7 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -250,6 +251,30 @@ public class Tx2pcCoordinatorTest {
         assertEquals(OperationStatus.OK, coordinator.forceResolve(dtxId, true).getStatus());
         verify(pool, atLeastOnce()).request(any(), any(), anyLong());
         assertEquals(OperationStatus.OK, findStatus("force-broadcast"));
+    }
+
+    @Test
+    public void test_force_resolve_records_the_real_participants() throws Exception {
+        final var self = node();
+        final var other = new NodeInfo("other", "127.0.0.1", 59998, NodeState.ALIVE, 1L, 1L);
+        TestUtils.setPrivateField(membershipService, "members",
+                new ConcurrentHashMap<>(java.util.Map.of("self", self, "other", other)));
+        TestUtils.setPrivateField(membershipService, "self", self);
+        ownership.onMembershipChanged(membershipService.membershipView());
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
+            final var reply = new ClusterMessage();
+            reply.setType(ClusterMessageType.COMMIT_TX_ACK);
+            return reply;
+        });
+        TestUtils.setPrivateField(coordinator, "pool", pool);
+        final var dtxId = seedDurablePrepared("force-participants");
+
+        assertEquals(OperationStatus.OK, coordinator.forceResolve(dtxId, true).getStatus());
+
+        assertFalse(org.techhouse.ops.Tx2pcLog.readCoordinatorParticipants(dtxId).isEmpty(),
+                "an empty participant list makes the next recovery sweep delete the coordinator marker, after"
+                        + " which a straggler participant reads NO_RECORD and aborts what the others committed");
     }
 
     @Test

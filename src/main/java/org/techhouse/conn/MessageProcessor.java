@@ -60,9 +60,6 @@ public class MessageProcessor implements Runnable {
                 while (!close) {
                     final var message = reader.readLine();
                     if (message == null) {
-                        TransactionOperationHelper.cleanupOnDisconnect(clientId);
-                        listenManager.unregisterAllForClient(clientId);
-                        clientTracker.removeById(clientId);
                         break;
                     }
                     if (!message.isBlank()) {
@@ -83,9 +80,6 @@ public class MessageProcessor implements Runnable {
                                     final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
                                     if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
                                         close = true;
-                                        TransactionOperationHelper.cleanupOnDisconnect(clientId);
-                                        listenManager.unregisterAllForClient(clientId);
-                                        clientTracker.removeById(clientId);
                                     }
                                     response = eJson.toJson(responseObj);
                                 } else {
@@ -108,9 +102,6 @@ public class MessageProcessor implements Runnable {
                                                 response = handled.response();
                                                 if (handled.close()) {
                                                     close = true;
-                                                    TransactionOperationHelper.cleanupOnDisconnect(clientId);
-                                                    listenManager.unregisterAllForClient(clientId);
-                                                    clientTracker.removeById(clientId);
                                                 }
                                             }
                                         }
@@ -145,18 +136,21 @@ public class MessageProcessor implements Runnable {
                 }
             }
         } catch (SSLException e) {
-            if (clientId != null) {
-                TransactionOperationHelper.cleanupOnDisconnect(clientId);
-                clientTracker.removeById(clientId);
-            }
             logger.warning("Rejected connection: TLS handshake failed (non-TLS or incompatible client)");
         } catch (IOException e) {
+            logger.error("General error in MessageProcessor", e);
+        } catch (RuntimeException e) {
+            logger.error("Unexpected failure in MessageProcessor", e);
+            throw e;
+        } catch (Throwable t) {
+            logger.error("Unexpected failure in MessageProcessor", new Exception(t));
+            throw t;
+        } finally {
             if (clientId != null) {
                 TransactionOperationHelper.cleanupOnDisconnect(clientId);
                 listenManager.unregisterAllForClient(clientId);
                 clientTracker.removeById(clientId);
             }
-            logger.error("General error in MessageProcessor", e);
         }
     }
 

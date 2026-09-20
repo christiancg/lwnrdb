@@ -82,20 +82,27 @@ public class Tx2pcCoordinator {
     }
 
     public OperationResponse forceResolve(String dtxId, boolean commit) {
+        final var self = membershipService.getSelf();
+        final var peers = membershipService.membershipView().peers(self).stream()
+                .map(member -> member.address().toString()).toList();
         try {
             if (commit && !Tx2pcLog.isCommitted(dtxId)) {
-                Tx2pcLog.recordCoordinatorCommit(dtxId, List.of());
+                Tx2pcLog.recordCoordinatorCommit(dtxId, peers);
             }
             TwoPhaseParticipant.resolveFromDurable(dtxId, commit);
         } catch (Exception e) {
             logger.error("Failed to force-resolve transaction " + dtxId, e);
             return new OperationResponse(OperationType.RESOLVE_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         }
-        final var self = membershipService.getSelf();
         final var type = commit ? ClusterMessageType.COMMIT_TX : ClusterMessageType.ABORT_TX;
         final var ack = commit ? ClusterMessageType.COMMIT_TX_ACK : ClusterMessageType.ABORT_TX_ACK;
-        for (final var member : membershipService.membershipView().peers(self)) {
-            send(member.address().toString(), type, dtxId, dtxId, ack, null);
+        var allAcked = true;
+        for (final var address : peers) {
+            allAcked &= send(address, type, dtxId, dtxId, ack, null);
+        }
+        if (commit && !allAcked) {
+            logger.warning("Not every participant acknowledged the forced commit of " + dtxId
+                    + "; keeping the coordinator marker so recovery can re-drive it");
         }
         return OperationResponse.ok(OperationType.RESOLVE_TRANSACTION,
                 "Transaction " + (commit ? "committed" : "aborted"));

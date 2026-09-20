@@ -53,6 +53,7 @@ public class AdminCache {
     private final BoundedLruCache<ProcedureDefinition> procedures = new BoundedLruCache<>(Integer.MAX_VALUE,
             configuration.getMetadataCacheMaxBytes() / 3,
             definition -> (long) definition.getSource().length() * 2L + 512L);
+    private final java.util.concurrent.atomic.AtomicLong triggerGeneration = new java.util.concurrent.atomic.AtomicLong();
     private final BoundedLruCache<List<TriggerDefinition>> triggers = new BoundedLruCache<>(
             configuration.getMetadataCacheMaxEntries(), 0L, definitions -> definitions.size() * 512L + 128L);
     private final BoundedLruCache<ScheduleDefinition> schedules = new BoundedLruCache<>(Integer.MAX_VALUE,
@@ -362,8 +363,11 @@ public class AdminCache {
         final var id = Cache.getCollectionIdentifier(dbName, collName);
         var cached = triggers.get(id);
         if (cached == null) {
+            final var generationAtLoad = triggerGeneration.get();
             cached = loadTriggersUncached(dbName, collName);
-            triggers.put(id, cached);
+            if (triggerGeneration.get() == generationAtLoad) {
+                triggers.put(id, cached);
+            }
         }
         return cached;
     }
@@ -391,21 +395,25 @@ public class AdminCache {
     }
 
     public void putTriggers(String dbName, String collName, List<TriggerDefinition> definitions) {
+        triggerGeneration.incrementAndGet();
         triggers.put(Cache.getCollectionIdentifier(dbName, collName), List.copyOf(definitions));
     }
 
     public void removeTriggers(String dbName, String collName) {
+        triggerGeneration.incrementAndGet();
         triggers.remove(Cache.getCollectionIdentifier(dbName, collName));
     }
 
     public void removeTriggersForDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        triggerGeneration.incrementAndGet();
         triggers.removeIf(id -> id.startsWith(prefix));
     }
 
     // Must leave no entry behind: a cached empty list would make an already-queued trigger silently
     // not fire when TriggerDispatcher looks the list up again.
     public void removeTriggersMatching(Predicate<String> keyMatches) {
+        triggerGeneration.incrementAndGet();
         triggers.removeIf(keyMatches);
     }
 

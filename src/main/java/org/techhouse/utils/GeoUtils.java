@@ -98,8 +98,12 @@ public final class GeoUtils {
         } else {
             lngDelta = Math.toDegrees(Math.asin(sinAngular / cosLat)) * BBOX_SAFETY;
         }
-        return new BoundingBox(clampLat(center.lat() - latDelta), clampLng(center.lng() - lngDelta),
-                clampLat(center.lat() + latDelta), clampLng(center.lng() + lngDelta));
+        final var minLng = center.lng() - lngDelta;
+        final var maxLng = center.lng() + lngDelta;
+        if (lngDelta >= 180 || minLng < -180 || maxLng > 180) {
+            return new BoundingBox(clampLat(center.lat() - latDelta), -180, clampLat(center.lat() + latDelta), 180);
+        }
+        return new BoundingBox(clampLat(center.lat() - latDelta), minLng, clampLat(center.lat() + latDelta), maxLng);
     }
 
     public static BoundingBox boundingBoxOf(List<GeoPoint> points) {

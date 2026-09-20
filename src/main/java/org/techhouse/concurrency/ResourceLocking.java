@@ -128,6 +128,29 @@ public class ResourceLocking {
         return acquired;
     }
 
+    public List<String> acquireReadLocks(boolean dirtyRead, List<String> identifiers, long timeoutMillis)
+            throws InterruptedException {
+        if (dirtyRead) {
+            return List.of();
+        }
+        final var sorted = identifiers.stream().distinct().sorted().toList();
+        final var acquired = new ArrayList<String>();
+        try {
+            for (var identifier : sorted) {
+                if (!lockFor(identifier).readLock().tryLock(timeoutMillis,
+                        java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    releaseReadLocks(acquired);
+                    return null;
+                }
+                acquired.add(identifier);
+            }
+        } catch (InterruptedException e) {
+            releaseReadLocks(acquired);
+            throw e;
+        }
+        return acquired;
+    }
+
     public void releaseReadLocks(List<String> acquired) {
         for (var i = acquired.size() - 1; i >= 0; i--) {
             releaseReadByName(acquired.get(i));

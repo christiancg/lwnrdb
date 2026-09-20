@@ -200,19 +200,43 @@ public class TestUtils {
 
     public static void cacheEntry(Cache cache, String dbName, String collName, DbEntry entry) throws IOException {
         cache.addEntryToCache(dbName, collName, entry);
-        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        final var position = Collections.binarySearch(pkIndex, entry.get_id());
-        if (position < 0) {
-            pkIndex.add(-(position + 1), new PkIndexEntry(dbName, collName, entry.get_id(), 0, 1, entry.getPage()));
-        }
+        underCollectionLock(dbName, collName, () -> {
+            final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            final var position = Collections.binarySearch(pkIndex, entry.get_id());
+            if (position < 0) {
+                pkIndex.add(-(position + 1), new PkIndexEntry(dbName, collName, entry.get_id(), 0, 1, entry.getPage()));
+            }
+        });
     }
 
     public static void uncacheEntry(Cache cache, String dbName, String collName, String id) throws IOException {
         cache.evictEntry(dbName, collName, id);
-        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        final var position = Collections.binarySearch(pkIndex, id);
-        if (position >= 0) {
-            pkIndex.remove(position);
+        underCollectionLock(dbName, collName, () -> {
+            final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            final var position = Collections.binarySearch(pkIndex, id);
+            if (position >= 0) {
+                pkIndex.remove(position);
+            }
+        });
+    }
+
+    private interface PkIndexMutation {
+        void run() throws IOException;
+    }
+
+    private static void underCollectionLock(String dbName, String collName, PkIndexMutation mutation)
+            throws IOException {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        try {
+            locks.lock(dbName, collName);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException(e);
+        }
+        try {
+            mutation.run();
+        } finally {
+            locks.release(dbName, collName);
         }
     }
 

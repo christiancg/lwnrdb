@@ -34,7 +34,8 @@ public class UserCache {
         var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
         if (primaryKeyIndex == null) {
             primaryKeyIndex = fs.readWholePkIndexFile(dbName, collName);
-            if (shouldCache(dbName, CacheSizeEstimator.estimatePkIndexSize(primaryKeyIndex))) {
+            if (rl.holdsCollectionLock(dbName, collName)
+                    && shouldCache(dbName, CacheSizeEstimator.estimatePkIndexSize(primaryKeyIndex))) {
                 pkIndexMap.put(collectionIdentifier, primaryKeyIndex);
             }
         }

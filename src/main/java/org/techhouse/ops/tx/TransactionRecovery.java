@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterCoordinator;
@@ -57,12 +58,13 @@ public final class TransactionRecovery {
             for (final var op : ops) {
                 recordIntoOverlay(reconstructed, op);
             }
-            dropTombstonesWrittenSincePrepare(reconstructed, preparedVersion);
+            final var fencedIds = idsWrittenSincePrepare(reconstructed, preparedVersion);
+            dropTombstonesWrittenSincePrepare(reconstructed, fencedIds);
             final var reservedTombstones = coordinator.reserveTransactionTombstones(reconstructed);
             listenManager.deferNotifications();
             try {
                 for (final var op : ops) {
-                    applyBufferedOp(op, preparedVersion);
+                    applyBufferedOp(op, fencedIds);
                 }
             } finally {
                 listenManager.flushDeferredNotifications();
@@ -116,10 +118,11 @@ public final class TransactionRecovery {
         Tx2pcLog.recordOutcome(dtxId, committed);
     }
 
-    private static void dropTombstonesWrittenSincePrepare(Transaction transaction, long preparedVersion)
+    private static Set<String> idsWrittenSincePrepare(Transaction transaction, long preparedVersion)
             throws java.io.IOException {
+        final var fenced = new HashSet<String>();
         if (preparedVersion <= 0) {
-            return;
+            return fenced;
         }
         for (final var collId : transaction.touchedCollections()) {
             final var overlay = transaction.overlayFor(collId);
@@ -127,10 +130,32 @@ public final class TransactionRecovery {
                 continue;
             }
             final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
+            for (final var id : overlay.keySet()) {
+                if (writtenSincePrepare(parts[0], parts[1], id, preparedVersion)) {
+                    fenced.add(fenceKey(parts[0], parts[1], id));
+                }
+            }
+        }
+        return fenced;
+    }
+
+    private static String fenceKey(String dbName, String collName, String id) {
+        return Cache.getCollectionIdentifier(dbName, collName) + Globals.COLL_IDENTIFIER_SEPARATOR + id;
+    }
+
+    private static void dropTombstonesWrittenSincePrepare(Transaction transaction, Set<String> fencedIds) {
+        if (fencedIds.isEmpty()) {
+            return;
+        }
+        for (final var collId : transaction.touchedCollections()) {
+            final var overlay = transaction.overlayFor(collId);
+            if (overlay == null) {
+                continue;
+            }
             final var stale = new ArrayList<String>();
             for (final var overlayEntry : overlay.entrySet()) {
                 if (Transaction.isTombstone(overlayEntry.getValue())
-                        && writtenSincePrepare(parts[0], parts[1], overlayEntry.getKey(), preparedVersion)) {
+                        && fencedIds.contains(collId + Globals.COLL_IDENTIFIER_SEPARATOR + overlayEntry.getKey())) {
                     stale.add(overlayEntry.getKey());
                 }
             }
@@ -243,17 +268,17 @@ public final class TransactionRecovery {
     }
 
     public static void applyBufferedOp(AdminTransactionEntry op) throws Exception {
-        applyBufferedOp(op, 0L);
+        applyBufferedOp(op, Set.of());
     }
 
-    public static void applyBufferedOp(AdminTransactionEntry op, long preparedVersion) throws Exception {
+    public static void applyBufferedOp(AdminTransactionEntry op, Set<String> fencedIds) throws Exception {
         final var dbName = op.getTargetDb();
         final var collName = op.getTargetColl();
         switch (op.getOpType()) {
             case AdminTransactionEntry.OP_TYPE_SAVE -> {
                 final var object = op.getPayload();
                 final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
-                if (writtenSincePrepare(dbName, collName, id, preparedVersion)) {
+                if (fencedIds.contains(fenceKey(dbName, collName, id))) {
                     logger.warning("Skipping the replay of " + id + " in " + dbName + "|" + collName
                             + ": it was written after the transaction was prepared");
                     return;
@@ -268,7 +293,7 @@ public final class TransactionRecovery {
                 for (final var element : op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList()) {
                     final var object = element.asJsonObject();
                     final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
-                    if (writtenSincePrepare(dbName, collName, id, preparedVersion)) {
+                    if (fencedIds.contains(fenceKey(dbName, collName, id))) {
                         logger.warning("Skipping the replay of " + id + " in " + dbName + "|" + collName
                                 + ": it was written after the transaction was prepared");
                         continue;
@@ -285,7 +310,7 @@ public final class TransactionRecovery {
             }
             case AdminTransactionEntry.OP_TYPE_DELETE -> {
                 final var id = op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue();
-                if (writtenSincePrepare(dbName, collName, id, preparedVersion)) {
+                if (fencedIds.contains(fenceKey(dbName, collName, id))) {
                     logger.warning("Skipping the replayed delete of " + id + " in " + dbName + "|" + collName
                             + ": it was written after the transaction was prepared");
                     return;

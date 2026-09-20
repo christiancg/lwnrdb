@@ -82,7 +82,7 @@ public final class SearchUtils {
     }
 
     private static <T> int compareAsDouble(T entryValue, Double target) {
-        return Double.compare(((Number) entryValue).doubleValue(), target);
+        return FieldIndexEntry.compareIndexedNumbers((Number) entryValue, target);
     }
 
     private static <T> int compareAsCustom(T entryValue, JsonCustom<Object> target) {

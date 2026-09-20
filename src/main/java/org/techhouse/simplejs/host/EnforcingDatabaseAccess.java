@@ -208,14 +208,16 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (sessionClientId == null) {
             throw jsError("No transaction is active on this script");
         }
+        var fenced = false;
         try {
             final var response = dispatch(request);
+            fenced = ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(response.getErrorCode());
             if (response.getStatus() != OperationStatus.OK
                     && !ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode())) {
                 throw jsError(response.getMessage());
             }
         } finally {
-            clearSession();
+            clearSession(fenced);
         }
     }
 
@@ -237,11 +239,15 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     }
 
     private void clearSession() {
-        if (sessionClientId != null) {
+        clearSession(false);
+    }
+
+    private void clearSession(boolean fenced) {
+        if (sessionClientId != null && !fenced) {
             clientTracker.clearTransactionState(sessionClientId);
-        }
-        if (sessionClientId != null && !sessionClientId.equals(clientId)) {
-            clientTracker.removeById(sessionClientId);
+            if (!sessionClientId.equals(clientId)) {
+                clientTracker.removeById(sessionClientId);
+            }
         }
         sessionClientId = null;
         sessionThread = null;

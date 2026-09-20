@@ -94,16 +94,24 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
             if (asDouble % 1 == 0 && asDouble >= Long.MIN_VALUE && asDouble <= Long.MAX_VALUE) {
                 return Long.toString(number.longValue());
             }
-            return Double.toString(asDouble);
+            return Double.toString(normalizeZero(asDouble));
         }
         return indexedValue.toString();
     }
 
     public static boolean sameIndexedValue(Object indexedValue, Object candidate) {
         if (indexedValue instanceof Number indexedNumber && candidate instanceof Number candidateNumber) {
-            return Double.compare(indexedNumber.doubleValue(), candidateNumber.doubleValue()) == 0;
+            return compareIndexedNumbers(indexedNumber, candidateNumber) == 0;
         }
         return Objects.equals(indexedValue, candidate);
+    }
+
+    public static int compareIndexedNumbers(Number left, Number right) {
+        return Double.compare(normalizeZero(left.doubleValue()), normalizeZero(right.doubleValue()));
+    }
+
+    private static double normalizeZero(double value) {
+        return value + 0.0;
     }
 
     public static <T> FieldIndexEntry<T> fromIndexFileEntry(String databaseName, String collectionName, String line,
@@ -174,7 +182,7 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
     public int compareTo(T otherIndexValue) {
         Objects.requireNonNull(otherIndexValue);
         return switch (value) {
-            case Number d -> Double.compare(d.doubleValue(), ((Number) otherIndexValue).doubleValue());
+            case Number d -> compareIndexedNumbers(d, (Number) otherIndexValue);
             case Boolean b -> b.compareTo((Boolean) otherIndexValue);
             case String s -> s.compareToIgnoreCase((String) otherIndexValue);
             case null -> 0;
