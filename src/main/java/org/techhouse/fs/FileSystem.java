@@ -308,9 +308,15 @@ public class FileSystem {
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
+            final var tail = readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
             final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.setLength(totalFileLength - pkIndexEntry.getLength());
-            pkIndexStore.deleteIndexValue(pkIndexEntry);
+            try {
+                pkIndexStore.deleteIndexValue(pkIndexEntry);
+            } catch (IOException e) {
+                restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
+                throw e;
+            }
             return compacted ? compactionFor(pkIndexEntry) : null;
         } catch (IOException e) {
             throw new RuntimeException(e);
@@ -327,6 +333,30 @@ public class FileSystem {
     private static void shiftIfAfter(PkIndexEntry entry, PkCompaction compaction) {
         if (entry.getPage() == compaction.page() && entry.getPosition() > compaction.removedPosition()) {
             entry.setPosition(entry.getPosition() - compaction.removedLength());
+        }
+    }
+
+    private static byte[] readRegion(RandomAccessFile writer, long from, long to) throws IOException {
+        final var length = (int) (to - from);
+        if (length <= 0) {
+            return new byte[0];
+        }
+        final var buffer = new byte[length];
+        writer.seek(from);
+        writer.readFully(buffer, 0, length);
+        return buffer;
+    }
+
+    private void restoreRegion(RandomAccessFile writer, long from, byte[] region, long originalLength) {
+        try {
+            if (region.length > 0) {
+                writer.seek(from);
+                writer.write(region, 0, region.length);
+            }
+            writer.setLength(originalLength);
+        } catch (IOException restoreFailure) {
+            logger.error("Could not restore the page after a failed index write; run REINDEX on this collection",
+                    restoreFailure);
         }
     }
 
@@ -393,6 +423,7 @@ public class FileSystem {
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
+            final var tail = readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
             final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
             writer.seek(totalFileLength - pkIndexEntry.getLength());
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
@@ -401,8 +432,14 @@ public class FileSystem {
             writer.write(bytes, 0, length);
             writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
             entry.setPreviousByteSize(pkIndexEntry.getLength());
-            final var updated = pkIndexStore.updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(),
-                    entry.get_id(), totalFileLength, length, page, entry.getVersion());
+            final PkIndexEntry updated;
+            try {
+                updated = pkIndexStore.updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(),
+                        entry.get_id(), totalFileLength, length, page, entry.getVersion());
+            } catch (IOException e) {
+                restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
+                throw e;
+            }
             return new UpdateResult(updated, compacted ? compactionFor(pkIndexEntry) : null);
         } finally {
             lock.unlock();

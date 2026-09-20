@@ -29,19 +29,36 @@ public final class ReplicatedApplyHelper {
     }
 
     public static boolean apply(ReplicationPayload payload) {
+        return apply(payload, 0L);
+    }
+
+    public static boolean apply(ReplicationPayload payload, long timeoutMillis) {
         if (payload == null || payload.getOp() == null) {
             return false;
         }
         final var dbName = payload.getDbName();
         final var collName = payload.getCollName();
+        var locked = false;
         try {
-            locks.lock(dbName, collName);
+            if (timeoutMillis > 0) {
+                locked = locks.tryLockWrite(dbName, collName, timeoutMillis);
+                if (!locked) {
+                    logger.warning("Skipping the replicated apply to " + dbName + "|" + collName
+                            + ": its write lock stayed held for " + timeoutMillis + "ms");
+                    return false;
+                }
+            } else {
+                locks.lock(dbName, collName);
+                locked = true;
+            }
             return applyLocked(payload);
         } catch (Exception e) {
             logger.error("Failed to apply replicated write to " + dbName + "|" + collName, e);
             return false;
         } finally {
-            locks.release(dbName, collName);
+            if (locked) {
+                locks.release(dbName, collName);
+            }
         }
     }
 

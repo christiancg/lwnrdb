@@ -109,6 +109,11 @@ public final class TriggerDispatcher {
         }
         if (!committed.get()) {
             triggerExecutor.countFailure();
+            if (database.lastCommitWasFenced()) {
+                logger.warning(line + " outcome=commit-fenced");
+                deadLetterFencedCommit(event, trigger, definer, scriptRun.runId(), start, result);
+                return;
+            }
             logger.warning(line + " outcome=commit-failed");
             handleFailure(event, trigger, definer, scriptRun.runId(), start, "CommitFailed",
                     "the trigger's effects could not be committed", null, result, true);
@@ -117,6 +122,19 @@ public final class TriggerDispatcher {
         logger.info(line + " outcome=ok");
         recordRun(event, trigger, definer, scriptRun.runId(), start, ScriptRunRecord.OUTCOME_OK, null, null, null,
                 result);
+    }
+
+    private static void deadLetterFencedCommit(TriggerEvent event, TriggerDefinition trigger, String definer,
+            String runId, long start, ScriptResult result) {
+        final var error = "CommitFenced: the trigger's effects were half applied and the collections are fenced";
+        if (event.getRunId() != null) {
+            TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.DEAD, event.getAttempt(), error, 0L);
+        }
+        triggerExecutor.countDeadLetter();
+        logger.error("Trigger '" + trigger.getName() + "' was dead-lettered after a half-applied commit; runId="
+                + event.getRunId() + " - recovery finishes the slice, so do not re-run it", null);
+        recordRun(event, trigger, definer, runId, start, ScriptRunRecord.OUTCOME_DEAD_LETTER, "CommitFenced", error,
+                null, result);
     }
 
     private static void handleFailure(TriggerEvent event, TriggerDefinition trigger, String definer, String runId,

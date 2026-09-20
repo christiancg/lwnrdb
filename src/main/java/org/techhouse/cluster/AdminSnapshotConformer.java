@@ -319,7 +319,12 @@ final class AdminSnapshotConformer {
     }
 
     private void dropCollection(String dbName, String collName) throws Exception {
-        locks.lock(dbName, collName);
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+        if (!locks.tryLockWrite(dbName, collName, waitMillis)) {
+            logger.warning("Skipping the quarantine of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                    + ": its write lock stayed held for " + waitMillis + "ms. The next round retries it.");
+            return;
+        }
         try {
             cache.evictCollection(dbName, collName);
             AdminOperationHelper.deleteCollectionEntry(dbName, collName);
@@ -347,9 +352,14 @@ final class AdminSnapshotConformer {
         final var collNames = dbEntry != null ? new ArrayList<>(dbEntry.getCollections()) : new ArrayList<String>();
         Collections.sort(collNames);
         final var lockedColls = new ArrayList<String>();
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
         try {
             for (final var collName : collNames) {
-                locks.lock(dbName, collName);
+                if (!locks.tryLockWrite(dbName, collName, waitMillis)) {
+                    logger.warning("Skipping the quarantine of database " + dbName + ": the write lock of " + collName
+                            + " stayed held for " + waitMillis + "ms. The next round retries it.");
+                    return;
+                }
                 lockedColls.add(collName);
             }
             cache.evictDatabase(dbName);

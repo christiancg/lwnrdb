@@ -302,7 +302,7 @@ public class MembershipService {
                 System.currentTimeMillis(), 0L, 0, scriptAdmission.capacity());
     }
 
-    private String resolveNodeId() {
+    public String resolveNodeId() {
         final var configured = clusterConfig.configuredNodeId();
         if (configured != null && !configured.isBlank()) {
             return configured.trim();

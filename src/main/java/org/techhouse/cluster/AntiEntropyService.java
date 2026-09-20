@@ -210,13 +210,15 @@ public class AntiEntropyService implements MembershipListener {
 
         if (!deleteIds.isEmpty()) {
             ReplicatedApplyHelper.apply(
-                    new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, deleteVersions));
+                    new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, deleteVersions),
+                    clusterConfig.replicationAckTimeoutMs());
         }
         for (final var pull : pullByPeer.entrySet()) {
             final var response = requestPull(pull.getKey(), dbName, collName, pull.getValue());
             if (response != null && response.getDocuments() != null && !response.getDocuments().isEmpty()) {
                 ReplicatedApplyHelper.apply(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT,
-                        response.getDocuments(), null, response.getVersions()));
+                        response.getDocuments(), null, response.getVersions()),
+                        clusterConfig.replicationAckTimeoutMs());
             }
         }
         garbageCollectTombstones(dbName, collName, everyPeerAnswered && !peers.isEmpty());

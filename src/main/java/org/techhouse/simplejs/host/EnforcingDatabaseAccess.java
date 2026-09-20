@@ -60,6 +60,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private JsObject errorPrototype;
     private UUID sessionClientId;
     private Thread sessionThread;
+    private volatile boolean lastCommitFenced;
 
     public EnforcingDatabaseAccess(String username, UUID clientId) {
         this(username, clientId, null);
@@ -212,6 +213,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         try {
             final var response = dispatch(request);
             fenced = ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(response.getErrorCode());
+            lastCommitFenced = fenced;
             if (response.getStatus() != OperationStatus.OK
                     && !ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode())) {
                 throw jsError(response.getMessage());
@@ -236,6 +238,10 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
 
     public boolean hasActiveTransaction() {
         return sessionClientId != null;
+    }
+
+    public boolean lastCommitWasFenced() {
+        return lastCommitFenced;
     }
 
     private void clearSession() {

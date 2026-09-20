@@ -21,6 +21,8 @@ public final class TriggerRunLog {
     private static final Logger logger = Logger.logFor(TriggerRunLog.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
+    private static final org.techhouse.cluster.ClusterConfig clusterConfig = IocContainer
+            .get(org.techhouse.cluster.ClusterConfig.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     public record TriggerRunDescriptor(String dbName, String collName, String triggerName, String procedureName,
@@ -139,7 +141,10 @@ public final class TriggerRunLog {
 
     public static String currentNodeId() {
         final var self = membershipService.getSelf();
-        return self == null ? Globals.STANDALONE_NODE_ID : self.getNodeId();
+        if (self != null) {
+            return self.getNodeId();
+        }
+        return clusterConfig.isEnabled() ? membershipService.resolveNodeId() : Globals.STANDALONE_NODE_ID;
     }
 
     private record Chunk(List<String> ids, List<JsonObject> documents) {
