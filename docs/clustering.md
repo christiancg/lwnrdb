@@ -40,6 +40,16 @@ Three mechanisms bound the damage rather than eliminate the disagreement:
 - **Version-checked applies**: a replica refuses any upsert or delete older than what it stores,
   which makes an out-of-order arrival and a stale anti-entropy decision harmless.
 
+**The transaction commit path deliberately keeps that silent success, and this is not an oversight.**
+A commit whose ownership moved between the pre-commit check and `replicateTransaction` ships nothing
+and still answers OK, where the equivalent `SAVE`/`DELETE` answers `421-1`. Reporting it was tried
+and reverted: `entries.isEmpty()` conflates three cases, and only one is a defect — an edge
+coordinator whose slice was forwarded legitimately owns nothing locally, and a forwarded 2PC
+participant legitimately touches collections it does not own, so both would have been reported as
+failures. Telling them apart needs ownership context from *before* the commit point, which
+`replicateTransaction` does not have. The write itself is not lost: it carries the highest version,
+so anti-entropy propagates it. Only the acknowledgement is stronger than what happened.
+
 The residual is two nodes holding genuinely concurrent, incomparable views. The re-check narrows
 the window — an owner notices the loss before it writes — but cannot close it, because nothing
 orders the two views against each other. Resolving that needs consensus, which this design does not
