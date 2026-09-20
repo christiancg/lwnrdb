@@ -361,4 +361,24 @@ public class AggregationSortViaIndexTest {
             assertEquals(first, idsFrom(true, 1), "SORT + LIMIT must not pick a different tied document per run");
         }
     }
+
+    @Test
+    public void test_indexed_and_scanned_sort_agree_on_tied_keys() throws Exception {
+        for (var i = 0; i < 10; i++) {
+            insert(String.format("p%02d", i), 5);
+        }
+        final var scanned = idsSorted();
+        enableIndex();
+        final var indexed = idsSorted();
+
+        assertEquals(scanned, indexed, "a page must not change because a field happened to gain an index");
+        assertEquals(scanned.subList(3, 6), indexed.subList(3, 6), "SKIP + LIMIT must select the same page");
+    }
+
+    private List<String> idsSorted() throws IOException {
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new SortAggregationStep(FIELD, true)));
+        return AggregationOperationHelper.processAggregation(request).stream()
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue()).toList();
+    }
 }

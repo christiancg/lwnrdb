@@ -15,10 +15,12 @@ import java.util.Spliterators;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.utils.JsonUtils;
@@ -63,7 +65,12 @@ public final class SortOperatorHelper {
         final Comparator<Keyed> byKey = ascending
                 ? (a, b) -> JsonUtils.compareSortKeysAscending(a.key(), b.key())
                 : (a, b) -> JsonUtils.compareSortKeysDescending(a.key(), b.key());
-        return byKey.thenComparingInt(Keyed::seq);
+        return byKey.thenComparing(SortOperatorHelper::idOf).thenComparingInt(Keyed::seq);
+    }
+
+    private static String idOf(Keyed keyed) {
+        final var id = keyed.document().get(Globals.PK_FIELD);
+        return id instanceof JsonString jsonString ? jsonString.getValue() : "";
     }
 
     private static Stream<JsonObject> fullSort(Stream<JsonObject> source, String fieldName,

@@ -213,16 +213,15 @@ public class ScriptRunHistory {
     }
 
     private static boolean ensureCollection(String dbName) {
-        if (knownDatabases.contains(dbName)) {
-            return true;
-        }
         if (cache.getAdminDbEntry(dbName) == null) {
+            knownDatabases.remove(dbName);
             return false;
         }
         if (cache.getAdminCollectionEntry(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME) != null) {
             knownDatabases.add(dbName);
             return true;
         }
+        knownDatabases.remove(dbName);
         final var response = dispatch(new CreateCollectionRequest(dbName, Globals.SCRIPT_RUNS_COLLECTION_NAME), null);
         if (response.getStatus() != OperationStatus.OK) {
             logger.warning(

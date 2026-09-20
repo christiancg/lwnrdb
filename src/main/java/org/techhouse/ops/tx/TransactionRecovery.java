@@ -55,6 +55,7 @@ public final class TransactionRecovery {
             final var ops = AdminOperationHelper.readTransactionOps(opIds);
             ops.sort(Comparator.comparingLong(AdminTransactionEntry::getSeq));
             final var reconstructed = new Transaction(UUID.fromString(txId), UUID.randomUUID());
+            reconstructed.setTriggerDepth(triggerDepthOf(ops));
             for (final var op : ops) {
                 recordIntoOverlay(reconstructed, op);
             }
@@ -173,6 +174,14 @@ public final class TransactionRecovery {
         final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         final var found = java.util.Collections.binarySearch(pkIndex, id);
         return found >= 0 && pkIndex.get(found).getVersion() > preparedVersion;
+    }
+
+    private static int triggerDepthOf(List<AdminTransactionEntry> ops) {
+        var depth = 0;
+        for (final var op : ops) {
+            depth = Math.max(depth, op.getTriggerDepth());
+        }
+        return depth;
     }
 
     public static void recordIntoOverlay(Transaction transaction, AdminTransactionEntry op) {

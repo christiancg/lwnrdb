@@ -208,8 +208,10 @@ public final class TransactionOperationHelper {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
             releaseHeldLocks(transaction);
-            clientTracker.clearActiveTransaction(clientId);
-            clientTracker.clearTransactionState(clientId);
+            if (transaction.getHeldLocks().isEmpty()) {
+                clientTracker.clearActiveTransaction(clientId);
+                clientTracker.clearTransactionState(clientId);
+            }
         }
     }
 

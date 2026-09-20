@@ -112,14 +112,18 @@ public final class ProcedureOperationHelper {
     private static ProcedureDefinition stampedDefinition(SaveProcedureRequest request, ProcedureDefinition existing,
             String actingUser) {
         final var version = existing == null ? 1L : existing.getVersion() + 1;
-        final var createdAt = existing == null ? System.currentTimeMillis() : existing.getCreatedAt();
         final var alreadyStamped = request.getStampedVersion() > 0;
         final var effectiveVersion = alreadyStamped ? request.getStampedVersion() : version;
         final var effectiveUpdatedAt = alreadyStamped ? request.getStampedUpdatedAt() : System.currentTimeMillis();
         final var effectiveUpdatedBy = alreadyStamped ? request.getStampedUpdatedBy() : actingUser;
+        final var localCreatedAt = existing == null ? effectiveUpdatedAt : existing.getCreatedAt();
+        final var createdAt = alreadyStamped && request.getStampedCreatedAt() > 0
+                ? request.getStampedCreatedAt()
+                : localCreatedAt;
         request.setStampedVersion(effectiveVersion);
         request.setStampedUpdatedAt(effectiveUpdatedAt);
         request.setStampedUpdatedBy(effectiveUpdatedBy);
+        request.setStampedCreatedAt(createdAt);
         return new ProcedureDefinition(request.getName(), request.getScript(), effectiveVersion,
                 request.getDescription(), request.isEnabled(), createdAt, effectiveUpdatedAt, effectiveUpdatedBy);
     }

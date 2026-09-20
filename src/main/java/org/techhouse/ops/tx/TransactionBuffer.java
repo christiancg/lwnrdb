@@ -194,7 +194,8 @@ public final class TransactionBuffer {
         final var seq = transaction.nextSeq();
         final var opEntry = new AdminTransactionEntry(transaction.getTransactionId().toString(),
                 transaction.getClientId().toString(), seq, opType, dbName, collName, payload);
-        opEntry.setTriggerContext(insertedIds, clientTracker.getAuthenticatedUsername(transaction.getClientId()));
+        opEntry.setTriggerContext(insertedIds, clientTracker.getAuthenticatedUsername(transaction.getClientId()),
+                transaction.getTriggerDepth());
         AdminOperationHelper.saveTransactionOp(opEntry);
         transaction.addBufferedOpId(opEntry.get_id());
         return seq;

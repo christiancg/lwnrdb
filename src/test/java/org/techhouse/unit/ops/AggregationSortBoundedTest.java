@@ -74,16 +74,19 @@ public class AggregationSortBoundedTest {
     }
 
     @Test
-    public void test_duplicate_sort_keys_keep_encounter_order() throws IOException {
+    public void test_duplicate_sort_keys_break_ties_on_id() throws IOException {
         for (var i = 0; i < 12; i++) {
             insertNumber(String.format("d%02d", i), 5);
         }
-        final var sourceOrder = run();
+        final var byId = new java.util.ArrayList<>(run());
+        java.util.Collections.sort(byId);
 
-        assertEquals(sourceOrder, run(sort(true)), "documents sharing one sort key must keep their encounter order");
-        assertEquals(sourceOrder, run(sort(false)), "a descending sort must break ties on encounter order too");
-        assertEquals(sourceOrder.subList(0, 4), run(sort(true), new LimitAggregationStep(4)),
-                "the bounded path must break ties on encounter order too");
+        assertEquals(byId, run(sort(true)),
+                "the index-backed source already orders ties by _id, so breaking them on stream position made"
+                        + " SORT + SKIP + LIMIT return a different page once the field was indexed");
+        assertEquals(byId, run(sort(false)), "a descending sort must break ties the same way");
+        assertEquals(byId.subList(0, 4), run(sort(true), new LimitAggregationStep(4)),
+                "the bounded path must break ties the same way");
     }
 
     @Test

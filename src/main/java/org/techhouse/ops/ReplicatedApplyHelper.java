@@ -111,7 +111,7 @@ public final class ReplicatedApplyHelper {
             return true;
         }
         final var tombstoned = tombstones.get(id);
-        return tombstoned != null && tombstoned > version;
+        return tombstoned != null && tombstoned >= version;
     }
 
     private static Long storedVersionOf(String dbName, String collName, String id) throws java.io.IOException {
