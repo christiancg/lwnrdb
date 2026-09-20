@@ -275,6 +275,49 @@ def test_lock_timeout_aborts_and_refuses_retries(c):
               orphan.get("status") == "NOT_FOUND", f"got {orphan}")
 
 
+def test_crossed_read_and_write_sets_do_not_hang(c):
+    section("Two transactions whose read and write sets cross time out instead of deadlocking")
+    # A transaction holds its write locks until commit, and a read taken inside one used to park with
+    # no timeout: T1 holding write(A) and reading B, against T2 holding write(B) and reading A, parked
+    # on each other forever - and a write lock is thread-owned, so nothing could ever recover them.
+    # Both transactions are aborted by the timeout, which tears their connections down, so this runs
+    # on two of its own rather than on the suite's shared connection.
+    other = "orders_crossed"
+    check_status("create the second collection",
+                 c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": other}), "OK")
+    check_status("seed the second collection", c.send(
+        {"type": "SAVE", "databaseName": DB, "collectionName": other, "object": {"_id": "seed", "v": 0}}), "OK")
+
+    with authed_conn() as t1, authed_conn() as t2:
+        check_status("T1: START_TRANSACTION", start_txn(t1), "OK")
+        check_status("T1: SAVE takes write(orders)", save(t1, {"_id": "crossed-1", "v": 1}), "OK")
+        check_status("T2: START_TRANSACTION", start_txn(t2), "OK")
+        check_status("T2: SAVE takes write(orders_crossed)",
+                     save(t2, {"_id": "crossed-2", "v": 1}, coll=other), "OK")
+
+        # Each now reads the collection the other holds. The assertion is that neither request hangs:
+        # a timeout answer is a correct outcome, a socket that never comes back is not.
+        started = time.time()
+        t1_reads_other = aggregate(t1, [], coll=other)
+        t2_reads_orders = aggregate(t2, [])
+        elapsed = time.time() - started
+
+        check("both crossed reads answered rather than parking forever", elapsed < 60.0,
+              f"took {elapsed:.1f}s")
+        for label, response in (("T1 reading the collection T2 holds", t1_reads_other),
+                                ("T2 reading the collection T1 holds", t2_reads_orders)):
+            check(f"{label} is refused with 409-5 rather than hanging",
+                  isinstance(response, dict) and response.get("errorCode") == "409-5", f"got {response}")
+
+    with authed_conn() as after:
+        check_status("the collections are usable once both transactions are gone",
+                     after.send({"type": "SAVE", "databaseName": DB, "collectionName": other,
+                                 "object": {"_id": "after", "v": 1}}), "OK")
+        check_status("and so is the first one",
+                     after.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                                 "object": {"_id": "after", "v": 1}}), "OK")
+
+
 def test_entry_size_is_checked_after_the_id_is_assigned(c):
     section("An oversized-once-identified document is refused at buffer time")
 
@@ -389,6 +432,8 @@ def main():
         test_table_locking_blocks_other_clients(c)
     with authed_conn() as (c):
         test_lock_timeout_aborts_and_refuses_retries(c)
+    with authed_conn() as (c):
+        test_crossed_read_and_write_sets_do_not_hang(c)
     with authed_conn() as (c):
         test_entry_size_is_checked_after_the_id_is_assigned(c)
     test_auto_rollback_on_disconnect()

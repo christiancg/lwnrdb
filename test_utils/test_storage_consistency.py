@@ -400,6 +400,47 @@ def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
 
 
 
+def test_index_operations_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
+    section("CREATE_INDEX / DROP_INDEX never take the pk index or the tombstones with them")
+    # Index files are selected by name. An unanchored match on "-<field>-" also matched
+    # <coll>-_id-String.idx and <coll>-tombstones.idx, and collection names admit '-', so an ordinary
+    # CREATE_INDEX on field "data" in collection "user-data" deleted both. Losing pk.idx is
+    # unrecoverable in-product: REINDEX rebuilds field indexes, never the pk index.
+    coll = "user-data"
+    bu.check_status("create a hyphenated collection",
+                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    for i in range(3):
+        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                   "object": {"_id": f"d{i}", "data": i}})
+
+    bu.check_code("DROP_INDEX on _id is refused",
+                  conn.send({"type": "DROP_INDEX", "databaseName": DB, "collectionName": coll,
+                             "fieldName": "_id"}), "ERROR", "400-1")
+    bu.check_code("CREATE_INDEX on _id is refused",
+                  conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
+                             "fieldName": "_id"}), "ERROR", "400-1")
+
+    bu.check_status("CREATE_INDEX on a field whose name is a token of the collection name",
+                    conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
+                               "fieldName": "data"}), "OK")
+
+    pk_file = pk_index_file(work_dir, DB, coll)
+    bu.check("the pk index file still exists", os.path.isfile(pk_file), detail=pk_file)
+    for i in range(3):
+        bu.check_status(f"FIND_BY_ID still resolves d{i}",
+                        conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll,
+                                   "_id": f"d{i}"}), "OK")
+
+    # With pk.idx gone the re-save is classified as an insert, which appends a second physical
+    # document for one _id; the scan then returns the id twice while FIND_BY_ID answers 404.
+    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
+               "object": {"_id": "d0", "data": 99}})
+    scanned = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
+                         "aggregationSteps": []})
+    ids = [d.get("_id") for d in (scanned.get("results") or [])]
+    bu.check("a re-save does not duplicate the _id", len(ids) == len(set(ids)) == 3, detail=f"ids={ids}")
+
+
 # ── phase 3: an unclean stop, then a restart with the cache disabled ─────────
 
 def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
@@ -551,6 +592,7 @@ def main():
             test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
             test_writes_to_an_unknown_collection_are_refused_cleanly(conn)
             test_an_unreadable_schema_refuses_the_write(conn, work_dir)
+            test_index_operations_cannot_destroy_the_pk_index(conn, work_dir)
 
             check("a burst of indexed writes leaves an index-dirty marker on disk",
                   write_until_indexes_are_dirty(conn, work_dir),

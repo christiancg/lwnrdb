@@ -1270,6 +1270,38 @@ def test_an_unreadable_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: st
     check("the audit row is back", await_doc(conn, "CREATED-ur2").get("status") == "OK")
 
 
+def test_a_deleted_definition_stops_being_served(conn: Conn):
+    section("A deleted procedure or schema stops applying immediately")
+    # The definition caches load from disk outside any lock while the DDL that removes them holds the
+    # collection lock, so a load that started before the delete used to reinstate the definition after
+    # it - and BoundedLruCache is access-ordered, so the stale entry was refreshed on every use and
+    # never aged out. The visible symptoms are a dropped procedure that still runs and a deleted
+    # schema that still rejects writes.
+    coll = "definition_cache_coll"
+    check_status("create the collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+
+    check_status("save a procedure", conn.save_procedure("ghost_proc", "export default () => 1;"), "OK")
+    check_status("the procedure runs", conn.call("ghost_proc"), "OK")
+    check_status("delete the procedure",
+                 conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "ghost_proc"}), "OK")
+    after = conn.call("ghost_proc")
+    check("a deleted procedure stops being callable at once", after.get("status") != "OK",
+          f"got {after.get('status')}/{after.get('errorCode')}")
+
+    schema = {"type": "object", "properties": {"n": {"type": "string"}}, "required": ["n"]}
+    check_status("save a schema", conn.send({"type": "SAVE_SCHEMA", "databaseName": DB,
+                                             "collectionName": coll, "schema": schema}), "OK")
+    rejected = conn.save_doc({"_id": "s1", "n": 7}, coll=coll)
+    check("the schema rejects a non-conforming write", rejected.get("status") != "OK",
+          f"got {rejected.get('status')}/{rejected.get('errorCode')}")
+
+    check_status("delete the schema", conn.send({"type": "DELETE_SCHEMA", "databaseName": DB,
+                                                 "collectionName": coll}), "OK")
+    check_status("a deleted schema stops rejecting writes at once",
+                 conn.save_doc({"_id": "s2", "n": 7}, coll=coll), "OK")
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Phase 3 — a retry outliving the shutdown budget
 # ══════════════════════════════════════════════════════════════════════════
@@ -1565,6 +1597,7 @@ def main():
         with admin_conn() as conn:
             test_a_recovered_commit_fires_its_triggers(conn)
             test_an_unreadable_trigger_file_is_not_an_empty_one(conn, work_dir)
+            test_a_deleted_definition_stops_being_served(conn)
             test_retry_and_dead_letters(conn)
 
         # Phase 3: a retry backoff far beyond the shutdown budget, so the stop below is timed with a

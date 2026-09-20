@@ -940,6 +940,11 @@ REG_BULK = "idxagg_reg_bulk"
 REG_CASE = "idxagg_reg_case"
 REG_SORT = "idxagg_reg_sort"
 REG_MIXED = "idxagg_reg_mixed"
+REG_IN = "idxagg_reg_in"
+REG_NOTIN = "idxagg_reg_notin"
+REG_MINVALUE = "idxagg_reg_minvalue"
+REG_GEO_WRAP = "idxagg_reg_geowrap"
+REG_TIES = "idxagg_reg_ties"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -1213,6 +1218,139 @@ def probe_mixed_type_field_falls_back_to_scan(c):
           detail=f"got {indexed_contains}")
 
 
+def _ids(response) -> list:
+    return sorted(d.get("_id") for d in (response.get("results") or []))
+
+
+def _in_filter(c, coll, field, values, op="IN"):
+    return _ids(agg(c, coll, [{"type": "FILTER",
+                               "operator": {"fieldOperatorType": op, "field": field, "value": values}}]))
+
+
+def probe_numeric_in_agrees_between_index_and_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_IN})
+    for i, score in enumerate((1, 2, 3, 5, 9)):
+        save_doc(c, REG_IN, {"_id": f"n{i}", "score": score})
+
+    # The operands arrive through the real parser, which narrows an integral value inside the int
+    # range to an Integer, while a number index entry is always a Double. Boxed set membership then
+    # matched nothing and every numeric IN on an indexed field silently returned no rows.
+    scan_in = _in_filter(c, REG_IN, "score", [2, 9])
+    scan_mixed = _in_filter(c, REG_IN, "score", [5, 2.5])
+    scan_count = ((agg(c, REG_IN, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "score", "value": [2, 9]}},
+        {"type": "COUNT"}]).get("results") or [{}])[0]).get("count")
+
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_IN, "fieldName": "score"})
+    wait_for_indexes(c, [(REG_IN, "score")])
+    wait_for_background()
+
+    indexed_in = _in_filter(c, REG_IN, "score", [2, 9])
+    indexed_mixed = _in_filter(c, REG_IN, "score", [5, 2.5])
+    indexed_count = ((agg(c, REG_IN, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "score", "value": [2, 9]}},
+        {"type": "COUNT"}]).get("results") or [{}])[0]).get("count")
+
+    check("an indexed numeric IN returns what the scan returns",
+          indexed_in == scan_in == ["n1", "n4"], detail=f"scan={scan_in} indexed={indexed_in}")
+    check("an IN list mixing integral and fractional operands agrees too",
+          indexed_mixed == scan_mixed, detail=f"scan={scan_mixed} indexed={indexed_mixed}")
+    check("the index-only COUNT after a numeric IN matches the scan",
+          indexed_count == scan_count == 2, detail=f"scan={scan_count} indexed={indexed_count}")
+
+
+def probe_not_in_then_equals_on_a_scalar_only_field(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NOTIN})
+    for i, score in enumerate((1, 2, 2, 7)):
+        save_doc(c, REG_NOTIN, {"_id": f"s{i}", "score": score})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_NOTIN, "fieldName": "score"})
+    wait_for_indexes(c, [(REG_NOTIN, "score")])
+    wait_for_background()
+
+    # NOT_IN probes whether another index covers the field. Probing the scalar kinds through the hash
+    # loader parsed the same .idx file into String values and cached them under the typed key, so the
+    # next EQUALS threw a ClassCastException and the following write replaced the line instead of
+    # merging into it, permanently dropping ids.
+    not_in = _in_filter(c, REG_NOTIN, "score", [1], op="NOT_IN")
+    equals = _ids(agg(c, REG_NOTIN, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "score", "value": 2}}]))
+
+    check("NOT_IN on a scalar-only indexed field answers", not_in == ["s1", "s2", "s3"],
+          detail=f"got={not_in}")
+    check("EQUALS still works after the NOT_IN probe", equals == ["s1", "s2"], detail=f"got={equals}")
+
+    save_doc(c, REG_NOTIN, {"_id": "s4", "score": 2})
+    wait_for_background()
+    after = _ids(agg(c, REG_NOTIN, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "score", "value": 2}}]))
+    check("a write after the NOT_IN probe does not drop the ids already on that line",
+          after == ["s1", "s2", "s4"], detail=f"got={after}")
+
+
+def probe_group_by_integer_min_value(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_MINVALUE})
+    for i in range(3):
+        save_doc(c, REG_MINVALUE, {"_id": f"m{i}", "n": -2147483648})
+
+    scanned = agg(c, REG_MINVALUE, [{"type": "GROUP_BY", "fieldName": "n"}])
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_MINVALUE, "fieldName": "n"})
+    wait_for_indexes(c, [(REG_MINVALUE, "n")])
+    wait_for_background()
+    indexed = agg(c, REG_MINVALUE, [{"type": "GROUP_BY", "fieldName": "n"}])
+
+    # The codec admitted Integer.MIN_VALUE where the parser does not, so the same value hashed two
+    # ways and the index-backed grouping emitted two groups under one key.
+    check("an indexed GROUP_BY on Integer.MIN_VALUE emits one group, as the scan does",
+          len(indexed.get("results") or []) == len(scanned.get("results") or []) == 1,
+          detail=f"scan={scanned.get('results')} indexed={indexed.get('results')}")
+
+
+def probe_geo_distance_across_the_antimeridian(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_GEO_WRAP})
+    save_doc(c, REG_GEO_WRAP, {"_id": "east", "location": "#geo(0.000000,179.950000)"})
+    save_doc(c, REG_GEO_WRAP, {"_id": "west", "location": "#geo(0.000000,-179.950000)"})
+    save_doc(c, REG_GEO_WRAP, {"_id": "mid", "location": "#geo(0.000000,0.000000)"})
+
+    def _within():
+        return _ids(agg(c, REG_GEO_WRAP,
+                        geo_distance_steps("SMALLER_THAN", 50000, target="#geo(0.000000,179.990000)")))
+
+    scanned = _within()
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_GEO_WRAP,
+            "fieldName": "location"})
+    wait_for_indexes(c, [(REG_GEO_WRAP, "location")])
+    wait_for_background()
+    indexed = _within()
+
+    # clampLng truncates at +/-180 and contains() cannot express a wrapped interval, so the pre-filter
+    # dropped every true match on the far side - and FILTER re-tests candidates but never adds one back.
+    check("a geo radius spanning the antimeridian returns both sides", scanned == ["east", "west"],
+          detail=f"scan={scanned}")
+    check("the indexed geo radius returns what the scan returns", indexed == scanned,
+          detail=f"scan={scanned} indexed={indexed}")
+
+
+def probe_sort_ties_do_not_depend_on_the_index(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_TIES})
+    for i in range(10):
+        save_doc(c, REG_TIES, {"_id": f"p{i:02d}", "score": 5})
+
+    def _page():
+        return [d.get("_id") for d in (agg(c, REG_TIES, [
+            {"type": "SORT", "fieldName": "score", "ascending": True},
+            {"type": "SKIP", "skip": 3},
+            {"type": "LIMIT", "limit": 3}]).get("results") or [])]
+
+    scanned = _page()
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_TIES, "fieldName": "score"})
+    wait_for_indexes(c, [(REG_TIES, "score")])
+    wait_for_background()
+    indexed = _page()
+
+    check("a SORT + SKIP + LIMIT page does not change when the field gains an index",
+          indexed == scanned, detail=f"scan={scanned} indexed={indexed}")
+
+
 def regression_suite(c):
     section("Correctness regressions: non-ASCII index values, index values containing the file's own "
             "delimiters, repeated CREATE_INDEX, single-valued index ranges, low-cardinality numeric "
@@ -1227,6 +1365,11 @@ def regression_suite(c):
     probe_case_variants_agree_between_index_and_scan(c)
     probe_sort_keeps_documents_without_the_field(c)
     probe_mixed_type_field_falls_back_to_scan(c)
+    probe_numeric_in_agrees_between_index_and_scan(c)
+    probe_not_in_then_equals_on_a_scalar_only_field(c)
+    probe_group_by_integer_min_value(c)
+    probe_geo_distance_across_the_antimeridian(c)
+    probe_sort_ties_do_not_depend_on_the_index(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════

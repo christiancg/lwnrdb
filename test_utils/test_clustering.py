@@ -2278,6 +2278,91 @@ def test_drop_and_recreate_does_not_resurrect_documents():
           all_nodes_see(DB, coll, "after", 1, ports=all_ports(), timeout_s=30.0))
 
 
+def _node_log_mentions_quarantine(node, coll) -> bool:
+    try:
+        return f"Quarantined collection {DB}|{coll}" in bu.read_log(node.log_path)
+    except OSError:
+        return False
+
+
+def test_rapid_collection_creates_are_not_quarantined():
+    section("CREATE_COLLECTION bursts replicate and converge")
+    # A convergence guard for concurrent DDL, not an incarnation-rounding reproduction. The rounding
+    # defect needs the HLC's logical counter to be non-zero, which takes two next() calls inside one
+    # millisecond; with a counter of zero the packed value is ms<<16, whose low 16 bits are zero and
+    # which a double therefore represents exactly. A network round trip per create never collides
+    # that tightly - concurrent creates, and a bulk-save warm-up, were both tried and neither moved
+    # the counter - so a wire-level version passes whether or not the defect is present. The exact
+    # round trip is pinned deterministically by CollectionIncarnationTest instead.
+    colls = [f"burst_coll_{i}" for i in range(8)]
+    for coll in colls:
+        check_status(f"create {coll}", create_coll(nodes[0].client_port, DB, coll), "OK")
+        save(nodes[0].client_port, DB, coll, {"_id": "seed", "v": 1})
+
+    def _all_nodes_hold_every_burst_collection():
+        for coll in colls:
+            for port in all_ports():
+                if ids_of(aggregate(port, DB, coll, [])) != ["seed"]:
+                    return False
+        return True
+
+    # Spans several antiEntropyIntervalMs sweeps: a quarantine fires from the admin conform, so if a
+    # rounded incarnation were going to strip one of these it would have done so inside this window.
+    ok = wait_until(_all_nodes_hold_every_burst_collection, timeout_s=90.0, interval_s=1.0)
+    missing = {}
+    if not ok:
+        for coll in colls:
+            per_node = {p: ids_of(aggregate(p, DB, coll, [])) for p in all_ports()}
+            if any(v != ["seed"] for v in per_node.values()):
+                missing[coll] = per_node
+    check("every node keeps every collection created in the burst", ok, f"diverged: {missing}")
+
+    quarantined = [f"node-{n.index}:{c}" for n in nodes for c in colls
+                   if _node_log_mentions_quarantine(n, c)]
+    check("no node quarantined a healthy collection", not quarantined, f"quarantines: {quarantined}")
+
+
+def test_recreating_an_existing_collection_keeps_its_documents():
+    section("CREATE_COLLECTION on a populated collection is a safe no-op")
+    # Pins the user-visible behaviour: a duplicate create must never cost documents. It does not
+    # reproduce the mint-locally defect, which needs a node that is up, still lacks the collection,
+    # and receives the duplicate create before its first admin conform hands it the real incarnation
+    # - a window this harness cannot hold open. CollectionIncarnationTest covers that deterministically.
+    coll = "recreate_coll"
+    check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
+    for i in range(5):
+        save(nodes[0].client_port, DB, coll, {"_id": f"doc{i}", "v": i})
+
+    def _all_see_five():
+        return all(len(ids_of(aggregate(p, DB, coll, []))) == 5 for p in all_ports())
+
+    check("every node holds the documents", wait_until(_all_see_five, timeout_s=30.0))
+
+    victim = nodes[2]
+    print(f"  Killing node-{victim.index} so it misses the re-create ...")
+    victim.kill()
+
+    def _recreated():
+        return create_coll(nodes[0].client_port, DB, coll).get("status") == "OK"
+
+    check("re-creating an existing collection still answers OK",
+          wait_until(_recreated, timeout_s=30.0, interval_s=1.0))
+
+    print(f"  Restarting node-{victim.index} ...")
+    victim.start()
+
+    ok = wait_until(_all_see_five, timeout_s=90.0, interval_s=1.0)
+    per_node = {p: sorted(ids_of(aggregate(p, DB, coll, []))) for p in all_ports()}
+    check("no node loses the documents to a quarantine", ok, f"per-node: {per_node}")
+
+    quarantined = [f"node-{n.index}" for n in nodes if _node_log_mentions_quarantine(n, coll)]
+    check("no node quarantined the re-created collection", not quarantined, f"quarantines: {quarantined}")
+
+    check_status("the collection is still writable",
+                 save(nodes[0].client_port, DB, coll, {"_id": "after", "v": 9}), "OK")
+    check("the later write converges", all_nodes_see(DB, coll, "after", 9, ports=all_ports(), timeout_s=30.0))
+
+
 def main():
     bu.banner("Clustering (multi-node) integration suite")
 
@@ -2333,6 +2418,8 @@ def main():
         test_a_post_prepare_write_survives_2pc_recovery()
         test_a_trigger_fires_once_despite_a_replication_timeout()
         test_drop_and_recreate_does_not_resurrect_documents()
+        test_rapid_collection_creates_are_not_quarantined()
+        test_recreating_an_existing_collection_keeps_its_documents()
         test_schedule_rejoin_catch_up()
         # Last: it parks a long run on one node, which leaves that node's gossiped script load
         # elevated for a round or two. Placement takes the *less* loaded of two samples, so running
