@@ -1,7 +1,7 @@
 package org.techhouse.ops.filter;
 
-import java.util.Objects;
 import java.util.function.BiPredicate;
+import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
@@ -77,8 +77,8 @@ public final class FieldPredicateFactory {
 
     private static boolean numberMatches(Number operand, Number stored, FieldOperatorType operation) {
         return switch (operation) {
-            case EQUALS -> Objects.equals(operand, stored);
-            case NOT_EQUALS -> !Objects.equals(operand, stored);
+            case EQUALS -> FieldIndexEntry.compareIndexedNumbers(operand, stored) == 0;
+            case NOT_EQUALS -> FieldIndexEntry.compareIndexedNumbers(operand, stored) != 0;
             case GREATER_THAN -> operand.doubleValue() < stored.doubleValue();
             case GREATER_THAN_EQUALS -> operand.doubleValue() <= stored.doubleValue();
             case SMALLER_THAN -> operand.doubleValue() > stored.doubleValue();
