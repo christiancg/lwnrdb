@@ -418,6 +418,14 @@ correct outcome can be decided before forcing it with `RESOLVE_TRANSACTION` (for
 or force-abort, broadcast to all members). In-doubt transactions also surface per node in
 `GET_DATABASE_STATS` and in periodic warning logs.
 
+`RESOLVE_TRANSACTION` records the decision against the **live peer set**, and keeps the coordinator
+marker when any participant does not acknowledge it. Recording it with an empty participant list
+made the next recovery sweep treat the transaction as fully resolved and delete the marker, after
+which a participant that missed the forced COMMIT asked the coordinator, read `NO_RECORD`, and
+aborted a transaction the others had already committed — one distributed transaction resolved two
+ways, permanently and invisibly. This mirrors what the ordinary commit path already does: the
+marker is retained unless every listed participant acked.
+
 **Liveness before prepare.** If the edge connection closes or the edge node crashes before
 commit, the not-yet-prepared session is rolled back — the edge aborts its participants, and
 a membership listener reaps sessions of a departed edge node. A session that has already
@@ -460,6 +468,28 @@ and the `versions` lists of `ReplicationPayload` and `AntiEntropyPayload` are th
 on the wire. This is a cluster protocol change: nodes on either side of it do not interoperate,
 which the single-build rule above already requires. Document numbers are untouched — they are
 still stored and treated as `double`.
+
+**A collection's incarnation travels the same way, but keeps its numeric field.** The incarnation
+stamped at `CREATE_COLLECTION` is minted from the same clock and is the same 2^57 magnitude, so it
+was quantised by exactly the same rounding: at that size a double's ULP is 16, which discards the
+whole 16-bit logical counter. The coordinator kept the exact value and every peer a neighbouring
+one, and `AdminSnapshotConformer` then quarantined a *healthy* collection — renaming its folder
+aside on whichever side lost the `(epoch, nodeId)` order. `CreateCollectionRequest` therefore
+carries both `incarnationText`, which is authoritative and exact, and the original numeric
+`incarnation`; a reader prefers the text and falls back to the number. Unlike the version fields
+above, the numeric one cannot be dropped yet: EJson refuses a number for a `String` field by
+failing the *whole* object, so removing it would make a pre-upgrade peer's `CREATE_COLLECTION`
+deserialize to null and stop replicating entirely. Until every node is upgraded, new→old reads the
+number and ignores the unknown field, old→new falls back to the number and is no worse than before,
+and only new→new is exact.
+
+**A duplicate `CREATE_COLLECTION` still replicates, so it still carries an incarnation.** The
+operation is idempotent and answers OK when the collection already exists, but `afterAdminOp` ships
+it regardless. Shipping `incarnation: 0` let a peer that lacked the collection mint its own — far
+above the original, because it is minted from *now* — and the conform then quarantined every
+populated copy, leaving the live collection empty cluster-wide. A create on an existing collection
+now replicates that collection's existing incarnation, and a replicated request never mints one at
+all: admin ops replicate by re-execution, so a locally derived value differs on every node.
 
 Tombstones are only garbage-collected on a round in which **every** currently known peer answered
 the digest request. A node that is partitioned — or alone — keeps them: collecting a tombstone

@@ -523,6 +523,25 @@ exactly-once guarantee is deliberately waived, because an operator cancelling a 
 wants it stopped. `LIST_TRIGGER_RUNS`/`RESOLVE_TRIGGER_RUN` are the admin-only operator surface,
 fanned out cluster-wide because `admin/trigger_runs` is not replicated.
 
+Two outcomes are neither ordinary retries nor terminal consumes, and both used to be misfiled.
+
+**A definition that cannot be *read* is not a definition that was deleted.** `findTrigger` answered
+`null` for both, and the caller consumes the pending run on `null` — so a transient I/O failure
+reading `{coll}-triggers.json` deleted the only record that would have replayed the run, and an
+after trigger for a committed write silently never ran. It is worst at startup, where every run
+`TriggerRunRecovery` re-queues is exposed at once, so one brief disk stall could consume all of
+them. An unreadable definition now leaves the record `PENDING` and retries with the same doubling
+backoff, dead-lettering only once `triggerMaxAttempts` is exhausted. `AdminCache` already refuses
+to cache such a failure as an absence (`MetadataReadException`); the dispatcher now agrees.
+
+**A half-applied commit is not a retryable failure.** `TRANSACTION_HALF_APPLIED` (500-33) means the
+transaction passed its commit point, applied some of its ops, and deliberately kept both its write
+locks and its commit-log marker so recovery can finish the slice. Re-running the body would apply
+those ops a second time — the counter-incrementing trigger double-counts, which is precisely what
+exactly-once exists to prevent. The run is dead-lettered instead, leaving it visible to
+`RESOLVE_TRIGGER_RUN`. `REPLICATION_TIMEOUT` was already special-cased in the same seam; this is
+the second status that needs it.
+
 Triggers are **queued** from `OperationProcessor`'s write handlers and `TransactionOperationHelper.commit`
 — never from the write helpers, since a replicated apply reaches those directly and would fire
 once per replica. Enqueueing is one map lookup and a queue offer, so it is safe inside the write
