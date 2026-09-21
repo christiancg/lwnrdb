@@ -41,10 +41,10 @@ public final class ListenOperationHelper {
                 });
     }
 
-    public static OperationResponse processStopListenOperation(StopListenRequest request) {
+    public static OperationResponse processStopListenOperation(StopListenRequest request, UUID clientId) {
         return OperationResponse.respondOrError(OperationType.STOP_LISTEN, ErrorCode.ERROR_LISTEN, () -> {
             final var listenId = java.util.UUID.fromString(request.getListenId());
-            final var unregistered = listenManager.unregister(listenId);
+            final var unregistered = listenManager.unregister(listenId, clientId);
             if (!unregistered) {
                 return new OperationResponse(OperationType.STOP_LISTEN, ErrorCode.LISTEN_NOT_FOUND);
             }

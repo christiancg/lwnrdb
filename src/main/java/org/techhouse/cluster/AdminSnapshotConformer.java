@@ -99,7 +99,7 @@ final class AdminSnapshotConformer {
     }
 
     private HashSet<String> conformCollections(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs,
-            long epochAtStart) throws Exception {
+            long epochAtStart) {
         final var snapshotColls = new HashSet<String>();
         for (final var collJson : snapshot.getCollections()) {
             final var coll = AdminCollEntry.fromJsonObject(collJson);
@@ -112,8 +112,13 @@ final class AdminSnapshotConformer {
             snapshotColls.add(coll.get_id());
             final var schemaEl = snapshot.getSchemas().get(coll.get_id());
             final var desiredSchema = schemaEl != null && schemaEl.isJsonObject() ? schemaEl.asJsonObject() : null;
-            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema, snapshot.getTriggers(), epochAtStart,
-                    coll.getIncarnation());
+            try {
+                conformCollection(dbName, collName, coll.getIndexes(), desiredSchema, snapshot.getTriggers(),
+                        epochAtStart, coll.getIncarnation());
+            } catch (Exception e) {
+                logger.warning("Skipping the admin conform of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                        + " for this round: " + e.getMessage());
+            }
         }
         return snapshotColls;
     }
@@ -299,8 +304,16 @@ final class AdminSnapshotConformer {
                 + (moved ? "moved aside on disk" : "left on disk") + " and the collection is now empty here.");
     }
 
+    private JsonObject localSchema(String dbName, String collName) {
+        try {
+            return cache.loadSchemaUncached(dbName, collName);
+        } catch (MetadataReadException e) {
+            return null;
+        }
+    }
+
     private void conformSchema(String dbName, String collName, JsonObject desiredSchema) throws Exception {
-        final var current = cache.loadSchemaUncached(dbName, collName);
+        final var current = localSchema(dbName, collName);
         if (desiredSchema != null) {
             if (!desiredSchema.equals(current)) {
                 fs.writeCollectionSchema(dbName, collName, eJson.toJson(desiredSchema));

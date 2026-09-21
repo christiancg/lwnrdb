@@ -10,8 +10,9 @@ import java.util.concurrent.atomic.LongAdder;
 import java.util.function.Consumer;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.config.Configuration;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.log.Logger;
-import org.techhouse.ops.TriggerDispatcher;
+import org.techhouse.ops.TriggerRunLog;
 
 public class TriggerExecutor {
     private final Logger logger = Logger.logFor(TriggerExecutor.class);
@@ -45,7 +46,8 @@ public class TriggerExecutor {
                 continue;
             }
             dropped.increment();
-            TriggerDispatcher.consumeQuietly(evicted.getRunId(), evicted.getTriggerName());
+            TriggerRunLog.markAttempt(evicted.getRunId(), TriggerRunStatus.DEAD, evicted.getAttempt(),
+                    "dropped: trigger queue full", 0L);
             logger.warning(
                     "Trigger queue full; dropped the oldest queued trigger '" + evicted.getTriggerName() + "' for "
                             + evicted.getDbName() + "|" + evicted.getCollName() + " (event " + evicted.getType() + ")");

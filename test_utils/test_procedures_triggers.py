@@ -1413,6 +1413,76 @@ def test_retry_and_dead_letters(conn: Conn):
                               ["CREATED", "UPDATED"]), "OK")
 
 
+def test_a_post_commit_error_applies_its_effects_once(conn: Conn):
+    section("An error raised after the commit is not retried")
+    drop_hook(conn, "off_hook")
+    check_status("install a trigger that commits and then overruns its budget",
+                 conn.save_procedure("post_commit",
+                                     "import db from 'db';\n"
+                                     "const current = db.findById(db.name, '" + AUDIT + "', 'postcommit');\n"
+                                     "const runs = current === null ? 0 : current.runs;\n"
+                                     "db.save(db.name, '" + AUDIT + "', { _id: 'postcommit', runs: runs + 1 });\n"
+                                     "setInterval(() => { for (let i = 0; i < 20000; i++) { } }, 0);\n"), "OK")
+    check_status("point a trigger at it",
+                 conn.save_trigger("postcommitting", ["CREATED"], "post_commit"), "OK")
+
+    check_status("write a document so it fires", conn.save_doc({"_id": "postcommitdoc", "n": 1}), "OK")
+    applied = await_doc(conn, "postcommit")
+    check("the committed effects landed", applied.get("status") == "OK", f"got {applied!r}")
+
+    time.sleep(5.0)
+    final = conn.find("postcommit", coll=AUDIT)
+    runs = (final.get("object") or {}).get("runs")
+    check("the effects were applied exactly once", runs == 1, f"runs={runs!r}")
+
+    check_status("remove the trigger",
+                 conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
+                            "name": "postcommitting"}), "OK")
+    check_status("restore the vetoing hook for the next phase",
+                 install_hook(conn, "off_hook", "offhook",
+                              "export default (doc) => { throw new Error('always refuses'); };",
+                              ["CREATED", "UPDATED"]), "OK")
+
+
+def test_a_replayed_dead_letter_gets_a_full_budget(conn: Conn):
+    section("A replayed dead letter starts its attempts over")
+    drop_hook(conn, "off_hook")
+    check_status("install a trigger whose procedure always throws",
+                 conn.save_procedure("replay_boom", "throw new Error('replay boom');"), "OK")
+    check_status("point a trigger at it",
+                 conn.save_trigger("replaying", ["CREATED"], "replay_boom"), "OK")
+    check_status("write a document so it fires", conn.save_doc({"_id": "replaydoc", "n": 1}), "OK")
+
+    deadline = time.time() + 30.0
+    dead = dead_letters_for(conn, "replaying")
+    while not dead and time.time() < deadline:
+        time.sleep(0.3)
+        dead = dead_letters_for(conn, "replaying")
+    check("the run is dead-lettered after its two attempts", len(dead) == 1, f"runs={dead!r}")
+
+    if dead:
+        before = len(history_rows(conn, kind="TRIGGER", name="replaying"))
+        check_status("replay it without repairing the procedure",
+                     conn.send({"type": "RESOLVE_TRIGGER_RUN", "runId": dead[0].get("runId"),
+                                "decision": "replay"}), "OK")
+
+        deadline = time.time() + 30.0
+        rows = history_rows(conn, kind="TRIGGER", name="replaying")
+        while len(rows) < before + 2 and time.time() < deadline:
+            time.sleep(0.3)
+            rows = history_rows(conn, kind="TRIGGER", name="replaying")
+        check("the replay is tried twice, not dead-lettered on its first failure",
+              len(rows) >= before + 2, f"rows={len(rows)} before={before}")
+
+    check_status("remove the replaying trigger",
+                 conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
+                            "name": "replaying"}), "OK")
+    check_status("restore the vetoing hook for the next phase",
+                 install_hook(conn, "off_hook", "offhook",
+                              "export default (doc) => { throw new Error('always refuses'); };",
+                              ["CREATED", "UPDATED"]), "OK")
+
+
 def test_trigger_run_operations(conn: Conn):
     section("LIST_TRIGGER_RUNS / RESOLVE_TRIGGER_RUN")
     check_status("listing works", conn.send({"type": "LIST_TRIGGER_RUNS"}), "OK")
@@ -1599,6 +1669,8 @@ def main():
             test_an_unreadable_trigger_file_is_not_an_empty_one(conn, work_dir)
             test_a_deleted_definition_stops_being_served(conn)
             test_retry_and_dead_letters(conn)
+            test_a_replayed_dead_letter_gets_a_full_budget(conn)
+            test_a_post_commit_error_applies_its_effects_once(conn)
 
         # Phase 3: a retry backoff far beyond the shutdown budget, so the stop below is timed with a
         # retry that cannot possibly come back before the budget expires.

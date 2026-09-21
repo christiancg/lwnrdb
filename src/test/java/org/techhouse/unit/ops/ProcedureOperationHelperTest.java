@@ -55,6 +55,19 @@ public class ProcedureOperationHelperTest {
         return new SaveProcedureRequest(TestGlobals.DB, "p", script);
     }
 
+    @Test
+    public void test_a_save_invalidates_the_compiled_entry() throws Exception {
+        final var compiledProcedures = org.techhouse.ioc.IocContainer
+                .get(org.techhouse.ops.CompiledProcedureCache.class);
+        save("return 1;");
+        final var stale = compiledProcedures.get(TestGlobals.DB, "p", 1L, "return 1;");
+
+        save("return 2;");
+
+        assertNotSame(stale, compiledProcedures.get(TestGlobals.DB, "p", 1L, "return 1;"),
+                "an in-flight compile can re-publish a key after a delete, so the save must invalidate too");
+    }
+
     private SaveProcedureResponse save(String script) throws Exception {
         final var response = ProcedureOperationHelper.executeSave(saveRequest(script), ACTOR);
         assertInstanceOf(SaveProcedureResponse.class, response, response.getMessage());

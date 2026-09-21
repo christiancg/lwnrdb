@@ -2,6 +2,7 @@ package org.techhouse.cluster;
 
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
@@ -9,6 +10,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -128,6 +130,16 @@ public class AdminAntiEntropyService implements MembershipListener {
         return nodeId.compareTo(bestNodeId) > 0;
     }
 
+    private <T> T readable(String dbName, String name, String kind, Supplier<T> loader) {
+        try {
+            return loader.get();
+        } catch (MetadataReadException e) {
+            logger.warning("Leaving the " + kind + " of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + name
+                    + " out of the admin snapshot: " + e.getMessage());
+            return null;
+        }
+    }
+
     public AdminSnapshotPayload buildSnapshot() {
         final var databases = new ArrayList<JsonObject>();
         for (final var dbEntry : cache.getAllAdminDbEntries()) {
@@ -140,13 +152,15 @@ public class AdminAntiEntropyService implements MembershipListener {
         final var schedules = new JsonObject();
         for (final var dbName : cache.getUserDatabaseNames()) {
             for (final var procedureName : fs.listProcedureNames(dbName)) {
-                final var procedure = cache.loadProcedureUncached(dbName, procedureName);
+                final var procedure = readable(dbName, procedureName, "procedure",
+                        () -> cache.loadProcedureUncached(dbName, procedureName));
                 if (procedure != null) {
                     procedures.add(Cache.getCollectionIdentifier(dbName, procedureName), procedure.toJsonObject());
                 }
             }
             for (final var scheduleName : fs.listScheduleNames(dbName)) {
-                final var schedule = cache.loadScheduleUncached(dbName, scheduleName);
+                final var schedule = readable(dbName, scheduleName, "schedule",
+                        () -> cache.loadScheduleUncached(dbName, scheduleName));
                 if (schedule != null) {
                     schedules.add(Cache.getCollectionIdentifier(dbName, scheduleName), schedule.toJsonObject());
                 }
@@ -157,12 +171,14 @@ public class AdminAntiEntropyService implements MembershipListener {
                     final var json = collEntry.getData().deepCopy();
                     json.addProperty(Globals.PK_FIELD, collEntry.get_id());
                     collections.add(json);
-                    final var schema = cache.loadSchemaUncached(dbName, collName);
+                    final var schema = readable(dbName, collName, "schema",
+                            () -> cache.loadSchemaUncached(dbName, collName));
                     if (schema != null) {
                         schemas.add(collEntry.get_id(), schema);
                     }
-                    final var collTriggers = cache.loadTriggersUncached(dbName, collName);
-                    if (!collTriggers.isEmpty()) {
+                    final var collTriggers = readable(dbName, collName, "triggers",
+                            () -> cache.loadTriggersUncached(dbName, collName));
+                    if (collTriggers != null && !collTriggers.isEmpty()) {
                         triggers.add(collEntry.get_id(), TriggerDefinition.toJsonArray(collTriggers));
                     }
                 }

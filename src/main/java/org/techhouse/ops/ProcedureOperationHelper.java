@@ -82,6 +82,7 @@ public final class ProcedureOperationHelper {
             final var definition = stampedDefinition(request, existing, actingUser);
             fs.writeProcedure(dbName, definition.getName(), eJson.toJson(definition.toJsonObject()));
             cache.putProcedure(dbName, definition);
+            compiledProcedures.invalidateProcedure(dbName, definition.getName());
             return new SaveProcedureResponse("Procedure saved successfully", definition.getVersion());
         } finally {
             locks.release(dbName, Globals.PROCEDURES_FOLDER);

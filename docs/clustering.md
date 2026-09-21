@@ -304,11 +304,23 @@ clustering off there is no ring, so the scheduler runs everything locally.
 and the admin snapshot's conform step also reloads that database's registry so the
 scheduler picks a change up without waiting for `scheduleRefreshMs`.
 
+**Firing is gated on quorum as well as ownership.** `OwnershipManager.ring` is rebuilt from
+`view.aliveNodeIds()`, so a partitioned minority node's ring contains only itself and it owns
+*every* schedule in every database. `ScheduleExecutor.isOwner` therefore checks
+`hasQuorum()` before `isOwner(...)`, in the same order as `ClusterCoordinator.guardWrite`.
+Script database writes were already contained — they go through `processMessage` and are
+refused `503-2` — but `fetch` is not, so without the quorum gate an external HTTP call ran on
+both sides of a partition.
+
 **Handoff skips a tick rather than duplicating one.** A new owner computes the next
 *future* occurrence, so an instant the previous owner may already have run is never
-replayed. That is the whole at-most-once guarantee, and it is why `nextRunAt` lives only in
-memory: persisting a `lastRunAt` would mean an admin write per run and would churn the
-admin epoch for no benefit. The cost is the other side of the same coin — a membership
+replayed. That, plus the quorum gate above, is the whole guarantee, and it is why `nextRunAt`
+lives only in memory: persisting a `lastRunAt` would mean an admin write per run and would
+churn the admin epoch for no benefit. **It is not at-most-once in general.** During gossip
+convergence after any join or leave, two nodes hold different `aliveNodeIds()` and can each
+believe they own the same ring key while both hold quorum, so the same occurrence can fire
+twice. Closing that needs a durable claim, which the memory-only `nextRunAt` deliberately
+rules out; a job that must not run twice has to be idempotent. The cost is the other side of the same coin — a membership
 change during a tick can drop that tick, and **missed runs while a node was down are
 skipped, not caught up**.
 

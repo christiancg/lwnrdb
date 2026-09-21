@@ -37,6 +37,12 @@ public final class TriggerOperationHelper {
             return new OperationResponse(OperationType.SAVE_TRIGGER, "Collection '" + collName + "' not found",
                     ErrorCode.DATABASE_NOT_FOUND);
         }
+        if (Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName)) {
+            return new OperationResponse(
+                    OperationType.SAVE_TRIGGER, ErrorCode.INVALID_TRIGGER.getDefaultMessage()
+                            + ": the reserved collection '" + collName + "' never fires triggers",
+                    ErrorCode.INVALID_TRIGGER);
+        }
         final var events = new LinkedHashSet<EventType>();
         if (request.getEvents().isEmpty()) {
             return new OperationResponse(OperationType.SAVE_TRIGGER,

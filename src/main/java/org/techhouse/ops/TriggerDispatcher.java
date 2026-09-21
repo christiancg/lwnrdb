@@ -97,17 +97,19 @@ public final class TriggerDispatcher {
                 + event.getCollName() + " event=" + event.getType() + " definer=" + definer + " actingUser="
                 + event.getActingUser() + " runId=" + scriptRun.runId() + " durationMs="
                 + (System.currentTimeMillis() - start);
+        final var effectsAreDurable = committed.get();
         if (result.isError()) {
             triggerExecutor.countFailure();
             logger.warning(line + " outcome=" + result.getErrorName() + ": " + result.getErrorMessage()
                     + ScriptOperationHelper.renderStack(result.getErrorStack())
                     + (result.getLogs().isEmpty() ? "" : " logs=" + result.getLogs()));
-            final var retryable = !CANCELLED.equals(result.getErrorName());
+            final var retryable = !CANCELLED.equals(result.getErrorName()) && !effectsAreDurable;
             handleFailure(event, trigger, definer, scriptRun.runId(), start, result.getErrorName(),
-                    result.getErrorMessage(), result.getErrorStack(), result, retryable);
+                    result.getErrorMessage(), result.getErrorStack(), result, retryable,
+                    database.sawClusterUnavailable());
             return;
         }
-        if (!committed.get()) {
+        if (!effectsAreDurable) {
             triggerExecutor.countFailure();
             if (database.lastCommitWasFenced()) {
                 logger.warning(line + " outcome=commit-fenced");
@@ -116,7 +118,8 @@ public final class TriggerDispatcher {
             }
             logger.warning(line + " outcome=commit-failed");
             handleFailure(event, trigger, definer, scriptRun.runId(), start, "CommitFailed",
-                    "the trigger's effects could not be committed", null, result, true);
+                    "the trigger's effects could not be committed", null, result, true,
+                    database.sawClusterUnavailable());
             return;
         }
         logger.info(line + " outcome=ok");
@@ -139,11 +142,11 @@ public final class TriggerDispatcher {
 
     private static void handleFailure(TriggerEvent event, TriggerDefinition trigger, String definer, String runId,
             long start, String errorName, String errorMessage, List<String> stack, ScriptResult result,
-            boolean retryable) {
+            boolean retryable, boolean clusterUnavailable) {
         final var attempt = event.getAttempt();
         final var maxAttempts = Math.max(1, configuration.getTriggerMaxAttempts());
         final var error = errorName + ": " + errorMessage;
-        if (retryable && event.getRunId() != null && isClusterUnavailable(errorMessage)) {
+        if (retryable && event.getRunId() != null && clusterUnavailable && withinClusterRetryWindow(event)) {
             final var delay = backoffFor(attempt);
             TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
                     System.currentTimeMillis() + delay);
@@ -189,9 +192,8 @@ public final class TriggerDispatcher {
         return delay < 0 || delay > ceiling ? ceiling : delay;
     }
 
-    private static boolean isClusterUnavailable(String errorMessage) {
-        return errorMessage != null && (errorMessage.contains(ErrorCode.NO_QUORUM.getDefaultMessage())
-                || errorMessage.contains(ErrorCode.NOT_COLLECTION_OWNER.getDefaultMessage()));
+    private static boolean withinClusterRetryWindow(TriggerEvent event) {
+        return System.currentTimeMillis() - event.getFiredAt() < Math.max(0L, configuration.getTriggerRunRetentionMs());
     }
 
     private static TriggerEvent retryOf(TriggerEvent event) {

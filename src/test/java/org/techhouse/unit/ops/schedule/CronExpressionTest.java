@@ -163,17 +163,68 @@ public class CronExpressionTest {
     public void test_sub_hourly_fires_through_a_fall_back_overlap() {
         final var newYork = ZoneId.of("America/New_York");
         final var expression = CronExpression.parse("*/5 * * * *");
-        final var from = ZonedDateTime.of(2026, 11, 1, 1, 10, 0, 0, newYork).withLaterOffsetAtOverlap();
-        assertTrue(newYork.getRules().getDaylightSavings(from.toInstant()).isZero(), "from must be the EST pass");
+        final var from = ZonedDateTime.of(2026, 11, 1, 1, 55, 0, 0, newYork).withEarlierOffsetAtOverlap();
+        assertFalse(newYork.getRules().getDaylightSavings(from.toInstant()).isZero(),
+                "the executor only ever reaches the overlap at the earlier offset, marching forward from 01:55 EDT");
 
         final var next = expression.nextAfter(from);
 
         assert next != null;
-        assertEquals(1, next.getHour(), "the loop used to run out of the repeated hour entirely");
-        assertEquals(15, next.getMinute());
+        assertEquals(1, next.getHour(), "the walk used to leave the repeated hour entirely");
+        assertEquals(0, next.getMinute());
         assertTrue(newYork.getRules().getDaylightSavings(next.toInstant()).isZero(),
-                "every candidate inside the overlap resolved to the earlier offset, which is already behind the"
-                        + " cursor, so the twelve occurrences in the repeated hour never fired");
+                "the twelve occurrences of the repeated hour fire at the later offset");
+    }
+
+    @Test
+    public void test_every_occurrence_of_the_repeated_hour_fires_exactly_once() {
+        final var newYork = ZoneId.of("America/New_York");
+        final var expression = CronExpression.parse("*/5 * * * *");
+        var current = ZonedDateTime.of(2026, 11, 1, 0, 55, 0, 0, newYork);
+        final var fired = new java.util.ArrayList<java.time.Instant>();
+
+        for (var i = 0; i < 25; i++) {
+            current = expression.nextAfter(current);
+            assert current != null;
+            fired.add(current.toInstant());
+        }
+
+        assertEquals(fired.size(), new java.util.LinkedHashSet<>(fired).size(), "no occurrence may repeat");
+        final var overlapStart = ZonedDateTime.of(2026, 11, 1, 1, 0, 0, 0, newYork).withLaterOffsetAtOverlap();
+        final var repeatedHourFires = fired.stream().filter(instant -> !instant.isBefore(overlapStart.toInstant())
+                && instant.isBefore(overlapStart.toInstant().plusSeconds(3600))).count();
+        assertEquals(12, repeatedHourFires, "a five-minute job must not go dark for the repeated hour");
+    }
+
+    @Test
+    public void test_a_fixed_time_daily_cron_skips_the_repeated_hour() {
+        final var newYork = ZoneId.of("America/New_York");
+        final var expression = CronExpression.parse("0 1 * * *");
+        final var first = expression.nextAfter(ZonedDateTime.of(2026, 11, 1, 0, 0, 0, 0, newYork));
+        assert first != null;
+
+        final var second = expression.nextAfter(first);
+
+        assert second != null;
+        assertEquals(2, second.getDayOfMonth(),
+                "a cron naming an exact hour and minute fires once, so the wildcard re-scan must not apply to it");
+    }
+
+    @Test
+    public void test_step_in_the_day_of_month_field_still_ands_with_the_day_of_week() {
+        var current = utc(2026, 6, 1, 0, 0);
+        for (var i = 0; i < 4; i++) {
+            current = next("0 0 */1 * MON", current);
+            assert current != null;
+            assertEquals(java.time.DayOfWeek.MONDAY, current.getDayOfWeek(),
+                    "'*/1' spells every day, so it must not turn the day fields into an OR");
+        }
+    }
+
+    @Test
+    public void test_star_and_step_one_agree_in_the_day_field() {
+        final var from = utc(2026, 6, 1, 0, 0);
+        assertEquals(next("0 0 * * MON", from), next("0 0 */1 * MON", from));
     }
 
     @Test

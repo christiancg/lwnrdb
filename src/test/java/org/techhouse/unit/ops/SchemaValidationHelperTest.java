@@ -155,6 +155,43 @@ public class SchemaValidationHelperTest {
     }
 
     @Test
+    public void test_an_unexpected_failure_refuses_the_write() {
+        installSchema();
+
+        final var response = SchemaValidationHelper.check(new SaveRequest(TestGlobals.DB, TestGlobals.COLL));
+
+        assertNotNull(response, "failing open would let an unvalidated document reach the collection");
+        assertEquals("503-11", response.getErrorCode());
+    }
+
+    @Test
+    public void test_a_non_string_id_still_reports_the_schema_failure() {
+        installSchema();
+        final var bad = new JsonObject();
+        bad.add("_id", new JsonNumber(7));
+        final var request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObjects(List.of(bad));
+
+        final var response = SchemaValidationHelper.check(request);
+
+        assertNotNull(response);
+        assertEquals("400-7", response.getErrorCode(),
+                "building the rejection message must not itself throw on a document whose _id is not a string");
+    }
+
+    @Test
+    public void test_replacing_the_schema_object_revalidates_against_the_new_one() {
+        installSchema();
+        assertNull(SchemaValidationHelper.check(save(doc("Alice"))));
+
+        cache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL,
+                eJson.fromJson("{\"type\":\"object\",\"required\":[\"age\"]}", JsonObject.class));
+
+        assertNotNull(SchemaValidationHelper.check(save(doc("Alice"))),
+                "the meta-check result is cached per schema instance, so a replacement must not reuse it");
+    }
+
+    @Test
     public void test_a_valid_schema_still_validates_normally() {
         installSchema();
 

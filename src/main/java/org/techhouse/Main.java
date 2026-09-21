@@ -115,7 +115,11 @@ public class Main {
         if (!config.isSchedulesEnabled()) {
             return;
         }
-        scheduleRegistry.loadAll();
+        try {
+            scheduleRegistry.loadAll();
+        } catch (RuntimeException e) {
+            logger.error("Failed to load the schedule definitions; the scheduler starts with the ones that loaded", e);
+        }
         scheduleExecutor.start(ScheduleDispatcher::dispatch);
     }
 

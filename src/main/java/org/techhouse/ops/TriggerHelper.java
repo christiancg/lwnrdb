@@ -117,7 +117,7 @@ public final class TriggerHelper {
     }
 
     private static boolean hasNotTriggerFor(String dbName, String collName, EventType type, int depth) {
-        if (!configuration.isTriggersEnabled()) {
+        if (!configuration.isTriggersEnabled() || Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName)) {
             return true;
         }
         for (final var trigger : triggersOrNone(dbName, collName)) {

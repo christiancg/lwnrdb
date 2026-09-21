@@ -133,6 +133,30 @@ def test_invalid_schema_rejected(c):
                save_schema(c, COLL, {"type": "objct"}), "ERROR", "400-8")
 
 
+def test_cyclic_ref_rejected(c):
+    section("Cyclic $ref rejected at save")
+    check_code("a schema whose root refers to itself is rejected",
+               save_schema(c, COLL, {"$ref": "#"}), "ERROR", "400-8")
+    check_code("a cycle through $defs is rejected",
+               save_schema(c, COLL, {"$ref": "#/$defs/a",
+                                     "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"$ref": "#/$defs/a"}}}),
+               "ERROR", "400-8")
+    check_code("a cycle through an applicator is rejected",
+               save_schema(c, COLL, {"allOf": [{"$ref": "#"}]}), "ERROR", "400-8")
+    check_code("an unresolvable pointer is rejected",
+               save_schema(c, COLL, {"$ref": "#/$defs/missing"}), "ERROR", "400-8")
+    check_status("recursion bounded by instance depth is still accepted", save_schema(c, COLL, {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "child": {"$ref": "#"}},
+    }), "OK")
+    check_status("a nested document validates against the recursive schema",
+                 save(c, COLL, {"_id": "rec1", "name": "a", "child": {"name": "b"}}), "OK")
+    check_code("a nested document that breaks the recursive schema is refused",
+               save(c, COLL, {"_id": "rec2", "name": "a", "child": {"name": 3}}), "ERROR", "400-7")
+    check_status("the connection survives a schema-heavy exchange",
+                 find_by_id(c, COLL, "rec1"), "OK")
+
+
 def test_schema_warnings(c):
     section("SAVE_SCHEMA warnings")
     resp = save_schema(c, COLL, {"type": "object", "properties": {"name": {"type": "string"}}, "foo": 1})
@@ -205,6 +229,7 @@ def main():
         test_save_and_enforce_schema,
         test_bulk_save_atomic,
         test_invalid_schema_rejected,
+        test_cyclic_ref_rejected,
         test_schema_warnings,
         test_custom_type_enforcement,
         test_delete_schema,

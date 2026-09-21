@@ -378,7 +378,7 @@ public class TriggerDispatcherTest {
     }
 
     @Test
-    public void test_no_quorum_does_not_consume_an_attempt() throws Exception {
+    public void test_a_script_error_naming_no_quorum_is_not_a_free_retry() throws Exception {
         TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
         TestUtils.setPrivateField(configuration, "triggerMaxAttempts", 1);
         TestUtils.setPrivateField(configuration, "triggerRetryBackoffMs", 60_000L);
@@ -388,8 +388,9 @@ public class TriggerDispatcherTest {
             storeThrowingProcedure(ErrorCode.NO_QUORUM.getDefaultMessage());
             final var waitingRun = recordRunFor("waiting");
             TriggerDispatcher.dispatch(lastAttemptEvent("waiting", waitingRun));
-            assertEquals(TriggerRunStatus.PENDING, statusOf(waitingRun),
-                    "a write refused for lack of quorum must not burn the run's last attempt");
+            assertEquals(TriggerRunStatus.DEAD, statusOf(waitingRun),
+                    "the unbounded cluster retry is chosen from the response's error code, not from a message the"
+                            + " script itself controls");
 
             IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(TestGlobals.DB);
             storeThrowingProcedure("something the trigger itself got wrong");

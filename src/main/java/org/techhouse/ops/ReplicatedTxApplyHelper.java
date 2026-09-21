@@ -5,10 +5,12 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 
 public final class ReplicatedTxApplyHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final Logger logger = Logger.logFor(ReplicatedTxApplyHelper.class);
 
     private ReplicatedTxApplyHelper() {
@@ -36,12 +38,17 @@ public final class ReplicatedTxApplyHelper {
     private static boolean applyUnderWriteLocks(TxReplicationPayload payload, java.util.Set<String> collIds,
             long timeoutMillis) throws Exception {
         final ResourceLocking.LockedAction<Boolean> applyEntries = () -> {
-            for (final var entry : payload.getEntries()) {
-                if (!ReplicatedApplyHelper.applyLocked(entry)) {
-                    return false;
+            listenManager.deferNotifications();
+            try {
+                for (final var entry : payload.getEntries()) {
+                    if (!ReplicatedApplyHelper.applyLocked(entry)) {
+                        return false;
+                    }
                 }
+                return true;
+            } finally {
+                listenManager.flushDeferredNotifications();
             }
-            return true;
         };
         return timeoutMillis > 0
                 ? locks.withWriteLocks(collIds, timeoutMillis, applyEntries)

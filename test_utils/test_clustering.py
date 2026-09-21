@@ -898,6 +898,53 @@ def test_multi_collection_transaction():
     check("rolled-back multi-collection write appears nowhere", wait_until(_none_have_y, timeout_s=10.0))
 
 
+def test_a_replica_listener_never_sees_a_partial_transaction():
+    section("A listener attached to a replica is notified once the whole transaction applied (5a/5b)")
+
+    coll = "listen_repl"
+    create_coll(nodes[0].client_port, DB, coll)
+    owner = owner_of(nodes[0].client_port, DB, coll)
+    check("the collection has an owner", owner is not None, "cannot tell owner from replica without one")
+    if owner is None:
+        return
+
+    replicas = [n for n in nodes if n.alive and n is not owner]
+    check("there is a replica to listen on", bool(replicas))
+    if not replicas:
+        return
+
+    listener = authed(replicas[0].client_port)
+    writer = authed(nodes[0].client_port)
+    try:
+        steps = [{"type": "FILTER",
+                  "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "repl-txn"}}]
+        registered = listener.send({"type": "LISTEN", "databaseName": DB, "collectionName": coll,
+                                    "aggregationSteps": steps})
+        check_status("LISTEN registered on a replica", registered, "OK")
+
+        expected = {f"repl-{i}" for i in range(1, 6)}
+        check_status("START_TRANSACTION", writer.send({"type": "START_TRANSACTION"}), "OK")
+        for id_ in sorted(expected):
+            writer.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                         "object": {"_id": id_, "kind": "repl-txn"}})
+        check_status("COMMIT_TRANSACTION", writer.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+        frames = []
+        frame = listener.recv(timeout=10.0)
+        while frame is not None:
+            frames.append({d.get("_id") for d in (frame.get("results") or [])})
+            frame = listener.recv(timeout=2.0)
+
+        check("the replica's listener was notified", bool(frames), "no push reached the replica")
+        check("no frame holds part of the transaction", all(ids == expected for ids in frames),
+              f"partial frames: {[sorted(ids) for ids in frames if ids != expected]}")
+
+        listener.send({"type": "STOP_LISTEN", "listenId": registered.get("listenId")})
+    finally:
+        listener.close()
+        writer.close()
+
+
 def test_lock_timeout_aborts_the_whole_transaction():
     section("A participant that timed out on a collection lock votes no (5b)")
 
@@ -2393,6 +2440,7 @@ def main():
         test_user_and_permission_replication()
         test_single_node_transaction()
         test_multi_collection_transaction()
+        test_a_replica_listener_never_sees_a_partial_transaction()
         test_admin_transaction_ops()
         test_lock_timeout_aborts_the_whole_transaction()
         test_script_placement_forwards_runs()

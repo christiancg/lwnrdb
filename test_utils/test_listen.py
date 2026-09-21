@@ -429,6 +429,27 @@ def test_stop_listen(writer: Conn, listener: Conn):
     delete_doc(writer, "stoppable-1")
 
 
+def test_stop_listen_from_another_client_is_refused(writer: Conn, listener: Conn):
+    section("LISTEN: STOP_LISTEN only cancels the caller's own listener")
+
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "owned"}}]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the ownership test", r, "OK")
+    listen_id = r.get("listenId")
+
+    with Conn() as attacker:
+        attacker.authenticate()
+        r_stolen = attacker.send({"type": "STOP_LISTEN", "listenId": listen_id})
+        check_code("another client cannot stop this listener", r_stolen, "NOT_FOUND", "404-7")
+
+    save_doc(writer, {"_id": "owned-1", "kind": "owned"})
+    pushed = listener.recv(timeout=5.0)
+    check("the owner keeps receiving pushes", pushed is not None, "the listener was cancelled by another client")
+
+    check_status("the owner can still stop its own listener", stop_listen(listener, listen_id), "OK")
+    delete_doc(writer, "owned-1")
+
+
 def test_multiple_listeners(writer: Conn, listener: Conn):
     section("LISTEN: multiple listeners on same collection")
 
@@ -589,6 +610,7 @@ def main():
                 test_push_on_vector_nearest_closer(writer_conn, listener_conn)
                 test_no_push_on_vector_farther(writer_conn, listener_conn)
                 test_stop_listen(writer_conn, listener_conn)
+                test_stop_listen_from_another_client_is_refused(writer_conn, listener_conn)
                 test_multiple_listeners(writer_conn, listener_conn)
                 test_transactional_commit_pushes_once_with_the_final_state(writer_conn, listener_conn)
                 test_listener_survives_a_concurrent_bulk_save(writer_conn, listener_conn)

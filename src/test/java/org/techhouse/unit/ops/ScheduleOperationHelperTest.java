@@ -82,6 +82,45 @@ public class ScheduleOperationHelperTest {
         return request;
     }
 
+    @Test
+    public void test_a_cron_that_can_never_occur_is_refused() throws Exception {
+        final var response = ScheduleOperationHelper.executeSave(cronRequest("impossible", "0 0 31 4 *"), ACTOR);
+
+        assertEquals(ErrorCode.INVALID_SCHEDULE.getCode(), response.getErrorCode(),
+                "April has thirty days, so the schedule would report success and silently never fire");
+    }
+
+    @Test
+    public void test_a_distant_but_reachable_cron_is_accepted() throws Exception {
+        assertInstanceOf(SaveScheduleResponse.class,
+                ScheduleOperationHelper.executeSave(cronRequest("leap", "0 0 29 2 *"), ACTOR),
+                "February 29 falls within the search horizon");
+    }
+
+    @Test
+    public void test_created_at_is_stamped_onto_the_request_for_re_execution() throws Exception {
+        final var request = cronRequest("stamped", "0 3 * * *");
+
+        save(request);
+
+        assertTrue(request.getStampedCreatedAt() > 0,
+                "a locally computed createdAt diverges per node and makes the admin conform rewrite the file");
+    }
+
+    @Test
+    public void test_a_replayed_save_adopts_the_coordinator_createdAt() throws Exception {
+        final var request = cronRequest("replayed", "0 3 * * *");
+        request.setStampedVersion(7L);
+        request.setStampedUpdatedAt(1_700_000_000_000L);
+        request.setStampedUpdatedBy(ACTOR);
+        request.setStampedDefiner(ACTOR);
+        request.setStampedCreatedAt(1_600_000_000_000L);
+
+        save(request);
+
+        assertEquals(1_600_000_000_000L, cache.getSchedule(TestGlobals.DB, "replayed").getCreatedAt());
+    }
+
     private SaveScheduleResponse save(SaveScheduleRequest request) throws Exception {
         final var response = ScheduleOperationHelper.executeSave(request, ACTOR);
         assertInstanceOf(SaveScheduleResponse.class, response, response.getMessage());

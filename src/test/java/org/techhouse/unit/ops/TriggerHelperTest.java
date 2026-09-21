@@ -128,6 +128,21 @@ public class TriggerHelperTest {
     }
 
     @Test
+    public void test_the_reserved_history_collection_short_circuits_the_id_path_too() {
+        cache.putTriggers(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME,
+                List.of(new TriggerDefinition("t", new LinkedHashSet<>(Set.of(EventType.CREATED)), "recalc",
+                        TriggerDefinition.MODE_DOCUMENT, false, true, "owner", 1L, 1L, 1L, "owner")));
+
+        assertTrue(
+                capture(() -> TriggerHelper.afterWriteIds(TestGlobals.DB,
+                        org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME, EventType.CREATED, List.of("a"),
+                        "alice", 0)).isEmpty(),
+                "the history sweep must not pay a document read per row for a trigger that never fires");
+
+        cache.removeTriggers(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME);
+    }
+
+    @Test
     public void test_fires_only_matching_event_type() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
         assertEquals(1, capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,

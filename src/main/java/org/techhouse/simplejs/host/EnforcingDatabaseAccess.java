@@ -61,6 +61,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private UUID sessionClientId;
     private Thread sessionThread;
     private volatile boolean lastCommitFenced;
+    private volatile boolean clusterUnavailable;
 
     public EnforcingDatabaseAccess(String username, UUID clientId) {
         this(username, clientId, null);
@@ -244,6 +245,10 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         return lastCommitFenced;
     }
 
+    public boolean sawClusterUnavailable() {
+        return clusterUnavailable;
+    }
+
     private void clearSession() {
         clearSession(false);
     }
@@ -304,17 +309,25 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
             throw jsError(schemaError.getMessage());
         }
         if (sessionClientId != null) {
-            return routeOrProcess(request, rawJson, sessionClientId);
+            return recordClusterAvailability(routeOrProcess(request, rawJson, sessionClientId));
         }
         if (clientId != null) {
-            return routeOrProcess(request, rawJson, clientId);
+            return recordClusterAvailability(routeOrProcess(request, rawJson, clientId));
         }
         final var forwardedClientId = clientTracker.registerForwardedClient(username);
         try {
-            return routeOrProcess(request, rawJson, forwardedClientId);
+            return recordClusterAvailability(routeOrProcess(request, rawJson, forwardedClientId));
         } finally {
             clientTracker.removeById(forwardedClientId);
         }
+    }
+
+    private OperationResponse recordClusterAvailability(OperationResponse response) {
+        if (ErrorCode.NO_QUORUM.getCode().equals(response.getErrorCode())
+                || ErrorCode.NOT_COLLECTION_OWNER.getCode().equals(response.getErrorCode())) {
+            clusterUnavailable = true;
+        }
+        return response;
     }
 
     private OperationResponse routeOrProcess(OperationRequest request, String rawJson, UUID effectiveClientId) {

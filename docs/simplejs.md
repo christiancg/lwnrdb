@@ -458,10 +458,10 @@ where the run sits relative to the write path.
 | Surface | Authority | `db` | Budgets | Console | Notes |
 |---|---|---|---|---|---|
 | `RUN_SCRIPT` | caller | yes | `script*` | returned | ad-hoc; parse cached by source hash |
-| `CALL_PROCEDURE` | **invoker** (caller) | yes | `script*` | returned | parse cached by `db\|name\|version` |
+| `CALL_PROCEDURE` | **invoker** (caller) | yes | `script*` | returned | parse cached by `db\|name\|version`, checked by source hash |
 | After trigger | **definer** (installer) | yes | `script*`, `triggerTimeoutMs` | logged | async, exactly-once, retried |
 | Before-write hook | recorded, not enforced | **no** | `beforeHook*` | discarded | synchronous, in the write lock, fail-closed |
-| Schedule | **definer** | yes | `scheduleTimeoutMs` | logged | at-most-once per due instant |
+| Schedule | **definer** | yes | `scheduleTimeoutMs` | logged | at-most-once per due instant under a stable view |
 | Pipeline script | the query's caller | **no** | `aggregationScript*` | discarded | one callable per pipeline, per document |
 
 ### Ad-hoc scripts and stored procedures
@@ -514,7 +514,12 @@ inside a trigger is rejected (the run is already transactional); and the guarant
 *database effects*, so a replayed run's console output can repeat.
 
 A failed run is **retried** — the state machine lives on the pending-run record itself, which is
-what keeps exactly-once intact (a record still present is still un-applied). A retryable failure
+what keeps exactly-once intact (a record still present is still un-applied). An error raised
+*after* the run's transaction committed is the exception: the module body is wrapped in that
+transaction and the event loop is drained once the wrapper has returned, so a pending timer or a
+throwing microtask surfaces as a script error on a run whose effects are already durable and
+whose record is already gone. Such a run is recorded as an error and **never re-queued** —
+re-running it would apply the effects a second time. A retryable failure
 (a script error or a commit failure) increments `attempts` and re-queues after a doubling
 backoff up to `triggerMaxAttempts`, after which the record is marked `DEAD` with its payload and
 last error kept. Everything else is terminal and consumes the record: a missing definer or
@@ -591,8 +596,13 @@ unsatisfiable expression such as `0 0 30 2 *` answers `null` instead of spinning
 walked as *local* date-times and only then resolved against `scriptTimeZone`, which is what makes
 a daily schedule fire once across a DST transition.
 
-Delivery is **at-most-once per due instant**: a node taking a schedule over computes the next
-*future* occurrence, so a handoff may drop a tick but can never replay one. `nextRunAt` is
+Delivery is **at-most-once per due instant under a stable membership view**: a node taking a
+schedule over computes the next *future* occurrence, so a handoff may drop a tick but can never
+replay one, and `ScheduleExecutor` fires only when this node both holds a write quorum and owns
+the ring key — without the quorum gate a partitioned minority owns every schedule and re-runs it.
+While the view is still converging after a join or leave, two nodes can each believe they own the
+same key and both hold quorum, so an occurrence can still fire twice; a job that must not run
+twice has to be idempotent. `nextRunAt` is
 therefore never persisted — a durable `lastRunAt` would mean a DDL write per run and would churn
 the admin epoch. Missed runs while a node was down are skipped, not caught up, so a job that must
 not miss an occurrence should be idempotent and driven off data rather than off the clock. A run

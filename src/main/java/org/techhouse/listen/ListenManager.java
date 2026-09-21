@@ -36,6 +36,14 @@ public class ListenManager {
         return listenId;
     }
 
+    public boolean unregister(UUID listenId, UUID clientId) {
+        final var registration = registrations.get(listenId);
+        if (registration == null || !registration.clientId().equals(clientId)) {
+            return false;
+        }
+        return unregister(listenId);
+    }
+
     public boolean unregister(UUID listenId) {
         final var registration = registrations.remove(listenId);
         if (registration == null) {

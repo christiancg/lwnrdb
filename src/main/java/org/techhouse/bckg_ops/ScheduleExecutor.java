@@ -107,8 +107,8 @@ public class ScheduleExecutor {
     }
 
     private boolean isOwner(ScheduleRegistry.Entry entry) {
-        return !clusterConfig.isEnabled()
-                || ownershipManager.isOwner(entry.getDbName(), ScheduleOperationHelper.ringKey(entry.getName()));
+        return !clusterConfig.isEnabled() || (ownershipManager.hasQuorum()
+                && ownershipManager.isOwner(entry.getDbName(), ScheduleOperationHelper.ringKey(entry.getName())));
     }
 
     public void submit(ScheduleRegistry.Entry entry) {

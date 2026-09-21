@@ -12,6 +12,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.ScheduleDefinition;
 import org.techhouse.ex.InvalidCronException;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -77,11 +78,18 @@ public class ScheduleRegistry {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
         final var seen = new ArrayList<String>();
         for (final var name : fs.listScheduleNames(dbName)) {
-            final var definition = cache.getSchedule(dbName, name);
+            final var key = Cache.getCollectionIdentifier(dbName, name);
+            final ScheduleDefinition definition;
+            try {
+                definition = cache.getSchedule(dbName, name);
+            } catch (MetadataReadException e) {
+                seen.add(key);
+                warnOnce(key, "the definition could not be read and was skipped: " + e.getMessage());
+                continue;
+            }
             if (definition == null) {
                 continue;
             }
-            final var key = Cache.getCollectionIdentifier(dbName, name);
             seen.add(key);
             put(key, dbName, definition);
         }
@@ -113,7 +121,7 @@ public class ScheduleRegistry {
 
     public long nextRunAfter(Entry entry, long from) {
         if (entry.getCron() == null) {
-            return from + Math.max(1L, entry.getDefinition().getIntervalMs());
+            return nextIntervalRun(entry, from);
         }
         final var next = entry.getCron()
                 .nextAfter(ZonedDateTime.ofInstant(java.time.Instant.ofEpochMilli(from), zone()));
@@ -123,6 +131,15 @@ public class ScheduleRegistry {
             return 0L;
         }
         return next.toInstant().toEpochMilli();
+    }
+
+    private static long nextIntervalRun(Entry entry, long from) {
+        final var interval = Math.max(1L, entry.getDefinition().getIntervalMs());
+        final var scheduled = entry.getNextRunAt();
+        if (scheduled <= 0 || scheduled > from) {
+            return from + interval;
+        }
+        return scheduled + ((from - scheduled) / interval + 1) * interval;
     }
 
     public void warnOnce(String key, String message) {

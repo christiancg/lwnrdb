@@ -115,7 +115,7 @@ public class OperationProcessor {
                 UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
             case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
             case LISTEN -> processListenOperation((ListenRequest) operationRequest, clientId);
-            case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest);
+            case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest, clientId);
             case START_TRANSACTION ->
                 TransactionOperationHelper.start(clientId, UUID.randomUUID(), operationRequest.getTriggerDepth());
             case COMMIT_TRANSACTION -> TransactionOperationHelper.commit(clientId);
@@ -220,8 +220,8 @@ public class OperationProcessor {
         return ListenOperationHelper.processListenOperation(listenRequest, clientId);
     }
 
-    private OperationResponse processStopListenOperation(StopListenRequest request) {
-        return ListenOperationHelper.processStopListenOperation(request);
+    private OperationResponse processStopListenOperation(StopListenRequest request, UUID clientId) {
+        return ListenOperationHelper.processStopListenOperation(request, clientId);
     }
 
     private OperationResponse processRunScriptOperation(RunScriptRequest request, String actingUser, UUID clientId) {
