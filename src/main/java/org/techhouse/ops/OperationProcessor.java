@@ -250,14 +250,16 @@ public class OperationProcessor {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_TRIGGER,
-                ErrorCode.ERROR_SAVING_TRIGGER, () -> TriggerOperationHelper.executeSave(request, actingUser));
+                ErrorCode.ERROR_SAVING_TRIGGER, request.isReplicated(),
+                () -> TriggerOperationHelper.executeSave(request, actingUser));
     }
 
     private OperationResponse processDeleteTrigger(DeleteTriggerRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_TRIGGER,
-                ErrorCode.ERROR_DELETING_TRIGGER, () -> TriggerOperationHelper.executeDelete(request));
+                ErrorCode.ERROR_DELETING_TRIGGER, request.isReplicated(),
+                () -> TriggerOperationHelper.executeDelete(request));
     }
 
     private OperationResponse processListTriggers(ListTriggersRequest request) {
@@ -411,14 +413,16 @@ public class OperationProcessor {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_SCHEMA,
-                ErrorCode.ERROR_SAVING_SCHEMA, () -> SchemaOperationHelper.executeSaveSchema(request));
+                ErrorCode.ERROR_SAVING_SCHEMA, request.isReplicated(),
+                () -> SchemaOperationHelper.executeSaveSchema(request));
     }
 
     private OperationResponse processDeleteSchema(DeleteSchemaRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_SCHEMA,
-                ErrorCode.ERROR_DELETING_SCHEMA, () -> SchemaOperationHelper.executeDeleteSchema(request));
+                ErrorCode.ERROR_DELETING_SCHEMA, request.isReplicated(),
+                () -> SchemaOperationHelper.executeDeleteSchema(request));
     }
 
 }

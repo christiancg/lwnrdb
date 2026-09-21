@@ -92,6 +92,12 @@ public class TransactionCrashAtomicityTest {
                 "the transaction stays registered so its collections stay fenced rather than serving a half-state");
         assertTrue(TxCommitLog.isLocallyCommitted(transaction.getTransactionId().toString()),
                 "the commit log must survive so restart recovery can finish the slice");
+
+        TransactionOperationHelper.abortInPlace(clientId);
+        assertTrue(TxCommitLog.isLocallyCommitted(transaction.getTransactionId().toString()),
+                "teardown must not discard the slice the fence is holding for recovery");
+
+        TxCommitLog.clearLocalCommit(transaction.getTransactionId().toString());
         TransactionOperationHelper.abortInPlace(clientId);
     }
 

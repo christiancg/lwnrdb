@@ -239,7 +239,7 @@ public class ClusterConnectionHandler implements Runnable {
 
     private ClusterMessage handleReplicate(ClusterMessage request) {
         final var response = new ClusterMessage();
-        if (ReplicatedApplyHelper.apply(request.getReplication())) {
+        if (ReplicatedApplyHelper.apply(request.getReplication(), clusterConfig.replicationAckTimeoutMs())) {
             response.setType(ClusterMessageType.REPLICATE_ACK);
         } else {
             response.setType(ClusterMessageType.ERROR);

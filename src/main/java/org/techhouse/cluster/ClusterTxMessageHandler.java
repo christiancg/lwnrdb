@@ -22,6 +22,7 @@ final class ClusterTxMessageHandler {
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private static final Tx2pcDirectory tx2pcDirectory = IocContainer.get(Tx2pcDirectory.class);
+    private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
 
     private ClusterTxMessageHandler() {
@@ -76,7 +77,7 @@ final class ClusterTxMessageHandler {
 
     static ClusterMessage handleReplicateTx(ClusterMessage request) {
         final var response = new ClusterMessage();
-        if (ReplicatedTxApplyHelper.apply(request.getTxReplication())) {
+        if (ReplicatedTxApplyHelper.apply(request.getTxReplication(), clusterConfig.replicationAckTimeoutMs())) {
             response.setType(ClusterMessageType.REPLICATE_TX_ACK);
         } else {
             response.setType(ClusterMessageType.ERROR);

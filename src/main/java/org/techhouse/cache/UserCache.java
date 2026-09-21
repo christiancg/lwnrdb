@@ -134,7 +134,8 @@ public class UserCache {
             if (index == null) {
                 index = new ConcurrentHashMap<>();
             }
-            if (shouldCache(dbName, CacheSizeEstimator.estimateFieldIndexSize(new ArrayList<>(indexEntries)))) {
+            if (rl.holdsCollectionLock(dbName, collName)
+                    && shouldCache(dbName, CacheSizeEstimator.estimateFieldIndexSize(new ArrayList<>(indexEntries)))) {
                 index.put(indexIdentifier, new ArrayList<>(indexEntries));
                 fieldIndexMap.put(collectionIdentifier, index);
             }

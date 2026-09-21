@@ -28,7 +28,7 @@ public final class IndexOperationHelper {
         final var collName = createIndexRequest.getCollectionName();
         final var fieldName = createIndexRequest.getFieldName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_INDEX,
-                ErrorCode.ERROR_CREATING_INDEX, () -> {
+                ErrorCode.ERROR_CREATING_INDEX, createIndexRequest.isReplicated(), () -> {
                     if (!cache.hasNoIndex(dbName, collName, fieldName)) {
                         return OperationResponse.ok(OperationType.CREATE_INDEX,
                                 "Index already exists for field: " + fieldName);
@@ -46,7 +46,7 @@ public final class IndexOperationHelper {
         // The collection write lock makes the file deletion and the unregistration atomic with respect to
         // saves and the background indexer.
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DROP_INDEX,
-                ErrorCode.ERROR_DROPPING_INDEX, () -> {
+                ErrorCode.ERROR_DROPPING_INDEX, dropIndexRequest.isReplicated(), () -> {
                     final var result = IndexHelper.dropIndex(dbName, collName, fieldName);
                     if (result) {
                         AdminOperationHelper.deleteIndex(dbName, collName, fieldName);
@@ -62,7 +62,7 @@ public final class IndexOperationHelper {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.REINDEX, ErrorCode.ERROR_REINDEXING,
-                () -> {
+                request.isReplicated(), () -> {
                     final var registeredIndexes = cache.getIndexesForCollection(dbName, collName);
                     final List<String> targets;
                     if (request.getFieldNames().isEmpty()) {

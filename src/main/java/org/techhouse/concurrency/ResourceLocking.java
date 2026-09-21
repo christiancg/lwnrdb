@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.ex.CollectionBusyException;
 
 /**
  * The locks here are always acquired <em>above</em> the per-file locks held inside
@@ -77,6 +78,27 @@ public class ResourceLocking {
         try {
             for (final var collId : new TreeSet<>(collectionIds)) {
                 lockWrite(collId);
+                acquired.add(collId);
+            }
+            return action.run();
+        } finally {
+            for (final var collId : acquired) {
+                releaseWrite(collId);
+            }
+        }
+    }
+
+    public <T> T withWriteLocks(Collection<String> collectionIds, long timeoutMillis, LockedAction<T> action)
+            throws Exception {
+        final var acquired = new ArrayList<String>();
+        final var deadline = System.currentTimeMillis() + timeoutMillis;
+        try {
+            for (final var collId : new TreeSet<>(collectionIds)) {
+                final var remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0 || !lockFor(collId).writeLock().tryLock(remaining,
+                        java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    throw new CollectionBusyException(collId, timeoutMillis);
+                }
                 acquired.add(collId);
             }
             return action.run();

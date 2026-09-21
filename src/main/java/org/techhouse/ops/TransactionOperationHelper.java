@@ -79,10 +79,17 @@ public final class TransactionOperationHelper {
         return new StartTransactionResponse("Transaction started", transactionId.toString());
     }
 
+    private static boolean isLocalCommitFenced(Transaction transaction) {
+        return TxCommitLog.isLocallyCommitted(transaction.getTransactionId().toString());
+    }
+
     public static OperationResponse abort(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
+        }
+        if (isLocalCommitFenced(transaction)) {
+            return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
         }
         try {
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
@@ -181,7 +188,7 @@ public final class TransactionOperationHelper {
 
     public static void abortInPlace(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
-        if (transaction == null) {
+        if (transaction == null || isLocalCommitFenced(transaction)) {
             return;
         }
         transaction.markAborted();
@@ -198,6 +205,9 @@ public final class TransactionOperationHelper {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
+        }
+        if (isLocalCommitFenced(transaction)) {
+            return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
         }
         try {
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
@@ -229,7 +239,7 @@ public final class TransactionOperationHelper {
         if (transaction == null) {
             return;
         }
-        if (clusterRouter.teardownTransaction(clientId)) {
+        if (clusterRouter.teardownTransaction(clientId) || isLocalCommitFenced(transaction)) {
             return;
         }
         try {
@@ -251,7 +261,8 @@ public final class TransactionOperationHelper {
         for (final var clientId : clientTracker.clientIdsSnapshot()) {
             final var transaction = clientTracker.getActiveTransaction(clientId);
             if (transaction == null || sessionClientIds.contains(clientId)
-                    || Tx2pcLog.isPrepared(transaction.getTransactionId().toString())) {
+                    || Tx2pcLog.isPrepared(transaction.getTransactionId().toString())
+                    || isLocalCommitFenced(transaction)) {
                 continue;
             }
             final var wait = ShutdownRollbackWaits.register(clientId);
@@ -271,7 +282,8 @@ public final class TransactionOperationHelper {
         for (final var entry : clientTracker.txSessionsSnapshot().entrySet()) {
             final var session = entry.getValue();
             final var transaction = clientTracker.getActiveTransaction(session.clientId());
-            if (transaction == null || Tx2pcLog.isPrepared(transaction.getTransactionId().toString())) {
+            if (transaction == null || Tx2pcLog.isPrepared(transaction.getTransactionId().toString())
+                    || isLocalCommitFenced(transaction)) {
                 continue;
             }
             try {

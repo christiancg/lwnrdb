@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
@@ -20,10 +21,8 @@ import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
-import org.techhouse.log.Logger;
 
 public class FileSystem {
-    private final Logger logger = Logger.logFor(FileSystem.class);
     private final FilePaths paths = new FilePaths();
     private final DirtyIndexMarkers dirtyIndexMarkers = new DirtyIndexMarkers(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
@@ -228,6 +227,7 @@ public class FileSystem {
             final List<T> entries, final Function<? super T, Long> storagePageResolver) throws IOException {
         final var indexEntries = new ArrayList<IndexedDbEntry>();
         final var pkEntriesToIndex = new ArrayList<PkIndexEntry>();
+        final var lengthsBeforeAppend = new LinkedHashMap<File, Long>();
         final var entrySet = entries.stream().collect(Collectors.groupingBy(storagePageResolver)).entrySet();
         for (var groupedEntry : entrySet) {
             final var page = groupedEntry.getKey();
@@ -238,6 +238,7 @@ public class FileSystem {
             try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
                     Globals.BUFFER_SIZE)) {
                 var currentOffset = file.length();
+                lengthsBeforeAppend.putIfAbsent(file, currentOffset);
                 for (var entry : pageEntries) {
                     final var strData = entry.toFileEntry() + Globals.NEWLINE;
                     final var bytes = strData.getBytes(StandardCharsets.UTF_8);
@@ -259,8 +260,25 @@ public class FileSystem {
                 lock.unlock();
             }
         }
-        pkIndexStore.bulkIndexNewPKValues(dbName, collName, pkEntriesToIndex);
+        try {
+            pkIndexStore.bulkIndexNewPKValues(dbName, collName, pkEntriesToIndex);
+        } catch (IOException e) {
+            rollBackBulkAppends(lengthsBeforeAppend);
+            throw e;
+        }
         return indexEntries;
+    }
+
+    private void rollBackBulkAppends(Map<File, Long> lengthsBeforeAppend) {
+        for (final var appended : lengthsBeforeAppend.entrySet()) {
+            final var lock = FileLocks.lockFor(appended.getKey()).writeLock();
+            lock.lock();
+            try {
+                PageRegions.truncateTo(appended.getKey(), appended.getValue());
+            } finally {
+                lock.unlock();
+            }
+        }
     }
 
     public PkIndexEntry insertIntoCollection(DbEntry entry) throws IOException {
@@ -282,20 +300,11 @@ public class FileSystem {
                 return pkIndexStore.indexNewPKValue(dbName, collName, entry.get_id(), totalFileLength, length, page,
                         entry.getVersion());
             } catch (IOException e) {
-                truncateTo(file, totalFileLength);
+                PageRegions.truncateTo(file, totalFileLength);
                 throw e;
             }
         } finally {
             lock.unlock();
-        }
-    }
-
-    private void truncateTo(File file, long length) {
-        try (var channel = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            channel.setLength(length);
-        } catch (IOException e) {
-            logger.error("Could not roll back the page append for " + file.getAbsolutePath()
-                    + " after its index write failed; run REINDEX on this collection", e);
         }
     }
 
@@ -308,16 +317,16 @@ public class FileSystem {
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
-            final var tail = readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
-            final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
-            writer.setLength(totalFileLength - pkIndexEntry.getLength());
+            final var tail = PageRegions.readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
             try {
+                final var compacted = PageRegions.shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
+                writer.setLength(totalFileLength - pkIndexEntry.getLength());
                 pkIndexStore.deleteIndexValue(pkIndexEntry);
+                return compacted ? compactionFor(pkIndexEntry) : null;
             } catch (IOException e) {
-                restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
+                PageRegions.restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
                 throw e;
             }
-            return compacted ? compactionFor(pkIndexEntry) : null;
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
@@ -334,44 +343,6 @@ public class FileSystem {
         if (entry.getPage() == compaction.page() && entry.getPosition() > compaction.removedPosition()) {
             entry.setPosition(entry.getPosition() - compaction.removedLength());
         }
-    }
-
-    private static byte[] readRegion(RandomAccessFile writer, long from, long to) throws IOException {
-        final var length = (int) (to - from);
-        if (length <= 0) {
-            return new byte[0];
-        }
-        final var buffer = new byte[length];
-        writer.seek(from);
-        writer.readFully(buffer, 0, length);
-        return buffer;
-    }
-
-    private void restoreRegion(RandomAccessFile writer, long from, byte[] region, long originalLength) {
-        try {
-            if (region.length > 0) {
-                writer.seek(from);
-                writer.write(region, 0, region.length);
-            }
-            writer.setLength(originalLength);
-        } catch (IOException restoreFailure) {
-            logger.error("Could not restore the page after a failed index write; run REINDEX on this collection",
-                    restoreFailure);
-        }
-    }
-
-    private boolean shiftOtherEntriesToStart(RandomAccessFile writer, PkIndexEntry pkIndexEntry, long totalFileLength)
-            throws IOException {
-        final int otherEntriesLength = (int) (totalFileLength - pkIndexEntry.getPosition() - pkIndexEntry.getLength());
-        if (otherEntriesLength <= 0) {
-            return false;
-        }
-        writer.seek(pkIndexEntry.getPosition() + pkIndexEntry.getLength());
-        byte[] buffer = new byte[otherEntriesLength];
-        writer.readFully(buffer, 0, otherEntriesLength);
-        writer.seek(pkIndexEntry.getPosition());
-        writer.write(buffer, 0, otherEntriesLength);
-        return true;
     }
 
     public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
@@ -423,24 +394,23 @@ public class FileSystem {
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
-            final var tail = readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
-            final var compacted = shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
-            writer.seek(totalFileLength - pkIndexEntry.getLength());
-            final var strData = entry.toFileEntry() + Globals.NEWLINE;
-            final var bytes = strData.getBytes(StandardCharsets.UTF_8);
-            final var length = bytes.length;
-            writer.write(bytes, 0, length);
-            writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
-            entry.setPreviousByteSize(pkIndexEntry.getLength());
-            final PkIndexEntry updated;
+            final var tail = PageRegions.readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
             try {
-                updated = pkIndexStore.updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(),
+                final var compacted = PageRegions.shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
+                writer.seek(totalFileLength - pkIndexEntry.getLength());
+                final var strData = entry.toFileEntry() + Globals.NEWLINE;
+                final var bytes = strData.getBytes(StandardCharsets.UTF_8);
+                final var length = bytes.length;
+                writer.write(bytes, 0, length);
+                writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
+                entry.setPreviousByteSize(pkIndexEntry.getLength());
+                final var updated = pkIndexStore.updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(),
                         entry.get_id(), totalFileLength, length, page, entry.getVersion());
+                return new UpdateResult(updated, compacted ? compactionFor(pkIndexEntry) : null);
             } catch (IOException e) {
-                restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
+                PageRegions.restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
                 throw e;
             }
-            return new UpdateResult(updated, compacted ? compactionFor(pkIndexEntry) : null);
         } finally {
             lock.unlock();
         }
