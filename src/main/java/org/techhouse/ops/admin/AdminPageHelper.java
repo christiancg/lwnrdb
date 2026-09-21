@@ -8,17 +8,20 @@ import java.util.stream.Collectors;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 
 public final class AdminPageHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private static final Logger logger = Logger.logFor(AdminPageHelper.class);
 
     private AdminPageHelper() {
     }
@@ -203,8 +206,32 @@ public final class AdminPageHelper {
 
     public static void deletePageCollections(String dbName, String collName) {
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
-        fs.deleteCollectionFiles(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
-        cache.removeAdminPageEntries(dbName, collName);
-        cache.removeAdminPageEntries(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+        final var exclusive = lockAdminPagesForDrop(dbName, collName);
+        try {
+            fs.deleteCollectionFiles(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+            cache.removeAdminPageEntries(dbName, collName);
+            cache.removeAdminPageEntries(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+        } finally {
+            if (exclusive) {
+                releaseAdminPageCollection(dbName, collName);
+            }
+        }
+    }
+
+    private static boolean lockAdminPagesForDrop(String dbName, String collName) {
+        try {
+            final var acquired = locks.tryLockWrite(Globals.ADMIN_PAGES_DB_NAME,
+                    String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName),
+                    Configuration.getInstance().getTransactionLockTimeoutMs());
+            if (!acquired) {
+                logger.warning("Dropping the page metadata of " + dbName + "|" + collName + " without its"
+                        + " admin_pages lock: the background page writer may re-create rows for a collection"
+                        + " that no longer exists");
+            }
+            return acquired;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 }

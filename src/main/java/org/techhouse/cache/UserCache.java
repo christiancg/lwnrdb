@@ -31,15 +31,37 @@ public class UserCache {
     private final Map<String, AtomicLong> collectionBytes = new ConcurrentHashMap<>();
     public List<PkIndexEntry> getPkIndexAndLoadIfNecessary(String dbName, String collName) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
+        final var primaryKeyIndex = pkIndexMap.get(collectionIdentifier);
         if (primaryKeyIndex == null) {
-            primaryKeyIndex = fs.readWholePkIndexFile(dbName, collName);
+            final var fromDisk = fs.readWholePkIndexFile(dbName, collName);
             if (rl.holdsCollectionLock(dbName, collName)
-                    && shouldCache(dbName, CacheSizeEstimator.estimatePkIndexSize(primaryKeyIndex))) {
-                pkIndexMap.put(collectionIdentifier, primaryKeyIndex);
+                    && shouldCache(dbName, CacheSizeEstimator.estimatePkIndexSize(fromDisk))) {
+                pkIndexMap.put(collectionIdentifier, fromDisk);
             }
+            return fromDisk;
         }
-        return primaryKeyIndex;
+        if (rl.holdsCollectionLock(dbName, collName)) {
+            return primaryKeyIndex;
+        }
+        return snapshotForLockFreeReader(dbName, collName, primaryKeyIndex);
+    }
+
+    private List<PkIndexEntry> snapshotForLockFreeReader(String dbName, String collName, List<PkIndexEntry> shared)
+            throws IOException {
+        var held = false;
+        try {
+            held = rl.tryLockRead(dbName, collName, 0);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        if (!held) {
+            return fs.readWholePkIndexFile(dbName, collName);
+        }
+        try {
+            return new ArrayList<>(shared);
+        } finally {
+            rl.releaseRead(dbName, collName);
+        }
     }
 
     public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,

@@ -107,18 +107,29 @@ public final class TwoPhaseParticipant {
             return false;
         }
         final var session = entry.getValue();
-        session.submit(() -> commit
+        final var result = session.submit(() -> commit
                 ? commitPrepared(session.clientId())
                 : TransactionOperationHelper.abort(session.clientId())).get();
-        clientTracker.removeTxSession(entry.getKey());
+        if (releasedItsLocks(result)) {
+            clientTracker.removeTxSession(entry.getKey());
+        }
         return true;
     }
 
+    private static boolean releasedItsLocks(OperationResponse response) {
+        return response == null || !ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(response.getErrorCode());
+    }
+
     public static void commitPreparedFromDurable(String dtxId, List<String> collections) throws Exception {
+        commitPreparedFromDurable(dtxId, collections, 0L);
+    }
+
+    public static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
+            throws Exception {
         if (resolvedThroughLiveSession(dtxId, true)) {
             return;
         }
-        TransactionRecovery.commitPreparedFromDurable(dtxId, collections);
+        TransactionRecovery.commitPreparedFromDurable(dtxId, collections, timeoutMillis);
     }
 
     public static void abortFromDurable(String dtxId) throws Exception {

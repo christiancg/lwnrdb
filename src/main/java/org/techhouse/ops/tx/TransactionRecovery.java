@@ -43,14 +43,24 @@ public final class TransactionRecovery {
     }
 
     public static void commitPreparedFromDurable(String dtxId, List<String> collections) throws Exception {
+        commitPreparedFromDurable(dtxId, collections, 0L);
+    }
+
+    public static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
+            throws Exception {
         final var marker = Tx2pcLog.readParticipantMarker(dtxId);
-        replayDurableSlice(dtxId, collections, marker != null ? marker.preparedVersion() : 0L,
+        replayDurableSlice(dtxId, collections, marker != null ? marker.preparedVersion() : 0L, timeoutMillis,
                 () -> resolveMarkers(dtxId, true));
     }
 
     private static void replayDurableSlice(String txId, List<String> collections, long preparedVersion,
             ThrowingRunnable markerCleanup) throws Exception {
-        locks.withWriteLocks(collections, () -> {
+        replayDurableSlice(txId, collections, preparedVersion, 0L, markerCleanup);
+    }
+
+    private static void replayDurableSlice(String txId, List<String> collections, long preparedVersion,
+            long timeoutMillis, ThrowingRunnable markerCleanup) throws Exception {
+        final ResourceLocking.LockedAction<Void> replay = () -> {
             final var opIds = Tx2pcLog.sliceOpIds(txId);
             final var ops = AdminOperationHelper.readTransactionOps(opIds);
             ops.sort(Comparator.comparingLong(AdminTransactionEntry::getSeq));
@@ -79,7 +89,12 @@ public final class TransactionRecovery {
                     reconstructed.getTriggerDepth(), reconstructed);
             coordinator.replicateTransaction(reconstructed, reservedTombstones);
             return null;
-        });
+        };
+        if (timeoutMillis > 0) {
+            locks.withWriteLocks(collections, timeoutMillis, replay);
+        } else {
+            locks.withWriteLocks(collections, replay);
+        }
     }
 
     private static String actingUserOf(List<AdminTransactionEntry> ops) {

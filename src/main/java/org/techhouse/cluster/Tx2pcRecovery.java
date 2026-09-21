@@ -97,7 +97,8 @@ public class Tx2pcRecovery implements MembershipListener {
                     continue;
                 }
                 switch (resolve(marker.coordinatorAddress(), marker.participants(), dtxId)) {
-                    case COMMIT -> TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
+                    case COMMIT -> TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections(),
+                            clusterConfig.replicationAckTimeoutMs());
                     case ABORT -> TwoPhaseParticipant.abortFromDurable(dtxId);
                     default -> logger.info("Transaction " + dtxId + " still in-doubt; will retry");
                 }

@@ -592,6 +592,14 @@ Re-runs are deliberately dirty reads (timeliness over strict consistency), but a
 defers its notifications until every buffered op has applied, so a listener never sees a frame holding
 half a transaction.
 
+Dirty does not mean unsynchronised. A writer reshapes the cached PK index in place — a bulk save
+removes, appends twice, and only re-sorts in a `finally` — so a reader binary-searching that list
+without the collection lock could miss rows, throw, or report a phantom torn index. A caller holding
+no collection lock is therefore handed its own snapshot of the list rather than the shared instance,
+taken under a non-blocking `tryLock`; when a writer holds the lock the reader falls back to reading
+the PK index from disk, which the per-file locks already make safe for a dirty read. The re-run
+itself still takes no collection lock and never makes a writer wait.
+
 ## Wire protocol
 
 The node-to-node channel reuses the client transport: line-delimited EJson over TCP on
