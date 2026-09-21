@@ -530,6 +530,39 @@ def test_unauthenticated_listen():
 
 # ── main ─────────────────────────────────────────────────────────────────────
 
+def test_listener_survives_a_concurrent_bulk_save(writer_conn: Conn, listener_conn: Conn):
+    """A re-run reads the PK index while a bulk save reshapes it in place: removeIf, two addAlls,
+    and only then a re-sort. Binary-searching that list mid-flight returned wrong rows or threw,
+    and processListen swallowed it as a dropped notification."""
+    section("A re-run during a bulk save still answers correctly")
+    started = listen(listener_conn, [{"type": "FILTER",
+                                      "operator": {"fieldOperatorType": "EQUALS",
+                                                   "field": "kind", "value": "bulk"}}])
+    listen_id = started.get("listenId")
+    check("listener registered for the bulk case", listen_id is not None, detail=str(started))
+
+    expected = 40
+    objects = [{"_id": f"bulk_{i:03d}", "kind": "bulk"} for i in range(expected)]
+    writer_conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+                      "objects": objects})
+
+    seen = -1
+    deadline = time.time() + 15.0
+    while time.time() < deadline:
+        pushed = listener_conn.recv(timeout=5.0)
+        if not pushed:
+            break
+        seen = len(pushed.get("results") or [])
+        if seen == expected:
+            break
+    check("a listener converges on the full bulk result rather than a torn read",
+          seen == expected, detail=f"last pushed count={seen} expected={expected}")
+
+    stop_listen(listener_conn, listen_id)
+    for i in range(expected):
+        delete_doc(writer_conn, f"bulk_{i:03d}")
+
+
 def main():
     bu.banner("Listenable queries (LISTEN / STOP_LISTEN) test suite", HOST, PORT)
 
@@ -558,6 +591,7 @@ def main():
                 test_stop_listen(writer_conn, listener_conn)
                 test_multiple_listeners(writer_conn, listener_conn)
                 test_transactional_commit_pushes_once_with_the_final_state(writer_conn, listener_conn)
+                test_listener_survives_a_concurrent_bulk_save(writer_conn, listener_conn)
                 test_disconnect_cleanup(writer_conn)
 
             test_unauthenticated_listen()

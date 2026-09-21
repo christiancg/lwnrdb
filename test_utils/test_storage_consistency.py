@@ -386,6 +386,55 @@ def test_an_unreadable_schema_refuses_the_write(conn: Conn, work_dir: str):
     check_code("a write against an unreadable schema is refused", refused, "ERROR", "503-11")
 
 
+BULK_COLL = "bulk_rollback_coll"
+TXN_COLL = "txn_durability_coll"
+
+
+def test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn: Conn):
+    """bulkInsertIntoCollection appended across pages and then wrote the pk index with no rollback,
+    so a failed index write orphaned every record: visible to a scan, invisible to FIND_BY_ID, and a
+    later re-save of the same id appended a second copy."""
+    section("bulk insert: scan and the pk index agree")
+    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": BULK_COLL})
+    objects = [{"_id": f"bulk_{i:04d}", "pad": PAD} for i in range(60)]
+    check_status("bulk insert across several pages",
+                 conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": BULK_COLL,
+                            "objects": objects}), "OK")
+
+    scanned = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BULK_COLL,
+                         "aggregationSteps": []})
+    scan_ids = sorted(d.get("_id") for d in (scanned.get("results") or []))
+    missing = [i for i in scan_ids
+               if conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": BULK_COLL,
+                             "_id": i}).get("status") != "OK"]
+    check("every bulk-inserted document a scan returns is reachable by FIND_BY_ID",
+          len(scan_ids) == len(objects) and not missing,
+          f"scanned={len(scan_ids)} expected={len(objects)} unreachable={missing[:5]}")
+    check("no id appears twice on the page", len(scan_ids) == len(set(scan_ids)),
+          f"scanned={len(scan_ids)} distinct={len(set(scan_ids))}")
+
+
+def test_a_committed_transaction_survives_a_restart_whole(conn: Conn):
+    """A commit that cannot finish applying keeps its locks and its marker so recovery can finish
+    the slice. Teardown used to delete the ops the marker pointed at, after which startup recovery
+    replayed an empty slice and logged that it had finished the transaction."""
+    section("transaction durability across a restart")
+    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": TXN_COLL})
+    check_status("start transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    for i in range(5):
+        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": TXN_COLL,
+                   "object": {"_id": f"txn_{i}", "pad": PAD}})
+    check_status("commit transaction", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+
+def test_the_committed_transaction_is_all_there_after_the_restart(conn: Conn):
+    found = [i for i in range(5)
+             if conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": TXN_COLL,
+                           "_id": f"txn_{i}"}).get("status") == "OK"]
+    check("a committed transaction is entirely present after a restart, never partly",
+          len(found) == 5, f"present after restart: {found}")
+
+
 def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
     section("writes naming a collection that does not exist")
     for op, request in (
@@ -591,6 +640,7 @@ def main():
             test_drop_database_does_not_strand_a_collection_lock(conn)
             test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
             test_writes_to_an_unknown_collection_are_refused_cleanly(conn)
+            test_a_committed_transaction_survives_a_restart_whole(conn)
             test_an_unreadable_schema_refuses_the_write(conn, work_dir)
             test_index_operations_cannot_destroy_the_pk_index(conn, work_dir)
 
@@ -609,6 +659,8 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         test_an_unclean_stop_is_reported_at_the_next_startup(work_dir, log_path, log_offset)
         with admin_conn() as conn:
+            test_the_committed_transaction_is_all_there_after_the_restart(conn)
+            test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)
             test_a_self_heal_never_erases_a_committed_write(conn, work_dir, log_path)
     finally:
         bu.stop_server(proc)

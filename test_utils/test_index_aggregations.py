@@ -755,12 +755,17 @@ AGREE_SORT_BOOL = "idxagg_agree_sort_bool"
 AGREE_SORT_BOOL_DESC = "idxagg_agree_sort_bool_desc"
 AGREE_SORT_MIXED = "idxagg_agree_sort_mixed"
 AGREE_SORT_TIES = "idxagg_agree_sort_ties"
+AGREE_SIBLING = "idxagg_agree_sibling"
+AGREE_OBJ_SORT = "idxagg_agree_obj_sort"
+AGREE_CUSTOM = "idxagg_agree_custom"
+AGREE_MIXED_BOX = "idxagg_agree_mixed_box"
 AGREE_GEO = "idxagg_agree_geo"
 AGREE_GEO_TARGET = "#geo(0.000000,0.000000)"
 
 AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, AGREE_NOT_IN_ARR,
                      AGREE_JOIN_REMOTE, AGREE_JOIN_LEFT, AGREE_JOIN_NULL_REMOTE, AGREE_JOIN_NULL_LEFT,
-                     AGREE_SORT_BOOL, AGREE_SORT_BOOL_DESC, AGREE_SORT_MIXED, AGREE_SORT_TIES, AGREE_GEO)
+                     AGREE_SORT_BOOL, AGREE_SORT_BOOL_DESC, AGREE_SORT_MIXED, AGREE_SORT_TIES,
+                     AGREE_SIBLING, AGREE_OBJ_SORT, AGREE_CUSTOM, AGREE_MIXED_BOX, AGREE_GEO)
 
 
 def agree_ids(r):
@@ -915,6 +920,75 @@ def probe_geo_distance_agrees_with_scan_at_the_rim(c):
           AGREE_GEO, "location", expected=["onTheRim"])
 
 
+def probe_dropping_an_index_spares_a_sibling_field(c):
+    """CREATE_INDEX on `first` used to delete every `first-name` index file: the anchored prefix
+    still matched a longer field, and hyphens are legal in field names."""
+    save_doc(c, AGREE_SIBLING, {"_id": "s1", "first": "ada", "first-name": "ada lovelace"})
+    save_doc(c, AGREE_SIBLING, {"_id": "s2", "first": "alan", "first-name": "alan turing"})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SIBLING,
+            "fieldName": "first-name"})
+    wait_for_indexes(c, [(AGREE_SIBLING, "first-name")])
+    steps = [{"type": "FILTER",
+              "operator": {"fieldOperatorType": "EQUALS", "field": "first-name", "value": "ada lovelace"}}]
+    before = agree_ids(agg(c, AGREE_SIBLING, steps))
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SIBLING,
+            "fieldName": "first"})
+    wait_for_indexes(c, [(AGREE_SIBLING, "first")])
+    save_doc(c, AGREE_SIBLING, {"_id": "s3", "first": "grace", "first-name": "grace hopper"})
+    after = agree_ids(agg(c, AGREE_SIBLING, steps))
+    check("indexing a field never deletes a sibling whose name extends it",
+          before == ["s1"] and after == ["s1"],
+          f"before={before!r}  after indexing 'first'={after!r}")
+
+
+def probe_object_sort_keys_break_ties_on_id(c):
+    """Every object-valued sort key compares equal, so the index path must still order ties by _id
+    the way the scan does - otherwise SORT + LIMIT returns a different page."""
+    for doc_id, inner in (("z", 1), ("a", 2), ("m", 3)):
+        save_doc(c, AGREE_OBJ_SORT, {"_id": doc_id, "meta": {"x": inner}})
+    steps = [{"type": "SORT", "fieldName": "meta", "ascending": True}, {"type": "LIMIT", "limit": 2}]
+    agree(c, "SORT + LIMIT over object-valued keys", AGREE_OBJ_SORT, steps,
+          AGREE_OBJ_SORT, "meta", extract=agree_ordered_ids, expected=["a", "m"])
+
+
+def probe_custom_values_bucket_the_same_either_way(c):
+    """The build path buckets custom values by raw wire text while incremental maintenance used to
+    match them semantically, so DISTINCT disagreed with the scan and with itself."""
+    save_doc(c, AGREE_CUSTOM, {"_id": "d1", "when": "#datetime(2024-01-01T10:00)"})
+    save_doc(c, AGREE_CUSTOM, {"_id": "d2", "when": "#datetime(2024-01-01T10:00:00)"})
+    steps = [{"type": "DISTINCT", "fieldName": "when"}]
+    scanned = len(agg(c, AGREE_CUSTOM, steps).get("results") or [])
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_CUSTOM,
+            "fieldName": "when"})
+    wait_for_indexes(c, [(AGREE_CUSTOM, "when")])
+    save_doc(c, AGREE_CUSTOM, {"_id": "d3", "when": "#datetime(2024-02-02T11:00)"})
+    indexed = len(agg(c, AGREE_CUSTOM, steps).get("results") or [])
+    check("DISTINCT over a custom-typed field buckets the same with and without an index",
+          indexed == scanned + 1, f"scan over 2 docs={scanned}  indexed over 3 docs={indexed}")
+
+
+def probe_a_scalar_membership_operand_is_refused(c):
+    """IN with a non-array operand reached SearchUtils and threw, so the same query answered 500
+    with an index and NO_RESULTS without one. It must now be refused before either path."""
+    steps = [{"type": "FILTER",
+              "operator": {"fieldOperatorType": "IN", "field": "score", "value": 2}}]
+    r = agg(c, AGREE_MIXED_BOX, steps)
+    check("a scalar IN operand is refused rather than answered differently per path",
+          r.get("status") == "ERROR" and str(r.get("errorCode", "")).startswith("400"),
+          f"status={r.get('status')} errorCode={r.get('errorCode')} message={r.get('message')!r}")
+
+
+def probe_mixed_number_boxes_group_the_same_either_way(c):
+    """equals compares numbers by double value while hashCode returned the boxed hash, so a
+    hash-based GROUP_BY split one logical value across two buckets on the scan path."""
+    save_doc(c, AGREE_MIXED_BOX, {"_id": "w1", "score": 2})
+    save_doc(c, AGREE_MIXED_BOX, {"_id": "w2", "score": 2.0})
+    save_doc(c, AGREE_MIXED_BOX, {"_id": "w3", "score": 3})
+    steps = [{"type": "GROUP_BY", "fieldName": "score"}]
+    agree(c, "GROUP_BY over mixed integer and fractional spellings", AGREE_MIXED_BOX, steps,
+          AGREE_MIXED_BOX, "score", extract=lambda r: len(r.get("results") or []), expected=2)
+
+
 def agreement_suite(c):
     section("Index / scan agreement: an index-backed answer must equal the full-scan answer")
     setup_agreement(c)
@@ -924,6 +998,11 @@ def agreement_suite(c):
     probe_sort_agrees_with_scan(c)
     probe_sort_limit_is_deterministic(c)
     probe_geo_distance_agrees_with_scan_at_the_rim(c)
+    probe_dropping_an_index_spares_a_sibling_field(c)
+    probe_object_sort_keys_break_ties_on_id(c)
+    probe_custom_values_bucket_the_same_either_way(c)
+    probe_a_scalar_membership_operand_is_refused(c)
+    probe_mixed_number_boxes_group_the_same_either_way(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════
