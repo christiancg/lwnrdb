@@ -277,9 +277,10 @@ public final class IndexEntryReader {
             final var lookupValue = IndexValueCodec.elementToLookupValue(localValue);
             final var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, localValue);
             final var ids = cache.getIdsFromIndex(dbName, collName, fieldName, operator, lookupValue);
-            if (ids != null) {
-                matchingIds.addAll(ids);
+            if (ids == null) {
+                return null;
             }
+            matchingIds.addAll(ids);
         }
         final var pendingIds = PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName);
         if (pendingIds.isEmpty()) {

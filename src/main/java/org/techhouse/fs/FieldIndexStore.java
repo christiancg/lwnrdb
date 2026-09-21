@@ -67,8 +67,7 @@ final class FieldIndexStore {
         if (collFolder.exists()) {
             final var prefix = collName + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName
                     + Globals.INDEX_FILE_NAME_SEPARATOR;
-            final var indexFiles = collFolder
-                    .listFiles((_, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION) && name.startsWith(prefix));
+            final var indexFiles = collFolder.listFiles((_, name) -> namesOneTypeOfThisField(name, prefix));
             if (indexFiles != null) {
                 final var deleted = new ArrayList<Boolean>();
                 for (var index : indexFiles) {
@@ -78,6 +77,15 @@ final class FieldIndexStore {
             }
         }
         return false;
+    }
+
+    private static boolean namesOneTypeOfThisField(String fileName, String prefix) {
+        if (!fileName.endsWith(Globals.INDEX_FILE_EXTENSION) || !fileName.startsWith(prefix)) {
+            return false;
+        }
+        final var typeSegment = fileName.substring(prefix.length(),
+                fileName.length() - Globals.INDEX_FILE_EXTENSION.length());
+        return !typeSegment.isEmpty() && typeSegment.indexOf(Globals.INDEX_FILE_NAME_SEPARATOR) < 0;
     }
 
     private File indexFileFor(String dbName, String collName, String fieldName, FieldIndexEntry<?> entry) {

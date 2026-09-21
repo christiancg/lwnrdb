@@ -22,8 +22,9 @@ public class JsonPrimitive<T> extends JsonBaseElement {
         if (value == null) {
             return 31;
         }
-        if (value instanceof Number) {
-            return getValue().hashCode();
+        if (value instanceof Number number) {
+            final var asDouble = number.doubleValue();
+            return Double.hashCode(asDouble == 0.0 ? 0.0 : asDouble);
         }
         return value.hashCode();
     }

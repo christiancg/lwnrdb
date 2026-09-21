@@ -6,11 +6,13 @@ import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.GeoDistanceComparator;
 import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.custom_types.JsonVector;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.BaseOperator;
+import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.BaseMidOperator;
@@ -218,6 +220,17 @@ public class AggregationStepValidator {
         return ValidationResult.ok();
     }
 
+    private static ValidationResult validateMembershipOperand(FieldOperator fieldOp) {
+        final var type = fieldOp.getFieldOperatorType();
+        if (type != FieldOperatorType.IN && type != FieldOperatorType.NOT_IN) {
+            return ValidationResult.ok();
+        }
+        if (!(fieldOp.getValue() instanceof JsonArray)) {
+            return ValidationResult.fail(type + " requires an array value");
+        }
+        return ValidationResult.ok();
+    }
+
     public static ValidationResult validateOperator(BaseOperator operator) {
         if (operator.getType() == OperatorType.FIELD) {
             final var fieldOp = (FieldOperator) operator;
@@ -227,6 +240,7 @@ public class AggregationStepValidator {
             if (fieldOp.getFieldOperatorType() == null) {
                 return ValidationResult.fail("Field operator requires a fieldOperatorType");
             }
+            return validateMembershipOperand(fieldOp);
         } else if (operator.getType() == OperatorType.CUSTOM) {
             return validateCustomOperator((CustomOperator) operator);
         } else if (operator.getType() == OperatorType.SCRIPT) {

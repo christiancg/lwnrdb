@@ -393,10 +393,8 @@ public class IndexHelper {
             JsonCustom<?> value) throws IOException {
         final var indexEntries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, value.getClass());
         if (indexEntries != null) {
-            //noinspection unchecked
-            return indexEntries.stream()
-                    .filter(indexEntry -> indexEntry.getValue().compare(value.getCustomValue()) == 0).findFirst()
-                    .orElse(null);
+            return indexEntries.stream().filter(indexEntry -> indexEntry.getValue().getValue().equals(value.getValue()))
+                    .findFirst().orElse(null);
         }
         return null;
     }

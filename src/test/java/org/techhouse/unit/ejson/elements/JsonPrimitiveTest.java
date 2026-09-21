@@ -77,6 +77,7 @@ public class JsonPrimitiveTest {
     }
 
     @Test
+    @SuppressWarnings("ConstantValue")
     public void test_equals_with_null_returns_false() {
         JsonPrimitive<String> primitive = new JsonString("test");
 
@@ -135,9 +136,37 @@ public class JsonPrimitiveTest {
     }
 
     @Test
-    public void test_hashCode_number_returns_value_hashcode() {
-        JsonNumber n = new JsonNumber(42);
-        assertEquals(n.getValue().hashCode(), n.hashCode());
+    public void test_hashCode_agrees_with_equals_across_number_boxes() {
+        JsonNumber asInteger = new JsonNumber(2);
+        JsonNumber asDouble = new JsonNumber(2.0d);
+
+        assertEquals(asInteger, asDouble, "equals compares numbers by double value");
+        assertEquals(asInteger.hashCode(), asDouble.hashCode(),
+                "the boxed hash split one logical value across two buckets in every hash-based pipeline step,"
+                        + " so DISTINCT returned two rows on a scan where the index returned one");
+    }
+
+    @Test
+    public void test_hashCode_agrees_with_equals_for_negative_zero() {
+        JsonNumber positive = new JsonNumber(0.0d);
+        JsonNumber negative = new JsonNumber(-0.0d);
+
+        assertEquals(positive, negative, "equals treats the two zeroes as one value");
+        assertEquals(positive.hashCode(), negative.hashCode(), "so their hashes must agree too");
+    }
+
+    @Test
+    public void test_hashCode_agrees_with_equals_for_nan() {
+        JsonNumber first = new JsonNumber(Double.NaN);
+        JsonNumber second = new JsonNumber(Double.NaN);
+
+        assertEquals(first, second, "equals deliberately makes NaN equal itself");
+        assertEquals(first.hashCode(), second.hashCode(), "so their hashes must agree too");
+    }
+
+    @Test
+    public void test_distinct_numbers_still_hash_apart() {
+        assertNotEquals(new JsonNumber(2).hashCode(), new JsonNumber(3).hashCode());
     }
 
     @Test

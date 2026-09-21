@@ -194,6 +194,62 @@ public class FileSystemFieldIndexTest {
     }
 
     @Test
+    public void test_drop_index_spares_a_field_whose_name_extends_the_dropped_one()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
+
+        File collFolder = new File(
+                TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL);
+
+        File dropped = new File(collFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + "first"
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
+        File sibling = new File(collFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + "first-name"
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
+        File siblingNumber = new File(collFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + "first-name"
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_NUMBER + Globals.INDEX_FILE_EXTENSION);
+
+        assertTrue(dropped.createNewFile());
+        assertTrue(sibling.createNewFile());
+        assertTrue(siblingNumber.createNewFile());
+
+        assertTrue(fs.dropIndex(TestGlobals.DB, TestGlobals.COLL, "first"));
+
+        assertFalse(dropped.exists(), "the targeted field's index must go");
+        assertTrue(sibling.exists(),
+                "hyphens are legal in field names, so an anchored prefix still matched a longer field and"
+                        + " CREATE_INDEX on 'first' silently deleted every 'first-name' index file");
+        assertTrue(siblingNumber.exists(), "every type of the sibling field must survive, not just the first");
+    }
+
+    @Test
+    public void test_drop_index_removes_every_type_of_the_targeted_field()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fs = new FileSystem();
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
+
+        File collFolder = new File(
+                TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL);
+
+        File asString = new File(collFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + "mixed"
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
+        File asNumber = new File(collFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + "mixed"
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_NUMBER + Globals.INDEX_FILE_EXTENSION);
+        File asObject = new File(collFolder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + "mixed"
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_OBJECT + Globals.INDEX_FILE_EXTENSION);
+
+        assertTrue(asString.createNewFile());
+        assertTrue(asNumber.createNewFile());
+        assertTrue(asObject.createNewFile());
+
+        assertTrue(fs.dropIndex(TestGlobals.DB, TestGlobals.COLL, "mixed"));
+
+        assertFalse(asString.exists());
+        assertFalse(asNumber.exists());
+        assertFalse(asObject.exists(), "tightening the match must not stop it removing the field's own files");
+    }
+
+    @Test
     public void test_drop_index_does_not_delete_the_pk_index_or_tombstones()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fs = new FileSystem();
