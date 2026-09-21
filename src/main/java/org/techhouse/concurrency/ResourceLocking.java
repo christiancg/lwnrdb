@@ -191,6 +191,10 @@ public class ResourceLocking {
         lockWrite(getIndexIdentifier(dbName, collName, fieldName));
     }
 
+    public boolean tryLockIndex(String dbName, String collName, String fieldName) {
+        return lockFor(getIndexIdentifier(dbName, collName, fieldName)).writeLock().tryLock();
+    }
+
     public void releaseIndex(String dbName, String collName, String fieldName) {
         releaseWrite(getIndexIdentifier(dbName, collName, fieldName));
     }

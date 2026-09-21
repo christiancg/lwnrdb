@@ -14,8 +14,11 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 
 final class AdminPageCache {
+    private static final long INTERRUPTED_LOCK_BUDGET_MS = 250;
+    private final Logger logger = Logger.logFor(AdminPageCache.class);
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final org.techhouse.concurrency.ResourceLocking locks = IocContainer
@@ -90,26 +93,51 @@ final class AdminPageCache {
 
     void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        var reinterrupt = false;
         try {
             locks.lock(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return;
+            reinterrupt = true;
+            if (!acquireDespiteInterruption(pagesCollName)) {
+                Thread.currentThread().interrupt();
+                logger.error("Dropped a page size delta of " + bytesDelta + " for " + dbName + "|" + collName + " page "
+                        + page + ": nothing recomputes page sizes before a restart, so first-fit"
+                        + " may overfill that page past maxPageSize");
+                return;
+            }
         }
         try {
-            final var pageEntries = pageList(dbName, collName);
-            final var existing = findPage(pageEntries, page);
-            if (existing != null) {
-                existing.setPageSize(existing.getPageSize() + bytesDelta);
-                existing.setEntryCount(existing.getEntryCount() + 1);
-            } else {
-                final var newEntry = new AdminPageEntry(dbName, collName, page);
-                newEntry.setPageSize(bytesDelta);
-                newEntry.setEntryCount(1);
-                pageEntries.add(newEntry);
-            }
+            applyPageSizeDelta(dbName, collName, page, bytesDelta);
         } finally {
             locks.release(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+            if (reinterrupt) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    private boolean acquireDespiteInterruption(String pagesCollName) {
+        final var deadline = System.currentTimeMillis() + INTERRUPTED_LOCK_BUDGET_MS;
+        while (System.currentTimeMillis() < deadline) {
+            if (locks.tryLockWrite(Globals.ADMIN_PAGES_DB_NAME, pagesCollName)) {
+                return true;
+            }
+            Thread.onSpinWait();
+        }
+        return false;
+    }
+
+    private void applyPageSizeDelta(String dbName, String collName, long page, long bytesDelta) {
+        final var pageEntries = pageList(dbName, collName);
+        final var existing = findPage(pageEntries, page);
+        if (existing != null) {
+            existing.setPageSize(existing.getPageSize() + bytesDelta);
+            existing.setEntryCount(existing.getEntryCount() + 1);
+        } else {
+            final var newEntry = new AdminPageEntry(dbName, collName, page);
+            newEntry.setPageSize(bytesDelta);
+            newEntry.setEntryCount(1);
+            pageEntries.add(newEntry);
         }
     }
 

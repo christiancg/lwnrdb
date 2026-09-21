@@ -12,6 +12,7 @@ import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -188,6 +189,11 @@ public class MemoryManagement {
             if (!locks.tryLockWrite(resource.dbName(), resource.collName())) {
                 continue;
             }
+            final var indexedField = lockedFieldOf(resource);
+            if (indexedField != null && !locks.tryLockIndex(resource.dbName(), resource.collName(), indexedField)) {
+                locks.releaseWrite(resource.dbName(), resource.collName());
+                continue;
+            }
             try {
                 switch (resource.kind()) {
                     case PK_INDEX -> userCache.evictPkIndex(resource.dbName(), resource.collName());
@@ -199,9 +205,20 @@ public class MemoryManagement {
                 }
                 remaining -= resource.estimatedSizeBytes();
             } finally {
+                if (indexedField != null) {
+                    locks.releaseIndex(resource.dbName(), resource.collName(), indexedField);
+                }
                 locks.releaseWrite(resource.dbName(), resource.collName());
             }
         }
+    }
+
+    private static String lockedFieldOf(CacheableResource resource) {
+        if (resource.kind() != AccessKind.FIELD_INDEX || resource.indexKey() == null) {
+            return null;
+        }
+        final var separator = resource.indexKey().lastIndexOf(Globals.COLL_IDENTIFIER_SEPARATOR);
+        return separator < 0 ? resource.indexKey() : resource.indexKey().substring(0, separator);
     }
 
     public long userCacheBytes() {

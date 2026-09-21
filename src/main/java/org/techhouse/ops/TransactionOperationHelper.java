@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.bckg_ops.events.EventType;
@@ -14,6 +15,7 @@ import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
@@ -110,8 +112,10 @@ public final class TransactionOperationHelper {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
             releaseHeldLocks(transaction);
-            clientTracker.clearActiveTransaction(clientId);
-            clientTracker.clearTransactionState(clientId);
+            if (transaction.getHeldLocks().isEmpty()) {
+                clientTracker.clearActiveTransaction(clientId);
+                clientTracker.clearTransactionState(clientId);
+            }
         }
     }
 
@@ -306,7 +310,8 @@ public final class TransactionOperationHelper {
                 continue;
             }
             try {
-                session.submit(() -> rollback(session.clientId())).get();
+                session.submit(() -> rollback(session.clientId()))
+                        .get(Configuration.getInstance().getShutdownTimeoutMs(), TimeUnit.MILLISECONDS);
                 rolledBack++;
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
@@ -346,7 +351,8 @@ public final class TransactionOperationHelper {
             return;
         }
         try {
-            session.submit(() -> rollback(session.clientId())).get();
+            session.submit(() -> rollback(session.clientId())).get(Configuration.getInstance().getShutdownTimeoutMs(),
+                    TimeUnit.MILLISECONDS);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         } catch (Exception ex) {

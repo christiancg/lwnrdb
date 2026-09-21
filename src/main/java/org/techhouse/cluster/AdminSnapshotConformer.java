@@ -125,7 +125,12 @@ final class AdminSnapshotConformer {
             desired.put(entry.getKey(), entry.getValue().asJsonObject());
         }
         for (final var dbName : snapshotDbs.keySet()) {
-            locks.lock(dbName, Globals.PROCEDURES_FOLDER);
+            final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+            if (!locks.tryLockWrite(dbName, Globals.PROCEDURES_FOLDER, waitMillis)) {
+                logger.warning("Skipping the procedures conform of " + dbName + ": its lock stayed held" + " for "
+                        + waitMillis + "ms. The next round retries it.");
+                continue;
+            }
             try {
                 for (final var existingName : new ArrayList<>(fs.listProcedureNames(dbName))) {
                     if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
@@ -176,7 +181,12 @@ final class AdminSnapshotConformer {
         }
         for (final var dbName : snapshotDbs.keySet()) {
             var changed = false;
-            locks.lock(dbName, Globals.SCHEDULES_FOLDER);
+            final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+            if (!locks.tryLockWrite(dbName, Globals.SCHEDULES_FOLDER, waitMillis)) {
+                logger.warning("Skipping the schedules conform of " + dbName + ": its lock stayed held" + " for "
+                        + waitMillis + "ms. The next round retries it.");
+                continue;
+            }
             try {
                 for (final var existingName : new ArrayList<>(fs.listScheduleNames(dbName))) {
                     if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
