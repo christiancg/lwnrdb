@@ -72,6 +72,9 @@ public class AdminAntiEntropyService implements MembershipListener {
         if (!clusterConfig.isEnabled()) {
             return;
         }
+        if (adminEpoch.isUnreadable()) {
+            return;
+        }
         boolean answered;
         try {
             AdminSnapshotPayload best = null;
@@ -93,7 +96,11 @@ public class AdminAntiEntropyService implements MembershipListener {
                     best = snapshot;
                 }
             }
-            if (best != null) {
+            if (best != null && wouldEmptyThisNode(best)) {
+                logger.warning("Refusing to conform to the admin snapshot of " + bestNodeId + " at epoch " + bestEpoch
+                        + ": it lists no databases while this node holds some, which would unregister every one"
+                        + " of them and delete every user");
+            } else if (best != null) {
                 conformer.conform(best);
                 adminEpoch.adopt(best.getEpoch());
                 antiEntropyService.reconcileNow();
@@ -104,6 +111,11 @@ public class AdminAntiEntropyService implements MembershipListener {
         } finally {
             publishSyncState();
         }
+    }
+
+    private boolean wouldEmptyThisNode(AdminSnapshotPayload snapshot) {
+        final var offered = snapshot.getDatabases();
+        return (offered == null || offered.isEmpty()) && !cache.getAllAdminDbEntries().isEmpty();
     }
 
     private static boolean outranks(long epoch, String nodeId, long bestEpoch, String bestNodeId) {

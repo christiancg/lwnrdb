@@ -2,6 +2,7 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -110,6 +111,43 @@ public class AdminAntiEntropyServiceTest {
 
     private static JsonObject dbJson(List<String> owners) {
         return new AdminDbEntry("newdb", new ArrayList<>(), new ArrayList<>(owners)).getData();
+    }
+
+    @Test
+    public void test_an_empty_snapshot_never_unregisters_a_populated_node() throws Exception {
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB, new ArrayList<>(), new ArrayList<>()));
+        assertNotNull(cache.getAdminDbEntry(TestGlobals.DB), "the node must start out holding a database");
+        stubSnapshot(List.of(), List.of(), List.of());
+
+        service.reconcile();
+
+        assertNotNull(cache.getAdminDbEntry(TestGlobals.DB),
+                "a fresh node joining a populated one is also at epoch 0, so the winner was a uuid coin flip;"
+                        + " conforming to its empty snapshot unregistered every database and deleted every user");
+    }
+
+    @Test
+    public void test_an_empty_node_still_learns_from_a_populated_peer() throws Exception {
+        stubSnapshot(List.of(dbJson(List.of())), List.of(), List.of());
+
+        service.reconcile();
+
+        assertNotNull(cache.getAdminDbEntry("newdb"),
+                "the guard must not break bootstrap: an empty node must still adopt a populated snapshot");
+    }
+
+    @Test
+    public void test_an_unreadable_epoch_stops_this_node_conforming_at_all() throws Exception {
+        TestUtils.setPrivateField(adminEpoch, "unreadable", true);
+        stubSnapshot(List.of(dbJson(List.of())), List.of(), List.of());
+        try {
+            service.reconcile();
+
+            assertNull(cache.getAdminDbEntry("newdb"),
+                    "a node that cannot read its own epoch must not bid 0 and adopt a peer's snapshot");
+        } finally {
+            TestUtils.setPrivateField(adminEpoch, "unreadable", false);
+        }
     }
 
     @Test

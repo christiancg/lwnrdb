@@ -79,6 +79,15 @@ public final class TransactionOperationHelper {
         return new StartTransactionResponse("Transaction started", transactionId.toString());
     }
 
+    private static boolean holdsEveryLockOnThisThread(Transaction transaction) {
+        for (final var collId : transaction.getHeldLocks()) {
+            if (!locks.isWriteLockedByCurrentThread(collId)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private static boolean isLocalCommitFenced(Transaction transaction) {
         return TxCommitLog.isLocallyCommitted(transaction.getTransactionId().toString());
     }
@@ -137,6 +146,11 @@ public final class TransactionOperationHelper {
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NOT_COLLECTION_OWNER);
             }
             final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
+            if (ops.size() != transaction.getBufferedOpIds().size()) {
+                logger.error("Transaction " + transaction.getTransactionId() + " lost "
+                        + (transaction.getBufferedOpIds().size() - ops.size()) + " buffered op(s) before commit");
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
+            }
             final var txId = transaction.getTransactionId().toString();
             // The commit point: durable before the first op is applied, so a crash after this is finished by
             // cleanupOrphansAtStartup instead of leaving the transaction half-applied.
@@ -255,6 +269,7 @@ public final class TransactionOperationHelper {
 
     public static void rollbackOpenTransactionsAtShutdown() {
         var rolledBack = 0;
+        var skippedWithNoOwnerToSignal = 0;
         final var sessionClientIds = clientTracker.txSessionsSnapshot().values().stream().map(TxSession::clientId)
                 .collect(Collectors.toSet());
         final var signalled = new ArrayList<CountDownLatch>();
@@ -271,6 +286,10 @@ public final class TransactionOperationHelper {
                 continue;
             }
             ShutdownRollbackWaits.cancel(clientId);
+            if (!holdsEveryLockOnThisThread(transaction)) {
+                skippedWithNoOwnerToSignal++;
+                continue;
+            }
             try {
                 rollback(clientId);
                 rolledBack++;
@@ -297,6 +316,11 @@ public final class TransactionOperationHelper {
         }
         if (rolledBack > 0) {
             logger.info("Rolled back " + rolledBack + " open transaction(s) during shutdown");
+        }
+        if (skippedWithNoOwnerToSignal > 0) {
+            logger.warning("Left " + skippedWithNoOwnerToSignal + " open transaction(s) to their own threads during"
+                    + " shutdown: a write lock is thread-owned, so rolling them back from here would discard a"
+                    + " buffer still being written without releasing anything");
         }
     }
 

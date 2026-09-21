@@ -7,6 +7,7 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -16,6 +17,7 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.RequestParser;
+import org.techhouse.ops.resp.OperationResponse;
 
 final class ClusterTxMessageHandler {
     private static final EJson eJson = IocContainer.get(EJson.class);
@@ -56,7 +58,7 @@ final class ClusterTxMessageHandler {
                 return operationProcessor.processMessage(parsed, clientId);
             }).get();
             clientTracker.updateLastCommandTime(clientId);
-            if (type == OperationType.COMMIT_TRANSACTION || type == OperationType.ROLLBACK_TRANSACTION) {
+            if (finishesSession(type) && releasedItsLocks(result)) {
                 clientTracker.removeTxSession(sessionId);
             }
             response.setType(ClusterMessageType.FORWARD_RESPONSE);
@@ -66,6 +68,14 @@ final class ClusterTxMessageHandler {
             response.setErrorMessage("Failed to execute forwarded transaction op: " + e.getMessage());
         }
         return response;
+    }
+
+    private static boolean finishesSession(OperationType type) {
+        return type == OperationType.COMMIT_TRANSACTION || type == OperationType.ROLLBACK_TRANSACTION;
+    }
+
+    private static boolean releasedItsLocks(OperationResponse response) {
+        return response == null || !ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(response.getErrorCode());
     }
 
     private static boolean startsTransaction(OperationType type) {
@@ -129,7 +139,9 @@ final class ClusterTxMessageHandler {
                 final var result = session.submit(() -> commit
                         ? TwoPhaseParticipant.commitPrepared(session.clientId())
                         : TransactionOperationHelper.abort(session.clientId())).get();
-                clientTracker.removeTxSession(sessionId);
+                if (releasedItsLocks(result)) {
+                    clientTracker.removeTxSession(sessionId);
+                }
                 if (result != null && result.getStatus() != OperationStatus.OK) {
                     response.setType(ClusterMessageType.ERROR);
                     response.setErrorMessage("Participant failed to resolve transaction: " + result.getMessage());

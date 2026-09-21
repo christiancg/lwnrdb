@@ -47,6 +47,7 @@ public final class TwoPhaseParticipant {
             clientTracker.clearTransactionState(clientId);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_NOT_USABLE);
         }
+        var fenced = false;
         try {
             final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
             if (ops.size() != transaction.getBufferedOpIds().size()) {
@@ -56,12 +57,15 @@ public final class TwoPhaseParticipant {
             }
             final var reservedTombstones = coordinator.reserveTransactionTombstones(transaction);
             listenManager.deferNotifications();
+            final boolean applied;
             try {
-                for (final var op : ops) {
-                    TransactionRecovery.applyBufferedOp(op);
-                }
+                applied = TransactionRecovery.applyAllWithRetry(ops, transaction.getTransactionId().toString());
             } finally {
                 listenManager.flushDeferredNotifications();
+            }
+            if (!applied) {
+                fenced = true;
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             // After the durable commit, so a trigger never observes a transaction that later rolled back.
@@ -73,11 +77,14 @@ public final class TwoPhaseParticipant {
             return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
         } catch (Exception e) {
             logger.error(OperationType.COMMIT_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(), e);
-            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
+            fenced = true;
+            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
         } finally {
-            TransactionOperationHelper.releaseHeldLocks(transaction);
-            clientTracker.clearActiveTransaction(clientId);
-            clientTracker.clearTransactionState(clientId);
+            if (!fenced) {
+                TransactionOperationHelper.releaseHeldLocks(transaction);
+                clientTracker.clearActiveTransaction(clientId);
+                clientTracker.clearTransactionState(clientId);
+            }
         }
     }
 

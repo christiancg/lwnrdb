@@ -63,6 +63,10 @@ public class ResourceLocking {
         return releaseWrite(Cache.getCollectionIdentifier(dbName, collName));
     }
 
+    public boolean isWriteLockedByCurrentThread(String lockName) {
+        return lockFor(lockName).isWriteLockedByCurrentThread();
+    }
+
     public boolean tryLockWrite(String dbName, String collName) {
         return lockFor(Cache.getCollectionIdentifier(dbName, collName)).writeLock().tryLock();
     }

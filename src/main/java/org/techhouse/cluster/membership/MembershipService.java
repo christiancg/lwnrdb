@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -311,20 +312,45 @@ public class MembershipService {
         try {
             if (Files.exists(path)) {
                 final var stored = Files.readString(path, StandardCharsets.UTF_8).trim();
-                if (!stored.isBlank()) {
+                if (isWellFormedNodeId(stored)) {
                     return stored;
                 }
+                throw new IllegalStateException("The node id at " + path + " is not a valid uuid. A truncated or"
+                        + " corrupt id silently changes this node's identity, which reshuffles hash-ring ownership"
+                        + " and orphans every trigger run stamped under the old one. Repair or delete the file,"
+                        + " or set nodeId in the configuration.");
             }
             final var generated = UUID.randomUUID().toString();
             final var parent = path.getParent();
             if (parent != null) {
                 Files.createDirectories(parent);
             }
-            Files.writeString(path, generated, StandardCharsets.UTF_8);
+            writeNodeIdAtomically(path, generated);
             return generated;
         } catch (IOException e) {
-            logger.warning("Could not persist node id, using an ephemeral one: " + e.getMessage());
-            return UUID.randomUUID().toString();
+            throw new IllegalStateException("Could not persist the node id at " + path + ". An ephemeral id changes"
+                    + " this node's identity on every restart, so it must not start clustered without one.", e);
+        }
+    }
+
+    private static boolean isWellFormedNodeId(String candidate) {
+        if (candidate.isBlank()) {
+            return false;
+        }
+        try {
+            return UUID.fromString(candidate).toString().equals(candidate);
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
+    }
+
+    private static void writeNodeIdAtomically(Path path, String nodeId) throws IOException {
+        final var tmp = path.resolveSibling(path.getFileName() + ".tmp");
+        Files.writeString(tmp, nodeId, StandardCharsets.UTF_8);
+        try {
+            Files.move(tmp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
         }
     }
 

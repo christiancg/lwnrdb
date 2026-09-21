@@ -96,7 +96,8 @@ public class AntiEntropyService implements MembershipListener {
         lockReadOrSkip(dbName, collName);
         try {
             for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
-                entries.add(new DigestEntry(entry.getValue(), entry.getVersion(), false, selfNodeId));
+                entries.add(
+                        new DigestEntry(entry.getValue(), entry.getVersion(), false, selfNodeId, entry.getLength()));
             }
             for (final var tombstone : fs.readTombstones(dbName, collName).entrySet()) {
                 entries.add(new DigestEntry(tombstone.getKey(), tombstone.getValue(), true, selfNodeId));
@@ -117,7 +118,7 @@ public class AntiEntropyService implements MembershipListener {
     static String summaryOf(List<DigestEntry> entries) {
         final var canonical = new ArrayList<String>(entries.size());
         for (final var entry : entries) {
-            canonical.add(entry.getId() + '|' + entry.getVersion() + '|' + entry.isDeleted());
+            canonical.add(entry.getId() + '|' + entry.getVersion() + '|' + entry.isDeleted() + '|' + entry.getLength());
         }
         canonical.sort(null);
         return entries.size() + ":" + JsonUtils.sha256(String.join("\u001f", canonical));

@@ -564,6 +564,17 @@ mirroring the DDL handlers. A document reconciliation pass follows, so freshly m
 collections repopulate. Because authority is the highest epoch, a stale rejoining node
 never overwrites live state — it catches up instead.
 
+The epoch alone is not enough to decide that, because a node only bumps it while clustered
+and acting as admin coordinator. A populated node switched from standalone to clustered has
+therefore never bumped and sits at epoch 0, exactly like a brand-new node joining it, and
+equal epochs are broken by node id — a coin flip between random uuids. Losing that flip
+would conform the populated node to the empty one, deleting every user and unregistering
+every database, and both would stay at 0 so no later round could repair it. Two rules close
+that: a snapshot listing no databases is never adopted by a node that holds some, and a node
+whose `cluster/admin.epoch` exists but cannot be parsed refuses to conform at all rather than
+bidding 0 with real data on disk. The epoch file is written atomically, so a crash mid-write
+leaves the previous value rather than a truncated one that parses as a lower epoch.
+
 To close the window where a stale node becomes the admin coordinator before it has caught
 up, a coordinator rejects coordinated admin ops with a retryable `503-5 ADMIN_SYNCING`
 until it has completed one admin reconciliation since starting.

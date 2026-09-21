@@ -5,6 +5,7 @@ public class DigestEntry {
     private String version;
     private boolean deleted;
     private String nodeId;
+    private long length;
 
     public DigestEntry() {
     }
@@ -14,10 +15,23 @@ public class DigestEntry {
     }
 
     public DigestEntry(String id, long version, boolean deleted, String nodeId) {
+        this(id, version, deleted, nodeId, 0L);
+    }
+
+    public DigestEntry(String id, long version, boolean deleted, String nodeId, long length) {
         this.id = id;
         this.version = Long.toString(version);
         this.deleted = deleted;
         this.nodeId = nodeId;
+        this.length = length;
+    }
+
+    public long getLength() {
+        return length;
+    }
+
+    public void setLength(long length) {
+        this.length = length;
     }
 
     public String getNodeId() {
