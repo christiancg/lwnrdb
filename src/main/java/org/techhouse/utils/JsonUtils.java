@@ -6,6 +6,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.function.ToIntBiFunction;
+import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -76,8 +77,8 @@ public final class JsonUtils {
             return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
         }
         if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
-            return Double.compare(o1Primitive.asJsonNumber().getValue().doubleValue(),
-                    o2Primitive.asJsonNumber().getValue().doubleValue());
+            return FieldIndexEntry.compareIndexedNumbers(o1Primitive.asJsonNumber().getValue(),
+                    o2Primitive.asJsonNumber().getValue());
         }
         if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
             return Boolean.compare(o1Primitive.asJsonBoolean().getValue(), o2Primitive.asJsonBoolean().getValue());

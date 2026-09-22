@@ -119,6 +119,31 @@ public class AntiEntropyServiceTest {
         assertEquals(owner.getSummary(), AntiEntropyService.summaryOf(asReceived.getDigest()));
     }
 
+    @Test
+    public void test_the_summary_reconcile_sends_matches_the_digest_it_would_build() throws Exception {
+        seed();
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "gone", HybridClock.pack(System.currentTimeMillis(), 1));
+        final var sentSummary = new AtomicReference<String>();
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(invocation -> {
+            final ClusterMessage message = invocation.getArgument(1);
+            sentSummary.compareAndSet(null, message.getAntiEntropy().getSummary());
+            final var response = new ClusterMessage();
+            response.setType(ClusterMessageType.DIGEST_ACK);
+            final var payload = new AntiEntropyPayload(TestGlobals.DB, TestGlobals.COLL);
+            payload.setSummaryMatch(true);
+            response.setAntiEntropy(payload);
+            return response;
+        });
+        injectPeer(pool);
+
+        service.reconcile(TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(service.buildDigest(TestGlobals.DB, TestGlobals.COLL).getSummary(), sentSummary.get(),
+                "a converged peer answers summaryMatch only when the summary reconcile sends is built exactly"
+                        + " as buildDigest builds its own, document length included");
+    }
+
     private Thread backgroundWriter(AtomicBoolean stop) {
         return new Thread(() -> {
             for (var i = 0; i < 400 && !stop.get(); i++) {

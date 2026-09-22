@@ -528,6 +528,27 @@ def test_an_unclean_stop_is_reported_at_the_next_startup(work_dir: str, log_path
           "the restart log does not name the collection, so an operator has no signal to rebuild it")
 
 
+def test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn: Conn, work_dir: str):
+    section("REINDEX retires the index-dirty marker the startup warning told the operator to act on")
+
+    check("the marker survived the unclean stop", dirty_markers(work_dir),
+          "without a marker there is nothing for REINDEX to retire and the rest of this case proves nothing")
+    check_status("add a second index so a partial rebuild is possible",
+                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": DIRTY_COLL,
+                            "fieldName": "pad"}), "OK")
+
+    check_status("rebuild only one of the two indexes",
+                 conn.send({"type": "REINDEX", "databaseName": DB, "collectionName": DIRTY_COLL,
+                            "fieldNames": ["n"]}), "OK")
+    check("a partial rebuild leaves the marker in place", dirty_markers(work_dir),
+          "the fields that run skipped were never re-derived, so the collection is still suspect")
+
+    check_status("rebuild every index",
+                 conn.send({"type": "REINDEX", "databaseName": DB, "collectionName": DIRTY_COLL}), "OK")
+    check("a whole-collection rebuild retires the marker", not dirty_markers(work_dir),
+          "REINDEX is the remedy the startup warning names, so the warning must not outlive it")
+
+
 def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, log_path: str):
     section("A PK-index self-heal racing committed writes")
 
@@ -661,6 +682,7 @@ def main():
         with admin_conn() as conn:
             test_the_committed_transaction_is_all_there_after_the_restart(conn)
             test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)
+            test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn, work_dir)
             test_a_self_heal_never_erases_a_committed_write(conn, work_dir, log_path)
     finally:
         bu.stop_server(proc)

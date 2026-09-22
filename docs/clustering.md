@@ -526,7 +526,11 @@ On any membership change, `cluster/AntiEntropyService` reconciles each of this n
 collections against the live members:
 
 1. It builds a local **digest** (`id → version` for live documents, plus tombstones) and
-   requests each peer's digest.
+   requests each peer's digest. The request carries a **summary** of that digest — the entry
+   count plus a hash over every `id|version|deleted|length` line — and a peer whose own summary
+   matches answers `summaryMatch` and omits the digest entirely, which is what keeps a converged
+   cluster's sweeps cheap. Both sides must build their entries identically, byte length included,
+   or the two summaries never agree and every sweep ships a full digest instead.
 2. It computes, per id, the **highest version seen anywhere** — a tombstone wins a tie with
    a live document, so a delete beats a concurrent write at the same version. Two live copies at
    exactly equal versions are ordered by node id, and the pull gate and the replicated-apply check
@@ -628,7 +632,7 @@ inbound messages whose `secret` does not match `clusterSecret` are rejected.
 | `FORWARD_REQUEST` / `FORWARD_RESPONSE` | `forwardBody` (Base64 JSON), `actingUser` | request routing and script placement |
 | `REPLICATE_ADMIN` | `forwardBody`, `actingUser`, `adminEpoch` | admin/DDL replication by re-execution |
 | `REPLICATE_USER` | `replication` (the committed `admin/users` record), `adminEpoch` | user/permission replication by record-shipping |
-| `DIGEST` / `PULL` | `antiEntropy`: a collection's `{id, version, deleted}` digest, or pulled documents | document anti-entropy |
+| `DIGEST` / `PULL` | `antiEntropy`: a collection's `{id, version, deleted, length}` digest and its summary, or pulled documents | document anti-entropy |
 | `ADMIN_SNAPSHOT` | `adminSnapshot`: `{epoch, databases, collections, users, schemas, procedures, triggers, schedules}` | admin/DDL anti-entropy |
 | `FORWARD_TX_REQUEST` | `forwardBody`, `txSessionId`, `txId` (reply reuses `FORWARD_RESPONSE`) | a forwarded transaction operation |
 | `REPLICATE_TX` | `txReplication`: per-collection entries | a committed transaction's atomic batch |

@@ -40,6 +40,23 @@ public class AntiEntropySummaryTest {
     }
 
     @Test
+    public void test_the_local_side_and_the_peer_side_describe_a_document_the_same_way() {
+        final var asBuildDigestEmitsIt = List.of(new DigestEntry("a", 7, false, "peer", 120));
+        final var asReconcileEmitsIt = List.of(new DigestEntry("a", 7, false, null, 120));
+
+        assertEquals(summaryOf(asBuildDigestEmitsIt), summaryOf(asReconcileEmitsIt),
+                "the node id rides beside the summary and must not enter it, or no two nodes ever match");
+    }
+
+    @Test
+    public void test_omitting_the_length_changes_the_summary() {
+        assertNotEquals(summaryOf(List.of(new DigestEntry("a", 7, false, null, 120))),
+                summaryOf(List.of(new DigestEntry("a", 7, false))),
+                "a live entry built without its length can never match the peer's, which is why reconcile"
+                        + " must not use the length-less constructor");
+    }
+
+    @Test
     public void test_identical_contents_produce_the_same_summary() {
         final var a = List.of(entry("a", 1, false), entry("b", 2, false));
         final var b = List.of(entry("a", 1, false), entry("b", 2, false));

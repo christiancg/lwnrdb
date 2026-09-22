@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
@@ -103,5 +104,28 @@ public class AggregationSortTieBreakTest {
         final var viaIndex = runIds(new SortAggregationStep(FIELD, false));
 
         assertEquals(viaScan, viaIndex, "the tie-break must not depend on the sort direction");
+    }
+
+    private void insertNumberValued(String id, double value) throws IOException {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add(FIELD, new JsonNumber(value));
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id(id);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
+    }
+
+    @Test
+    public void test_negative_zero_sorts_the_same_way_on_both_paths() throws Exception {
+        insertNumberValued("z", -0.0);
+        insertNumberValued("a", 0.0);
+        final var viaScan = runIds(new SortAggregationStep(FIELD, true));
+        enableIndex();
+
+        final var viaIndex = runIds(new SortAggregationStep(FIELD, true));
+
+        assertEquals(List.of("a", "z"), viaScan,
+                "the index keys both spellings as 0, so the scan must tie them and break on _id too");
+        assertEquals(viaScan, viaIndex);
     }
 }

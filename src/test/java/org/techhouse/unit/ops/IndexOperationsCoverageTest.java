@@ -11,9 +11,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OperationProcessor;
@@ -32,7 +34,10 @@ import org.techhouse.test.TestUtils;
 
 public class IndexOperationsCoverageTest {
     private static final String LOCKED_FIELD = "s";
+    private static final String COLLECTION_IDENTIFIER = TestGlobals.DB + Globals.COLL_IDENTIFIER_SEPARATOR
+            + TestGlobals.COLL;
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
 
     private void seed(String id, String s, int n) {
         final var obj = new JsonObject();
@@ -83,6 +88,50 @@ public class IndexOperationsCoverageTest {
 
         final var dropped = processor.processMessage(new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "n"));
         assertEquals(OperationStatus.OK, dropped.getStatus());
+    }
+
+    private boolean isMarkedDirty() {
+        return fs.listDirtyIndexCollections().contains(COLLECTION_IDENTIFIER);
+    }
+
+    private void markDirty() {
+        fs.markIndexesDirty(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(isMarkedDirty());
+    }
+
+    @Test
+    public void test_a_whole_collection_reindex_clears_the_dirty_marker() {
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "n"));
+        markDirty();
+
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of())).getStatus());
+
+        assertFalse(isMarkedDirty(),
+                "REINDEX is the remedy the startup warning names, so the warning must not survive it");
+    }
+
+    @Test
+    public void test_a_partial_reindex_keeps_the_dirty_marker() {
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "n"));
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "s"));
+        markDirty();
+
+        assertEquals(OperationStatus.OK, processor
+                .processMessage(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("n"))).getStatus());
+
+        assertTrue(isMarkedDirty(),
+                "the fields this run skipped were never re-derived, so their collection is still suspect");
+    }
+
+    @Test
+    public void test_a_reindex_with_no_registered_indexes_clears_the_dirty_marker() {
+        markDirty();
+
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of())).getStatus());
+
+        assertFalse(isMarkedDirty(), "a collection with no indexes has nothing that can be missing from one");
     }
 
     @Test

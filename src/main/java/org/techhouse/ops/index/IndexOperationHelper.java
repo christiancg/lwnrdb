@@ -2,7 +2,9 @@ package org.techhouse.ops.index;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import org.techhouse.cache.Cache;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
@@ -19,6 +21,7 @@ import org.techhouse.ops.resp.ReindexResponse;
 // which stops a save landing mid-build from being skipped as "not a known index".
 public final class IndexOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final FileSystem fs = IocContainer.get(FileSystem.class);
 
     private IndexOperationHelper() {
     }
@@ -76,14 +79,22 @@ public final class IndexOperationHelper {
                         }
                         targets = request.getFieldNames();
                     }
-                    if (targets.isEmpty()) {
-                        return new ReindexResponse("No indexes to rebuild", List.of());
-                    }
                     for (var fieldName : targets) {
                         IndexHelper.dropIndex(dbName, collName, fieldName);
                         IndexHelper.createIndex(dbName, collName, fieldName);
                     }
+                    clearDirtyMarkerIfFullyRebuilt(dbName, collName, targets, registeredIndexes);
+                    if (targets.isEmpty()) {
+                        return new ReindexResponse("No indexes to rebuild", List.of());
+                    }
                     return new ReindexResponse("Rebuilt " + targets.size() + " index(es)", targets);
                 });
+    }
+
+    private static void clearDirtyMarkerIfFullyRebuilt(String dbName, String collName, List<String> rebuiltFields,
+            Set<String> registeredIndexes) {
+        if (Set.copyOf(rebuiltFields).containsAll(registeredIndexes)) {
+            fs.clearIndexesDirty(dbName, collName);
+        }
     }
 }
