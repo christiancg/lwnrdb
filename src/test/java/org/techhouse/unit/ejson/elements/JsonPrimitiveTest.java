@@ -195,8 +195,7 @@ public class JsonPrimitiveTest {
 
         assertAll(() -> assertInstanceOf(JsonDateTime.class, copy), () -> assertNotSame(original, copy),
                 () -> assertTrue(copy.isJsonCustom()),
-                () -> assertEquals(original.getValue(), ((JsonCustom<?>) copy).getValue()),
-                () -> {
+                () -> assertEquals(original.getValue(), ((JsonCustom<?>) copy).getValue()), () -> {
                     assert copy instanceof JsonDateTime;
                     assertEquals(original.getCustomValue(), ((JsonDateTime) copy).getCustomValue());
                 });
