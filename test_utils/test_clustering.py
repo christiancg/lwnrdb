@@ -448,6 +448,24 @@ CANARY_DB = "cluster_canary_db"
 CANARY_COLL = "canary"
 
 
+_CANARY_COUNTER = {"n": 0}
+
+
+def _canary_write_converges() -> bool:
+    """One round of the canary: a SAVE that commits and that every alive node reads back.
+
+    The write is sent to the first alive node rather than nodes[0], because the tests that need
+    this most are the ones that have just killed a node - and nodes[0] is sometimes the victim."""
+    live = next((n for n in nodes if n.alive), None)
+    if live is None:
+        return False
+    _CANARY_COUNTER["n"] += 1
+    v = _CANARY_COUNTER["n"]
+    if save(live.client_port, CANARY_DB, CANARY_COLL, {"_id": "canary", "v": v}).get("status") != "OK":
+        return False
+    return all_nodes_see(CANARY_DB, CANARY_COLL, "canary", v, timeout_s=1.0)
+
+
 def wait_for_cluster(timeout_s: float = 60.0):
     """Block until all nodes have joined and route/replicate consistently.
 
@@ -458,21 +476,36 @@ def wait_for_cluster(timeout_s: float = 60.0):
     op(nodes[0].client_port, {"type": "CREATE_DATABASE", "databaseName": CANARY_DB})
     op(nodes[0].client_port, {"type": "CREATE_COLLECTION",
                               "databaseName": CANARY_DB, "collectionName": CANARY_COLL})
-    counter = {"n": 0}
-
-    def _converged():
-        counter["n"] += 1
-        v = counter["n"]
-        r = save(nodes[0].client_port, CANARY_DB, CANARY_COLL, {"_id": "canary", "v": v})
-        if r.get("status") != "OK":
-            return False
-        return all_nodes_see(CANARY_DB, CANARY_COLL, "canary", v, timeout_s=1.0)
-
-    if not wait_until(_converged, timeout_s, interval_s=1.0):
+    if not wait_until(_canary_write_converges, timeout_s, interval_s=1.0):
         for n in nodes:
             n.dump_log()
         raise RuntimeError("cluster did not converge in time")
     print("  Cluster converged.")
+
+
+def wait_until_cluster_is_healthy(timeout_s: float = 60.0) -> bool:
+    """The soft form of wait_for_cluster: answers whether the ring routes and replicates again.
+
+    A suspended node stops gossiping, so any freeze that outlasts deadTimeoutMs (4000, against the
+    5000 a write waits for its acks) leaves the frozen peers DEAD in every other node's view.
+    Resuming them does not restore that view instantly, and a test that opens its convergence
+    deadline while the ring is still healing is timing the healing rather than the behaviour it
+    means to pin - which is what makes the checks after a freeze fail on a loaded runner and pass
+    everywhere else. Counts only alive nodes, so it is equally valid while a victim stays killed."""
+    return wait_until(_canary_write_converges, timeout_s, interval_s=1.0)
+
+
+def seed_documents(port, db, coll, objs, timeout_s: float = 30.0) -> bool:
+    """Write setup documents, retrying each one until it actually commits.
+
+    A fire-and-forget save is lost silently whenever the write momentarily lacks a quorum - which is
+    the state a preceding test can leave behind - and the convergence check that follows then waits
+    out its whole budget for a document nothing ever wrote, reporting a replication failure that
+    never happened."""
+    for obj in objs:
+        if not wait_until(lambda o=obj: save(port, db, coll, o).get("status") == "OK", timeout_s):
+            return False
+    return True
 
 
 # ── node lifecycle ───────────────────────────────────────────────────────────
@@ -1795,6 +1828,13 @@ def drive_to_prepared(edge, watched, frozen, buffered, victim, timeout_s=20.0):
         pending.join(60.0)
         if not prepared:
             conn.send({"type": "ROLLBACK_TRANSACTION"})
+        # `frozen` was suspended for longer than deadTimeoutMs, so it is DEAD in every peer's view by
+        # the time it resumes, and killing `victim` moves ownership around again on top of that.
+        # Both have to settle before the caller starts timing anything, or its deadlines measure the
+        # healing rather than the recovery they mean to pin. Only alive nodes count, so the killed
+        # victim never holds this open - and the ring is rebuilt from the alive set, so a canary
+        # collection the victim owned simply moves to a survivor.
+        wait_until_cluster_is_healthy()
         return tx_id if prepared else None
     finally:
         frozen.resume()
@@ -1820,6 +1860,12 @@ def test_a_prepared_participant_resolves_without_its_coordinator():
     # dead they stop gossiping to it and it can never rejoin, so it is never the node killed here.
     coordinator, watched, frozen = nodes[1], nodes[0], nodes[2]
     slices = [owners[watched.index][0], owners[frozen.index][0]]
+
+    # The kill/rejoin tests run before this one, so the ring can still be settling when it starts.
+    # Without this the transaction's own buffered SAVEs are refused for lack of a quorum, and the
+    # slice they never joined then fails every assertion downstream as a recovery defect.
+    if not check("the ring is healthy before the transaction starts", wait_until_cluster_is_healthy()):
+        return
 
     def _buffer(conn):
         for coll in slices:
@@ -2022,6 +2068,11 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
         finally:
             for node in frozen:
                 node.resume()
+            # The freeze has to outlast replicationAckTimeoutMs to reach the case under test, and
+            # that is longer than deadTimeoutMs - so both peers are DEAD in the host's view by the
+            # time it ends, and the host is alone. The trigger's own write needs the ring back
+            # before it can commit, and so does the next attempt of this loop.
+            wait_until_cluster_is_healthy()
 
     # The write is enqueued for the trigger before it replicates, so the trigger's own commit runs
     # inside the same frozen window; the client's 503-3 is the evidence that the quorum really was
@@ -2032,9 +2083,14 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
         if _write_with_the_peers_frozen(doc_id).get("errorCode") == "503-3":
             fired_id = doc_id
             break
-        time.sleep(2)
     if not check("a write's replication quorum timed out, so the case under test was reached",
                  fired_id is not None, "the peers kept acknowledging within replicationAckTimeoutMs"):
+        return
+    # The trigger retries without consuming an attempt while the cluster is unavailable, so this
+    # does not weaken the count below - it separates "the trigger never ran" from "the ring was
+    # still healing", which are the same symptom at the 60s deadline.
+    if not check("the frozen peers rejoined, so the trigger's own write can commit",
+                 wait_until_cluster_is_healthy()):
         return
 
     def _runs():
@@ -2271,8 +2327,8 @@ def test_drop_and_recreate_does_not_resurrect_documents():
     # cluster-wide. The collection incarnation is what tells that node its documents are dead.
     coll = "incarnation_coll"
     check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
-    for i in range(5):
-        save(nodes[0].client_port, DB, coll, {"_id": f"pre{i}", "v": i})
+    check("the pre-drop documents all committed",
+          seed_documents(nodes[0].client_port, DB, coll, [{"_id": f"pre{i}", "v": i} for i in range(5)]))
 
     def _all_see_five():
         return all(len(ids_of(aggregate(p, DB, coll, []))) == 5 for p in all_ports())
@@ -2342,9 +2398,12 @@ def test_rapid_collection_creates_are_not_quarantined():
     # the counter - so a wire-level version passes whether or not the defect is present. The exact
     # round trip is pinned deterministically by CollectionIncarnationTest instead.
     colls = [f"burst_coll_{i}" for i in range(8)]
+    unseeded = []
     for coll in colls:
         check_status(f"create {coll}", create_coll(nodes[0].client_port, DB, coll), "OK")
-        save(nodes[0].client_port, DB, coll, {"_id": "seed", "v": 1})
+        if not seed_documents(nodes[0].client_port, DB, coll, [{"_id": "seed", "v": 1}]):
+            unseeded.append(coll)
+    check("every burst collection got its seed document", not unseeded, f"unseeded: {unseeded}")
 
     def _all_nodes_hold_every_burst_collection():
         for coll in colls:
@@ -2377,8 +2436,8 @@ def test_recreating_an_existing_collection_keeps_its_documents():
     # - a window this harness cannot hold open. CollectionIncarnationTest covers that deterministically.
     coll = "recreate_coll"
     check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
-    for i in range(5):
-        save(nodes[0].client_port, DB, coll, {"_id": f"doc{i}", "v": i})
+    check("the documents all committed",
+          seed_documents(nodes[0].client_port, DB, coll, [{"_id": f"doc{i}", "v": i} for i in range(5)]))
 
     def _all_see_five():
         return all(len(ids_of(aggregate(p, DB, coll, []))) == 5 for p in all_ports())
