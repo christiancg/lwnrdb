@@ -52,16 +52,11 @@ public class JsonPrimitive<T> extends JsonBaseElement {
     @Override
     public JsonBaseElement deepCopy() {
         return switch (this) {
+            case JsonCustom<?> custom -> CustomTypeFactory.getCustomTypeInstance(custom.getValue());
             case JsonNumber ignored -> new JsonNumber((Number) getValue());
             case JsonBoolean ignored -> new JsonBoolean((Boolean) getValue());
             case JsonString ignored -> new JsonString((String) getValue());
-            default -> {
-                if (JsonCustom.class.isAssignableFrom(getClass())) {
-                    yield CustomTypeFactory.getCustomTypeInstance((String) this.getValue());
-                } else {
-                    yield null;
-                }
-            }
+            default -> null;
         };
     }
 }

@@ -398,6 +398,42 @@ def test_join_reads_your_own_writes(c):
           attached == ["jrw_committed"], f"expected=['jrw_committed']  got={attached!r}")
 
 
+def test_custom_typed_writes_are_readable_inside_the_transaction(c):
+    section("Read-your-writes keeps custom types (#datetime / #geo) typed in the overlay")
+
+    when = "#datetime(2024-01-01T10:00:00)"
+    where = "#geo(40.0,-74.0)"
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    save(c, {"_id": "custom-1", "when": when, "where": where})
+
+    found = find_by_id(c, "custom-1")
+    check_status("FIND_BY_ID sees the buffered custom-typed document", found, "OK")
+    obj = found.get("object") or {}
+    check("the buffered #datetime value round-trips", obj.get("when") == when, f"got {obj.get('when')!r}")
+    check("the buffered #geo value round-trips", obj.get("where") == where, f"got {obj.get('where')!r}")
+
+    equality = aggregate(c, [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "EQUALS", "field": "when", "value": when}}])
+    check("a #datetime EQUALS filter inside the transaction sees its own write",
+          result_ids(equality) == ["custom-1"], f"ids={result_ids(equality)}")
+
+    geo = aggregate(c, [{"type": "FILTER", "operator": {
+        "customOperatorName": "distance", "field": "where", "value": where,
+        "comparator": "SMALLER_THAN", "distance": 1000}}])
+    check("a geo distance filter inside the transaction sees its own write",
+          result_ids(geo) == ["custom-1"], f"ids={result_ids(geo)}")
+
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    with authed_conn() as oc:
+        committed = aggregate(oc, [{"type": "FILTER", "operator": {
+            "fieldOperatorType": "EQUALS", "field": "when", "value": when}}])
+        check("the committed custom-typed document is still matched by the same filter",
+              result_ids(committed) == ["custom-1"], f"ids={result_ids(committed)}")
+        delete(oc, "custom-1")
+
+
 def main():
     bu.banner("Transactions test suite", HOST, PORT)
 
@@ -420,6 +456,8 @@ def main():
         test_read_your_writes_aggregate(c)
     with authed_conn() as (c):
         test_buffered_delete_reads_as_not_found(c)
+    with authed_conn() as (c):
+        test_custom_typed_writes_are_readable_inside_the_transaction(c)
     with authed_conn() as (c):
         test_join_reads_your_own_writes(c)
     with authed_conn() as (c):

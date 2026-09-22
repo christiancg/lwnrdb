@@ -406,6 +406,74 @@ def test_no_push_on_vector_farther(writer: Conn, listener: Conn):
     delete_doc(writer, "vec-farther")
 
 
+def test_push_on_reorder_inside_a_sorted_top_k(writer: Conn, listener: Conn):
+    section("LISTEN: push when a SORT + LIMIT top-K is reordered without changing its members")
+
+    save_doc(writer, {"_id": "topk-a", "kind": "topk", "score": 5})
+    save_doc(writer, {"_id": "topk-b", "kind": "topk", "score": 3})
+    save_doc(writer, {"_id": "topk-c", "kind": "topk", "score": 1})
+    time.sleep(0.5)
+
+    steps = [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "topk"}},
+        {"type": "SORT", "fieldName": "score", "ascending": False},
+        {"type": "LIMIT", "limit": 2},
+    ]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the sorted top-K", r, "OK")
+    listen_id = r.get("listenId")
+    initial_hash = r.get("resultHash")
+    check("initial top-K is [topk-a, topk-b]",
+          [d.get("_id") for d in (r.get("results") or [])] == ["topk-a", "topk-b"],
+          f"got {[d.get('_id') for d in (r.get('results') or [])]!r}")
+
+    save_doc(writer, {"_id": "topk-b", "kind": "topk", "score": 9})
+
+    pushed = listener.recv(timeout=5.0)
+    check("push received after the top-K was reordered", pushed is not None,
+          "no push message within 5 s")
+
+    if pushed is not None:
+        check("push resultHash differs from initial",
+              pushed.get("resultHash") != initial_hash,
+              f"hash unchanged: {pushed.get('resultHash')!r}")
+        check("pushed top-K is [topk-b, topk-a]",
+              [d.get("_id") for d in (pushed.get("results") or [])] == ["topk-b", "topk-a"],
+              f"got {[d.get('_id') for d in (pushed.get('results') or [])]!r}")
+
+    stop_listen(listener, listen_id)
+    for id_ in ("topk-a", "topk-b", "topk-c"):
+        delete_doc(writer, id_)
+
+
+def test_no_push_when_an_unordered_group_by_result_is_unchanged(writer: Conn, listener: Conn):
+    section("LISTEN: no push when a GROUP_BY result set is unchanged")
+
+    save_doc(writer, {"_id": "grp-a", "kind": "grouped", "category": "books"})
+    save_doc(writer, {"_id": "grp-b", "kind": "grouped", "category": "books"})
+    time.sleep(0.5)
+
+    steps = [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "grouped"}},
+        {"type": "SORT", "fieldName": "category", "ascending": True},
+        {"type": "GROUP_BY", "fieldName": "category"},
+    ]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the grouped query", r, "OK")
+    listen_id = r.get("listenId")
+
+    save_doc(writer, {"_id": "grp-c", "kind": "other", "category": "music"})
+    time.sleep(0.5)
+
+    pushed = listener.recv(timeout=2.0)
+    check("no push for a write outside the grouped result", pushed is None,
+          f"unexpected push: {pushed!r}")
+
+    stop_listen(listener, listen_id)
+    for id_ in ("grp-a", "grp-b", "grp-c"):
+        delete_doc(writer, id_)
+
+
 def test_stop_listen(writer: Conn, listener: Conn):
     section("LISTEN: STOP_LISTEN cancels subscription")
 
@@ -609,6 +677,8 @@ def main():
                 test_push_on_geo_within_match(writer_conn, listener_conn)
                 test_push_on_vector_nearest_closer(writer_conn, listener_conn)
                 test_no_push_on_vector_farther(writer_conn, listener_conn)
+                test_push_on_reorder_inside_a_sorted_top_k(writer_conn, listener_conn)
+                test_no_push_when_an_unordered_group_by_result_is_unchanged(writer_conn, listener_conn)
                 test_stop_listen(writer_conn, listener_conn)
                 test_stop_listen_from_another_client_is_refused(writer_conn, listener_conn)
                 test_multiple_listeners(writer_conn, listener_conn)

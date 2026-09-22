@@ -1019,6 +1019,8 @@ REG_BULK = "idxagg_reg_bulk"
 REG_CASE = "idxagg_reg_case"
 REG_SORT = "idxagg_reg_sort"
 REG_MIXED = "idxagg_reg_mixed"
+REG_CUSTOM = "idxagg_reg_custom"
+REG_NOID = "idxagg_reg_noid"
 REG_IN = "idxagg_reg_in"
 REG_NOTIN = "idxagg_reg_notin"
 REG_MINVALUE = "idxagg_reg_minvalue"
@@ -1430,10 +1432,67 @@ def probe_sort_ties_do_not_depend_on_the_index(c):
           indexed == scanned, detail=f"scan={scanned} indexed={indexed}")
 
 
+REG_CUSTOM_WHEN = "#datetime(2024-01-01T10:00:00)"
+REG_CUSTOM_WHERE = "#geo(40.0,-74.0)"
+
+
+def probe_a_custom_filter_survives_a_map_step(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CUSTOM})
+    save_doc(c, REG_CUSTOM, {"_id": "cu1", "when": REG_CUSTOM_WHEN, "where": REG_CUSTOM_WHERE, "note": "keep"})
+    save_doc(c, REG_CUSTOM, {"_id": "cu2", "when": "#datetime(2025-06-01T08:30:00)",
+                             "where": "#geo(34.05,-118.24)", "note": "keep"})
+    wait_for_background()
+
+    when_filter = {"type": "FILTER",
+                   "operator": {"fieldOperatorType": "EQUALS", "field": "when", "value": REG_CUSTOM_WHEN}}
+    geo_filter = {"type": "FILTER", "operator": {"customOperatorName": "distance", "field": "where",
+                                                 "value": REG_CUSTOM_WHERE, "comparator": "SMALLER_THAN",
+                                                 "distance": 1000}}
+    passthrough_map = {"type": "MAP", "operators": [{"fieldName": "absent"}]}
+
+    for label, step in (("datetime EQUALS", when_filter), ("geo distance", geo_filter)):
+        direct = _ids(agg(c, REG_CUSTOM, [step]))
+        after_map = _ids(agg(c, REG_CUSTOM, [passthrough_map, step]))
+        check(f"a {label} filter answers the same before and after a MAP step",
+              direct == after_map == ["cu1"], detail=f"direct={direct}, after MAP={after_map}")
+
+    distinct_all = agg(c, REG_CUSTOM, [{"type": "DISTINCT"}])
+    values = sorted(d.get("when") for d in (distinct_all.get("results") or []))
+    check("a DISTINCT step keeps custom values in their wire form",
+          values == sorted([REG_CUSTOM_WHEN, "#datetime(2025-06-01T08:30:00)"]),
+          detail=f"got {values}")
+
+
+def probe_a_conjunction_after_a_row_reshaping_step(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NOID})
+    for doc_id, category in (("n1", "books"), ("n2", "music"), ("n3", "books")):
+        save_doc(c, REG_NOID, {"_id": doc_id, "category": category})
+    wait_for_background()
+
+    def conjunction(kind):
+        return {"type": "FILTER", "operator": {"conjunctionType": kind, "operators": [
+            {"fieldOperatorType": "EQUALS", "field": "category", "value": "books"},
+            {"fieldOperatorType": "NOT_EQUALS", "field": "category", "value": "music"}]}}
+
+    for reshaper, label in (({"type": "DISTINCT", "fieldName": "category"}, "DISTINCT"),
+                            ({"type": "GROUP_BY", "fieldName": "category"}, "GROUP_BY")):
+        for kind in ("AND", "XOR", "NAND", "NOR", "OR"):
+            r = agg(c, REG_NOID, [reshaper, conjunction(kind)])
+            check(f"a {kind} conjunction after {label} answers instead of erroring",
+                  r.get("status") == "OK" or r.get("errorCode") == "404-3",
+                  detail=f"status={r.get('status')} code={r.get('errorCode')} msg={r.get('message', '')!r}")
+
+        and_rows = agg(c, REG_NOID, [reshaper, conjunction("AND")]).get("results") or []
+        check(f"a AND conjunction after {label} keeps only the matching row",
+              [row.get("category") for row in and_rows] == ["books"],
+              detail=f"got {[row.get('category') for row in and_rows]}")
+
+
 def regression_suite(c):
     section("Correctness regressions: non-ASCII index values, index values containing the file's own "
             "delimiters, repeated CREATE_INDEX, single-valued index ranges, low-cardinality numeric "
-            "indexes, conjunctions over a filtered stream")
+            "indexes, conjunctions over a filtered stream, custom values across a MAP step, "
+            "conjunctions over rows with no _id")
     probe_non_ascii_indexed_values(c)
     probe_index_values_containing_delimiters(c)
     probe_repeated_create_index_is_idempotent(c)
@@ -1449,6 +1508,8 @@ def regression_suite(c):
     probe_group_by_integer_min_value(c)
     probe_geo_distance_across_the_antimeridian(c)
     probe_sort_ties_do_not_depend_on_the_index(c)
+    probe_a_custom_filter_survives_a_map_step(c)
+    probe_a_conjunction_after_a_row_reshaping_step(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════

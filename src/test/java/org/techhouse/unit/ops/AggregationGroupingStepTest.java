@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.IOException;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -22,7 +23,9 @@ import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
@@ -195,5 +198,28 @@ public class AggregationGroupingStepTest {
 
         assertEquals(2, scan.size(), "the scan path keeps the explicit null as its own group");
         assertEquals(scan.size(), indexed.size(), "an index that cannot hold explicit nulls must not answer GROUP_BY");
+    }
+
+    private static JsonObject categorised(String id, String category) {
+        final var document = new JsonObject();
+        document.add(Globals.PK_FIELD, new JsonString(id));
+        document.addProperty("category", category);
+        return document;
+    }
+
+    @Test
+    public void test_a_filter_with_an_and_conjunction_after_group_by() throws IOException {
+        AggregateRequest request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(new GroupByAggregationStep("category"),
+                new FilterAggregationStep(new ConjunctionOperator(ConjunctionOperatorType.AND, List.of(
+                        new FieldOperator(FieldOperatorType.EQUALS, "category", new JsonString("books")),
+                        new FieldOperator(FieldOperatorType.NOT_EQUALS, "category", new JsonString("music")))))));
+
+        List<JsonObject> result = AggregationOperationHelper.processAggregation(request,
+                Stream.of(categorised("1", "books"), categorised("2", "music"), categorised("3", "books")));
+
+        assertEquals(1, result.size());
+        assertEquals("books", result.getFirst().get("category").asJsonString().getValue());
+        assertEquals(2, result.getFirst().get("group").asJsonArray().size());
     }
 }

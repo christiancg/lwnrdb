@@ -90,25 +90,23 @@ public class FilterOperatorHelper {
     }
 
     private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
-        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
+        return combinationResult.stream().flatMap(FilterOperatorHelper::distinctByConjunctionKey)
                 .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
                 .filter(matching -> matching.size() == matches).map(List::getFirst);
     }
 
-    private static JsonBaseElement conjunctionKey(JsonObject jsonObject) {
+    private static Stream<JsonObject> distinctByConjunctionKey(Stream<JsonObject> rows) {
+        final var seen = new HashSet<>();
+        return rows.filter(jsonObject -> seen.add(conjunctionKey(jsonObject)));
+    }
+
+    private static Object conjunctionKey(JsonObject jsonObject) {
         final var id = jsonObject.get(Globals.PK_FIELD);
-        if (id == null) {
-            throw new IllegalStateException("Document missing _id in conjunction grouping");
-        }
-        return id;
+        return id != null ? id : jsonObject;
     }
 
     private static Stream<JsonObject> orConjunction(List<Stream<JsonObject>> combinationResult) {
-        final var seen = new HashSet<>();
-        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).filter(jsonObject -> {
-            final var id = jsonObject.get(Globals.PK_FIELD);
-            return seen.add(id != null ? id : jsonObject);
-        });
+        return distinctByConjunctionKey(combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream));
     }
 
     private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined,
@@ -117,7 +115,7 @@ public class FilterOperatorHelper {
             // Blocking step (documented exception): NOR/NAND must diff against the full collection.
             resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
         }
-        return Stream.concat(resultStream, combined)
+        return Stream.concat(distinctByConjunctionKey(resultStream), combined)
                 .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
                 .filter(matching -> matching.size() == 1).map(List::getFirst);
     }

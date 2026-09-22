@@ -5,8 +5,10 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.EnumSet;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Set;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
@@ -15,6 +17,8 @@ import org.techhouse.ops.req.agg.BaseAggregationStep;
 
 public final class ResultHasher {
     private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final Set<AggregationStepType> ORDER_PRESERVING = EnumSet.of(AggregationStepType.FILTER,
+            AggregationStepType.MAP, AggregationStepType.JOIN, AggregationStepType.LIMIT, AggregationStepType.SKIP);
 
     private ResultHasher() {
     }
@@ -36,7 +40,19 @@ public final class ResultHasher {
     }
 
     public static boolean ordersResults(List<BaseAggregationStep> steps) {
-        return steps != null && !steps.isEmpty() && steps.getLast().getType() == AggregationStepType.SORT;
+        if (steps == null) {
+            return false;
+        }
+        for (var i = steps.size() - 1; i >= 0; i--) {
+            final var type = steps.get(i).getType();
+            if (type == AggregationStepType.SORT) {
+                return true;
+            }
+            if (!ORDER_PRESERVING.contains(type)) {
+                return false;
+            }
+        }
+        return false;
     }
 
     private static String digestOf(String text) {

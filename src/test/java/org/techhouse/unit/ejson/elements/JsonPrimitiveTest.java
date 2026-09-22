@@ -2,14 +2,26 @@ package org.techhouse.unit.ejson.elements;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.util.List;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
+import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ioc.IocContainer;
 
 public class JsonPrimitiveTest {
+    @BeforeAll
+    public static void registerExtendedTypes() {
+        IocContainer.get(EJson.class);
+    }
+
     @Test
     public void test_set_get_primitive_values() {
         JsonString stringPrimitive = new JsonString("test");
@@ -173,5 +185,55 @@ public class JsonPrimitiveTest {
     public void test_toString_not_null() {
         JsonString s = new JsonString("hello");
         assertNotNull(s.toString());
+    }
+
+    @Test
+    public void test_deep_copy_of_a_custom_type_keeps_its_class() {
+        JsonDateTime original = new JsonDateTime("#datetime(2024-01-01T10:00:00)");
+
+        JsonBaseElement copy = original.deepCopy();
+
+        assertAll(() -> assertInstanceOf(JsonDateTime.class, copy), () -> assertNotSame(original, copy),
+                () -> assertTrue(copy.isJsonCustom()),
+                () -> assertEquals(original.getValue(), ((JsonCustom<?>) copy).getValue()),
+                () -> {
+                    assert copy instanceof JsonDateTime;
+                    assertEquals(original.getCustomValue(), ((JsonDateTime) copy).getCustomValue());
+                });
+    }
+
+    @Test
+    public void test_deep_copy_of_every_registered_custom_type_keeps_its_class() {
+        List<String> samples = List.of("#datetime(2024-01-01T10:00:00)", "#time(10:15:30)", "#geo(1.5,2.5)",
+                "#vector(1.0,2.0,3.0)");
+
+        for (String sample : samples) {
+            JsonCustom<?> original = CustomTypeFactory.getCustomTypeInstance(sample);
+            JsonBaseElement copy = original.deepCopy();
+            assertEquals(original.getClass(), copy.getClass(), sample);
+            assertTrue(copy.isJsonCustom(), sample);
+            assertEquals(sample, ((JsonCustom<?>) copy).getValue(), sample);
+        }
+        assertTrue(
+                CustomTypeFactory.getCustomTypes().keySet().containsAll(List.of("datetime", "time", "geo", "vector")));
+    }
+
+    @Test
+    public void test_deep_copy_of_a_plain_string_that_looks_custom_stays_a_string() {
+        JsonString original = new JsonString("#datetime(2024-01-01T10:00:00)");
+
+        JsonBaseElement copy = original.deepCopy();
+
+        assertAll(() -> assertEquals(JsonString.class, copy.getClass()), () -> assertFalse(copy.isJsonCustom()),
+                () -> assertEquals(original.getValue(), ((JsonString) copy).getValue()));
+    }
+
+    @Test
+    public void test_json_type_of_a_custom_value_is_custom() {
+        JsonDateTime custom = new JsonDateTime("#datetime(2024-01-01T10:00:00)");
+        JsonString plain = new JsonString("#datetime(2024-01-01T10:00:00)");
+
+        assertEquals(JsonBaseElement.JsonType.CUSTOM, custom.getJsonType());
+        assertEquals(JsonBaseElement.JsonType.STRING, plain.getJsonType());
     }
 }

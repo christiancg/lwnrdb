@@ -39,7 +39,7 @@ public class EnumTypeAdapter<T extends Enum<T>> implements TypeAdapter<T> {
 
     @Override
     public T fromJson(JsonBaseElement value) {
-        if (value.getJsonType() == JsonBaseElement.JsonType.STRING) {
+        if (value.isJsonString()) {
             final var name = value.asJsonString().getValue();
             final var constant = byName.get(name);
             if (constant == null) {

@@ -15,6 +15,9 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.custom_types.JsonDateTime;
+import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -24,6 +27,7 @@ import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
@@ -36,6 +40,7 @@ import org.techhouse.ops.req.agg.step.SkipAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.ops.req.agg.step.map.MapOperationType;
 import org.techhouse.ops.req.agg.step.map.MapOperator;
+import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -249,5 +254,62 @@ public class AggregationPipelineTest {
         AggregationOperationHelper.processAggregation(request, source);
 
         assertTrue(closed.get());
+    }
+
+    private static JsonObject documentWithCustomFields() {
+        final var document = new JsonObject();
+        document.add(Globals.PK_FIELD, new JsonString("c1"));
+        document.add("when", new JsonDateTime("#datetime(2024-01-01T10:00:00)"));
+        document.add("where", new JsonGeo("#geo(0.0,0.0)"));
+        return document;
+    }
+
+    private static MapAggregationStep passThroughMapStep() {
+        return new MapAggregationStep(List.of(new RemoveFieldMapOperator("absent", null)));
+    }
+
+    private List<JsonObject> runOnCustomDocument(List<BaseAggregationStep> steps) throws IOException {
+        IocContainer.get(EJson.class);
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(steps);
+        return AggregationOperationHelper.processAggregation(request, Stream.of(documentWithCustomFields()));
+    }
+
+    @Test
+    public void test_a_custom_filter_after_a_map_step_still_matches() throws IOException {
+        final var customFilter = new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "when",
+                new JsonDateTime("#datetime(2024-01-01T10:00:00)")));
+
+        final var withoutMap = runOnCustomDocument(List.of(customFilter));
+        final var withMap = runOnCustomDocument(List.of(passThroughMapStep(), customFilter));
+
+        assertEquals(1, withoutMap.size());
+        assertEquals(withoutMap.size(), withMap.size());
+        assertTrue(withMap.getFirst().get("when").isJsonCustom());
+    }
+
+    @Test
+    public void test_a_geo_filter_after_a_map_step_still_matches() throws IOException {
+        final var args = new JsonObject();
+        args.add("value", new JsonGeo("#geo(0.0,0.0)"));
+        args.add("comparator", new JsonString("SMALLER_THAN"));
+        args.addProperty("distance", 1000);
+        final var geoFilter = new FilterAggregationStep(
+                new CustomOperator(JsonGeo.OPERATOR_DISTANCE, "where", new JsonGeo("#geo(0.0,0.0)"), args));
+
+        final var withoutMap = runOnCustomDocument(List.of(geoFilter));
+        final var withMap = runOnCustomDocument(List.of(passThroughMapStep(), geoFilter));
+
+        assertEquals(1, withoutMap.size());
+        assertEquals(withoutMap.size(), withMap.size());
+    }
+
+    @Test
+    public void test_a_distinct_step_keeps_custom_values_typed() throws IOException {
+        final var result = runOnCustomDocument(List.of(new DistinctAggregationStep(null)));
+
+        assertEquals(1, result.size());
+        assertTrue(result.getFirst().get("when").isJsonCustom());
+        assertTrue(result.getFirst().get("where").isJsonCustom());
     }
 }
