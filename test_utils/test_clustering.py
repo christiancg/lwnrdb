@@ -1633,12 +1633,19 @@ def _commit_and_kill_mid_apply(victim, coll, ids):
             return None
         # First op, so it is applied well before the kill: the replay's version check only has
         # something to skip once the interrupted commit itself wrote these ids.
-        conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
-                   "objects": [{"_id": doc_id, "v": 2} for doc_id in ids]})
-        for op in range(MID_COMMIT_FILLER_OPS):
-            conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
-                       "objects": [{"_id": f"filler{op}_{n}", "v": op}
-                                   for n in range(MID_COMMIT_FILLER_SIZE)]})
+        check_status("the ids the replay must skip were buffered", conn.send({
+            "type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+            "objects": [{"_id": doc_id, "v": 2} for doc_id in ids]}), "OK")
+        refused = 0
+        for filler in range(MID_COMMIT_FILLER_OPS):
+            if conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+                          "objects": [{"_id": f"filler{filler}_{n}", "v": filler}
+                                      for n in range(MID_COMMIT_FILLER_SIZE)]}).get("status") != "OK":
+                refused += 1
+        # Same reason as the sibling helper: the padding is what widens the window the kill lands in,
+        # so a silently refused filler op reads downstream as the commit outrunning the harness.
+        check("the commit's padding was buffered", refused == 0,
+              f"{refused} of {MID_COMMIT_FILLER_OPS} filler ops were refused")
         pending = BackgroundOp(conn, {"type": "COMMIT_TRANSACTION"})
         caught = wait_until(lambda: holds_tx_record(victim, tx_id, "localcommit"),
                             timeout_s=60.0, interval_s=0.02)
@@ -1922,10 +1929,18 @@ def prepare_then_kill_behind_a_slow_commit(edge, victim, buffered, padding, time
         if tx_id is None:
             return None
         buffered(conn)
-        for op in range(MID_COMMIT_FILLER_OPS):
-            conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": padding,
-                       "objects": [{"_id": f"pad{op}_{n}", "v": op}
-                                   for n in range(MID_COMMIT_FILLER_SIZE)]})
+        refused = 0
+        for filler in range(MID_COMMIT_FILLER_OPS):
+            if conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": padding,
+                          "objects": [{"_id": f"pad{filler}_{n}", "v": filler}
+                                      for n in range(MID_COMMIT_FILLER_SIZE)]}).get("status") != "OK":
+                refused += 1
+        # The padding is what holds the window open, so a refused filler op narrows the very gap the
+        # kill has to land in. Unchecked, that turns into "no participant marker was ever observed"
+        # further down - which reads as the commit outrunning the harness and skips the whole case
+        # under test, rather than reporting that the setup never took.
+        check("the commit's padding was buffered", refused == 0,
+              f"{refused} of {MID_COMMIT_FILLER_OPS} filler ops were refused")
         pending = BackgroundOp(conn, {"type": "COMMIT_TRANSACTION"})
         prepared = wait_until(lambda: holds_tx_record(victim, tx_id, "part"),
                               timeout_s=timeout_s, interval_s=0.02)
@@ -1933,6 +1948,9 @@ def prepare_then_kill_behind_a_slow_commit(edge, victim, buffered, padding, time
             print(f"  Killing prepared participant node-{victim.index} before the commit reaches it ...")
             victim.kill()
         pending.join(180.0)
+        # Killing the participant moves ownership off it, and the caller times its rewrite against a
+        # deadline that would otherwise be spent waiting for the ring to notice.
+        wait_until_cluster_is_healthy()
         return tx_id if prepared else None
     finally:
         conn.close()
@@ -1954,6 +1972,11 @@ def test_a_post_prepare_write_survives_2pc_recovery():
     coll = owners[victim.index][0]
     padding = owners[edge.index][0]
     ids = [f"pp{i}" for i in range(4)]
+
+    # The test before this one kills and restarts a node, so the ring can still be settling here.
+    # The buffered DELETEs below take collection write locks and are not retried, unlike the seeding.
+    if not check("the ring is healthy before the transaction starts", wait_until_cluster_is_healthy()):
+        return
 
     def _seeded():
         for doc_id in ids:
