@@ -3,6 +3,7 @@ package org.techhouse.ops.filter;
 import java.util.function.BiPredicate;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
@@ -35,7 +36,8 @@ public final class FieldPredicateFactory {
                         Globals.PK_FIELD.equals(fieldName));
             }
             if (operatorElement.isJsonArray()) {
-                return arrayOperandMatches(operatorElement, toTestElement, operation);
+                return arrayOperandMatches(operatorElement, toTestElement, operation,
+                        Globals.PK_FIELD.equals(fieldName));
             }
             if (operatorElement.isJsonObject()) {
                 return objectOperandMatches(operatorElement, toTestElement, operation);
@@ -127,10 +129,8 @@ public final class FieldPredicateFactory {
         return exactStrings ? operand.equals(stored) : operand.equalsIgnoreCase(stored);
     }
 
-    // JsonArray.contains uses element equality, so IN/NOT_IN also matches object/array field values
-    // against candidate objects/arrays, mirroring the index path's element-match resolution.
     private static boolean arrayOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
-            FieldOperatorType operation) {
+            FieldOperatorType operation, boolean exactStrings) {
         if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {
             if (toTestElement == null || !toTestElement.isJsonArray()) {
                 return false;
@@ -140,7 +140,21 @@ public final class FieldPredicateFactory {
         }
         if ((operation == FieldOperatorType.IN || operation == FieldOperatorType.NOT_IN) && toTestElement != null
                 && !toTestElement.isJsonNull()) {
-            return (operation == FieldOperatorType.IN) == operatorElement.asJsonArray().contains(toTestElement);
+            return (operation == FieldOperatorType.IN) == containsEquivalent(operatorElement.asJsonArray(),
+                    toTestElement, exactStrings);
+        }
+        return false;
+    }
+
+    private static boolean containsEquivalent(JsonArray operands, JsonBaseElement stored, boolean exactStrings) {
+        for (final var operand : operands) {
+            if (operand.isJsonPrimitive() && stored.isJsonPrimitive()) {
+                if (primitiveOperandMatches(operand, stored, FieldOperatorType.EQUALS, exactStrings)) {
+                    return true;
+                }
+            } else if (operand.equals(stored)) {
+                return true;
+            }
         }
         return false;
     }

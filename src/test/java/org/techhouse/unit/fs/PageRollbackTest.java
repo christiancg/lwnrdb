@@ -11,12 +11,15 @@ import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
@@ -53,8 +56,17 @@ public class PageRollbackTest {
     }
 
     private File pageFile() {
+        return pageFile(0);
+    }
+
+    private File pageFile(long page) {
         return new File(collectionFolder(),
-                TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + 0 + Globals.DB_FILE_EXTENSION);
+                TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + page + Globals.DB_FILE_EXTENSION);
+    }
+
+    private File pkIndexFile() {
+        return new File(collectionFolder(),
+                TestGlobals.COLL + "-" + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
     }
 
     private void replacePkIndexWithAnUnwritableDirectory() throws IOException {
@@ -65,13 +77,28 @@ public class PageRollbackTest {
     }
 
     private static DbEntry entry(String id) {
+        return entry(id, 0);
+    }
+
+    private static DbEntry entry(String id, long page) {
         final var object = new JsonObject();
         object.add(Globals.PK_FIELD, new JsonString(id));
         object.add("value", new JsonString("v"));
         final var dbEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, object);
         dbEntry.set_id(id);
-        dbEntry.setPage(0);
+        dbEntry.setPage(page);
         return dbEntry;
+    }
+
+    private Set<String> idsOnThePages() throws IOException {
+        try (var entries = fileSystem.streamEntries(TestGlobals.DB, TestGlobals.COLL)) {
+            return entries.map(DbEntry::get_id).collect(Collectors.toSet());
+        }
+    }
+
+    private Set<String> idsInThePkIndex() throws IOException {
+        return fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream().map(PkIndexEntry::getValue)
+                .collect(Collectors.toSet());
     }
 
     @Test
@@ -131,6 +158,56 @@ public class PageRollbackTest {
 
         assertArrayEquals(before, Files.readAllBytes(pageFile().toPath()),
                 "the page is rewritten before the index, so a failed index write must put it back");
+    }
+
+    @Test
+    public void test_a_failed_page_append_rolls_the_earlier_pages_back() throws Exception {
+        fileSystem.insertIntoCollection(entry("kept"));
+        final var beforePage = Files.readAllBytes(pageFile().toPath());
+        final var beforeIndex = Files.readString(pkIndexFile().toPath());
+        assertTrue(pageFile(1).mkdirs(), "the test needs the second page of the batch to be unwritable");
+
+        final var batch = new ArrayList<>(List.of(entry("a", 0), entry("b", 0), entry("c", 1)));
+        assertThrows(IOException.class,
+                () -> fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, batch),
+                "a bulk insert whose page append fails must surface the failure");
+
+        assertArrayEquals(beforePage, Files.readAllBytes(pageFile().toPath()),
+                "records appended before the failing page must be truncated back off it, or they stay on the"
+                        + " page with no pk index row and REINDEX cannot rebuild one");
+        assertEquals(beforeIndex, Files.readString(pkIndexFile().toPath()),
+                "no id of the failed batch may reach the pk index");
+    }
+
+    @Test
+    public void test_a_rolled_back_batch_leaves_the_pages_and_the_pk_index_describing_the_same_ids() throws Exception {
+        fileSystem.insertIntoCollection(entry("kept"));
+        assertTrue(pageFile(1).mkdirs(), "the test needs the second page of the batch to be unwritable");
+
+        final var batch = new ArrayList<>(List.of(entry("a", 0), entry("c", 1)));
+        assertThrows(IOException.class,
+                () -> fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, batch));
+        assertTrue(pageFile(1).delete(), "the unwritable placeholder must be gone before the collection is scanned");
+
+        assertEquals(idsInThePkIndex(), idsOnThePages(),
+                "a record on a page with no pk index row is returned by a scan and invisible to FIND_BY_ID,"
+                        + " index-only COUNT and DELETE");
+    }
+
+    @Test
+    public void test_a_failed_single_append_leaves_neither_a_record_nor_an_index_row() throws Exception {
+        fileSystem.insertIntoCollection(entry("kept"));
+        final var beforePage = Files.readAllBytes(pageFile().toPath());
+        final var beforeIndex = Files.readString(pkIndexFile().toPath());
+        assertTrue(pageFile(1).mkdirs(), "the test needs the target page to be unwritable");
+
+        assertThrows(IOException.class, () -> fileSystem.insertIntoCollection(entry("orphan", 1)),
+                "a single insert whose page append fails must surface the failure");
+
+        assertArrayEquals(beforePage, Files.readAllBytes(pageFile().toPath()));
+        assertEquals(beforeIndex, Files.readString(pkIndexFile().toPath()));
+        assertTrue(pageFile(1).delete(), "the unwritable placeholder must be gone before the collection is scanned");
+        assertEquals(idsInThePkIndex(), idsOnThePages());
     }
 
     @Test

@@ -106,8 +106,8 @@ public class IndexLookupInTest {
         arr.add(new JsonNumber("5"));
         arr.add(new JsonNumber("2.5"));
         final var operator = new FieldOperator(FieldOperatorType.IN, fieldName, arr);
-        final List<FieldIndexEntry<Number>> idx = List.of(new FieldIndexEntry<>(dbName, collName, 5.0, Set.of("id1")),
-                new FieldIndexEntry<>(dbName, collName, 2.5, Set.of("id2")),
+        final List<FieldIndexEntry<Number>> idx = List.of(new FieldIndexEntry<>(dbName, collName, 2.5, Set.of("id2")),
+                new FieldIndexEntry<>(dbName, collName, 5.0, Set.of("id1")),
                 new FieldIndexEntry<>(dbName, collName, 9.0, Set.of("id3")));
         when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class)).thenReturn(idx);
         when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();

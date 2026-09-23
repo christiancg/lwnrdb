@@ -195,7 +195,7 @@ public final class SaveOperationHelper {
         }
         final var entriesToInsert = entries.stream().filter(dbEntry -> indexedDbEntriesToUpdate.stream()
                 .noneMatch(indexedDbEntry -> indexedDbEntry.get_id().equals(dbEntry.get_id()))).toList();
-        List<IndexedDbEntry> insertedIndexEntries = new ArrayList<>();
+        final var insertedIndexEntries = new ArrayList<IndexedDbEntry>();
         try {
             primaryKeyIndex.addAll(updatedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
             if (!entriesToInsert.isEmpty()) {
@@ -206,28 +206,42 @@ public final class SaveOperationHelper {
                     e.setPage(target);
                     pendingPageBytes.merge(target, (long) size, Long::sum);
                 }
-                insertedIndexEntries = fs.bulkInsertIntoCollection(dbName, collName, entriesToInsert);
+                insertedIndexEntries.addAll(fs.bulkInsertIntoCollection(dbName, collName, entriesToInsert));
                 for (var ie : insertedIndexEntries) {
                     cache.updatePageSizeInMemory(dbName, collName, ie.getIndex().getPage(), ie.getIndex().getLength());
                 }
             }
             primaryKeyIndex.addAll(insertedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
+        } catch (Exception e) {
+            publishCommittedWrites(dbName, collName, toDbEntries(updatedIndexEntries),
+                    toDbEntries(insertedIndexEntries));
+            throw e;
         } finally {
             primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
         }
-        final var updatedDbEntries = updatedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
-        cache.addEntriesToCache(dbName, collName, updatedDbEntries);
-        final var insertedDbEntries = insertedIndexEntries.stream().map(IndexedDbEntry::toDbEntry).toList();
-        cache.addEntriesToCache(dbName, collName, insertedDbEntries);
-        final var updatedIds = updatedDbEntries.stream().map(DbEntry::get_id).toList();
-        final var insertedIds = insertedDbEntries.stream().map(DbEntry::get_id).toList();
-        // Mark the committed ids pending before releasing the write lock, so index-backed reads reconcile them.
-        pendingIndexWrites.mark(dbName, collName, updatedIds);
-        pendingIndexWrites.mark(dbName, collName, insertedIds);
-        taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, insertedDbEntries, updatedDbEntries));
-        listenManager.markDirty(dbName, collName);
+        final var updatedDbEntries = toDbEntries(updatedIndexEntries);
+        final var insertedDbEntries = toDbEntries(insertedIndexEntries);
+        publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries);
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
-        return new BulkSaveResponse("Successfully saved entries", insertedIds, updatedIds);
+        return new BulkSaveResponse("Successfully saved entries", idsOf(insertedDbEntries), idsOf(updatedDbEntries));
+    }
+
+    private static void publishCommittedWrites(String dbName, String collName, List<DbEntry> updated,
+            List<DbEntry> inserted) {
+        cache.addEntriesToCache(dbName, collName, updated);
+        cache.addEntriesToCache(dbName, collName, inserted);
+        pendingIndexWrites.mark(dbName, collName, idsOf(updated));
+        pendingIndexWrites.mark(dbName, collName, idsOf(inserted));
+        taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, inserted, updated));
+        listenManager.markDirty(dbName, collName);
+    }
+
+    private static List<DbEntry> toDbEntries(List<IndexedDbEntry> entries) {
+        return entries.stream().map(IndexedDbEntry::toDbEntry).toList();
+    }
+
+    private static List<String> idsOf(List<DbEntry> entries) {
+        return entries.stream().map(DbEntry::get_id).toList();
     }
 
     public static boolean wouldOverflowPage(String dbName, String collName, PkIndexEntry idxEntry, DbEntry entry) {

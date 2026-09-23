@@ -131,10 +131,17 @@ public class FilterCountFastPathAgreementTest {
         }
         for (final var type : List.of(FieldOperatorType.IN, FieldOperatorType.NOT_IN)) {
             queries.put(type + " " + field + " [a]", filter(type, field, arrayOf(new JsonString("a"))));
+            queries.put(type + " " + field + " [A]", filter(type, field, arrayOf(new JsonString("A"))));
             queries.put(type + " " + field + " [5]", filter(type, field, arrayOf(new JsonNumber(5))));
             queries.put(type + " " + field + " [null]", filter(type, field, arrayOf(JsonNull.INSTANCE)));
         }
         return queries;
+    }
+
+    private void seedStrings() throws IOException {
+        insert("a", new JsonString("Alpha"));
+        insert("b", new JsonString("alpha"));
+        insert("c", new JsonString("beta"));
     }
 
     @Test
@@ -147,6 +154,35 @@ public class FilterCountFastPathAgreementTest {
     @Test
     public void test_count_after_an_indexed_field_filter_matches_the_row_count() throws Exception {
         seed();
+        indexField();
+
+        assertCountMatchesRows(operandMatrix(FIELD));
+    }
+
+    @Test
+    public void test_count_after_a_case_mismatched_in_on_a_string_field_matches_the_row_count() throws Exception {
+        seedStrings();
+        indexField();
+        final var step = filter(FieldOperatorType.IN, FIELD, arrayOf(new JsonString("ALPHA")));
+
+        assertEquals(2, rowsOf(step), "IN matches both spellings the way EQUALS does");
+        assertEquals(2, countOf(step),
+                "the index-only COUNT has no document re-test, so a membership change shows up here first");
+    }
+
+    @Test
+    public void test_count_after_a_case_mismatched_not_in_on_a_string_field_matches_the_row_count() throws Exception {
+        seedStrings();
+        indexField();
+        final var step = filter(FieldOperatorType.NOT_IN, FIELD, arrayOf(new JsonString("ALPHA")));
+
+        assertEquals(1, rowsOf(step));
+        assertEquals(1, countOf(step));
+    }
+
+    @Test
+    public void test_count_after_a_string_field_in_matches_the_row_count_for_every_operand_kind() throws Exception {
+        seedStrings();
         indexField();
 
         assertCountMatchesRows(operandMatrix(FIELD));

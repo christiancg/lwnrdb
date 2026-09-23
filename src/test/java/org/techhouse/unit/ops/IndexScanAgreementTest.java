@@ -179,6 +179,21 @@ public class IndexScanAgreementTest {
                 filter(FieldOperatorType.IN, "name", array(new JsonString("bob"), new JsonString("carol")))});
         queries.put("NOT_IN name [bob]", () -> new BaseAggregationStep[]{
                 filter(FieldOperatorType.NOT_IN, "name", array(new JsonString("bob")))});
+        queries.put("IN name [BOB]",
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "name", array(new JsonString("BOB")))});
+        queries.put("NOT_IN name [BOB]", () -> new BaseAggregationStep[]{
+                filter(FieldOperatorType.NOT_IN, "name", array(new JsonString("BOB")))});
+        queries.put("IN name [missing]", () -> new BaseAggregationStep[]{
+                filter(FieldOperatorType.IN, "name", array(new JsonString("missing")))});
+        queries.put("NOT_IN name [missing]", () -> new BaseAggregationStep[]{
+                filter(FieldOperatorType.NOT_IN, "name", array(new JsonString("missing")))});
+        queries.put("IN name ['']",
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "name", array(new JsonString("")))});
+        queries.put("IN name []", () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "name", array())});
+        queries.put("COUNT after IN name [BOB]", () -> new BaseAggregationStep[]{
+                filter(FieldOperatorType.IN, "name", array(new JsonString("BOB"))), new CountAggregationStep()});
+        queries.put("COUNT after NOT_IN name [BOB]", () -> new BaseAggregationStep[]{
+                filter(FieldOperatorType.NOT_IN, "name", array(new JsonString("BOB"))), new CountAggregationStep()});
         queries.put("SORT name asc", () -> new BaseAggregationStep[]{new SortAggregationStep("name", true)});
         queries.put("DISTINCT name", () -> new BaseAggregationStep[]{new DistinctAggregationStep("name")});
         queries.put("GROUP_BY name", () -> new BaseAggregationStep[]{new GroupByAggregationStep("name")});
@@ -286,6 +301,10 @@ public class IndexScanAgreementTest {
                 () -> new BaseAggregationStep[]{filter(FieldOperatorType.EQUALS, "mixed", new JsonString("1"))});
         queries.put("NOT_IN mixed [1]",
                 () -> new BaseAggregationStep[]{filter(FieldOperatorType.NOT_IN, "mixed", array(parsed("1")))});
+        queries.put("IN mixed ['1']",
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "mixed", array(new JsonString("1")))});
+        queries.put("IN mixed [1]",
+                () -> new BaseAggregationStep[]{filter(FieldOperatorType.IN, "mixed", array(parsed("1")))});
         queries.put("SORT mixed asc", () -> new BaseAggregationStep[]{new SortAggregationStep("mixed", true)});
 
         assertEveryQueryAgrees("mixed", queries);

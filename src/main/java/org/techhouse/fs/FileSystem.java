@@ -229,38 +229,39 @@ public class FileSystem {
         final var pkEntriesToIndex = new ArrayList<PkIndexEntry>();
         final var lengthsBeforeAppend = new LinkedHashMap<File, Long>();
         final var entrySet = entries.stream().collect(Collectors.groupingBy(storagePageResolver)).entrySet();
-        for (var groupedEntry : entrySet) {
-            final var page = groupedEntry.getKey();
-            final var pageEntries = groupedEntry.getValue();
-            final var file = paths.collectionPage(dbName, collName, page);
-            final var lock = FileLocks.lockFor(file).writeLock();
-            lock.lock();
-            try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
-                    Globals.BUFFER_SIZE)) {
-                var currentOffset = file.length();
-                lengthsBeforeAppend.putIfAbsent(file, currentOffset);
-                for (var entry : pageEntries) {
-                    final var strData = entry.toFileEntry() + Globals.NEWLINE;
-                    final var bytes = strData.getBytes(StandardCharsets.UTF_8);
-                    final var length = bytes.length;
-                    writer.append(strData);
-                    final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset, length, page,
-                            entry.getVersion());
-                    pkEntriesToIndex.add(pkEntry);
-                    final var indexedEntry = new IndexedDbEntry();
-                    indexedEntry.setIndex(pkEntry);
-                    indexedEntry.setCollectionName(collName);
-                    indexedEntry.setDatabaseName(dbName);
-                    indexedEntry.set_id(entry.get_id());
-                    indexedEntry.setData(entry.getData());
-                    indexEntries.add(indexedEntry);
-                    currentOffset += length;
-                }
-            } finally {
-                lock.unlock();
-            }
-        }
         try {
+            for (var groupedEntry : entrySet) {
+                final var page = groupedEntry.getKey();
+                final var pageEntries = groupedEntry.getValue();
+                final var file = paths.collectionPage(dbName, collName, page);
+                final var lock = FileLocks.lockFor(file).writeLock();
+                lock.lock();
+                try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
+                        Globals.BUFFER_SIZE)) {
+                    var currentOffset = file.length();
+                    lengthsBeforeAppend.putIfAbsent(file, currentOffset);
+                    for (var entry : pageEntries) {
+                        final var strData = entry.toFileEntry() + Globals.NEWLINE;
+                        final var bytes = strData.getBytes(StandardCharsets.UTF_8);
+                        final var length = bytes.length;
+                        writer.append(strData);
+                        final var pkEntry = new PkIndexEntry(dbName, collName, entry.get_id(), currentOffset, length,
+                                page, entry.getVersion());
+                        pkEntriesToIndex.add(pkEntry);
+                        final var indexedEntry = new IndexedDbEntry();
+                        indexedEntry.setIndex(pkEntry);
+                        indexedEntry.setCollectionName(collName);
+                        indexedEntry.setDatabaseName(dbName);
+                        indexedEntry.set_id(entry.get_id());
+                        indexedEntry.setData(entry.getData());
+                        indexedEntry.setVersion(entry.getVersion());
+                        indexEntries.add(indexedEntry);
+                        currentOffset += length;
+                    }
+                } finally {
+                    lock.unlock();
+                }
+            }
             pkIndexStore.bulkIndexNewPKValues(dbName, collName, pkEntriesToIndex);
         } catch (IOException e) {
             rollBackBulkAppends(lengthsBeforeAppend);
@@ -292,11 +293,8 @@ public class FileSystem {
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
             final var length = strData.getBytes(StandardCharsets.UTF_8).length;
             final var totalFileLength = file.length();
-            try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
-                    Globals.BUFFER_SIZE)) {
-                writer.append(strData);
-            }
             try {
+                appendToPage(file, strData);
                 return pkIndexStore.indexNewPKValue(dbName, collName, entry.get_id(), totalFileLength, length, page,
                         entry.getVersion());
             } catch (IOException e) {
@@ -305,6 +303,12 @@ public class FileSystem {
             }
         } finally {
             lock.unlock();
+        }
+    }
+
+    private void appendToPage(File file, String strData) throws IOException {
+        try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE)) {
+            writer.append(strData);
         }
     }
 

@@ -172,6 +172,8 @@ A collection may also carry a single JSON Schema stored alongside its data files
 
 **Field operator types:** `EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`
 
+`EQUALS`, `NOT_EQUALS`, `IN` and `NOT_IN` all share one notion of equality: strings compare case-insensitively, custom types compare semantically (so `#datetime(2024-01-01T10:00)` equals `#datetime(2024-01-01T10:00:00)`), numbers compare by value, and objects and arrays compare exactly as whole values. The primary key is the one exception — a `FILTER` on `_id` compares exactly, matching `FIND_BY_ID`, `SAVE` and `DELETE`. `CONTAINS` on a string is a case-sensitive substring test. A `null` operand is only ever an equality test: `EQUALS null` returns exactly the documents whose field is `null` and `NOT_EQUALS null` exactly those whose field is not, while the ordering operators and `CONTAINS` return nothing. A document whose field is `null` is never matched by `IN` or `NOT_IN`, nor by any comparison against a non-null operand. A document that lacks the field is excluded by every operator.
+
 **Conjunction operator types:** `AND`, `OR`, `NOR`, `XOR`, `NAND`
 
 #### Script operators (SimpleJS in the pipeline)

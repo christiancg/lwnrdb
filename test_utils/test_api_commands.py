@@ -384,6 +384,14 @@ def test_filter_operators(c):
                ids_of(aggregate(c, COLL_AGG, [filter_step("name", "NOT_IN", ["alice", "bob"])])) == ["a3", "a4"])
     check("IN over a list of Objects (element-match)",
                ids_of(aggregate(c, COLL_AGG, [filter_step("meta", "IN", [{"k": 1}, {"k": 3}])])) == ["a1", "a3", "a4"])
+    check("IN uses the same string equality as EQUALS, so a case-mismatched operand matches",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("name", "IN", ["ALICE", "Bob"])])) == ["a1", "a2"])
+    check("NOT_IN excludes a case-mismatched operand for the same reason",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("name", "NOT_IN", ["ALICE", "Bob"])])) == ["a3", "a4"])
+    check("_id IN stays exact, matching FIND_BY_ID",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("_id", "IN", ["A1", "a2"])])) == ["a2"])
+    check("_id NOT_IN stays exact too",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("_id", "NOT_IN", ["A1"])])) == ["a1", "a2", "a3", "a4"])
 
     check("CONTAINS on an array field",
                ids_of(aggregate(c, COLL_AGG, [filter_step("tags", "CONTAINS", "z")])) == ["a2", "a3"])

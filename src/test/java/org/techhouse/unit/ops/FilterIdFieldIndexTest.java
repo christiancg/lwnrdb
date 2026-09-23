@@ -97,6 +97,22 @@ public class FilterIdFieldIndexTest extends FilterResolutionSupport {
     }
 
     @Test
+    public void test_filter_on_id_in_stays_case_sensitive_on_both_paths() throws IOException {
+        final var cache = seedIds("Case1", "case1");
+        assertIndexAgreesWithScan(cache,
+                new FieldOperator(FieldOperatorType.IN, Globals.PK_FIELD, arrayOf(new JsonString("Case1"))),
+                Set.of("Case1"));
+    }
+
+    @Test
+    public void test_filter_on_id_not_in_stays_case_sensitive_on_both_paths() throws IOException {
+        final var cache = seedIds("Case1", "case1");
+        assertIndexAgreesWithScan(cache,
+                new FieldOperator(FieldOperatorType.NOT_IN, Globals.PK_FIELD, arrayOf(new JsonString("Case1"))),
+                Set.of("case1"));
+    }
+
+    @Test
     public void test_an_ordinary_string_field_stays_case_insensitive() throws IOException {
         final var cache = mixedTypeFixture();
         addTyped(cache, "s1", "name", new JsonString("ABC"));

@@ -538,6 +538,8 @@ def test_a_filter_on_id_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
         ("CONTAINS", "d", ["d0", "d1", "d2"]),
         ("IN", ["d0", "d2"], ["d0", "d2"]),
         ("NOT_IN", ["d0", "d2"], ["d1"]),
+        ("IN", ["D0"], []),
+        ("NOT_IN", ["D0"], ["d0", "d1", "d2"]),
     ]
     for op_type, value, expected in cases:
         got = aggregate_ids(conn, coll, [{"type": "FILTER", "operator": {

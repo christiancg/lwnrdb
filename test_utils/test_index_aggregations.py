@@ -761,11 +761,16 @@ AGREE_CUSTOM = "idxagg_agree_custom"
 AGREE_MIXED_BOX = "idxagg_agree_mixed_box"
 AGREE_GEO = "idxagg_agree_geo"
 AGREE_GEO_TARGET = "#geo(0.000000,0.000000)"
+AGREE_IN_CASE = "idxagg_agree_in_case"
+AGREE_NOT_IN_CASE = "idxagg_agree_notin_case"
+AGREE_IN_CUSTOM = "idxagg_agree_in_custom"
+AGREE_NOT_IN_CUSTOM = "idxagg_agree_notin_custom"
 
 AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, AGREE_NOT_IN_ARR,
                      AGREE_JOIN_REMOTE, AGREE_JOIN_LEFT, AGREE_JOIN_NULL_REMOTE, AGREE_JOIN_NULL_LEFT,
                      AGREE_SORT_BOOL, AGREE_SORT_BOOL_DESC, AGREE_SORT_MIXED, AGREE_SORT_TIES,
-                     AGREE_SIBLING, AGREE_OBJ_SORT, AGREE_CUSTOM, AGREE_MIXED_BOX, AGREE_GEO)
+                     AGREE_SIBLING, AGREE_OBJ_SORT, AGREE_CUSTOM, AGREE_MIXED_BOX, AGREE_GEO,
+                     AGREE_IN_CASE, AGREE_NOT_IN_CASE, AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM)
 
 
 def agree_ids(r):
@@ -846,6 +851,15 @@ def setup_agreement(c):
     # with a rounded metres-per-degree constant rather than the sphere the distance itself uses.
     save_doc(c, AGREE_GEO, {"_id": "onTheRim", "location": "#geo(0.899000,0.000000)"})
     save_doc(c, AGREE_GEO, {"_id": "farAway", "location": "#geo(-40.000000,100.000000)"})
+    # Membership must use the equality EQUALS uses: case-insensitive for strings, semantic for
+    # custom types. Index and scan agreed with each other before, and disagreed with EQUALS.
+    for coll in (AGREE_IN_CASE, AGREE_NOT_IN_CASE):
+        save_doc(c, coll, {"_id": "upper", "tag": "Alpha"})
+        save_doc(c, coll, {"_id": "lower", "tag": "alpha"})
+        save_doc(c, coll, {"_id": "other", "tag": "beta"})
+    for coll in (AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM):
+        save_doc(c, coll, {"_id": "d1", "when": "#datetime(2024-01-01T10:00)"})
+        save_doc(c, coll, {"_id": "d2", "when": "#datetime(2024-02-02T11:00:00)"})
 
 
 def probe_contains_agrees_with_scan_per_type(c):
@@ -967,6 +981,25 @@ def probe_custom_values_bucket_the_same_either_way(c):
           indexed == scanned + 1, f"scan over 2 docs={scanned}  indexed over 3 docs={indexed}")
 
 
+def probe_membership_uses_the_same_equality_as_equals(c):
+    agree(c, "IN with a case-mismatched string operand", AGREE_IN_CASE,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "tag",
+                                           "value": ["ALPHA"]}}],
+          AGREE_IN_CASE, "tag", expected=["lower", "upper"])
+    agree(c, "NOT_IN with a case-mismatched string operand", AGREE_NOT_IN_CASE,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_IN", "field": "tag",
+                                           "value": ["ALPHA"]}}],
+          AGREE_NOT_IN_CASE, "tag", expected=["other"])
+    agree(c, "IN with a custom operand spelled differently from the stored value", AGREE_IN_CUSTOM,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "when",
+                                           "value": ["#datetime(2024-01-01T10:00:00)"]}}],
+          AGREE_IN_CUSTOM, "when", expected=["d1"])
+    agree(c, "NOT_IN with a custom operand spelled differently from the stored value", AGREE_NOT_IN_CUSTOM,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_IN", "field": "when",
+                                           "value": ["#datetime(2024-01-01T10:00:00)"]}}],
+          AGREE_NOT_IN_CUSTOM, "when", expected=["d2"])
+
+
 def probe_a_scalar_membership_operand_is_refused(c):
     """IN with a non-array operand reached SearchUtils and threw, so the same query answered 500
     with an index and NO_RESULTS without one. It must now be refused before either path."""
@@ -1002,6 +1035,7 @@ def agreement_suite(c):
     probe_object_sort_keys_break_ties_on_id(c)
     probe_custom_values_bucket_the_same_either_way(c)
     probe_a_scalar_membership_operand_is_refused(c)
+    probe_membership_uses_the_same_equality_as_equals(c)
     probe_mixed_number_boxes_group_the_same_either_way(c)
 
 
