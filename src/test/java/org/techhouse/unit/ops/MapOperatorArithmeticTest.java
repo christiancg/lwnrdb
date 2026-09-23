@@ -202,4 +202,27 @@ public class MapOperatorArithmeticTest {
         JsonObject result = MapOperatorHelper.processOperator(op, input);
         assertTrue(result.has("result"));
     }
+
+    private static String concatOf(JsonArray operands) {
+        final var operator = new AddFieldMapOperator("joined", null,
+                new ArrayParamMidOperator(MidOperationType.CONCAT, operands));
+        return MapOperatorHelper.processOperator(operator, new JsonObject()).get("joined").asJsonString().getValue();
+    }
+
+    @Test
+    public void test_concat_formats_an_array_element_like_a_scalar_operand() {
+        final var pastTheIntRange = new JsonNumber(3000000000d);
+
+        final var asScalarOperand = new JsonArray();
+        asScalarOperand.add(pastTheIntRange);
+
+        final var insideAnArrayOperand = new JsonArray();
+        final var nested = new JsonArray();
+        nested.add(pastTheIntRange);
+        insideAnArrayOperand.add(nested);
+
+        assertEquals(concatOf(asScalarOperand), concatOf(insideAnArrayOperand),
+                "both CONCAT branches must spell a number the same way");
+        assertEquals("3000000000", concatOf(insideAnArrayOperand));
+    }
 }

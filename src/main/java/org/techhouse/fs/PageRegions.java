@@ -14,11 +14,15 @@ final class PageRegions {
     }
 
     static void truncateTo(File file, long length) {
+        truncateTo(file, length, "Could not roll back the page append for " + file.getAbsolutePath()
+                + " after its index write failed; run REINDEX on this collection");
+    }
+
+    static void truncateTo(File file, long length, String failureMessage) {
         try (var channel = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             channel.setLength(length);
         } catch (IOException e) {
-            logger.error("Could not roll back the page append for " + file.getAbsolutePath()
-                    + " after its index write failed; run REINDEX on this collection", e);
+            logger.error(failureMessage, e);
         }
     }
 

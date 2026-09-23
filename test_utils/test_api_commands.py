@@ -128,6 +128,7 @@ def wait_for_index(c, coll, field, db=DB, timeout_s=15.0):
 
 COLL_CRUD = "crud"
 COLL_AGG = "agg"
+COLL_CASTS = "casts"
 COLL_JOIN_LEFT = "agg_join_left"
 COLL_JOIN_RIGHT = "agg_join_right"
 COLL_TYPES = "types"
@@ -449,6 +450,38 @@ def test_conjunctions(c):
     check_field("COUNT after NAND conjunction", r, "results.0.count", 2)
 
 
+def test_map_conditions_and_number_casts(c):
+    section("MAP conditions agree with FILTER; CAST to STRING spells numbers like the document does")
+
+    active = {"fieldOperatorType": "EQUALS", "field": "active", "value": True}
+    rating45 = {"fieldOperatorType": "EQUALS", "field": "rating", "value": 4.5}
+    age25 = {"fieldOperatorType": "EQUALS", "field": "age", "value": 25}
+
+    for conj_type, leaves in (("AND", [active, rating45]), ("OR", [age25, active]),
+                              ("XOR", [active, rating45]), ("NOR", [age25]),
+                              ("NAND", [active, rating45])):
+        condition = {"conjunctionType": conj_type, "operators": leaves}
+        by_filter = ids_of(aggregate(c, COLL_AGG, [{"type": "FILTER", "operator": condition}]))
+        mapped = aggregate(c, COLL_AGG, [{"type": "MAP", "operators": [
+            {"fieldName": "meta", "condition": condition}]}])
+        by_map = sorted(d.get("_id") for d in (mapped.get("results") or []) if "meta" not in d)
+        check(f"a {conj_type} MAP condition selects exactly what the same FILTER selects",
+              by_map == by_filter, detail=f"FILTER={by_filter}, MAP={by_map}")
+
+    create_coll(c, COLL_CASTS)
+    save(c, COLL_CASTS, {"_id": "big", "n": 3000000000})
+    save(c, COLL_CASTS, {"_id": "small", "n": 123})
+    cast_step = [{"type": "MAP", "operators": [
+        {"fieldName": "asText", "operator": {"type": "CAST", "fieldName": "n", "toType": "STRING"}}]}]
+    by_id = {d.get("_id"): d for d in (aggregate(c, COLL_CASTS, cast_step).get("results") or [])}
+    check("CAST to STRING of a number past the int range is not clamped",
+          by_id.get("big", {}).get("asText") == "3000000000",
+          detail=f"got {by_id.get('big', {}).get('asText')!r}")
+    check("CAST to STRING of a small integral number is unchanged",
+          by_id.get("small", {}).get("asText") == "123",
+          detail=f"got {by_id.get('small', {}).get('asText')!r}")
+
+
 def test_aggregation_steps(c):
     section("Aggregation steps (MAP / GROUP_BY / JOIN / COUNT / DISTINCT / LIMIT / SKIP / SORT)")
 
@@ -725,6 +758,7 @@ def main():
         test_filter_with_indexes,
         test_conjunctions,
         test_aggregation_steps,
+        test_map_conditions_and_number_casts,
         test_analyze,
         test_empty_collection_aggregate,
         test_index_ops,

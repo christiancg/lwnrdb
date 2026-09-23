@@ -16,6 +16,8 @@ import org.techhouse.log.Logger;
 
 final class PkIndexStore {
     private static final Logger logger = Logger.logFor(PkIndexStore.class);
+    private static final String PK_INDEX_ROLLBACK_FAILURE = "Could not roll back a failed pk index append;"
+            + " the pk index may list ids whose records are not on any page, and nothing rebuilds it";
 
     private final FilePaths paths;
 
@@ -30,14 +32,29 @@ final class PkIndexStore {
     private void appendEntries(File indexFile, List<PkIndexEntry> pkEntries) throws IOException {
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(indexFile, StandardCharsets.UTF_8, true),
-                Globals.BUFFER_SIZE)) {
-            for (var pkEntry : pkEntries) {
-                writer.append(pkEntry.toFileEntry());
-                writer.newLine();
-            }
+        try {
+            appendOrTruncateBack(indexFile, pkEntries);
         } finally {
             lock.unlock();
+        }
+    }
+
+    private void appendOrTruncateBack(File indexFile, List<PkIndexEntry> pkEntries) throws IOException {
+        final var lengthBeforeAppend = indexFile.length();
+        var appended = false;
+        try {
+            try (var writer = new BufferedWriter(new FileWriter(indexFile, StandardCharsets.UTF_8, true),
+                    Globals.BUFFER_SIZE)) {
+                for (var pkEntry : pkEntries) {
+                    writer.append(pkEntry.toFileEntry());
+                    writer.newLine();
+                }
+            }
+            appended = true;
+        } finally {
+            if (!appended) {
+                PageRegions.truncateTo(indexFile, lengthBeforeAppend, PK_INDEX_ROLLBACK_FAILURE);
+            }
         }
     }
 

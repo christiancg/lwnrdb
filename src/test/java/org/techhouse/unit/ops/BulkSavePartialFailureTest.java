@@ -115,13 +115,15 @@ public class BulkSavePartialFailureTest {
     }
 
     private String cachedValueOf() throws Exception {
-        final var entries = cache.getEntriesByIds(TestGlobals.DB, TestGlobals.COLL, Set.of(BulkSavePartialFailureTest.UPDATED_ID));
+        final var entries = cache.getEntriesByIds(TestGlobals.DB, TestGlobals.COLL,
+                Set.of(BulkSavePartialFailureTest.UPDATED_ID));
         assertEquals(1, entries.size(), "the collection must still hold " + BulkSavePartialFailureTest.UPDATED_ID);
         return entries.getFirst().getData().get(VALUE_FIELD).asJsonString().getValue();
     }
 
     private String storedValueOf() throws Exception {
-        final var onDisk = fileSystem.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0).get(BulkSavePartialFailureTest.UPDATED_ID);
+        final var onDisk = fileSystem.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0)
+                .get(BulkSavePartialFailureTest.UPDATED_ID);
         assertNotNull(onDisk, "the page must still hold " + BulkSavePartialFailureTest.UPDATED_ID);
         return onDisk.getData().get(VALUE_FIELD).asJsonString().getValue();
     }

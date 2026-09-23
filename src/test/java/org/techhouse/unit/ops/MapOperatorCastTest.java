@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.time.LocalDateTime;
 import java.time.LocalTime;
+import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonDateTime;
@@ -13,6 +14,7 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.ops.MapOperatorHelper;
 import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.CastToType;
@@ -188,5 +190,32 @@ public class MapOperatorCastTest {
         CastMidOperator cast = new CastMidOperator("t", CastToType.STRING);
         JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
         assertEquals("10:30", result.get("out").asJsonString().getValue());
+    }
+
+    private static String castToString(Number value) {
+        final var jsonObject = new JsonObject();
+        jsonObject.addProperty("value", value);
+        final var operator = new AddFieldMapOperator("asText", null, new CastMidOperator("value", CastToType.STRING));
+        return MapOperatorHelper.processOperator(operator, jsonObject).get("asText").asJsonString().getValue();
+    }
+
+    @Test
+    public void test_cast_to_string_of_a_number_above_the_int_range() {
+        assertEquals("3000000000", castToString(3000000000L),
+                "an int cast clamps, so a number past Integer.MAX_VALUE must not go through one");
+    }
+
+    @Test
+    public void test_cast_to_string_matches_the_documents_own_number_text() {
+        final var disagreeing = new java.util.ArrayList<String>();
+        for (final var value : List.of(0.0d, -0.0d, 123.0d, 3000000000.0d, 9007199254740994.0d, 0.0000001d, 1.0e21d)) {
+            final var casted = castToString(value);
+            final var documentText = NumberFormatter.toJsString(value);
+            if (!documentText.equals(casted)) {
+                disagreeing.add(value + " cast to \"" + casted + "\" but serializes as \"" + documentText + "\"");
+            }
+        }
+        assertEquals(List.of(), disagreeing,
+                "CAST to STRING must spell a number exactly as the document serializer spells it");
     }
 }

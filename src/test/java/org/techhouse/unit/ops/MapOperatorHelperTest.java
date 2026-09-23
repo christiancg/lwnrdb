@@ -222,7 +222,7 @@ public class MapOperatorHelperTest {
     }
 
     @Test
-    public void test_nor_condition_returns_false_skips_field() {
+    public void test_nor_condition_adds_the_field_when_no_child_matches() {
         JsonObject input = new JsonObject();
         input.addProperty("x", 5);
 
@@ -234,7 +234,7 @@ public class MapOperatorHelperTest {
                 new ArrayParamMidOperator(MidOperationType.SUM, operands));
 
         JsonObject result = MapOperatorHelper.processOperator(op, input);
-        assertFalse(result.has("result"));
+        assertTrue(result.has("result"));
     }
 
     @Test

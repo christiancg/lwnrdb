@@ -430,6 +430,13 @@ def test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn: Conn):
     check("no id appears twice on the page", len(scan_ids) == len(set(scan_ids)),
           f"scanned={len(scan_ids)} distinct={len(set(scan_ids))}")
 
+    counted = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BULK_COLL,
+                         "aggregationSteps": [{"type": "COUNT"}]})
+    counted_rows = ((counted.get("results") or [{}])[0]).get("count")
+    check("the pk index describes no row the pages cannot produce",
+          counted_rows == len(scan_ids),
+          f"index-only COUNT={counted_rows} scan={len(scan_ids)}")
+
 
 def test_a_committed_transaction_survives_a_restart_whole(conn: Conn):
     """A commit that cannot finish applying keeps its locks and its marker so recovery can finish

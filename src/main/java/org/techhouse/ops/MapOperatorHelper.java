@@ -11,6 +11,7 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.ejson.type_adapters.TypeAdapterFactory;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
@@ -87,7 +88,8 @@ public final class MapOperatorHelper {
             case AND -> trueCount == steps.size();
             case OR -> trueCount > 0;
             case XOR -> trueCount == 1;
-            case NOR, NAND -> false;
+            case NOR -> trueCount == 0;
+            case NAND -> trueCount != steps.size();
         };
     }
 
@@ -286,35 +288,24 @@ public final class MapOperatorHelper {
 
     private static JsonObject concat(ArrayParamMidOperator midOperator, String addFieldName, JsonObject obj) {
         final var operands = midOperator.getOperands();
-        final var elementAdapter = TypeAdapterFactory.getAdapter(JsonBaseElement.class);
         StringBuilder result = new StringBuilder();
         for (var concatStep : operands) {
             if (concatStep.isJsonPrimitive()) {
                 final var primitive = concatStep.asJsonPrimitive();
                 if (primitive.isJsonString()) {
                     final var primitiveString = primitive.asJsonString().getValue();
-                    String toAdd;
                     if (primitiveString.startsWith(Globals.STRING_LITERAL_PREFIX)) {
-                        toAdd = primitiveString.substring(Globals.STRING_LITERAL_PREFIX.length());
+                        result.append(primitiveString.substring(Globals.STRING_LITERAL_PREFIX.length()));
                     } else {
-                        final var fieldName = primitive.asJsonString().getValue();
-                        final var element = JsonUtils.getFromPath(obj, fieldName);
-                        if (element instanceof JsonCustom<?> custom) {
-                            toAdd = custom.stringDataValue();
-                        } else if (element.isJsonString()) {
-                            toAdd = element.asJsonString().getValue();
-                        } else {
-                            toAdd = elementAdapter.toJson(element);
-                        }
+                        result.append(concatTextOf(JsonUtils.getFromPath(obj, primitiveString)));
                     }
-                    result.append(toAdd);
                 } else {
-                    result.append(elementAdapter.toJson(concatStep));
+                    result.append(concatTextOf(concatStep));
                 }
             } else if (concatStep.isJsonArray()) {
                 for (var arrayElement : concatStep.asJsonArray()) {
                     if (arrayElement.isJsonPrimitive()) {
-                        result.append(arrayElement.asJsonPrimitive().getValue());
+                        result.append(concatTextOf(arrayElement));
                     }
                 }
             } else if (concatStep.isJsonNull()) {
@@ -323,6 +314,16 @@ public final class MapOperatorHelper {
         }
         obj.addProperty(addFieldName, result.toString());
         return obj;
+    }
+
+    private static String concatTextOf(JsonBaseElement element) {
+        if (element instanceof JsonCustom<?> custom) {
+            return custom.stringDataValue();
+        }
+        if (element.isJsonString()) {
+            return element.asJsonString().getValue();
+        }
+        return TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(element);
     }
 
     private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj) {
@@ -350,10 +351,8 @@ public final class MapOperatorHelper {
                     } else if (primitive.isJsonString()) {
                         yield primitive;
                     } else if (primitive.isJsonNumber()) {
-                        final var value = primitive.asJsonNumber().getValue();
-                        yield new JsonString(value.doubleValue() % 1 == 0
-                                ? Integer.toString(value.intValue())
-                                : Double.toString(value.doubleValue()));
+                        yield new JsonString(
+                                NumberFormatter.toJsString(primitive.asJsonNumber().getValue().doubleValue()));
                     } else if (primitive.isJsonBoolean()) {
                         yield new JsonString(Boolean.toString(primitive.asJsonBoolean().getValue()));
                     }
