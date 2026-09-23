@@ -27,6 +27,9 @@ public final class FieldPredicateFactory {
                 return false;
             }
             final var operatorElement = operator.getValue();
+            if (operatorElement.isJsonNull()) {
+                return nullOperandMatches(toTestElement, operation);
+            }
             if (operatorElement.isJsonPrimitive()) {
                 return primitiveOperandMatches(operatorElement, toTestElement, operation,
                         Globals.PK_FIELD.equals(fieldName));
@@ -37,7 +40,7 @@ public final class FieldPredicateFactory {
             if (operatorElement.isJsonObject()) {
                 return objectOperandMatches(operatorElement, toTestElement, operation);
             }
-            return operatorElement.isJsonNull() && toTestElement.isJsonNull();
+            return false;
         };
     }
 
@@ -67,6 +70,15 @@ public final class FieldPredicateFactory {
                     operation, exactStrings);
         }
         return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
+    }
+
+    private static boolean nullOperandMatches(JsonBaseElement toTestElement, FieldOperatorType operation) {
+        final var stored = toTestElement.isJsonNull();
+        return switch (operation) {
+            case EQUALS -> stored;
+            case NOT_EQUALS -> !stored;
+            case GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN, CONTAINS -> false;
+        };
     }
 
     private static boolean booleanMatches(boolean operand, boolean stored, FieldOperatorType operation) {

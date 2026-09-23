@@ -25,7 +25,9 @@ public final class PrimaryKeyIndexResolver {
         final var operand = operator.getValue();
         final var resolved = switch (operator.getFieldOperatorType()) {
             case EQUALS -> idsEqualTo(operand, dbName, collName);
-            case NOT_EQUALS -> complementOf(idsEqualTo(operand, dbName, collName), dbName, collName);
+            case NOT_EQUALS -> isNotPlainString(operand)
+                    ? null
+                    : complementOf(idsEqualTo(operand, dbName, collName), dbName, collName);
             case IN -> idsIn(operand, dbName, collName);
             case NOT_IN -> complementOf(idsIn(operand, dbName, collName), dbName, collName);
             case CONTAINS -> idsContaining(operand, dbName, collName);

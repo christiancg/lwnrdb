@@ -601,6 +601,86 @@ def test_a_filter_on_id_reads_only_the_matching_document(conn: Conn):
     bu.check("only the matching document was read", analysis.get("documentsScanned") == 1,
              detail=f"documentsScanned={analysis.get('documentsScanned')} of 25")
 
+def aggregate_count(conn: Conn, coll: str, steps: list) -> int:
+    resp = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
+                      "aggregationSteps": steps + [{"type": "COUNT"}]})
+    return ((resp.get("results") or [{}])[0]).get("count")
+
+
+def test_a_count_after_an_id_filter_matches_the_rows_it_returns(conn: Conn):
+    section("An index-only COUNT agrees with the rows the same FILTER returns")
+    # PrimaryKeyIndexResolver answered Set.of() both for a string absent from pk.idx and for an
+    # operand it could not read as a primary key at all, and complementOf turned the second into
+    # every document. FILTER hid it by re-testing each fetched document; tryIndexOnlyCount has no
+    # re-test by design, so [FILTER, COUNT] reported the collection size against zero rows.
+    coll = "id_count"
+    bu.check_status("create the collection",
+                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    for doc_id in ("k1", "k2", "k3"):
+        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                   "object": {"_id": doc_id, "n": 1}})
+
+    # A type-mismatched comparison matches nothing, here as everywhere else in the engine, so the
+    # complement the pk index would have taken is wrong. null is the exception and is not a type
+    # mismatch: no _id is ever null, so NOT_EQUALS null legitimately names every document.
+    for label, value, expected in (("a number", 5, []), ("an object", {}, []), ("an array", [], []),
+                                   ("null", None, ["k1", "k2", "k3"])):
+        steps = [{"type": "FILTER", "operator": {
+            "fieldOperatorType": "NOT_EQUALS", "field": "_id", "value": value}}]
+        rows = aggregate_ids(conn, coll, steps)
+        counted = aggregate_count(conn, coll, steps)
+        bu.check(f"NOT_EQUALS _id against {label} names the right documents", rows == expected,
+                 detail=f"got {rows}, expected {expected}")
+        bu.check(f"COUNT after NOT_EQUALS _id against {label} agrees with the rows",
+                 counted == len(rows), detail=f"count={counted} rows={len(rows)}")
+
+    present = [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "NOT_EQUALS", "field": "_id", "value": "k2"}}]
+    bu.check("NOT_EQUALS _id against a present id still answers from the pk index",
+             aggregate_ids(conn, coll, present) == ["k1", "k3"], detail=str(aggregate_ids(conn, coll, present)))
+    bu.check("COUNT after it agrees", aggregate_count(conn, coll, present) == 2,
+             detail=f"count={aggregate_count(conn, coll, present)}")
+
+    not_in = [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "NOT_IN", "field": "_id", "value": [5, None]}}]
+    bu.check("NOT_IN _id against a non-string list still returns every document",
+             aggregate_ids(conn, coll, not_in) == ["k1", "k2", "k3"], detail=str(aggregate_ids(conn, coll, not_in)))
+    bu.check("COUNT after it agrees", aggregate_count(conn, coll, not_in) == 3,
+             detail=f"count={aggregate_count(conn, coll, not_in)}")
+
+
+def test_not_equals_null_returns_the_documents_that_are_not_null(conn: Conn):
+    section("A null operand respects the operator it was given")
+    # JsonNull is not a JsonPrimitive, so a null operand fell past every typed branch of
+    # FieldPredicateFactory.getTester into a tail that answered isJsonNull() && isJsonNull()
+    # without looking at the operator: NOT_EQUALS, the four range operators and CONTAINS against
+    # null all returned exactly the null-valued documents.
+    coll = "null_operand"
+    bu.check_status("create the collection",
+                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "u_null", "v": None}})
+    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "u_str", "v": "open"}})
+    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "u_num", "v": 7}})
+    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "u_absent"}})
+
+    def against_null(operator: str) -> list:
+        return aggregate_ids(conn, coll, [{"type": "FILTER", "operator": {
+            "fieldOperatorType": operator, "field": "v", "value": None}}])
+
+    for stage in ("unindexed", "indexed"):
+        if stage == "indexed":
+            bu.check_status("index the field",
+                            conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
+                                       "fieldName": "v"}), "OK")
+        bu.check(f"EQUALS null names only the null-valued document ({stage})",
+                 against_null("EQUALS") == ["u_null"], detail=str(against_null("EQUALS")))
+        bu.check(f"NOT_EQUALS null names the documents that hold a value ({stage})",
+                 against_null("NOT_EQUALS") == ["u_num", "u_str"], detail=str(against_null("NOT_EQUALS")))
+        for operator in ("GREATER_THAN", "GREATER_THAN_EQUALS", "SMALLER_THAN", "SMALLER_THAN_EQUALS", "CONTAINS"):
+            bu.check(f"{operator} against null names nothing ({stage})",
+                     against_null(operator) == [], detail=str(against_null(operator)))
+
+
 # ── phase 3: an unclean stop, then a restart with the cache disabled ─────────
 
 def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
@@ -778,6 +858,8 @@ def main():
             test_a_filter_on_id_cannot_destroy_the_pk_index(conn, work_dir)
             test_a_filter_on_id_agrees_with_find_by_id_on_case(conn)
             test_a_filter_on_id_reads_only_the_matching_document(conn)
+            test_a_count_after_an_id_filter_matches_the_rows_it_returns(conn)
+            test_not_equals_null_returns_the_documents_that_are_not_null(conn)
 
             check("a burst of indexed writes leaves an index-dirty marker on disk",
                   write_until_indexes_are_dirty(conn, work_dir),

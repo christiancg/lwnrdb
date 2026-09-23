@@ -185,6 +185,34 @@ public class IndexScanAgreementTest {
         return queries;
     }
 
+    private void seedNulls() throws IOException {
+        insert("x_null", "state", org.techhouse.ejson.elements.JsonNull.INSTANCE);
+        insert("x_string", "state", new JsonString("open"));
+        insert("x_number", "state", parsed("7"));
+        insert("x_absent", "state", null);
+    }
+
+    private Map<String, Supplier<BaseAggregationStep[]>> nullOperandQueries() {
+        final var queries = new LinkedHashMap<String, Supplier<BaseAggregationStep[]>>();
+        for (final var type : List.of(FieldOperatorType.EQUALS, FieldOperatorType.NOT_EQUALS,
+                FieldOperatorType.GREATER_THAN, FieldOperatorType.GREATER_THAN_EQUALS, FieldOperatorType.SMALLER_THAN,
+                FieldOperatorType.SMALLER_THAN_EQUALS, FieldOperatorType.CONTAINS)) {
+            queries.put(type + " state null", () -> new BaseAggregationStep[]{
+                    filter(type, "state", org.techhouse.ejson.elements.JsonNull.INSTANCE)});
+        }
+        queries.put("IN state [null]", () -> new BaseAggregationStep[]{
+                filter(FieldOperatorType.IN, "state", array(org.techhouse.ejson.elements.JsonNull.INSTANCE))});
+        queries.put("NOT_IN state [null]", () -> new BaseAggregationStep[]{
+                filter(FieldOperatorType.NOT_IN, "state", array(org.techhouse.ejson.elements.JsonNull.INSTANCE))});
+        queries.put("COUNT after NOT_EQUALS state null",
+                () -> new BaseAggregationStep[]{
+                        filter(FieldOperatorType.NOT_EQUALS, "state", org.techhouse.ejson.elements.JsonNull.INSTANCE),
+                        new CountAggregationStep()});
+        queries.put("SORT state asc", () -> new BaseAggregationStep[]{new SortAggregationStep("state", true)});
+        queries.put("DISTINCT state", () -> new BaseAggregationStep[]{new DistinctAggregationStep("state")});
+        return queries;
+    }
+
     private Map<String, Supplier<BaseAggregationStep[]>> booleanQueries() {
         final var queries = new LinkedHashMap<String, Supplier<BaseAggregationStep[]>>();
         for (final var operand : List.of(true, false)) {
@@ -236,6 +264,13 @@ public class IndexScanAgreementTest {
         seedBooleans();
 
         assertEveryQueryAgrees("flag", booleanQueries());
+    }
+
+    @Test
+    public void test_every_null_operand_query_agrees_between_index_and_scan() throws Exception {
+        seedNulls();
+
+        assertEveryQueryAgrees("state", nullOperandQueries());
     }
 
     @Test

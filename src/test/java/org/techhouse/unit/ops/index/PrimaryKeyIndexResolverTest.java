@@ -12,8 +12,11 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -102,6 +105,33 @@ public class PrimaryKeyIndexResolverTest {
     @Test
     public void test_a_non_string_operand_resolves_empty() throws IOException {
         assertEquals(Set.of(), resolve(FieldOperatorType.EQUALS, new JsonNumber(1)));
+    }
+
+    @Test
+    public void test_not_equals_declines_every_operand_that_is_not_a_primary_key() throws IOException {
+        final var operands = new JsonBaseElement[]{new JsonNumber(5), JsonNull.INSTANCE, new JsonObject(), arrayOf(),
+                new JsonBoolean(true), new JsonDateTime("#datetime(2024-01-01T10:00:00)")};
+        for (final var operand : operands) {
+            assertNull(resolve(FieldOperatorType.NOT_EQUALS, operand),
+                    operand.getClass().getSimpleName() + " must decline rather than complement the collection");
+        }
+    }
+
+    @Test
+    public void test_not_equals_still_complements_an_empty_string_operand() throws IOException {
+        assertEquals(Set.of("a", "b", "c"), resolve(FieldOperatorType.NOT_EQUALS, new JsonString("")));
+    }
+
+    @Test
+    public void test_equals_and_contains_still_answer_empty_for_a_non_string_operand() throws IOException {
+        assertEquals(Set.of(), resolve(FieldOperatorType.EQUALS, new JsonNumber(5)));
+        assertEquals(Set.of(), resolve(FieldOperatorType.CONTAINS, new JsonNumber(5)));
+    }
+
+    @Test
+    public void test_not_in_still_complements_a_non_string_operand_list() throws IOException {
+        assertEquals(Set.of("a", "b", "c"),
+                resolve(FieldOperatorType.NOT_IN, arrayOf(new JsonNumber(5), JsonNull.INSTANCE)));
     }
 
     @Test
