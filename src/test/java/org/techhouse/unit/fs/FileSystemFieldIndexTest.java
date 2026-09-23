@@ -165,7 +165,7 @@ public class FileSystemFieldIndexTest {
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-Number.idx");
         String fileContent = Files.readString(indexFile.toPath());
 
-        assertFalse(fileContent.contains("123" + Globals.INDEX_ENTRY_SEPARATOR));
+        assertFalse(fileContent.contains("123" + Globals.ID_SEPARATOR));
     }
 
     @Test
@@ -336,16 +336,16 @@ public class FileSystemFieldIndexTest {
         File mockIndexFile = mock(File.class);
         when(mockIndexFile.exists()).thenReturn(true);
         Path path = Path.of(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
-                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-_id-String.idx");
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-pk.idx");
         when(mockIndexFile.toPath()).thenReturn(path);
 
         List<String> fileLines = Arrays.asList(
-                "value3" + Globals.INDEX_ENTRY_SEPARATOR + "300" + Globals.INDEX_ENTRY_SEPARATOR + "100"
-                        + Globals.INDEX_ENTRY_SEPARATOR + "0" + Globals.INDEX_ENTRY_SEPARATOR + "0",
-                "value1" + Globals.INDEX_ENTRY_SEPARATOR + "100" + Globals.INDEX_ENTRY_SEPARATOR + "100"
-                        + Globals.INDEX_ENTRY_SEPARATOR + "0" + Globals.INDEX_ENTRY_SEPARATOR + "0",
-                "value2" + Globals.INDEX_ENTRY_SEPARATOR + "200" + Globals.INDEX_ENTRY_SEPARATOR + "100"
-                        + Globals.INDEX_ENTRY_SEPARATOR + "0" + Globals.INDEX_ENTRY_SEPARATOR + "0");
+                "value3" + Globals.ID_SEPARATOR + "300" + Globals.ID_SEPARATOR + "100" + Globals.ID_SEPARATOR + "0"
+                        + Globals.ID_SEPARATOR + "0",
+                "value1" + Globals.ID_SEPARATOR + "100" + Globals.ID_SEPARATOR + "100" + Globals.ID_SEPARATOR + "0"
+                        + Globals.ID_SEPARATOR + "0",
+                "value2" + Globals.ID_SEPARATOR + "200" + Globals.ID_SEPARATOR + "100" + Globals.ID_SEPARATOR + "0"
+                        + Globals.ID_SEPARATOR + "0");
         Files.write(path, fileLines);
 
         List<PkIndexEntry> result = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);

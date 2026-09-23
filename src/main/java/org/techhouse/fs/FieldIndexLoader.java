@@ -40,7 +40,7 @@ final class FieldIndexLoader {
             String label, Function<String, FieldIndexEntry<T>> parser, Comparator<FieldIndexEntry<T>> order)
             throws IOException {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, indexTypeLabel);
-        if (!indexFile.exists()) {
+        if (indexFile == null || !indexFile.exists()) {
             return null;
         }
         final var readLock = FileLocks.lockFor(indexFile).readLock();
@@ -52,6 +52,12 @@ final class FieldIndexLoader {
             readLock.unlock();
         }
         if (parsed == null) {
+            return null;
+        }
+        if (parsed.unrecognised()) {
+            logger.error("No line in " + indexFile.getName() + " could be read as a " + label
+                    + " index entry, so it is not the file this loader expects; leaving it untouched."
+                    + " Run REINDEX on this collection to rebuild it from the stored documents.");
             return null;
         }
         if (!parsed.dropped()) {
@@ -75,7 +81,8 @@ final class FieldIndexLoader {
         }
     }
 
-    private record ParsedIndex<T>(List<FieldIndexEntry<T>> entries, List<String> lines, boolean dropped) {
+    private record ParsedIndex<T>(List<FieldIndexEntry<T>> entries, List<String> lines, boolean dropped,
+            boolean unrecognised) {
     }
 
     private <T> ParsedIndex<T> parseIndex(File indexFile, String label, Function<String, FieldIndexEntry<T>> parser)
@@ -103,7 +110,7 @@ final class FieldIndexLoader {
                         + ". Run REINDEX on this collection to rebuild it from the stored documents.");
             }
         }
-        return new ParsedIndex<>(entries, keepLines, dropped);
+        return new ParsedIndex<>(entries, keepLines, dropped, dropped && entries.isEmpty());
     }
 
     private static <T> Comparator<FieldIndexEntry<T>> byIndexedValue() {

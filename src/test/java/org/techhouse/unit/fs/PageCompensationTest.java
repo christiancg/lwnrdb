@@ -49,8 +49,7 @@ public class PageCompensationTest {
     private File pkIndexFile() {
         return new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR
-                + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_STRING
-                + Globals.INDEX_FILE_EXTENSION);
+                + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
     }
 
     private org.techhouse.data.PkIndexEntry insert(String id) throws Exception {

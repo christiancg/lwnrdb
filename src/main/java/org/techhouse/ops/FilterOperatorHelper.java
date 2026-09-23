@@ -27,6 +27,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.filter.FieldPredicateFactory;
 import org.techhouse.ops.index.PendingWriteReconciler;
+import org.techhouse.ops.index.PrimaryKeyIndexResolver;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
@@ -299,9 +300,7 @@ public class FilterOperatorHelper {
         return switch (operator.getType()) {
             case FIELD -> {
                 final var fieldOperator = (FieldOperator) operator;
-                // A hash index hit is only a candidate and the index-only COUNT cannot confirm it, so
-                // disqualify it and let the caller fall back to the document-reading COUNT.
-                if (usesHashIndex(fieldOperator)) {
+                if (hitsAreUnconfirmedCandidates(fieldOperator)) {
                     yield null;
                 }
                 yield indexMatchingIds(fieldOperator, dbName, collName);
@@ -311,6 +310,10 @@ public class FilterOperatorHelper {
             case CUSTOM -> null;
             case SCRIPT -> null;
         };
+    }
+
+    private static boolean hitsAreUnconfirmedCandidates(FieldOperator operator) {
+        return !Globals.PK_FIELD.equals(operator.getField()) && usesHashIndex(operator);
     }
 
     // Mirrors the dispatch in UserCache.doGetIdsFromIndex / getIdsFromInList: object operands and array
@@ -336,6 +339,9 @@ public class FilterOperatorHelper {
     // re-added by re-testing the operator against the current document, keeping the result exact.
     private static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
+        if (Globals.PK_FIELD.equals(operator.getField())) {
+            return PrimaryKeyIndexResolver.resolve(operator, dbName, collName);
+        }
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final var raw = rawIndexMatchingIds(operator, dbName, collName);
         if (raw == null) {
@@ -357,6 +363,9 @@ public class FilterOperatorHelper {
     private static Set<String> rawIndexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
         final var fieldName = operator.getField();
+        if (cache.hasNoIndex(dbName, collName, fieldName)) {
+            return null;
+        }
         final var value = operator.getValue();
         return switch (value) {
             case JsonObject jsonObject -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonObject);

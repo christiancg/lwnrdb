@@ -140,6 +140,7 @@ final class DocumentPageStore {
         entry.set_id(pkIndexEntry.getValue());
         entry.setData(jsonObject);
         entry.setPage(pkIndexEntry.getPage());
+        entry.setVersion(pkIndexEntry.getVersion());
         return entry;
     }
 }

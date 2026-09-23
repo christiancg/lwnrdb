@@ -58,8 +58,8 @@ public class PageRollbackTest {
     }
 
     private void replacePkIndexWithAnUnwritableDirectory() throws IOException {
-        final var pkIndex = new File(collectionFolder(), TestGlobals.COLL + "-" + Globals.PK_FIELD + "-"
-                + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
+        final var pkIndex = new File(collectionFolder(),
+                TestGlobals.COLL + "-" + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
         Files.deleteIfExists(pkIndex.toPath());
         assertTrue(pkIndex.mkdirs(), "the test needs the pk index path to be unwritable");
     }

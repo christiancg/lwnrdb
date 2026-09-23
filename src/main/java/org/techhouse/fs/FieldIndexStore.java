@@ -93,6 +93,9 @@ final class FieldIndexStore {
     }
 
     private void appendEntries(File indexFile, List<? extends FieldIndexEntry<?>> entries) {
+        if (indexFile == null) {
+            return;
+        }
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
         try (var writer = new BufferedWriter(new FileWriter(indexFile, StandardCharsets.UTF_8, true),
@@ -112,6 +115,9 @@ final class FieldIndexStore {
     }
 
     private void removeIndexLine(File indexFile, String value, FieldIndexEntry<?> entry) throws IOException {
+        if (indexFile == null) {
+            return;
+        }
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
@@ -129,6 +135,9 @@ final class FieldIndexStore {
     }
 
     private void upsertIndexLine(File indexFile, String value, FieldIndexEntry<?> entry) throws IOException {
+        if (indexFile == null) {
+            return;
+        }
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {

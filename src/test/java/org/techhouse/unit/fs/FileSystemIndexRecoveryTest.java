@@ -117,8 +117,7 @@ public class FileSystemIndexRecoveryTest {
 
         final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
                 + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
-                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR
-                + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
         Files.writeString(indexFile.toPath(), "\nthis is not a valid pk index line", StandardCharsets.UTF_8,
                 java.nio.file.StandardOpenOption.APPEND);
 
@@ -149,10 +148,11 @@ public class FileSystemIndexRecoveryTest {
 
         final var indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
                 + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
-                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD + Globals.INDEX_FILE_NAME_SEPARATOR
-                + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
-        Files.writeString(indexFile.toPath(), "\ndup|172|172|0|0", StandardCharsets.UTF_8,
-                java.nio.file.StandardOpenOption.APPEND);
+                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
+        Files.writeString(
+                indexFile.toPath(), "\ndup" + Globals.ID_SEPARATOR + "172" + Globals.ID_SEPARATOR + "172"
+                        + Globals.ID_SEPARATOR + "0" + Globals.ID_SEPARATOR + "0",
+                StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
 
         final var firstRead = fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
         assertEquals(1, firstRead.size(), "duplicate id must collapse to a single entry");

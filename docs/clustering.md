@@ -477,7 +477,8 @@ then, drain the node's traffic at the load balancer first if that window matters
 
 Every document write is stamped with a **version** — a node-global monotonic epoch-millis
 value assigned by the coordinating owner and persisted as an extra trailing column of the
-PK index (`id|position|length|page|version`). It ships in the `REPLICATE` payload so
+PK index (`id<US>position<US>length<US>page<US>version`, where `<US>` is U+001F, the delimiter every
+`.idx` file uses). It ships in the `REPLICATE` payload so
 replicas store the *owner's* version rather than assigning their own, and a node advances
 its clock past any version it receives so it never later assigns a lower one.
 

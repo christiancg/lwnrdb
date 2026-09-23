@@ -32,7 +32,7 @@ What is covered:
     grew past `maxPageSize`. Nothing recomputes page sizes except a restart.
 
   * a PK-index self-heal never erases a write that committed while it was reading.
-    `PkIndexStore.readWholePkIndexFile` rewrote `{coll}-_id-String.idx` in full from a snapshot
+    `PkIndexStore.readWholePkIndexFile` rewrote `{coll}-pk.idx` in full from a snapshot
     taken before it released the read lock, so an append that landed in between was dropped — and
     the loss is permanent, because `REINDEX` rebuilds field indexes only and nothing rebuilds the
     PK index from the document store. The last phase restarts with the cache disabled so that every
@@ -179,7 +179,23 @@ def actual_pages(work_dir: str, db=DB, coll=COLL) -> dict:
 
 
 def pk_index_file(work_dir: str, db=DB, coll=COLL) -> str:
-    return os.path.join(work_dir, "db", db, coll, f"{coll}-_id-String.idx")
+    return os.path.join(work_dir, "db", db, coll, f"{coll}-pk.idx")
+
+
+def unescape_index_token(token: str) -> str:
+    if "\\" not in token:
+        return token
+    out = []
+    i = 0
+    while i < len(token):
+        if token[i] != "\\" or i + 1 >= len(token):
+            out.append(token[i])
+            i += 1
+            continue
+        nxt = token[i + 1]
+        out.append({"\\": "\\", "n": "\n", "r": "\r", "s": "\x1f"}.get(nxt, "\\" + nxt))
+        i += 2
+    return "".join(out)
 
 
 def pk_index_ids(index_file: str) -> set:
@@ -187,8 +203,9 @@ def pk_index_ids(index_file: str) -> set:
     with open(index_file, "r", encoding="utf-8", errors="replace") as fp:
         for line in fp:
             line = line.strip()
-            if line.count("|") >= 4:
-                ids.add(line.rsplit("|", 4)[0])
+            fields = line.split("\x1f")
+            if len(fields) == 5:
+                ids.add(unescape_index_token(fields[0]))
     return ids
 
 
@@ -452,7 +469,7 @@ def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
 def test_index_operations_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
     section("CREATE_INDEX / DROP_INDEX never take the pk index or the tombstones with them")
     # Index files are selected by name. An unanchored match on "-<field>-" also matched
-    # <coll>-_id-String.idx and <coll>-tombstones.idx, and collection names admit '-', so an ordinary
+    # <coll>-pk.idx and <coll>-tombstones.idx, and collection names admit '-', so an ordinary
     # CREATE_INDEX on field "data" in collection "user-data" deleted both. Losing pk.idx is
     # unrecoverable in-product: REINDEX rebuilds field indexes, never the pk index.
     coll = "user-data"
@@ -489,6 +506,100 @@ def test_index_operations_cannot_destroy_the_pk_index(conn: Conn, work_dir: str)
     ids = [d.get("_id") for d in (scanned.get("results") or [])]
     bu.check("a re-save does not duplicate the _id", len(ids) == len(set(ids)) == 3, detail=f"ids={ids}")
 
+
+
+def aggregate_ids(conn: Conn, coll: str, steps: list) -> list:
+    resp = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
+                      "aggregationSteps": steps})
+    return sorted(d.get("_id") for d in (resp.get("results") or []))
+
+
+def test_a_filter_on_id_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
+    section("A FILTER on _id is answered by the pk index and never rewrites it")
+    # The pk index used to be written as <coll>-_id-String.idx, byte-for-byte the field-index naming
+    # scheme, and rawIndexMatchingIds was the one index-read entry point with no hasNoIndex gate. A
+    # FILTER on _id therefore parsed the pk index as a string field index, failed on every line, and
+    # the torn-line self-heal rewrote it empty. REINDEX never rebuilds pk.idx, so that was permanent.
+    coll = "id_filter"
+    bu.check_status("create the collection",
+                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    for i in range(3):
+        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                   "object": {"_id": f"d{i}", "n": i}})
+
+    pk_file = pk_index_file(work_dir, DB, coll)
+    bu.check("the pk index file is named <coll>-pk.idx", os.path.isfile(pk_file), detail=pk_file)
+    size_before = os.path.getsize(pk_file)
+    ids_before = pk_index_ids(pk_file)
+
+    cases = [
+        ("EQUALS", "d0", ["d0"]),
+        ("NOT_EQUALS", "d0", ["d1", "d2"]),
+        ("CONTAINS", "d", ["d0", "d1", "d2"]),
+        ("IN", ["d0", "d2"], ["d0", "d2"]),
+        ("NOT_IN", ["d0", "d2"], ["d1"]),
+    ]
+    for op_type, value, expected in cases:
+        got = aggregate_ids(conn, coll, [{"type": "FILTER", "operator": {
+            "fieldOperatorType": op_type, "field": "_id", "value": value}}])
+        bu.check(f"FILTER _id {op_type} answers correctly", got == expected,
+                 detail=f"expected {expected}, got {got}")
+
+    bu.check("the pk index file was not resized", os.path.getsize(pk_file) == size_before,
+             detail=f"{size_before} -> {os.path.getsize(pk_file)}")
+    bu.check("the pk index still holds every id", pk_index_ids(pk_file) == ids_before,
+             detail=f"{sorted(ids_before)} -> {sorted(pk_index_ids(pk_file))}")
+    for i in range(3):
+        bu.check_status(f"FIND_BY_ID still resolves d{i}",
+                        conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll,
+                                   "_id": f"d{i}"}), "OK")
+    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "d0", "n": 99}})
+    scanned = aggregate_ids(conn, coll, [])
+    bu.check("a re-save after the filter does not duplicate the _id",
+             len(scanned) == len(set(scanned)) == 3, detail=f"ids={scanned}")
+
+
+def test_a_filter_on_id_agrees_with_find_by_id_on_case(conn: Conn):
+    section("FILTER _id and FIND_BY_ID name the same document")
+    # FieldPredicateFactory routed _id through the generic string branch, whose EQUALS is
+    # equalsIgnoreCase, while FIND_BY_ID/SAVE/DELETE binary-search a case-sensitively sorted list. A
+    # document was findable by a filter and unaddressable by everything else.
+    coll = "id_case"
+    bu.check_status("create the collection",
+                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    for doc_id in ("Case1", "case1"):
+        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                   "object": {"_id": doc_id, "which": doc_id}})
+
+    for doc_id in ("Case1", "case1"):
+        filtered = aggregate_ids(conn, coll, [{"type": "FILTER", "operator": {
+            "fieldOperatorType": "EQUALS", "field": "_id", "value": doc_id}}])
+        found = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": doc_id})
+        bu.check(f"FILTER _id EQUALS {doc_id} names exactly that document", filtered == [doc_id],
+                 detail=f"got {filtered}")
+        bu.check(f"FIND_BY_ID {doc_id} agrees with the filter",
+                 (found.get("object") or {}).get("_id") == doc_id, detail=str(found)[:200])
+
+
+def test_a_filter_on_id_reads_only_the_matching_document(conn: Conn):
+    section("A FILTER on _id is resolved by the pk index, not by a collection scan")
+    coll = "id_analyze"
+    bu.check_status("create the collection",
+                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    for i in range(25):
+        conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                   "object": {"_id": f"a{i:03d}", "n": i}})
+
+    resp = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll, "analyze": True,
+                      "aggregationSteps": [{"type": "FILTER", "operator": {
+                          "fieldOperatorType": "EQUALS", "field": "_id", "value": "a007"}}]})
+    analysis = resp.get("analyzeResult") or {}
+    bu.check("the filter still answers correctly",
+             [d.get("_id") for d in (resp.get("results") or [])] == ["a007"], detail=str(resp)[:200])
+    bu.check("the pk index is reported as used", "_id" in (analysis.get("indexesUsed") or []),
+             detail=str(analysis)[:300])
+    bu.check("only the matching document was read", analysis.get("documentsScanned") == 1,
+             detail=f"documentsScanned={analysis.get('documentsScanned')} of 25")
 
 # ── phase 3: an unclean stop, then a restart with the cache disabled ─────────
 
@@ -609,7 +720,7 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
     # Without this the suite could pass by never entering the window it is here to guard.
     with open(log_path, "rb") as fp:
         fp.seek(log_offset)
-        heals = fp.read().decode(errors="replace").count(f"PK index entry in {HEAL_COLL}-_id-String")
+        heals = fp.read().decode(errors="replace").count(f"PK index entry in {HEAL_COLL}-pk")
     check("the writes really did race a self-heal", heals > 20,
           f"only {heals} self-heals fired, so the assertions below prove little")
 
@@ -664,6 +775,9 @@ def main():
             test_a_committed_transaction_survives_a_restart_whole(conn)
             test_an_unreadable_schema_refuses_the_write(conn, work_dir)
             test_index_operations_cannot_destroy_the_pk_index(conn, work_dir)
+            test_a_filter_on_id_cannot_destroy_the_pk_index(conn, work_dir)
+            test_a_filter_on_id_agrees_with_find_by_id_on_case(conn)
+            test_a_filter_on_id_reads_only_the_matching_document(conn)
 
             check("a burst of indexed writes leaves an index-dirty marker on disk",
                   write_until_indexes_are_dirty(conn, work_dir),

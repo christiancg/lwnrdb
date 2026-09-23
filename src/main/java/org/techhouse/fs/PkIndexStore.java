@@ -120,7 +120,8 @@ final class PkIndexStore {
         return others;
     }
 
-    private record ParsedPkIndex(List<PkIndexEntry> entries, List<String> lines, boolean dropped) {
+    private record ParsedPkIndex(List<PkIndexEntry> entries, List<String> lines, boolean dropped,
+            boolean unrecognised) {
     }
 
     List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
@@ -135,6 +136,12 @@ final class PkIndexStore {
             parsed = parsePkIndex(dbName, collectionName, indexFile);
         } finally {
             readLock.unlock();
+        }
+        if (parsed.unrecognised()) {
+            logger.error("No line in " + indexFile.getName() + " could be read as a PK index entry, so it is not"
+                    + " the file this loader expects; leaving it untouched. Nothing rebuilds the PK index, so it"
+                    + " must never be rewritten from a read that understood none of it.");
+            return parsed.entries();
         }
         if (!parsed.dropped()) {
             return parsed.entries();
@@ -174,7 +181,7 @@ final class PkIndexStore {
         }
         final var entries = new ArrayList<>(byValue.values());
         entries.sort(Comparator.comparing(PkIndexEntry::getValue));
-        return new ParsedPkIndex(entries, new ArrayList<>(lineByValue.values()), dropped);
+        return new ParsedPkIndex(entries, new ArrayList<>(lineByValue.values()), dropped, dropped && entries.isEmpty());
     }
 
 }

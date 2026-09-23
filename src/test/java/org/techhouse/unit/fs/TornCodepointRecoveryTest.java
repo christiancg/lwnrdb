@@ -139,7 +139,7 @@ public class TornCodepointRecoveryTest {
         final var fileSystem = fs();
         fileSystem.insertIntoCollection(entry("k1", "plain"));
         fileSystem.insertIntoCollection(entry("k2", CJK));
-        final var pkIndex = fileNamed("-_id-String.idx");
+        final var pkIndex = fileNamed("-pk.idx");
         appendTornLine(pkIndex, "torn" + Globals.ID_SEPARATOR + "0" + Globals.ID_SEPARATOR + "1" + Globals.ID_SEPARATOR
                 + "0" + Globals.ID_SEPARATOR);
 

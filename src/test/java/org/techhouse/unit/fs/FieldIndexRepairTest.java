@@ -104,4 +104,70 @@ public class FieldIndexRepairTest {
         final var entries = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, Number.class);
         assertEquals(2, entries.size(), "neither repair may lose a surviving entry");
     }
+
+    @Test
+    public void test_a_file_where_no_line_parses_is_not_rewritten() throws Exception {
+        writeIndexWithATornLine();
+        final var file = indexFile();
+        java.nio.file.Files.writeString(file.toPath(),
+                "a|0|20|0|0" + Globals.NEWLINE + "b|20|20|0|0" + Globals.NEWLINE);
+        final var before = java.nio.file.Files.readAllBytes(file.toPath());
+
+        final var read = fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, Number.class);
+
+        assertNull(read, "a file this loader cannot read at all must be declined, not answered from");
+        assertArrayEquals(before, java.nio.file.Files.readAllBytes(file.toPath()),
+                "a total parse failure means the file is not what the loader expects, so it must not be rewritten");
+    }
+
+    @Test
+    public void test_a_field_index_named_id_is_refused_and_leaves_the_pk_index_alone() throws Exception {
+        final var data = new org.techhouse.ejson.elements.JsonObject();
+        data.addProperty("name", "test");
+        final var entry = org.techhouse.data.DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("kept");
+        fs.insertIntoCollection(entry);
+        final var pkFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-pk.idx");
+        final var before = java.nio.file.Files.readAllBytes(pkFile.toPath());
+
+        assertNull(fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, Globals.PK_FIELD, String.class),
+                "the field-index reader must never resolve the pk index");
+
+        assertArrayEquals(before, java.nio.file.Files.readAllBytes(pkFile.toPath()));
+        assertEquals(1, fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).size());
+    }
+
+    @Test
+    public void test_a_field_index_named_tombstones_is_refused() throws Exception {
+        assertNull(fs.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, Globals.TOMBSTONE_FILE_NAME,
+                String.class));
+    }
+
+    @Test
+    public void test_a_field_index_write_named_id_is_refused() throws Exception {
+        final var data = new org.techhouse.ejson.elements.JsonObject();
+        data.addProperty("name", "test");
+        final var entry = org.techhouse.data.DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("kept");
+        fs.insertIntoCollection(entry);
+        final var pkFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-pk.idx");
+        final var before = java.nio.file.Files.readAllBytes(pkFile.toPath());
+
+        fs.writeIndexFile(TestGlobals.DB, TestGlobals.COLL, Globals.PK_FIELD, java.util.Map.of(String.class,
+                List.of(new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, "x", Set.of("y")))));
+
+        assertArrayEquals(before, java.nio.file.Files.readAllBytes(pkFile.toPath()));
+    }
+
+    @Test
+    public void test_every_field_index_name_carries_a_type_segment() {
+        final var reserved = Set.of(TestGlobals.COLL + "-pk.idx", TestGlobals.COLL + "-tombstones.idx");
+        for (final var type : List.of(Globals.INDEX_TYPE_NUMBER, Globals.INDEX_TYPE_STRING, Globals.INDEX_TYPE_BOOLEAN,
+                Globals.INDEX_TYPE_OBJECT, Globals.INDEX_TYPE_ARRAY)) {
+            final var name = TestGlobals.COLL + "-" + FIELD + "-" + type + Globals.INDEX_FILE_EXTENSION;
+            assertFalse(reserved.contains(name), name + " must not collide with a reserved file");
+        }
+    }
 }

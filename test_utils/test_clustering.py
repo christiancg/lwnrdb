@@ -1718,8 +1718,8 @@ def tombstone_ids(node, db, coll):
     with open(path, encoding="utf-8") as fp:
         for line in fp:
             line = line.strip()
-            if line:
-                ids.add(line.rsplit("|", 1)[0])
+            if line and "\x1f" in line:
+                ids.add(line.split("\x1f", 1)[0].replace("\\s", "\x1f").replace("\\\\", "\\"))
     return ids
 
 

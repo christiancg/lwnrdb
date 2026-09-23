@@ -244,6 +244,7 @@ public final class SaveOperationHelper {
             PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex) throws Exception {
         final var oldEntry = cache.getById(dbName, collName, idxEntry);
         oldEntry.setPage(idxEntry.getPage());
+        oldEntry.setVersion(idxEntry.getVersion());
         final var compaction = fs.deleteFromCollection(idxEntry);
         cache.shiftPkPositionsAfterCompaction(compaction);
         primaryKeyIndex.remove(idxEntry);

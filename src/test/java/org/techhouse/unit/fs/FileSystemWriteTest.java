@@ -376,8 +376,8 @@ public class FileSystemWriteTest {
         fileSystem.insertIntoCollection(entry("kept"));
         final var lengthBefore = pageFile().length();
         final var folder = pageFile().getParentFile();
-        final var indexFile = new File(folder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.PK_FIELD
-                + Globals.INDEX_FILE_NAME_SEPARATOR + Globals.INDEX_TYPE_STRING + Globals.INDEX_FILE_EXTENSION);
+        final var indexFile = new File(folder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
         assertTrue(indexFile.delete() || !indexFile.exists());
         assertTrue(indexFile.mkdir(), "the index path must be unwritable for this test to inject a failure");
 
@@ -403,7 +403,7 @@ public class FileSystemWriteTest {
         assertTrue(fileSystem.quarantineCollectionFiles(TestGlobals.DB, TestGlobals.COLL, 42L));
 
         final var dbFolder = new File(TestGlobals.PATH + File.separator + TestGlobals.DB);
-        final var moved = dbFolder.listFiles((dir, name) -> name.startsWith(TestGlobals.COLL + ".quarantined-42-"));
+        final var moved = dbFolder.listFiles((_, name) -> name.startsWith(TestGlobals.COLL + ".quarantined-42-"));
         assertNotNull(moved);
         assertEquals(1, moved.length, "the documents are moved aside, never deleted");
         assertTrue(Objects.requireNonNull(moved[0].listFiles()).length > 0);

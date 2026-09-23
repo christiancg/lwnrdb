@@ -1,6 +1,7 @@
 package org.techhouse.ops.filter;
 
 import java.util.function.BiPredicate;
+import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
@@ -27,7 +28,8 @@ public final class FieldPredicateFactory {
             }
             final var operatorElement = operator.getValue();
             if (operatorElement.isJsonPrimitive()) {
-                return primitiveOperandMatches(operatorElement, toTestElement, operation);
+                return primitiveOperandMatches(operatorElement, toTestElement, operation,
+                        Globals.PK_FIELD.equals(fieldName));
             }
             if (operatorElement.isJsonArray()) {
                 return arrayOperandMatches(operatorElement, toTestElement, operation);
@@ -40,7 +42,7 @@ public final class FieldPredicateFactory {
     }
 
     private static boolean primitiveOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
-            FieldOperatorType operation) {
+            FieldOperatorType operation, boolean exactStrings) {
         if (!toTestElement.isJsonPrimitive()) {
             return operation == FieldOperatorType.CONTAINS && toTestElement.isJsonArray()
                     && toTestElement.asJsonArray().contains(operatorElement);
@@ -62,7 +64,7 @@ public final class FieldPredicateFactory {
         if (!operatorPrimitive.isJsonCustom() && !toTestPrimitive.isJsonCustom() && operatorPrimitive.isJsonString()
                 && toTestPrimitive.isJsonString()) {
             return stringMatches(operatorElement.asJsonString().getValue(), toTestElement.asJsonString().getValue(),
-                    operation);
+                    operation, exactStrings);
         }
         return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
     }
@@ -99,13 +101,18 @@ public final class FieldPredicateFactory {
         };
     }
 
-    private static boolean stringMatches(String operand, String stored, FieldOperatorType operation) {
+    private static boolean stringMatches(String operand, String stored, FieldOperatorType operation,
+            boolean exactStrings) {
         return switch (operation) {
-            case EQUALS -> operand.equalsIgnoreCase(stored);
-            case NOT_EQUALS -> !operand.equalsIgnoreCase(stored);
+            case EQUALS -> stringsAreEqual(operand, stored, exactStrings);
+            case NOT_EQUALS -> !stringsAreEqual(operand, stored, exactStrings);
             case CONTAINS -> stored.contains(operand);
             case GREATER_THAN, GREATER_THAN_EQUALS, SMALLER_THAN, SMALLER_THAN_EQUALS, IN, NOT_IN -> false;
         };
+    }
+
+    private static boolean stringsAreEqual(String operand, String stored, boolean exactStrings) {
+        return exactStrings ? operand.equals(stored) : operand.equalsIgnoreCase(stored);
     }
 
     // JsonArray.contains uses element equality, so IN/NOT_IN also matches object/array field values
