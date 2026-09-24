@@ -407,6 +407,19 @@ emits real `JsonGeo`/`JsonVector`/… values, so a document saved from a script 
 storage and index layers already understand; a custom type registered later with no value type
 here degrades to its wire text rather than silently vanishing.
 
+A **plain string in custom wire format is promoted on the way into a document**, so
+`'#geo(1,2)'` and `Geo.from('#geo(1,2)')` store exactly the same thing and a script-written
+value is indexed in the same family as the identical bytes arriving over the wire. The promotion
+keeps the raw text verbatim — `#geo(1,2)` is stored as `#geo(1,2)`, not normalised to
+`#geo(1.0,2.0)` — so it changes the value's *type* and never its bytes. An unregistered or
+malformed one (`#nosuch(1)`, `#geo(bad)`) fails the write with a `TypeError` naming the member,
+exactly as the wire path already refuses the identical document at parse time. `JSON.stringify`
+is deliberately unaffected: a custom-shaped string stringifies as the string it is.
+
+Nothing on disk needs migrating, because the promotion never changed a stored byte. A collection
+that a script wrote a custom value into *before* this behaviour existed does hold that value in
+the wrong index family, though, and one `REINDEX` of the collection moves it into the right one.
+
 ### What a run reports back
 
 - **Result contract**: a top-level `return` if the module runs one, else `export default`, else
@@ -416,6 +429,10 @@ here degrades to its wire text rather than silently vanishing.
   interpreter's lifetime, so an accessor-valued property is read through its getter and the
   getter's work is charged to the run's budgets. The converted result is measured against
   `scriptMaxResultBytes` (`400-15`); a trigger passes `-1`, since its result is discarded.
+  A **non-finite number cannot cross into a run result or a document**: `Infinity`, `-Infinity`
+  and `NaN` fail the conversion with a `TypeError`, because the engine's own reader cannot parse
+  the token `NumberFormatter` spells for them. `JSON.stringify` keeps its own ECMAScript-mandated
+  answer of `null` for the same values.
 - **Console output** is captured on **every** exit path — value, throw, syntax error, abort — as
   a ring buffer keeping the newest `maxLogLines` (a longer line is clipped at
   `maxLogLineChars`, both setting a `logsTruncated` flag), and teed to the host sink when one

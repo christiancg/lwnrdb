@@ -140,6 +140,21 @@ public class BeforeHookContextTest {
     }
 
     @Test
+    public void test_rejects_a_replacement_holding_a_non_finite_number() throws Exception {
+        installHook("v", "inf", "export default function (doc) { return { ...doc, total: 1/0 }; };", EventType.CREATED);
+        final var outcome = run(document("a"), EventType.CREATED);
+        assertTrue(outcome.isRejected(), "a document the engine's own reader cannot parse must not be written");
+        assertTrue(outcome.rejection().getMessage().contains("is not a JSON number"), outcome.rejection().getMessage());
+    }
+
+    @Test
+    public void test_rejects_when_the_hook_returns_a_non_finite_number() throws Exception {
+        installHook("v", "nan", "export default function (doc) { return 0/0; };", EventType.CREATED);
+        assertTrue(run(document("a"), EventType.CREATED).isRejected(),
+                "a bare number is not a document, so a hook returning one is refused rather than nulled");
+    }
+
+    @Test
     public void test_rejects_when_the_hook_returns_a_string() throws Exception {
         installHook("v", "str", "export default function (doc) { return 'nope'; };", EventType.CREATED);
         assertTrue(run(document("a"), EventType.CREATED).isRejected());

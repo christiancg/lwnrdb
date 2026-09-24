@@ -52,6 +52,7 @@ import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -192,35 +193,47 @@ public final class SimpleJs {
         return new ScriptCallableException(error.name(), error.message(), error.stack());
     }
 
+    private enum NonFiniteResult {
+        NULLED, REFUSED
+    }
+
     private record SessionCallable(Session session, JsValue function) implements ScriptCallable {
         @Override
         public JsonBaseElement apply(JsonObject document) {
-            return invoke(List.of(EJsonInterop.fromEjson(document)), document, null);
+            return invoke(List.of(EJsonInterop.fromEjson(document)), document, null, NonFiniteResult.NULLED);
         }
 
         @Override
         public JsonBaseElement apply(JsonBaseElement accumulator, JsonObject document) {
             return invoke(List.of(EJsonInterop.fromEjson(accumulator), EJsonInterop.fromEjson(document)), document,
-                    accumulator);
+                    accumulator, NonFiniteResult.NULLED);
         }
 
         @Override
         public JsonBaseElement applyWithContext(JsonObject document, JsonObject context) {
-            return invoke(List.of(EJsonInterop.fromEjson(document), EJsonInterop.fromEjson(context)), document,
-                    context);
+            return invoke(List.of(EJsonInterop.fromEjson(document), EJsonInterop.fromEjson(context)), document, context,
+                    NonFiniteResult.REFUSED);
         }
 
-        private JsonBaseElement invoke(List<JsValue> args, JsonObject document, JsonBaseElement accumulator) {
+        private JsonBaseElement invoke(List<JsValue> args, JsonObject document, JsonBaseElement accumulator,
+                NonFiniteResult nonFinite) {
             final var charged = EJsonInterop.estimatedBytes(document)
                     + (accumulator == null ? 0 : EJsonInterop.estimatedBytes(accumulator));
             session.charge(charged);
             try {
-                return EJsonInterop.toHostEjson(settled(session.call(function, args)));
+                final var returned = settled(session.call(function, args));
+                return nonFinite == NonFiniteResult.NULLED && isNonFinite(returned)
+                        ? JsonNull.INSTANCE
+                        : EJsonInterop.toHostEjson(returned);
             } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
                 throw asCallableException(failure);
             } finally {
                 session.release(charged);
             }
+        }
+
+        private static boolean isNonFinite(JsValue value) {
+            return value instanceof JsNumber number && !Double.isFinite(number.getValue());
         }
 
         @Override

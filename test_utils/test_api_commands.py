@@ -134,6 +134,7 @@ COLL_JOIN_RIGHT = "agg_join_right"
 COLL_TYPES = "types"
 COLL_FLOWS = "flows"
 COLL_PERM = "perm_coll"
+COLL_MATH = "map_math"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -482,6 +483,99 @@ def test_map_conditions_and_number_casts(c):
           detail=f"got {by_id.get('small', {}).get('asText')!r}")
 
 
+def raw_send(c, payload) -> str:
+    """The response line before json.loads sees it.
+
+    base_utils.Conn.send parses with plain json.loads, which accepts Infinity/-Infinity/NaN
+    as a Python extension; RFC 8259 does not, and neither does any other client's parser.
+    """
+    c.s.sendall((json.dumps(payload) + "\n").encode())
+    return c.f.readline().decode().strip()
+
+
+def map_math(c, operation, operands, field="r"):
+    steps = [{"type": "MAP", "operators": [
+        {"fieldName": field, "operator": {"type": operation, "operands": operands}}]}]
+    return (aggregate(c, COLL_MATH, steps).get("results") or [{}])[0].get(field)
+
+
+def test_map_arithmetic(c):
+    section("MAP arithmetic: the first valid operand seeds the fold, and no sentinel leaks")
+
+    create_coll(c, COLL_MATH)
+    save(c, COLL_MATH, {"_id": "m1", "a": 10, "b": 2, "z": 0, "big": 3000000000, "nullField": None})
+
+    for operation in ("MULTIPLY", "SUBS", "DIVIDE", "POW", "ROOT"):
+        from_literals = map_math(c, operation, [10, 2])
+        from_fields = map_math(c, operation, ["a", "b"])
+        check(f"{operation} answers the same for literal and field operands",
+              from_literals == from_fields,
+              detail=f"literals={from_literals!r} fields={from_fields!r}")
+
+    check("MULTIPLY [10,2] is 20", map_math(c, "MULTIPLY", [10, 2]) == 20,
+          detail=f"got {map_math(c, 'MULTIPLY', [10, 2])!r}")
+    check("MULTIPLY [2,'a'] does not depend on operand order",
+          map_math(c, "MULTIPLY", [2, "a"]) == map_math(c, "MULTIPLY", ["a", 2]) == 20,
+          detail=f"got {map_math(c, 'MULTIPLY', [2, 'a'])!r}")
+    check("a field holding zero does not restart the fold",
+          map_math(c, "MULTIPLY", ["a", "z", "b"]) == 0 and map_math(c, "MULTIPLY", ["z", "a", "b"]) == 0,
+          detail=f"a,z,b={map_math(c, 'MULTIPLY', ['a', 'z', 'b'])!r} "
+                 f"z,a,b={map_math(c, 'MULTIPLY', ['z', 'a', 'b'])!r}")
+    check("SUBS and DIVIDE keep left-to-right order",
+          map_math(c, "SUBS", [10, 2, 1]) == 7 and map_math(c, "DIVIDE", [100, 5, 2]) == 10,
+          detail=f"subs={map_math(c, 'SUBS', [10, 2, 1])!r} divide={map_math(c, 'DIVIDE', [100, 5, 2])!r}")
+    check("POW seeds from the first operand", map_math(c, "POW", [2, 10]) == 1024,
+          detail=f"got {map_math(c, 'POW', [2, 10])!r}")
+    check("SUM is unchanged", map_math(c, "SUM", [10, 2]) == 12,
+          detail=f"got {map_math(c, 'SUM', [10, 2])!r}")
+
+    check("MIN over a value past the int range does not leak Integer.MAX_VALUE",
+          map_math(c, "MIN", ["big"]) == 3000000000, detail=f"got {map_math(c, 'MIN', ['big'])!r}")
+    check("MAX over a value past the int range does not leak Integer.MIN_VALUE",
+          map_math(c, "MAX", ["big"]) == 3000000000, detail=f"got {map_math(c, 'MAX', ['big'])!r}")
+    for operation in ("MIN", "MAX", "AVG", "MULTIPLY"):
+        for operand in ("missing", "nullField"):
+            check(f"{operation} over only {operand} answers null",
+                  map_math(c, operation, [operand]) is None,
+                  detail=f"got {map_math(c, operation, [operand])!r}")
+    check("a divide by zero answers null", map_math(c, "DIVIDE", ["a", "z"]) is None,
+          detail=f"got {map_math(c, 'DIVIDE', ['a', 'z'])!r}")
+
+    concat_literal_null = map_math(c, "CONCAT", ["-x", None, "-y"])
+    concat_null_field = map_math(c, "CONCAT", ["-x", "nullField", "-y"])
+    check("CONCAT spells a literal null like a null-valued field",
+          concat_literal_null == concat_null_field == "xnully",
+          detail=f"literal={concat_literal_null!r} field={concat_null_field!r}")
+    check("CONCAT never emits a Java identity string",
+          "@" not in (concat_literal_null or "") and "org.techhouse" not in (concat_literal_null or ""),
+          detail=f"got {concat_literal_null!r}")
+
+
+def test_every_aggregate_response_is_strict_json(c):
+    section("Every AGGREGATE response parses under a strict RFC 8259 reader")
+
+    def reject(token):
+        raise ValueError(f"non-RFC JSON token {token!r}")
+
+    shapes = {
+        "a divide by zero": {"type": "DIVIDE", "operands": ["a", "z"]},
+        "an average of nothing": {"type": "AVG", "operands": ["missing"]},
+        "a min of nothing": {"type": "MIN", "operands": ["missing"]},
+        "an overflowing pow": {"type": "POW", "operands": [1.7976931348623157e308, 2]},
+    }
+    for label, operator in shapes.items():
+        raw = raw_send(c, {"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_MATH,
+                           "aggregationSteps": [{"type": "MAP", "operators": [
+                               {"fieldName": "r", "operator": operator}]}]})
+        try:
+            json.loads(raw, parse_constant=reject)
+            ok = True
+        except ValueError as failure:
+            ok = False
+            raw = f"{failure}: {raw}"
+        check(f"the response for {label} is strict JSON", ok, detail=raw)
+
+
 def test_aggregation_steps(c):
     section("Aggregation steps (MAP / GROUP_BY / JOIN / COUNT / DISTINCT / LIMIT / SKIP / SORT)")
 
@@ -759,6 +853,8 @@ def main():
         test_conjunctions,
         test_aggregation_steps,
         test_map_conditions_and_number_casts,
+        test_map_arithmetic,
+        test_every_aggregate_response_is_strict_json,
         test_analyze,
         test_empty_collection_aggregate,
         test_index_ops,

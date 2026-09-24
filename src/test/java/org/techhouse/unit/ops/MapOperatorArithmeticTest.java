@@ -6,6 +6,9 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -80,22 +83,9 @@ public class MapOperatorArithmeticTest {
     }
 
     @Test
-    public void test_division_by_zero() {
-        JsonObject jsonObject = new JsonObject();
-        jsonObject.addProperty("value1", 10);
-        jsonObject.addProperty("value2", 0);
-
-        JsonArray operands = new JsonArray();
-        operands.add(new JsonString("value1"));
-        operands.add(new JsonString("value2"));
-
-        ArrayParamMidOperator midOperator = new ArrayParamMidOperator(MidOperationType.DIVIDE, operands);
-        AddFieldMapOperator operator = new AddFieldMapOperator("result", null, midOperator);
-
-        JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject);
-
-        assertTrue(Double.isInfinite(result.get("result").asJsonNumber().getValue().doubleValue()),
-                "Result should be infinite due to division by zero");
+    public void test_division_by_zero_answers_null() {
+        assertNull(foldOf(MidOperationType.DIVIDE, new JsonString("a"), new JsonString("z")),
+                "Infinity is not a JSON number, so a divide by zero has no answer to give");
     }
 
     @Test
@@ -165,7 +155,7 @@ public class MapOperatorArithmeticTest {
         JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject);
 
         assertTrue(result.has("sum"));
-        assertEquals(0.0, result.get("sum").asJsonNumber().getValue().doubleValue());
+        assertNull(result.get("sum").asJsonNumber().getValue());
     }
 
     @Test
@@ -201,6 +191,121 @@ public class MapOperatorArithmeticTest {
 
         JsonObject result = MapOperatorHelper.processOperator(op, input);
         assertTrue(result.has("result"));
+    }
+
+    private static JsonObject sample() {
+        final var document = new JsonObject();
+        document.addProperty("a", 10);
+        document.addProperty("b", 2);
+        document.addProperty("z", 0);
+        document.addProperty("negativeZero", -0.0);
+        document.addProperty("big", 3000000000d);
+        document.add("nullField", JsonNull.INSTANCE);
+        return document;
+    }
+
+    private static Double foldOf(MidOperationType type, JsonBaseElement... operands) {
+        return foldOf(sample(), type, operands);
+    }
+
+    private static Double foldOf(JsonObject document, MidOperationType type, JsonBaseElement... operands) {
+        final var operandArray = new JsonArray();
+        for (final var operand : operands) {
+            operandArray.add(operand);
+        }
+        final var operator = new AddFieldMapOperator("folded", null, new ArrayParamMidOperator(type, operandArray));
+        final var folded = MapOperatorHelper.processOperator(operator, document).get("folded").asJsonNumber()
+                .getValue();
+        return folded == null ? null : folded.doubleValue();
+    }
+
+    @Test
+    public void test_literal_operands_fold_like_field_operands() {
+        final var folds = List.of(MidOperationType.MULTIPLY, MidOperationType.SUBS, MidOperationType.DIVIDE,
+                MidOperationType.POW, MidOperationType.ROOT);
+        for (final var type : folds) {
+            assertEquals(foldOf(type, new JsonString("a"), new JsonString("b")),
+                    foldOf(type, new JsonNumber(10), new JsonNumber(2)),
+                    type + " must answer the same whether an operand is a literal or a field reference");
+        }
+        assertEquals(20.0, foldOf(MidOperationType.MULTIPLY, new JsonNumber(10), new JsonNumber(2)));
+        assertEquals(8.0, foldOf(MidOperationType.SUBS, new JsonNumber(10), new JsonNumber(2)));
+        assertEquals(5.0, foldOf(MidOperationType.DIVIDE, new JsonNumber(10), new JsonNumber(2)));
+        assertEquals(100.0, foldOf(MidOperationType.POW, new JsonNumber(10), new JsonNumber(2)));
+    }
+
+    @Test
+    public void test_operand_order_does_not_change_a_commutative_fold() {
+        assertEquals(foldOf(MidOperationType.MULTIPLY, new JsonString("a"), new JsonNumber(2)),
+                foldOf(MidOperationType.MULTIPLY, new JsonNumber(2), new JsonString("a")));
+        assertEquals(20.0, foldOf(MidOperationType.MULTIPLY, new JsonNumber(2), new JsonString("a")));
+    }
+
+    @Test
+    public void test_a_field_holding_zero_does_not_restart_the_fold() {
+        assertEquals(0.0,
+                foldOf(MidOperationType.MULTIPLY, new JsonString("a"), new JsonString("z"), new JsonString("b")));
+        assertEquals(0.0,
+                foldOf(MidOperationType.MULTIPLY, new JsonString("z"), new JsonString("a"), new JsonString("b")));
+    }
+
+    @Test
+    public void test_a_negative_zero_operand_seeds_the_fold_unchanged() {
+        assertEquals(-0.0, foldOf(MidOperationType.MULTIPLY, new JsonString("negativeZero"), new JsonString("a")));
+    }
+
+    @Test
+    public void test_subtraction_and_division_keep_left_to_right_order() {
+        assertEquals(7.0, foldOf(MidOperationType.SUBS, new JsonNumber(10), new JsonNumber(2), new JsonNumber(1)));
+        assertEquals(10.0, foldOf(MidOperationType.DIVIDE, new JsonNumber(100), new JsonNumber(5), new JsonNumber(2)));
+    }
+
+    @Test
+    public void test_pow_and_root_seed_from_the_first_operand() {
+        assertEquals(1024.0, foldOf(MidOperationType.POW, new JsonNumber(2), new JsonNumber(10)));
+        assertEquals(2.0, foldOf(MidOperationType.ROOT, new JsonNumber(1024), new JsonNumber(10)));
+    }
+
+    @Test
+    public void test_min_and_max_do_not_leak_a_sentinel() {
+        assertEquals(3000000000d, foldOf(MidOperationType.MIN, new JsonString("big")));
+        assertEquals(3000000000d, foldOf(MidOperationType.MAX, new JsonString("big")));
+        assertEquals(-0.0, foldOf(MidOperationType.MIN, new JsonString("negativeZero"), new JsonString("a")));
+    }
+
+    @Test
+    public void test_min_and_max_answer_null_with_no_valid_operand() {
+        assertNull(foldOf(MidOperationType.MIN, new JsonString("missing")));
+        assertNull(foldOf(MidOperationType.MAX, new JsonString("missing")));
+        assertNull(foldOf(MidOperationType.MIN, new JsonString("nullField")));
+    }
+
+    @Test
+    public void test_avg_answers_null_with_no_valid_operand() {
+        assertNull(foldOf(MidOperationType.AVG, new JsonString("missing")));
+        assertNull(foldOf(MidOperationType.AVG, new JsonString("nullField")));
+    }
+
+    @Test
+    public void test_non_finite_intermediate_results_answer_null() {
+        assertNull(foldOf(MidOperationType.POW, new JsonNumber(Double.MAX_VALUE), new JsonNumber(2)));
+        assertNull(
+                foldOf(MidOperationType.MULTIPLY, new JsonNumber(Double.MAX_VALUE), new JsonNumber(Double.MAX_VALUE)));
+    }
+
+    @Test
+    public void test_a_fold_over_only_non_numeric_operands_answers_null() {
+        final var arrayOperand = new JsonArray();
+        arrayOperand.add(new JsonNumber(1));
+        assertNull(foldOf(MidOperationType.SUM, new JsonBoolean(true), arrayOperand, new JsonObject(),
+                new JsonString("missing")));
+    }
+
+    @Test
+    public void test_a_single_operand_fold_answers_that_operand() {
+        assertEquals(10.0, foldOf(MidOperationType.MULTIPLY, new JsonString("a")));
+        assertEquals(10.0, foldOf(MidOperationType.MAX, new JsonString("a")));
+        assertEquals(10.0, foldOf(MidOperationType.SUBS, new JsonString("a")));
     }
 
     private static String concatOf(JsonArray operands) {

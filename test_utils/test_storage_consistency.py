@@ -64,6 +64,7 @@ SCHEMA_COLL = "schema_guarded"
 LOCK_COLL = "items"
 DIRTY_COLL = "dirty_index_docs"
 HEAL_COLL = "heal_race_docs"
+SCRIPT_COLL = "script_written"
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
@@ -99,6 +100,9 @@ class Conn(bu.Conn):
                               "aggregationSteps": [{"type": "COUNT"}]})
         return ((response.get("results") or [{}])[0]).get("count")
 
+    def run(self, script: str, db=DB) -> dict:
+        return self.send({"type": "RUN_SCRIPT", "databaseName": db, "script": script})
+
     def count_via_scan(self, db=DB, coll=COLL) -> int:
         response = self.send({"type": "AGGREGATE", "databaseName": db, "collectionName": coll,
                               "aggregationSteps": [
@@ -125,6 +129,7 @@ def write_config(work_dir: str, max_memory: str = "256mb"):
         f"maxEntrySize={MAX_ENTRY_SIZE}\n"
         f"defaultAdminUsername={ADMIN_USERNAME}\n"
         f"defaultAdminPassword={ADMIN_PASSWORD}\n"
+        "scriptsEnabled=true\n"
     )
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write(cfg)
@@ -245,6 +250,8 @@ def seed(conn: Conn, work_dir: str):
     check("it holds every seeded document", conn.count_via_pk(coll=HEAL_COLL) == HEAL_SEEDED,
           f"got {conn.count_via_pk(coll=HEAL_COLL)} of {HEAL_SEEDED}")
 
+    seed_script_written_documents(conn)
+
     files = page_files(work_dir)
     check("the collection really spans several pages", len(files) > 1, f"got {files}")
     check("page metadata is persisted for a user collection", page_metadata_bytes(work_dir) > 0,
@@ -254,6 +261,91 @@ def seed(conn: Conn, work_dir: str):
 
 
 # ── phase 2: after a restart ─────────────────────────────────────────────────
+
+SCRIPT_WRITTEN = {
+    "sw_geo": '{ _id: "sw_geo", loc: "#geo(3.0,4.0)", pad: "x" }',
+    "sw_time": '{ _id: "sw_time", loc: "#time(08:00:00)", pad: "x" }',
+    "sw_datetime": '{ _id: "sw_datetime", loc: "#datetime(2024-07-12T12:30:00)", pad: "x" }',
+    "sw_vector": '{ _id: "sw_vector", loc: "#vector(1.0,2.0,3.0)", pad: "x" }',
+    "sw_plain": '{ _id: "sw_plain", loc: "ordinary", pad: "x", n: 1.5, flag: true }',
+}
+WIRE_WRITTEN = {"ww_geo": "#geo(1.0,2.0)", "ww_plain": "ordinary"}
+
+
+def seed_script_written_documents(conn: Conn):
+    section("Seeding a collection written by both the wire and a script")
+    check_status("create the script-written collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": SCRIPT_COLL}), "OK")
+    for doc_id, loc in WIRE_WRITTEN.items():
+        check_status(f"wire-write {doc_id}",
+                     conn.save({"_id": doc_id, "loc": loc, "pad": "x"}, coll=SCRIPT_COLL), "OK")
+    for doc_id, literal in SCRIPT_WRITTEN.items():
+        check_status(f"script-write {doc_id}",
+                     conn.run('import db from "db";\n'
+                              f'db.save(db.name, "{SCRIPT_COLL}", {literal});'), "OK")
+    check_status("index the field both sides wrote",
+                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": SCRIPT_COLL,
+                            "fieldName": "loc"}), "OK")
+
+
+def test_a_script_cannot_store_a_value_the_reader_rejects(conn: Conn):
+    section("A script cannot store a document the engine's own reader rejects")
+    before = conn.count_via_pk(coll=SCRIPT_COLL)
+    refusals = {
+        "positive infinity": '{ _id: "bad_inf", v: 1/0 }',
+        "negative infinity": '{ _id: "bad_neginf", v: -1/0 }',
+        "not a number": '{ _id: "bad_nan", v: 0/0 }',
+        "an unregistered custom type": '{ _id: "bad_type", v: "#nosuch(1)" }',
+        "a malformed custom value": '{ _id: "bad_geo", v: "#geo(bad)" }',
+    }
+    for label, literal in refusals.items():
+        response = conn.run('import db from "db";\n'
+                            f'db.save(db.name, "{SCRIPT_COLL}", {literal});')
+        check_code(f"a script storing {label} is refused", response, "ERROR", "400-9")
+    check("the collection is unchanged by every refusal", conn.count_via_pk(coll=SCRIPT_COLL) == before,
+          f"expected {before} got {conn.count_via_pk(coll=SCRIPT_COLL)}")
+
+
+def test_a_script_written_document_survives_a_restart(conn: Conn):
+    section("A script-written document reads back after a restart")
+    expected = sorted(list(SCRIPT_WRITTEN) + list(WIRE_WRITTEN))
+    for doc_id in expected:
+        response = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": SCRIPT_COLL,
+                              "_id": doc_id})
+        check_status(f"FIND_BY_ID reaches {doc_id}", response, "OK")
+    scan = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": SCRIPT_COLL,
+                      "aggregationSteps": []})
+    scanned = sorted(doc["_id"] for doc in (scan.get("results") or []))
+    check("a full scan returns every document", scanned == expected, f"expected {expected} got {scanned}")
+    pk = conn.count_via_pk(coll=SCRIPT_COLL)
+    check("the index-only COUNT agrees with the scan", pk == len(expected), f"count={pk} scan={len(scanned)}")
+
+
+def test_count_agrees_with_a_scan_after_a_restart(conn: Conn):
+    section("COUNT agrees with a scan over wire-written and script-written documents")
+    pk = conn.count_via_pk(coll=SCRIPT_COLL)
+    scan = conn.count_via_scan(coll=SCRIPT_COLL)
+    check("the index-only COUNT and the scan agree", pk == scan, f"pk={pk} scan={scan}")
+
+
+def test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn: Conn):
+    section("A script-written custom value lands in its own index family")
+
+    def ids_for(value, force_scan):
+        steps = [{"type": "SKIP", "skip": 0}] if force_scan else []
+        steps.append({"type": "FILTER",
+                      "operator": {"fieldOperatorType": "EQUALS", "field": "loc", "value": value}})
+        response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": SCRIPT_COLL,
+                              "aggregationSteps": steps})
+        return sorted(doc["_id"] for doc in (response.get("results") or []))
+
+    for value, expected in (("#geo(3.0,4.0)", ["sw_geo"]), ("#geo(1.0,2.0)", ["ww_geo"]),
+                            ("#time(08:00:00)", ["sw_time"]), ("ordinary", ["sw_plain", "ww_plain"])):
+        indexed = ids_for(value, force_scan=False)
+        scanned = ids_for(value, force_scan=True)
+        check(f"the index and the scan agree on {value}", indexed == scanned == expected,
+              f"index={indexed} scan={scanned} expected={expected}")
+
 
 def test_scan_is_complete_after_restart(conn: Conn):
     section("Full scans after a restart")
@@ -869,6 +961,10 @@ def main():
             test_a_filter_on_id_reads_only_the_matching_document(conn)
             test_a_count_after_an_id_filter_matches_the_rows_it_returns(conn)
             test_not_equals_null_returns_the_documents_that_are_not_null(conn)
+            test_a_script_cannot_store_a_value_the_reader_rejects(conn)
+            test_a_script_written_document_survives_a_restart(conn)
+            test_count_agrees_with_a_scan_after_a_restart(conn)
+            test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn)
 
             check("a burst of indexed writes leaves an index-dirty marker on disk",
                   write_until_indexes_are_dirty(conn, work_dir),

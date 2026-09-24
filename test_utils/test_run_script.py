@@ -47,7 +47,7 @@ import threading
 import time
 
 import base_utils as bu
-from base_utils import check, check_code, check_result, check_status, section
+from base_utils import check, check_code, check_field, check_result, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SCRIPT_TEST_PORT", "8995"))
@@ -769,6 +769,52 @@ def test_custom_types(conn: Conn):
                  conn.run('import db from "db";\nreturn typeof Geo.from("#geo(1,2)").geoHash;'), "string")
 
 
+def test_value_guards(conn: Conn):
+    section("Host interface — values a document cannot hold")
+    for label, literal in (("1/0", "1/0"), ("-1/0", "-1/0"), ("0/0", "0/0"),
+                           ("an overflow", "Number.MAX_VALUE * 2")):
+        check_failed_script(f"storing {label} is refused", conn.run(
+            'import db from "db";\n'
+            f'db.save(db.name, "{COLL}", {{ _id: "nonfinite", v: {literal} }});'),
+            "400-9", "is not a JSON number")
+    check_result("the refusal is catchable inside the script", conn.run(
+        'import db from "db";\n'
+        f'try {{ db.save(db.name, "{COLL}", {{ _id: "nonfinite", v: 1/0 }}); return "saved"; }}\n'
+        "catch (e) { return e.name; }"), "TypeError")
+    check_failed_script("returning a non-finite number is refused too",
+                        conn.run("return 1/0;"), "400-9", "is not a JSON number")
+    check_code("no refused write reached the collection",
+               conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                          "_id": "nonfinite"}), "NOT_FOUND", "404-2")
+
+    check_failed_script("an unregistered custom type is refused", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "badcustom", f: "#nosuch(1)" }});'),
+        "400-9", "nosuch")
+    check_failed_script("a malformed custom value is refused", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "badcustom", f: "#geo(bad)" }});'), "400-9", "Cannot serialize")
+    check_code("neither reached the collection",
+               conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                          "_id": "badcustom"}), "NOT_FOUND", "404-2")
+
+    check_result("a custom-shaped string stores as the custom type the wire would build", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "promoted", loc: "#geo(3.0,4.0)" }});\n'
+        f'const stored = db.findById(db.name, "{COLL}", "promoted");\n'
+        "return [typeof stored.loc, stored.loc.lat, stored.loc.toString()];"),
+        ["object", 3, "#geo(3.0,4.0)"])
+    check_status("store an unnormalised custom value from a script", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "promoted2", loc: "#geo(1,2)" }});'), "OK")
+    check_field("promotion keeps the raw wire text rather than normalising it",
+                conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                           "_id": "promoted2"}), "object.loc", "#geo(1,2)")
+    check_result("JSON.stringify still treats a custom-shaped string as a string",
+                 conn.run("return JSON.stringify({ a: '#geo(1,2)', b: 1/0 });"),
+                 '{"a":"#geo(1,2)","b":null}')
+
+
 def test_capabilities(conn: Conn):
     section("Host interface — capabilities and environment")
     check_result("crypto.randomUUID", conn.run("return crypto.randomUUID().length;"), 36)
@@ -1393,6 +1439,7 @@ def main():
             test_schema_interaction(conn)
             test_arguments(conn)
             test_custom_types(conn)
+            test_value_guards(conn)
             test_capabilities(conn)
             test_procedure_imports(conn)
             test_language_surface(conn)
