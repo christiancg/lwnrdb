@@ -92,6 +92,16 @@ final class AdminPageCache {
     }
 
     void updatePageSizeInMemory(String dbName, String collName, long page, long bytesDelta) {
+        underAdminPagesLock(dbName, collName, page, bytesDelta,
+                () -> applyPageSizeDelta(dbName, collName, page, bytesDelta));
+    }
+
+    void updatePageSizeForUpdateInMemory(String dbName, String collName, long page, long bytesDelta) {
+        underAdminPagesLock(dbName, collName, page, bytesDelta,
+                () -> applyPageSizeDeltaKeepingCount(dbName, collName, page, bytesDelta));
+    }
+
+    private void underAdminPagesLock(String dbName, String collName, long page, long bytesDelta, Runnable apply) {
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
         var reinterrupt = false;
         try {
@@ -107,7 +117,7 @@ final class AdminPageCache {
             }
         }
         try {
-            applyPageSizeDelta(dbName, collName, page, bytesDelta);
+            apply.run();
         } finally {
             locks.release(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
             if (reinterrupt) {
@@ -138,6 +148,13 @@ final class AdminPageCache {
             newEntry.setPageSize(bytesDelta);
             newEntry.setEntryCount(1);
             pageEntries.add(newEntry);
+        }
+    }
+
+    private void applyPageSizeDeltaKeepingCount(String dbName, String collName, long page, long bytesDelta) {
+        final var existing = findPage(pageList(dbName, collName), page);
+        if (existing != null) {
+            existing.setPageSize(existing.getPageSize() + bytesDelta);
         }
     }
 

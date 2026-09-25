@@ -361,7 +361,9 @@ data half.
 realm `Error.prototype`) whenever the underlying `OperationResponse` is not OK — a denial, a
 schema violation, an entry-too-large, a cluster rejection, an internal error. Only genuine
 absence stays a value: `findById` answers `null`, `aggregate` answers `[]`, and `delete` of an
-absent id is a no-op.
+absent id is a no-op. A call that omits a required argument, or passes one of the wrong shape, is a
+catchable `TypeError` too — `db.save` needs a document and `db.aggregate`, `db.bulkSave` and
+`db.cursor` each need an array.
 
 **`db.cursor(database, collection, pipeline, options)`** walks a pipeline one batch at a time so
 a script can read a collection larger than its memory budget. Each batch is an ordinary

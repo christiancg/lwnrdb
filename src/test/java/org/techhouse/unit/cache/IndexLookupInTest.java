@@ -2,6 +2,7 @@ package org.techhouse.unit.cache;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -93,6 +94,31 @@ public class IndexLookupInTest {
         assertNotNull(result, "with no other index on the field NOT_IN is complement-safe and must use the index");
         assertTrue(result.contains("id2"));
         assertFalse(result.contains("id1"));
+    }
+
+    @Test
+    public void test_an_empty_index_of_another_type_still_disqualifies_not_in() throws IOException {
+        final var cache = mock(UserCache.class);
+        injectRealLocking(cache);
+        final var dbName = "db";
+        final var collName = "coll";
+        final var fieldName = "score";
+        final var arr = new JsonArray();
+        arr.add(new JsonNumber("10"));
+        final var operator = new FieldOperator(FieldOperatorType.NOT_IN, fieldName, arr);
+        final List<FieldIndexEntry<Number>> idx = List.of(new FieldIndexEntry<>(dbName, collName, 10.0, Set.of("id1")),
+                new FieldIndexEntry<>(dbName, collName, 30.0, Set.of("id2")));
+        when(cache.getFieldIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any())).thenReturn(null);
+        when(cache.getHashIndexAndLoadIfNecessary(eq(dbName), eq(collName), eq(fieldName), any(IndexKind.class)))
+                .thenReturn(null);
+        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Number.class)).thenReturn(idx);
+        when(cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Boolean.class)).thenReturn(List.of());
+        when(cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr)).thenCallRealMethod();
+
+        final var result = cache.getIdsFromIndex(dbName, collName, fieldName, operator, arr);
+
+        assertNull(result, "a zero-byte index file loads as an empty list, so leaving one behind costs the index path"
+                + " - which is why removing an index's last line deletes the file");
     }
 
     @Test

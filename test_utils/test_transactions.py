@@ -113,6 +113,35 @@ def test_commit_and_read_your_writes(c):
         check_field("committed value is correct", after, "object.total", 42)
 
 
+def test_save_reports_whether_it_inserted(c):
+    section("The inserted flag is the same inside and outside a transaction")
+    coll = "inserted_flag"
+    check_status("create the collection",
+                 c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+
+    outside = save(c, {"_id": "ins1", "total": 1}, coll=coll)
+    check("a non-transactional SAVE of a new id reports inserted", outside.get("inserted") is True,
+          f"got inserted={outside.get('inserted')!r}")
+    check("a non-transactional SAVE of an existing id reports not inserted",
+          save(c, {"_id": "ins1", "total": 2}, coll=coll).get("inserted") is False)
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    buffered_insert = save(c, {"_id": "ins2", "total": 1}, coll=coll)
+    check("a buffered SAVE of a new id reports inserted", buffered_insert.get("inserted") is True,
+          f"got inserted={buffered_insert.get('inserted')!r}")
+    check("a buffered SAVE of an existing id reports not inserted",
+          save(c, {"_id": "ins1", "total": 3}, coll=coll).get("inserted") is False)
+    check("a second buffered SAVE of the same new id reports not inserted",
+          save(c, {"_id": "ins2", "total": 2}, coll=coll).get("inserted") is False)
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    check_status("START_TRANSACTION again", start_txn(c), "OK")
+    check_status("buffered DELETE", delete(c, "ins2", coll=coll), "OK")
+    check("a SAVE after a buffered DELETE reports inserted again",
+          save(c, {"_id": "ins2", "total": 9}, coll=coll).get("inserted") is True)
+    check_status("COMMIT_TRANSACTION again", commit_txn(c), "OK")
+
+
 def test_rollback_discards(c):
     section("Rollback discards buffered writes")
 
@@ -450,6 +479,8 @@ def main():
     # Each group runs on its own authenticated connection.
     with authed_conn() as (c):
         test_commit_and_read_your_writes(c)
+    with authed_conn() as (c):
+        test_save_reports_whether_it_inserted(c)
     with authed_conn() as (c):
         test_rollback_discards(c)
     with authed_conn() as (c):

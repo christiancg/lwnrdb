@@ -43,15 +43,24 @@ public final class AdminPageHelper {
 
     public static void updateEntryCount(String dbName, String collName, EventType type, DbEntry dbEntry)
             throws IOException, InterruptedException {
-        baseUpdateEntryCount(dbName, collName, type, List.of(dbEntry), type == EventType.CREATED);
+        baseUpdateEntryCount(dbName, collName, type, List.of(dbEntry), type == EventType.CREATED,
+                type == EventType.UPDATED);
     }
 
     public static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,
             final List<DbEntry> insertedOrDeleted, final boolean skipMemoryDeltaForCreated)
             throws InterruptedException, IOException {
+        baseUpdateEntryCount(dbName, collName, type, insertedOrDeleted, skipMemoryDeltaForCreated, false);
+    }
+
+    public static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,
+            final List<DbEntry> insertedOrDeleted, final boolean skipMemoryDeltaForCreated,
+            final boolean skipMemoryDeltaForUpdated) throws InterruptedException, IOException {
         if (insertedOrDeleted.isEmpty()) {
             return;
         }
+        final var deltaAlreadyAppliedOnWritePath = (type == EventType.CREATED && skipMemoryDeltaForCreated)
+                || (type == EventType.UPDATED && skipMemoryDeltaForUpdated);
         lockAdminPageCollection(dbName, collName);
         try {
             // Re-check under the lock: a concurrent drop must not lead to orphan page metadata.
@@ -84,7 +93,7 @@ public final class AdminPageHelper {
                 final var existing = workingPageEntries.stream().filter(p -> p.getPage() == page).findFirst();
                 if (existing.isPresent()) {
                     final var pageEntry = existing.get();
-                    if (type != EventType.CREATED || !skipMemoryDeltaForCreated) {
+                    if (!deltaAlreadyAppliedOnWritePath) {
                         pageEntry.setEntryCount(pageEntry.getEntryCount() + deltaCount);
                         pageEntry.setPageSize(pageEntry.getPageSize() + deltaBytes);
                     }

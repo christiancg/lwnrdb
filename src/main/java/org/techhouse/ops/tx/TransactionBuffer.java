@@ -86,7 +86,7 @@ public final class TransactionBuffer {
                 transaction.recordInserts(seq, List.of(id));
             }
             transaction.recordSave(collId, id, effective);
-            return new SaveResponse("Successfully saved", id);
+            return new SaveResponse("Successfully saved", id, insert);
         });
     }
 

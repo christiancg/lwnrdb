@@ -97,10 +97,13 @@ public final class SaveOperationHelper {
                 return new SaveResponse("Successfully saved", relocatedPkIndexEntry.getValue());
             }
             entry.setPage(idxEntry.getPage());
+            final var previousLength = idxEntry.getLength();
             final var updateResult = fs.updateFromCollection(entry, idxEntry);
             savedPkIndexEntry = updateResult.indexEntry();
             cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
             primaryKeyIndex.remove(idxEntry);
+            cache.updatePageSizeForUpdateInMemory(dbName, collName, savedPkIndexEntry.getPage(),
+                    savedPkIndexEntry.getLength() - previousLength);
             eventType = EventType.UPDATED;
         } else {
             entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));

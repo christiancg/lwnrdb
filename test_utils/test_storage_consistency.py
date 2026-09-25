@@ -74,6 +74,7 @@ bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSW
 # Small enough that a few dozen small documents span several pages, so a partial page list is
 # observable at all. maxEntrySize must stay strictly below it.
 MAX_PAGE_SIZE = "4kb"
+MAX_PAGE_BYTES = 4096
 MAX_ENTRY_SIZE = "1kb"
 SEEDED_DOCS = 40
 PAD = "p" * 300
@@ -378,6 +379,110 @@ def test_page_cap_is_enforced_after_restart(conn: Conn, work_dir: str):
     pk = conn.count_via_pk()
     scan = conn.count_via_scan()
     check("the collection is still fully scannable", pk == scan, f"pk={pk} scan={scan}")
+
+
+GROWTH_COLL = "grown_in_a_txn"
+GROWTH_DOCS = 20
+GROWTH_PAD = "g" * 700
+
+
+def test_a_transaction_of_in_place_growths_respects_max_page_size(conn: Conn, work_dir: str):
+    section("A burst of in-place growths still relocates")
+    check_status("create the collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                            "collectionName": GROWTH_COLL}), "OK")
+    for i in range(GROWTH_DOCS):
+        check_status(f"seed a small document {i}", conn.save({"_id": f"grow{i:02d}", "pad": "s"},
+                                                             coll=GROWTH_COLL), "OK")
+
+    check_status("START_TRANSACTION", conn.send({"type": "START_TRANSACTION"}), "OK")
+    refused = [conn.save({"_id": f"grow{i:02d}", "pad": GROWTH_PAD}, coll=GROWTH_COLL)
+               for i in range(GROWTH_DOCS)]
+    refused = [r for r in refused if r.get("status") != "OK"]
+    check("every growth was buffered", not refused, f"first refusal: {refused[:1]}")
+    check_status("COMMIT_TRANSACTION", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+    folder = os.path.join(work_dir, "db", DB, GROWTH_COLL)
+    oversized = {f: os.path.getsize(os.path.join(folder, f))
+                 for f in page_files(work_dir, DB, GROWTH_COLL)
+                 if os.path.getsize(os.path.join(folder, f)) > MAX_PAGE_BYTES}
+    check("no page grew past maxPageSize", not oversized, f"oversized: {oversized}")
+
+    recorded = recorded_pages(work_dir, DB, GROWTH_COLL)
+    actual = actual_pages(work_dir, DB, GROWTH_COLL)
+    drifted = [f"page {page}: recorded {recorded[page]['size']}B/{recorded[page]['entryCount']} entries,"
+               f" on disk {actual[page][0]}B/{actual[page][1]} entries"
+               for page in sorted(actual)
+               if page not in recorded
+               or recorded[page]["size"] != actual[page][0]
+               or recorded[page]["entryCount"] != actual[page][1]]
+    check("the recorded page occupancy still matches the pages on disk", not drifted, "; ".join(drifted))
+
+    pk = conn.count_via_pk(coll=GROWTH_COLL)
+    check("every grown document is still there", pk == GROWTH_DOCS, f"pk={pk}")
+
+
+EMPTY_IDX_COLL = "emptied_index_docs"
+
+
+def index_files(work_dir: str, db: str, coll: str) -> dict:
+    folder = os.path.join(work_dir, "db", db, coll)
+    if not os.path.isdir(folder):
+        return {}
+    return {f: os.path.getsize(os.path.join(folder, f))
+            for f in os.listdir(folder) if f.endswith(".idx")}
+
+
+def await_index_file(conn: Conn, work_dir: str, coll: str, name: str, present: bool,
+                     timeout: float = 15.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if (name in index_files(work_dir, DB, coll)) == present:
+            return True
+        time.sleep(0.2)
+    return (name in index_files(work_dir, DB, coll)) == present
+
+
+def test_an_index_with_no_entries_left_is_removed(conn: Conn, work_dir: str):
+    section("An index file whose last line was removed is deleted, not left empty")
+    boolean_index = f"{EMPTY_IDX_COLL}-mixed-Boolean.idx"
+    check_status("create the collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                            "collectionName": EMPTY_IDX_COLL}), "OK")
+    check_status("index the field",
+                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": EMPTY_IDX_COLL,
+                            "fieldName": "mixed"}), "OK")
+    check_status("write a boolean-valued document",
+                 conn.save({"_id": "bool1", "mixed": True}, coll=EMPTY_IDX_COLL), "OK")
+    for i in range(3):
+        check_status(f"write a string-valued document {i}",
+                     conn.save({"_id": f"str{i}", "mixed": f"value{i}"}, coll=EMPTY_IDX_COLL), "OK")
+    check("the boolean index file exists while a boolean value does",
+          await_index_file(conn, work_dir, EMPTY_IDX_COLL, boolean_index, True),
+          f"index files: {sorted(index_files(work_dir, DB, EMPTY_IDX_COLL))}")
+
+    check_status("rewrite the only boolean document with a string value",
+                 conn.save({"_id": "bool1", "mixed": "value9"}, coll=EMPTY_IDX_COLL), "OK")
+
+    check("the now-entryless boolean index file is gone rather than empty",
+          await_index_file(conn, work_dir, EMPTY_IDX_COLL, boolean_index, False),
+          f"index files: {index_files(work_dir, DB, EMPTY_IDX_COLL)}")
+
+    scan = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": EMPTY_IDX_COLL,
+                      "aggregationSteps": [
+                          {"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS",
+                                                          "field": "_id", "value": "__none__"}},
+                          {"type": "FILTER", "operator": {"fieldOperatorType": "CONTAINS",
+                                                          "field": "mixed", "value": "value"}}]})
+    indexed = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": EMPTY_IDX_COLL,
+                         "aggregationSteps": [
+                             {"type": "FILTER", "operator": {"fieldOperatorType": "CONTAINS",
+                                                             "field": "mixed", "value": "value"}}]})
+    scanned_ids = sorted(d.get("_id") for d in (scan.get("results") or []))
+    indexed_ids = sorted(d.get("_id") for d in (indexed.get("results") or []))
+    check("CONTAINS still answers exactly what a scan answers",
+          scanned_ids == indexed_ids == ["bool1", "str0", "str1", "str2"],
+          f"scan={scanned_ids} indexed={indexed_ids}")
 
 
 def change_permissions(conn: Conn, username: str, db_perms: dict) -> dict:
@@ -950,6 +1055,8 @@ def main():
             test_scan_is_complete_after_the_first_write(conn)
             test_page_cap_is_enforced_after_restart(conn, work_dir)
             test_page_metadata_follows_an_admin_row_that_grows_on_update(conn, work_dir)
+            test_a_transaction_of_in_place_growths_respects_max_page_size(conn, work_dir)
+            test_an_index_with_no_entries_left_is_removed(conn, work_dir)
             test_drop_database_does_not_strand_a_collection_lock(conn)
             test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
             test_writes_to_an_unknown_collection_are_refused_cleanly(conn)

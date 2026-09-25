@@ -13,6 +13,7 @@ import java.util.List;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.log.Logger;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -60,6 +61,9 @@ import org.techhouse.simplejs.values.JsValue;
 import org.techhouse.utils.JsonUtils;
 
 public final class SimpleJs {
+    private static final String INTERNAL_ERROR = "InternalError";
+    private static final Logger logger = Logger.logFor(SimpleJs.class);
+
     public CompiledScript compile(String source, boolean strictScriptGoal) {
         final var program = Parser.parse(Lexer.lexWithPositions(source), strictScriptGoal);
         return new CompiledScript(program, source, strictScriptGoal, JsonUtils.sha256(source));
@@ -274,11 +278,19 @@ public final class SimpleJs {
             case ScriptPendingResultException error ->
                 new ScriptError(PENDING_RESULT, error.getMessage(), error.getCapturedStack());
             case SimpleJsRuntimeException error ->
-                new ScriptError("InternalError", error.getMessage(), error.getCapturedStack());
+                new ScriptError(INTERNAL_ERROR, error.getMessage(), error.getCapturedStack());
             case OutOfMemoryError _ -> new ScriptError(MEMORY, EXHAUSTED_MEMORY_MESSAGE);
             case StackOverflowError _ -> new ScriptError(MEMORY, EXHAUSTED_MEMORY_MESSAGE);
+            case ScriptCallableException _ -> null;
+            case RuntimeException unmapped -> reportedInternalError(unmapped);
             default -> null;
         };
+    }
+
+    private static ScriptError reportedInternalError(RuntimeException unmapped) {
+        logger.error("A script run failed with an exception the engine does not map, so it is reported as "
+                + INTERNAL_ERROR + " rather than escaping the interpreter", unmapped);
+        return new ScriptError(INTERNAL_ERROR, unmapped.getClass().getSimpleName() + ": " + unmapped.getMessage());
     }
 
     private static ScriptError throwName(JsThrowException thrown) {

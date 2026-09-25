@@ -815,6 +815,31 @@ def test_value_guards(conn: Conn):
                  '{"a":"#geo(1,2)","b":null}')
 
 
+def test_db_module_arity(conn: Conn):
+    section("Host interface - a db call with too few arguments")
+    for label, call in (("db.save", f'db.save("{COLL}", {{ _id: "arity" }})'),
+                        ("db.aggregate", f'db.aggregate(db.name, "{COLL}")'),
+                        ("db.bulkSave", f'db.bulkSave("{COLL}", [{{ _id: "arity" }}])'),
+                        ("db.cursor", f'db.cursor(db.name, "{COLL}")')):
+        check_failed_script(f"{label} with too few arguments is a TypeError",
+                            conn.run(f'import db from "db";\n{call};'), "400-9", "TypeError")
+        check_status(f"the connection still answers after {label} was refused",
+                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                                "_id": "arity"}), "NOT_FOUND")
+
+    check_result("the refusal is catchable inside the script", conn.run(
+        'import db from "db";\n'
+        f'try {{ db.save("{COLL}", {{ _id: "arity" }}); return "saved"; }}\n'
+        "catch (e) { return e.name; }"), "TypeError")
+    check_failed_script("a third argument of the wrong shape is refused the same way",
+                        conn.run('import db from "db";\n'
+                                 f'db.aggregate(db.name, "{COLL}", {{}});'), "400-9", "TypeError")
+    check_failed_script("an empty bulkSave array reaches request validation, not the arity guard",
+                        conn.run('import db from "db";\n'
+                                 f'db.bulkSave(db.name, "{COLL}", []);'),
+                        "400-9", "at least one object")
+
+
 def test_capabilities(conn: Conn):
     section("Host interface — capabilities and environment")
     check_result("crypto.randomUUID", conn.run("return crypto.randomUUID().length;"), 36)
@@ -1440,6 +1465,7 @@ def main():
             test_arguments(conn)
             test_custom_types(conn)
             test_value_guards(conn)
+            test_db_module_arity(conn)
             test_capabilities(conn)
             test_procedure_imports(conn)
             test_language_surface(conn)

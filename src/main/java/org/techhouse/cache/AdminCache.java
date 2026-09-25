@@ -146,6 +146,10 @@ public class AdminCache {
         pageCache.updatePageSizeInMemory(dbName, collName, page, bytesDelta);
     }
 
+    public void updatePageSizeForUpdateInMemory(String dbName, String collName, long page, long bytesDelta) {
+        pageCache.updatePageSizeForUpdateInMemory(dbName, collName, page, bytesDelta);
+    }
+
     public List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
         return pageCache.getAdminPagePkIndexes(dbName, collName);
     }

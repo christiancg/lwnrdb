@@ -7,6 +7,7 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.NoSuchElementException;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -27,6 +28,8 @@ import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
 public final class DbModule {
+    private static final int PAYLOAD_INDEX = 2;
+
     private DbModule() {
     }
 
@@ -61,7 +64,7 @@ public final class DbModule {
     }
 
     private static JsValue aggregate(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
-        final var pipeline = (JsonArray) EJsonInterop.toHostEjson(args.get(2), ops);
+        final var pipeline = requireArray(payloadArg(args, ops), "db.aggregate expects an array of aggregation steps");
         final var results = database.aggregate(arg(args, 0), arg(args, 1), pipeline);
         final var array = new JsArray();
         for (final var result : results) {
@@ -72,17 +75,14 @@ public final class DbModule {
     }
 
     private static JsValue save(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
-        final var document = (JsonObject) EJsonInterop.toHostEjson(args.get(2), ops);
+        final var document = requireDocument(payloadArg(args, ops));
         final var saved = database.save(arg(args, 0), arg(args, 1), document);
         InterpreterOps.charge(ops, EJsonInterop.estimatedBytes(saved));
         return EJsonInterop.fromEjson(saved);
     }
 
     private static JsValue bulkSave(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
-        final var converted = EJsonInterop.toHostEjson(args.get(2), ops);
-        if (!(converted instanceof JsonArray array)) {
-            throw new TypeErrorException("db.bulkSave expects an array of documents");
-        }
+        final var array = requireArray(payloadArg(args, ops), "db.bulkSave expects an array of documents");
         final var documents = new ArrayList<JsonObject>();
         for (final var element : array) {
             if (!(element instanceof JsonObject document)) {
@@ -243,5 +243,23 @@ public final class DbModule {
 
     private static String arg(List<JsValue> args, int index) {
         return index < args.size() ? JsCoercion.toStr(args.get(index)) : "undefined";
+    }
+
+    private static JsonBaseElement payloadArg(List<JsValue> args, InterpreterOps ops) {
+        return args.size() > PAYLOAD_INDEX ? EJsonInterop.toHostEjson(args.get(PAYLOAD_INDEX), ops) : null;
+    }
+
+    private static JsonObject requireDocument(JsonBaseElement converted) {
+        if (converted instanceof JsonObject object) {
+            return object;
+        }
+        throw new TypeErrorException("db.save expects a document");
+    }
+
+    private static JsonArray requireArray(JsonBaseElement converted, String message) {
+        if (converted instanceof JsonArray array) {
+            return array;
+        }
+        throw new TypeErrorException(message);
     }
 }

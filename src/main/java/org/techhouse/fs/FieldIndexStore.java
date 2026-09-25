@@ -12,8 +12,10 @@ import java.util.Map;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
+import org.techhouse.log.Logger;
 
 final class FieldIndexStore {
+    private static final Logger logger = Logger.logFor(FieldIndexStore.class);
     private static final byte[] NEWLINE_BYTES = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
     private static final byte SEPARATOR_BYTE = (byte) Globals.ID_SEPARATOR.charAt(0);
 
@@ -120,17 +122,27 @@ final class FieldIndexStore {
         }
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
-        try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-            final var wholeFile = readFully(writer);
-            final var indexOfExisting = searchIndexValue(wholeFile, value);
-            if (indexOfExisting >= 0) {
-                shiftOtherEntries(writer, wholeFile, indexOfExisting);
-                if (!entry.getIds().isEmpty()) {
-                    writeLine(writer, entry.toFileEntry());
+        try {
+            try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
+                final var wholeFile = readFully(writer);
+                final var indexOfExisting = searchIndexValue(wholeFile, value);
+                if (indexOfExisting >= 0) {
+                    shiftOtherEntries(writer, wholeFile, indexOfExisting);
+                    if (!entry.getIds().isEmpty()) {
+                        writeLine(writer, entry.toFileEntry());
+                    }
                 }
             }
+            deleteWhenNoEntriesRemain(indexFile);
         } finally {
             lock.unlock();
+        }
+    }
+
+    private static void deleteWhenNoEntriesRemain(File indexFile) {
+        if (indexFile.length() == 0 && !indexFile.delete()) {
+            logger.warning("Could not delete the now-empty index file " + indexFile.getName()
+                    + "; while it exists CONTAINS and NOT_IN decline this field's index until a REINDEX");
         }
     }
 

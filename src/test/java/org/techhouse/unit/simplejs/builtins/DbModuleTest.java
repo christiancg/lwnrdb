@@ -20,6 +20,7 @@ import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
+import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -123,6 +124,53 @@ public class DbModuleTest {
         final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
         assertThrows(TypeErrorException.class,
                 () -> call(db, "bulkSave", new JsString("d"), new JsString("c"), new JsString("nope")));
+    }
+
+    @Test
+    public void test_save_without_a_document_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "save", new JsString("d"), new JsString("c")));
+    }
+
+    @Test
+    public void test_save_without_any_argument_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "save"));
+    }
+
+    @Test
+    public void test_save_rejects_a_non_object_document() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class,
+                () -> call(db, "save", new JsString("d"), new JsString("c"), new JsNumber(5)));
+    }
+
+    @Test
+    public void test_aggregate_without_a_pipeline_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "aggregate", new JsString("d"), new JsString("c")));
+    }
+
+    @Test
+    public void test_aggregate_rejects_a_non_array_pipeline() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class,
+                () -> call(db, "aggregate", new JsString("d"), new JsString("c"), new JsObject()));
+    }
+
+    @Test
+    public void test_bulk_save_without_documents_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "bulkSave", new JsString("d"), new JsString("c")));
+    }
+
+    @Test
+    public void test_bulk_save_accepts_an_empty_array() {
+        final var fake = new FakeDatabaseAccess();
+        final var db = DbModule.create(fake, null, null, null);
+        final var result = (JsObject) call(db, "bulkSave", new JsString("d"), new JsString("c"), new JsArray());
+        assertEquals("bulkSave:d/c/0", fake.calls.getFirst());
+        assertInstanceOf(JsArray.class, result.get("inserted"));
     }
 
     @Test

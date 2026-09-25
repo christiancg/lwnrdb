@@ -163,9 +163,10 @@ public class FileSystemFieldIndexTest {
 
         File indexFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
                 + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + fieldName + "-Number.idx");
-        String fileContent = Files.readString(indexFile.toPath());
 
-        assertFalse(fileContent.contains("123" + Globals.ID_SEPARATOR));
+        assertFalse(indexFile.exists(),
+                "an index left with no entries is deleted, not kept as an empty file another type's lookup"
+                        + " would still count");
     }
 
     @Test

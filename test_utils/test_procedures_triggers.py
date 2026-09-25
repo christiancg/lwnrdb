@@ -1413,6 +1413,44 @@ def test_retry_and_dead_letters(conn: Conn):
                               ["CREATED", "UPDATED"]), "OK")
 
 
+def test_a_host_call_with_too_few_arguments_dead_letters(conn: Conn):
+    section("A trigger whose script calls db with too few arguments is dead-lettered")
+    drop_hook(conn, "off_hook")
+    check_status("install a trigger whose procedure omits db.save's database argument",
+                 conn.save_procedure("arity_boom",
+                                     "import db from 'db';\n"
+                                     "db.save('" + AUDIT + "', { _id: 'never' });"), "OK")
+    check_status("point a trigger at it",
+                 conn.save_trigger("arity", ["CREATED", "UPDATED"], "arity_boom"), "OK")
+    check_status("write a document so it fires", conn.save_doc({"_id": "aritydoc", "n": 1}), "OK")
+
+    deadline = time.time() + 30.0
+    dead = dead_letters_for(conn, "arity")
+    while not dead and time.time() < deadline:
+        time.sleep(0.3)
+        dead = dead_letters_for(conn, "arity")
+    check("the run is dead-lettered rather than left pending", len(dead) == 1, f"runs={dead!r}")
+    if dead:
+        entry = dead[0]
+        check("it carries the TypeError that killed it", "TypeError" in (entry.get("lastError") or ""),
+              f"entry={entry!r}")
+        check("it counts its attempts", (entry.get("attempts") or 0) >= 1, f"entry={entry!r}")
+        check_status("and it can be discarded like any other dead letter",
+                     conn.send({"type": "RESOLVE_TRIGGER_RUN", "runId": entry.get("runId"),
+                                "decision": "discard"}), "OK")
+    check("no pending run is left behind",
+          not [run for run in trigger_runs(conn, "PENDING") if run.get("trigger") == "arity"],
+          f"runs={trigger_runs(conn, 'PENDING')!r}")
+
+    check_status("remove the arity trigger",
+                 conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
+                            "name": "arity"}), "OK")
+    check_status("restore the vetoing hook for the next phase",
+                 install_hook(conn, "off_hook", "offhook",
+                              "export default (doc) => { throw new Error('always refuses'); };",
+                              ["CREATED", "UPDATED"]), "OK")
+
+
 def test_a_post_commit_error_applies_its_effects_once(conn: Conn):
     section("An error raised after the commit is not retried")
     drop_hook(conn, "off_hook")
@@ -1670,6 +1708,7 @@ def main():
             test_a_deleted_definition_stops_being_served(conn)
             test_retry_and_dead_letters(conn)
             test_a_replayed_dead_letter_gets_a_full_budget(conn)
+            test_a_host_call_with_too_few_arguments_dead_letters(conn)
             test_a_post_commit_error_applies_its_effects_once(conn)
 
         # Phase 3: a retry backoff far beyond the shutdown budget, so the stop below is timed with a
