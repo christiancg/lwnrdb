@@ -11,9 +11,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -24,6 +26,7 @@ import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.GroupByAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 import org.techhouse.ops.req.agg.step.LimitAggregationStep;
+import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -77,6 +80,12 @@ public class AggregationStreamLifetimeTest {
     }
 
     @Test
+    public void reduce_over_an_unwritten_collection_does_not_leak_descriptors() {
+        assertNoDescriptorLeak(List.of(new ReduceAggregationStep("export default (acc, doc) => acc + doc.score;",
+                new JsonNumber(0), "total")));
+    }
+
+    @Test
     public void filter_and_distinct_stay_leak_free() {
         assertNoDescriptorLeak(List.of(unindexedFilter(), new DistinctAggregationStep(FIELD)));
     }
@@ -104,6 +113,9 @@ public class AggregationStreamLifetimeTest {
     private void aggregate(List<BaseAggregationStep> steps) {
         final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         request.setAggregationSteps(steps);
-        processor.processMessage(request);
+        final var response = processor.processMessage(request);
+        assertTrue(response.getStatus() == OperationStatus.OK || response.getStatus() == OperationStatus.NOT_FOUND,
+                "the pipeline must really run, or the descriptor count proves nothing: " + response.getStatus() + " "
+                        + response.getErrorCode());
     }
 }
