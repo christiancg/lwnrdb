@@ -385,18 +385,20 @@ public final class TransactionOperationHelper {
         }
         final var seen = new HashSet<String>();
         final var result = new ArrayList<JsonObject>();
-        committed.forEach(doc -> {
-            final var id = doc.has(Globals.PK_FIELD) ? doc.get(Globals.PK_FIELD).asJsonString().getValue() : null;
-            if (id != null && overlay.containsKey(id)) {
-                seen.add(id);
-                final var buffered = overlay.get(id);
-                if (!Transaction.isTombstone(buffered)) {
-                    result.add(buffered);
+        try (var documents = committed) {
+            documents.forEach(doc -> {
+                final var id = doc.has(Globals.PK_FIELD) ? doc.get(Globals.PK_FIELD).asJsonString().getValue() : null;
+                if (id != null && overlay.containsKey(id)) {
+                    seen.add(id);
+                    final var buffered = overlay.get(id);
+                    if (!Transaction.isTombstone(buffered)) {
+                        result.add(buffered);
+                    }
+                } else {
+                    result.add(doc);
                 }
-            } else {
-                result.add(doc);
-            }
-        });
+            });
+        }
         for (final var overlayEntry : overlay.entrySet()) {
             if (!Transaction.isTombstone(overlayEntry.getValue()) && !seen.contains(overlayEntry.getKey())) {
                 result.add(overlayEntry.getValue());

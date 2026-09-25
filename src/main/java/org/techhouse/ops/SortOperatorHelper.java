@@ -85,15 +85,17 @@ public final class SortOperatorHelper {
             Comparator<Keyed> comparator, int bound) {
         final var heap = new PriorityQueue<>(comparator.reversed());
         final var seq = new int[]{0};
-        source.forEach(document -> {
-            final var keyed = new Keyed(document, JsonUtils.getFromPath(document, fieldName), seq[0]++);
-            if (heap.size() < bound) {
-                heap.offer(keyed);
-            } else if (comparator.compare(heap.peek(), keyed) > 0) {
-                heap.poll();
-                heap.offer(keyed);
-            }
-        });
+        try (var documents = source) {
+            documents.forEach(document -> {
+                final var keyed = new Keyed(document, JsonUtils.getFromPath(document, fieldName), seq[0]++);
+                if (heap.size() < bound) {
+                    heap.offer(keyed);
+                } else if (comparator.compare(heap.peek(), keyed) > 0) {
+                    heap.poll();
+                    heap.offer(keyed);
+                }
+            });
+        }
         final var retained = heap.toArray(Keyed[]::new);
         Arrays.sort(retained, comparator);
         return Arrays.stream(retained).map(Keyed::document);
@@ -101,8 +103,10 @@ public final class SortOperatorHelper {
 
     private static Keyed[] decorate(Stream<JsonObject> source, String fieldName) {
         final var decorated = new ArrayList<Keyed>();
-        source.forEach(document -> decorated
-                .add(new Keyed(document, JsonUtils.getFromPath(document, fieldName), decorated.size())));
+        try (var documents = source) {
+            documents.forEach(document -> decorated
+                    .add(new Keyed(document, JsonUtils.getFromPath(document, fieldName), decorated.size())));
+        }
         return decorated.toArray(Keyed[]::new);
     }
 

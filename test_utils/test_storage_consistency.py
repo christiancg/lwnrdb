@@ -39,6 +39,13 @@ What is covered:
     read really reaches the file rather than the one cached copy. Like the lock case above, this is
     timing-dependent: it can miss the window, but it can never fail when the engine is correct. The
     deterministic proof lives in FileSystemPkIndexTest.
+
+  * a blocking aggregation step over a collection with no page-occupancy metadata does not exhaust
+    the server's file descriptors. `Cache.streamCollectionFromDisk` falls back to a full folder scan
+    there, and that source used to hold an open directory handle that `SORT`, `GROUP_BY`, `JOIN` and
+    `REDUCE` dropped on the floor: two descriptors per query, never reclaimed, until the node stopped
+    accepting connections. The iteration count here stays well under any sane `ulimit -n`, so a
+    correct engine can never fail it; the deterministic proof lives in AggregationStreamLifetimeTest.
 """
 
 import json
@@ -49,7 +56,7 @@ import threading
 import time
 
 import base_utils as bu
-from base_utils import check, check_code, check_status, section
+from base_utils import check, check_code, check_field, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("STORAGE_CONSISTENCY_TEST_PORT", "8996"))
@@ -58,6 +65,8 @@ ADMIN_PASSWORD = "administrator"
 
 DB = "storage_db"
 COLL = "docs"
+UNWRITTEN_COLL = "never_written"
+UNWRITTEN_SCANS = 300
 LOCK_DB = "lock_db"
 RECREATE_DB = "recreate_db"
 SCHEMA_COLL = "schema_guarded"
@@ -670,6 +679,34 @@ def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
 
 
 
+def test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn: Conn):
+    section("repeated blocking aggregations over a collection with no page metadata")
+    check_status("the collection is created",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                            "collectionName": UNWRITTEN_COLL}), "OK")
+    blocking_pipelines = (
+        ("SORT", [{"type": "SORT", "fieldName": "score", "ascending": True}]),
+        ("GROUP_BY", [{"type": "GROUP_BY", "fieldName": "score"}]),
+        ("JOIN", [{"type": "JOIN", "joinCollection": COLL, "localField": "score",
+                   "remoteField": "score", "asField": "joined"}]),
+    )
+    for label, steps in blocking_pipelines:
+        for _ in range(UNWRITTEN_SCANS):
+            conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": UNWRITTEN_COLL,
+                       "aggregationSteps": steps})
+        check(f"the server still answers after {UNWRITTEN_SCANS} {label} scans of an unwritten collection",
+              conn.send({"type": "LIST_COLLECTIONS", "databaseName": DB}).get("status") == "OK")
+
+    with admin_conn() as fresh:
+        check_status("a new connection is still accepted afterwards",
+                     fresh.send({"type": "SAVE", "databaseName": DB, "collectionName": UNWRITTEN_COLL,
+                                 "object": {"_id": "after_scans", "score": 1}}), "OK")
+        check_field("the document written after the scans reads back",
+                    fresh.send({"type": "FIND_BY_ID", "databaseName": DB,
+                                "collectionName": UNWRITTEN_COLL, "_id": "after_scans"}),
+                    "object.score", 1)
+
+
 def test_index_operations_cannot_destroy_the_pk_index(conn: Conn, work_dir: str):
     section("CREATE_INDEX / DROP_INDEX never take the pk index or the tombstones with them")
     # Index files are selected by name. An unanchored match on "-<field>-" also matched
@@ -1072,6 +1109,7 @@ def main():
             test_a_script_written_document_survives_a_restart(conn)
             test_count_agrees_with_a_scan_after_a_restart(conn)
             test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn)
+            test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn)
 
             check("a burst of indexed writes leaves an index-dirty marker on disk",
                   write_until_indexes_are_dirty(conn, work_dir),

@@ -60,7 +60,14 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator,
             Stream<JsonObject> resultStream, String dbName, String collName, PipelineScriptContext context)
             throws IOException {
-        final var buffered = resultStream == null ? null : resultStream.toList();
+        final List<JsonObject> buffered;
+        if (resultStream == null) {
+            buffered = null;
+        } else {
+            try (var documents = resultStream) {
+                buffered = documents.toList();
+            }
+        }
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
             final var stepStream = buffered == null ? null : buffered.stream();

@@ -24,18 +24,19 @@ public final class ReduceOperatorHelper {
 
     public static Stream<JsonObject> processReduceStep(ReduceAggregationStep step, Stream<JsonObject> resultStream,
             String dbName, String collName, PipelineScriptContext context) throws IOException {
-        final var stream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var callable = context.callableFor(step.getScript());
         var accumulator = step.getInitialValue() == null ? JsonNull.INSTANCE : step.getInitialValue();
-        for (final var document : (Iterable<JsonObject>) stream::iterator) {
-            final var analyze = AnalyzeContext.current();
-            final var start = analyze == null ? 0 : System.nanoTime();
-            accumulator = callable.apply(accumulator, document);
-            if (analyze != null) {
-                analyze.recordScriptInvocation(System.nanoTime() - start);
-            }
-            if (accumulator == null) {
-                accumulator = JsonNull.INSTANCE;
+        try (var stream = cache.initializeStreamIfNecessary(resultStream, dbName, collName)) {
+            for (final var document : (Iterable<JsonObject>) stream::iterator) {
+                final var analyze = AnalyzeContext.current();
+                final var start = analyze == null ? 0 : System.nanoTime();
+                accumulator = callable.apply(accumulator, document);
+                if (analyze != null) {
+                    analyze.recordScriptInvocation(System.nanoTime() - start);
+                }
+                if (accumulator == null) {
+                    accumulator = JsonNull.INSTANCE;
+                }
             }
         }
         return Stream.of(resultDocument(step, accumulator));

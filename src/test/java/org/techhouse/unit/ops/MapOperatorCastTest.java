@@ -9,9 +9,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonTime;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
+import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ejson.internal.NumberFormatter;
@@ -190,6 +192,101 @@ public class MapOperatorCastTest {
         CastMidOperator cast = new CastMidOperator("t", CastToType.STRING);
         JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input);
         assertEquals("10:30", result.get("out").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_cast_infinity_string_to_number_returns_null() {
+        assertTrue(castToNumber("Infinity").isJsonNull());
+        assertTrue(castToNumber("-Infinity").isJsonNull());
+    }
+
+    @Test
+    public void test_cast_nan_string_to_number_returns_null() {
+        assertTrue(castToNumber("NaN").isJsonNull());
+    }
+
+    @Test
+    public void test_cast_hex_float_string_to_number_returns_null() {
+        assertTrue(castToNumber("0x1p3").isJsonNull());
+    }
+
+    @Test
+    public void test_cast_java_suffix_string_to_number_returns_null() {
+        assertTrue(castToNumber("1d").isJsonNull());
+        assertTrue(castToNumber("1f").isJsonNull());
+    }
+
+    @Test
+    public void test_cast_padded_numeric_string_to_number_returns_null() {
+        assertTrue(castToNumber(" 1 ").isJsonNull());
+    }
+
+    @Test
+    public void test_cast_leading_plus_string_to_number_returns_null() {
+        assertTrue(castToNumber("+1").isJsonNull());
+    }
+
+    @Test
+    public void test_cast_malformed_numeric_string_to_number_returns_null() {
+        assertTrue(castToNumber("").isJsonNull());
+        assertTrue(castToNumber("-").isJsonNull());
+        assertTrue(castToNumber(".").isJsonNull());
+        assertTrue(castToNumber("--1").isJsonNull());
+    }
+
+    @Test
+    public void test_cast_overflowing_exponent_string_to_number_returns_null() {
+        assertTrue(castToNumber("1e400").isJsonNull());
+    }
+
+    @Test
+    public void test_cast_exponent_string_to_number_parses() {
+        assertEquals(1000, castToNumber("1e3").asJsonNumber().getValue().intValue());
+        assertEquals(1000, castToNumber("1e+3").asJsonNumber().getValue().intValue());
+        assertEquals(0.001, castToNumber("1e-3").asJsonNumber().getValue().doubleValue());
+    }
+
+    @Test
+    public void test_cast_integral_string_to_number_narrows_like_the_parser() {
+        assertEquals(new JsonNumber("5").getValue(), castToNumber("5").asJsonNumber().getValue());
+        assertInstanceOf(Integer.class, castToNumber("5").asJsonNumber().getValue());
+        assertEquals(new JsonNumber("2147483647").getValue(), castToNumber("2147483647").asJsonNumber().getValue());
+        assertEquals(new JsonNumber("2147483648").getValue(), castToNumber("2147483648").asJsonNumber().getValue());
+    }
+
+    @Test
+    public void test_cast_non_finite_number_field_to_number_returns_null() {
+        final var input = new JsonObject();
+        input.add("n", new JsonNumber(Double.POSITIVE_INFINITY));
+        final var operator = new AddFieldMapOperator("out", null, new CastMidOperator("n", CastToType.NUMBER));
+        assertTrue(MapOperatorHelper.processOperator(operator, input).get("out").isJsonNull());
+    }
+
+    @Test
+    public void test_cast_unparseable_string_to_boolean_returns_null() {
+        assertTrue(castToBoolean("banana").isJsonNull());
+        assertTrue(castToBoolean("").isJsonNull());
+    }
+
+    @Test
+    public void test_cast_false_string_to_boolean_returns_false() {
+        assertFalse(castToBoolean("false").asJsonBoolean().getValue());
+        assertFalse(castToBoolean("FALSE").asJsonBoolean().getValue());
+        assertTrue(castToBoolean("TRUE").asJsonBoolean().getValue());
+    }
+
+    private static JsonBaseElement castToNumber(String raw) {
+        return castField(raw, new CastMidOperator("value", CastToType.NUMBER));
+    }
+
+    private static JsonBaseElement castToBoolean(String raw) {
+        return castField(raw, new CastMidOperator("value", CastToType.BOOLEAN));
+    }
+
+    private static JsonBaseElement castField(String raw, CastMidOperator cast) {
+        final var input = new JsonObject();
+        input.add("value", new JsonString(raw));
+        return MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, cast), input).get("out");
     }
 
     private static String castToString(Number value) {

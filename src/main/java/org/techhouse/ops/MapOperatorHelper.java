@@ -300,6 +300,44 @@ public final class MapOperatorHelper {
         return TypeAdapterFactory.getAdapter(JsonBaseElement.class).toJson(element);
     }
 
+    private static JsonBaseElement numberFromString(String text) {
+        if (!isJsonNumberText(text)) {
+            return JsonNull.INSTANCE;
+        }
+        try {
+            return Double.isFinite(Double.parseDouble(text)) ? new JsonNumber(text) : JsonNull.INSTANCE;
+        } catch (NumberFormatException ignored) {
+            return JsonNull.INSTANCE;
+        }
+    }
+
+    private static boolean isJsonNumberText(String text) {
+        if (text.isEmpty()) {
+            return false;
+        }
+        for (var i = 0; i < text.length(); i++) {
+            final var current = text.charAt(i);
+            final var digitOrSeparator = (current >= '0' && current <= '9') || current == '-' || current == '.'
+                    || current == 'e' || current == 'E';
+            final var exponentSign = current == '+' && i > 0 && isExponentMarker(text.charAt(i - 1));
+            if (!digitOrSeparator && !exponentSign) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static boolean isExponentMarker(char c) {
+        return c == 'e' || c == 'E';
+    }
+
+    private static JsonBaseElement booleanFromString(String text) {
+        if ("true".equalsIgnoreCase(text)) {
+            return new JsonBoolean(true);
+        }
+        return "false".equalsIgnoreCase(text) ? new JsonBoolean(false) : JsonNull.INSTANCE;
+    }
+
     private static JsonObject cast(CastMidOperator midOperator, String addFieldName, JsonObject obj) {
         final var fieldName = midOperator.getFieldName();
         final var type = midOperator.getToType();
@@ -310,14 +348,13 @@ public final class MapOperatorHelper {
             casted = switch (type) {
                 case NUMBER -> {
                     if (primitive.isJsonNumber()) {
-                        yield primitive;
-                    } else if (primitive.isJsonString()) {
-                        try {
-                            yield new JsonNumber(Double.parseDouble(primitive.asJsonString().getValue()));
-                        } catch (Exception ignored) {
-                        }
+                        yield Double.isFinite(primitive.asJsonNumber().getValue().doubleValue())
+                                ? primitive
+                                : JsonNull.INSTANCE;
                     }
-                    yield JsonNull.INSTANCE;
+                    yield primitive.isJsonString()
+                            ? numberFromString(primitive.asJsonString().getValue())
+                            : JsonNull.INSTANCE;
                 }
                 case STRING -> {
                     if (primitive instanceof JsonCustom<?> custom) {
@@ -335,16 +372,13 @@ public final class MapOperatorHelper {
                 case BOOLEAN -> {
                     if (primitive.isJsonBoolean()) {
                         yield primitive;
-                    } else if (primitive.isJsonString()) {
-                        try {
-                            yield new JsonBoolean(Boolean.parseBoolean(primitive.asJsonString().getValue()));
-                        } catch (Exception ignored) {
-                        }
-                    } else if (primitive.isJsonNumber()) {
-                        final var number = primitive.asJsonNumber().getValue().doubleValue();
-                        yield new JsonBoolean(number != 0);
                     }
-                    yield JsonNull.INSTANCE;
+                    if (primitive.isJsonNumber()) {
+                        yield new JsonBoolean(primitive.asJsonNumber().getValue().doubleValue() != 0);
+                    }
+                    yield primitive.isJsonString()
+                            ? booleanFromString(primitive.asJsonString().getValue())
+                            : JsonNull.INSTANCE;
                 }
                 case JSON_CUSTOM -> {
                     final var customTypeName = midOperator.getCustomTypeName();

@@ -4,7 +4,7 @@ import threading
 import time
 
 import base_utils as bu
-from base_utils import Conn, check, check_status, section
+from base_utils import Conn, check, check_code, check_status, section
 
 HOST = os.environ.get("INDEX_TEST_HOST", "127.0.0.1")
 # Overridable so CI can point this suite at a dedicated caching-disabled server
@@ -1060,6 +1060,8 @@ REG_NOTIN = "idxagg_reg_notin"
 REG_MINVALUE = "idxagg_reg_minvalue"
 REG_GEO_WRAP = "idxagg_reg_geowrap"
 REG_TIES = "idxagg_reg_ties"
+REG_VALUELESS = "idxagg_reg_valueless"
+REG_CAST = "idxagg_reg_cast"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -1522,11 +1524,74 @@ def probe_a_conjunction_after_a_row_reshaping_step(c):
               detail=f"got {[row.get('category') for row in and_rows]}")
 
 
+def probe_a_field_operator_without_a_value_is_refused(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_VALUELESS})
+    save_doc(c, REG_VALUELESS, {"_id": "v1", "name": "alice"})
+    wait_for_background()
+
+    def valueless(field, operator_type):
+        return agg(c, REG_VALUELESS,
+                   [{"type": "FILTER", "operator": {"fieldOperatorType": operator_type, "field": field}}])
+
+    for indexed in (False, True):
+        if indexed:
+            c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_VALUELESS,
+                    "fieldName": "name"})
+            wait_for_background()
+        label = "indexed" if indexed else "unindexed"
+        for operator_type in ("EQUALS", "NOT_EQUALS", "CONTAINS", "GREATER_THAN", "SMALLER_THAN_EQUALS"):
+            check_code(f"[{label}] a valueless {operator_type} on an ordinary field is a validation error",
+                       valueless("name", operator_type), "ERROR", "400-1")
+            check_code(f"[{label}] a valueless {operator_type} on _id is a validation error",
+                       valueless("_id", operator_type), "ERROR", "400-1")
+
+    check_status("an explicit null operand is still accepted",
+                 agg(c, REG_VALUELESS, [{"type": "FILTER", "operator": {
+                     "fieldOperatorType": "NOT_EQUALS", "field": "name", "value": None}}]), "OK")
+
+
+CAST_NUMBER_STEPS = [{"type": "MAP", "operators": [
+    {"fieldName": "n", "operator": {"type": "CAST", "fieldName": "raw", "toType": "NUMBER"}}]}]
+CAST_BOOLEAN_STEPS = [{"type": "MAP", "operators": [
+    {"fieldName": "b", "operator": {"type": "CAST", "fieldName": "raw", "toType": "BOOLEAN"}}]}]
+
+
+def probe_cast_keeps_the_value_boundary(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CAST})
+    numbers = {"inf": "Infinity", "nan": "NaN", "hex": "0x1p3", "exp": "1e3"}
+    for doc_id, raw in numbers.items():
+        save_doc(c, REG_CAST, {"_id": doc_id, "raw": raw})
+    wait_for_background()
+
+    rows = {row["_id"]: row.get("n") for row in (agg(c, REG_CAST, CAST_NUMBER_STEPS).get("results") or [])}
+    for doc_id, expected in (("inf", None), ("nan", None), ("hex", None), ("exp", 1000)):
+        check(f"CAST {numbers[doc_id]!r} to NUMBER answers {expected!r}", rows.get(doc_id) == expected,
+              detail=f"got {rows.get(doc_id)!r}")
+
+    selected = agg(c, REG_CAST, CAST_NUMBER_STEPS + [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "GREATER_THAN", "field": "n", "value": 100}}])
+    selected_ids = sorted(row["_id"] for row in (selected.get("results") or []))
+    check("a numeric filter after the cast selects only the row that really is a number",
+          selected_ids == ["exp"], detail=f"got {selected_ids}")
+
+
+def probe_cast_to_boolean_answers_null_for_an_unparseable_string(c):
+    booleans = {"btrue": "true", "bfalse": "FALSE", "bjunk": "banana"}
+    for doc_id, raw in booleans.items():
+        save_doc(c, REG_CAST, {"_id": doc_id, "raw": raw})
+    wait_for_background()
+
+    rows = {row["_id"]: row.get("b") for row in (agg(c, REG_CAST, CAST_BOOLEAN_STEPS).get("results") or [])}
+    for doc_id, expected in (("btrue", True), ("bfalse", False), ("bjunk", None)):
+        check(f"CAST {booleans[doc_id]!r} to BOOLEAN answers {expected!r}", rows.get(doc_id) == expected,
+              detail=f"got {rows.get(doc_id)!r}")
+
+
 def regression_suite(c):
     section("Correctness regressions: non-ASCII index values, index values containing the file's own "
             "delimiters, repeated CREATE_INDEX, single-valued index ranges, low-cardinality numeric "
             "indexes, conjunctions over a filtered stream, custom values across a MAP step, "
-            "conjunctions over rows with no _id")
+            "conjunctions over rows with no _id, valueless field operands, the MAP CAST value boundary")
     probe_non_ascii_indexed_values(c)
     probe_index_values_containing_delimiters(c)
     probe_repeated_create_index_is_idempotent(c)
@@ -1544,6 +1609,9 @@ def regression_suite(c):
     probe_sort_ties_do_not_depend_on_the_index(c)
     probe_a_custom_filter_survives_a_map_step(c)
     probe_a_conjunction_after_a_row_reshaping_step(c)
+    probe_a_field_operator_without_a_value_is_refused(c)
+    probe_cast_keeps_the_value_boundary(c)
+    probe_cast_to_boolean_answers_null_for_an_unparseable_string(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════

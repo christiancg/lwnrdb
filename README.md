@@ -154,7 +154,7 @@ Also accepts an optional top-level `"analyze": true` (default `false`); see [Exp
 
 | Step | Required fields | Notes |
 |---|---|---|
-| `FILTER` | `operator` | Field or conjunction operator |
+| `FILTER` | `operator` | Field or conjunction operator; a field operator needs `field`, `fieldOperatorType` and `value` |
 | `MAP` | `operators` (non-empty) | Each operator needs `fieldName` |
 | `GROUP_BY` | `fieldName` | |
 | `JOIN` | `joinCollection`, `localField`, `remoteField`, `asField` | `joinCollection` must satisfy naming rules; the user must also have `READ` on `joinCollection` |
@@ -174,7 +174,18 @@ A collection may also carry a single JSON Schema stored alongside its data files
 
 `EQUALS`, `NOT_EQUALS`, `IN` and `NOT_IN` all share one notion of equality: strings compare case-insensitively, custom types compare semantically (so `#datetime(2024-01-01T10:00)` equals `#datetime(2024-01-01T10:00:00)`), numbers compare by value, and objects and arrays compare exactly as whole values. The primary key is the one exception — a `FILTER` on `_id` compares exactly, matching `FIND_BY_ID`, `SAVE` and `DELETE`. `CONTAINS` on a string is a case-sensitive substring test. A `null` operand is only ever an equality test: `EQUALS null` returns exactly the documents whose field is `null` and `NOT_EQUALS null` exactly those whose field is not, while the ordering operators and `CONTAINS` return nothing. A document whose field is `null` is never matched by `IN` or `NOT_IN`, nor by any comparison against a non-null operand. A document that lacks the field is excluded by every operator.
 
+Every field operator requires a `value`, including the ones whose operand is conceptually empty — omitting the member is refused with `400-1` rather than being read as a null operand. Spell a null operand as an explicit JSON `null` (`"value": null`).
+
 **Conjunction operator types:** `AND`, `OR`, `NOR`, `XOR`, `NAND`
+
+#### The `CAST` mid-operator
+
+A `MAP` `ADD_FIELD` may carry a `CAST` mid-operator (`fieldName`, `toType`, plus `customTypeName` for `JSON_CUSTOM`). A cast that cannot produce a value of the target type sets the field to `null` rather than to a manufactured one, on every target type:
+
+- `NUMBER` accepts only the number syntax the wire protocol itself accepts — digits, a leading `-`, a decimal point, and an `e`/`E` exponent. Java-only spellings (`0x1p3`, `1d`, `+1`), surrounding whitespace, `Infinity` and `NaN` all answer `null`, as does an exponent that overflows a double. An integral result narrows exactly as a wire-parsed number does, so a cast `5` and a stored `5` are indistinguishable.
+- `BOOLEAN` accepts `true` and `false` case-insensitively; every other string answers `null`. A number casts to `value != 0`.
+- `STRING` renders a number with the same formatter that writes documents, and a custom type as its data value.
+- `JSON_CUSTOM` answers `null` when the source string is not a valid value of the named type.
 
 #### Script operators (SimpleJS in the pipeline)
 

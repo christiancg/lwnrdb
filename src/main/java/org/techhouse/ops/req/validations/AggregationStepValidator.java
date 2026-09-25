@@ -240,6 +240,9 @@ public class AggregationStepValidator {
             if (fieldOp.getFieldOperatorType() == null) {
                 return ValidationResult.fail("Field operator requires a fieldOperatorType");
             }
+            if (fieldOp.getValue() == null) {
+                return ValidationResult.fail("Field operator requires a value");
+            }
             return validateMembershipOperand(fieldOp);
         } else if (operator.getType() == OperatorType.CUSTOM) {
             return validateCustomOperator((CustomOperator) operator);

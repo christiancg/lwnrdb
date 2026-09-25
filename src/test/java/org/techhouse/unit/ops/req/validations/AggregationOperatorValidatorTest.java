@@ -6,6 +6,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -350,5 +351,37 @@ public class AggregationOperatorValidatorTest {
         operands.add(new JsonString("hello"));
         assertTrue(AggregationStepValidator
                 .validateMidOperator(new ArrayParamMidOperator(MidOperationType.CONCAT, operands)).isValid());
+    }
+
+    @Test
+    public void validate_filterStep_fieldOperatorWithoutValue_returnsFail() {
+        for (final var operatorType : FieldOperatorType.values()) {
+            final var op = new FieldOperator(operatorType, "age", null);
+            assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid(),
+                    operatorType + " must be refused without an operand");
+        }
+    }
+
+    @Test
+    public void validate_filterStep_fieldOperatorWithExplicitJsonNullValue_returnsOk() {
+        final var op = new FieldOperator(FieldOperatorType.EQUALS, "age", JsonNull.INSTANCE);
+        assertTrue(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_filterStep_nestedConjunctionChildWithoutValue_returnsFail() {
+        final var valued = new FieldOperator(FieldOperatorType.EQUALS, "age", new JsonString("30"));
+        final var valueless = new FieldOperator(FieldOperatorType.EQUALS, "name", null);
+        final var inner = new ConjunctionOperator(ConjunctionOperatorType.OR, List.of(valued, valueless));
+        final var outer = new ConjunctionOperator(ConjunctionOperatorType.AND, List.of(valued, inner));
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(outer)).isValid());
+    }
+
+    @Test
+    public void validate_mapStep_conditionWithoutValue_returnsFail() {
+        final var condition = new FieldOperator(FieldOperatorType.EQUALS, "age", null);
+        final var mapOp = new AddFieldMapOperator("result", condition,
+                new OneParamMidOperator(MidOperationType.ABS, "age"));
+        assertFalse(AggregationStepValidator.validate(new MapAggregationStep(List.of(mapOp))).isValid());
     }
 }

@@ -2,6 +2,7 @@ package org.techhouse.fs;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -93,17 +94,24 @@ final class DocumentPageStore {
         if (!Files.exists(collectionFolder)) {
             return Stream.empty();
         }
-        final var pathStream = Files.list(collectionFolder);
-        return pathStream.filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION)).map(path -> {
-            final var fileName = path.toFile().getName();
-            final var fileParts = fileName.replace(Globals.DB_FILE_EXTENSION, "").split(Globals.FILE_PAGE_SEPARATOR);
-            final var page = Long.parseLong(fileParts[fileParts.length - 1]);
+        final List<Long> pages;
+        try (var pathStream = Files.list(collectionFolder)) {
+            pages = pathStream.map(path -> path.toFile().getName())
+                    .filter(name -> name.endsWith(Globals.DB_FILE_EXTENSION)).map(DocumentPageStore::pageNumberOf)
+                    .sorted().toList();
+        }
+        return pages.stream().map(page -> {
             try {
                 return readWholeCollectionPage(dbName, collName, page);
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                throw new UncheckedIOException(e);
             }
-        }).onClose(pathStream::close);
+        });
+    }
+
+    private static long pageNumberOf(String fileName) {
+        final var fileParts = fileName.replace(Globals.DB_FILE_EXTENSION, "").split(Globals.FILE_PAGE_SEPARATOR);
+        return Long.parseLong(fileParts[fileParts.length - 1]);
     }
 
     Stream<DbEntry> streamEntries(String dbName, String collName) throws IOException {

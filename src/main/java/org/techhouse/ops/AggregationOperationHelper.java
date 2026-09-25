@@ -181,22 +181,21 @@ public final class AggregationOperationHelper {
                 return groupByViaIndex(indexEntries, dbName, collName, fieldName);
             }
         }
-        resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
-        // The reassignment above defeats the IDE's consumed-stream tracking.
-        //noinspection DataFlowIssue
-        return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, groupByStep.getFieldName()))
-                .collect(Collectors
-                        .groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, groupByStep.getFieldName())))
-                .entrySet().stream().map(jsonElementListEntry -> {
-                    final var groupedEntry = new JsonObject();
-                    groupedEntry.add(groupByStep.getFieldName(), jsonElementListEntry.getKey());
-                    final var values = new JsonArray();
-                    for (final var grouped : jsonElementListEntry.getValue()) {
-                        values.add(grouped);
-                    }
-                    groupedEntry.add(GROUP_FIELD_NAME, values);
-                    return groupedEntry;
-                });
+        final Map<JsonBaseElement, List<JsonObject>> grouped;
+        try (var documents = cache.initializeStreamIfNecessary(resultStream, dbName, collName)) {
+            grouped = documents.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName))
+                    .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, fieldName)));
+        }
+        return grouped.entrySet().stream().map(jsonElementListEntry -> {
+            final var groupedEntry = new JsonObject();
+            groupedEntry.add(fieldName, jsonElementListEntry.getKey());
+            final var values = new JsonArray();
+            for (final var groupedDocument : jsonElementListEntry.getValue()) {
+                values.add(groupedDocument);
+            }
+            groupedEntry.add(GROUP_FIELD_NAME, values);
+            return groupedEntry;
+        });
     }
 
     private static Stream<JsonObject> groupByViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
@@ -231,14 +230,16 @@ public final class AggregationOperationHelper {
 
     private static Stream<JsonObject> processJoinStep(BaseAggregationStep baseJoinStep, Stream<JsonObject> resultStream,
             String dbName, String collName, Transaction transaction) throws IOException {
-        resultStream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var joinStep = (JoinAggregationStep) baseJoinStep;
         final var joinCollectionName = joinStep.getJoinCollection();
         final var joinCollectionLocalField = joinStep.getLocalField();
         final var joinCollectionRemoteField = joinStep.getRemoteField();
         final var as = joinStep.getAsField();
         // Blocking step (documented exception): JOIN groups the remote side in memory before the per-row attach.
-        final var leftEntries = resultStream.toList();
+        final List<JsonObject> leftEntries;
+        try (var documents = cache.initializeStreamIfNecessary(resultStream, dbName, collName)) {
+            leftEntries = documents.toList();
+        }
         final var joinedCollection = buildJoinLookup(dbName, joinCollectionName, joinCollectionRemoteField, leftEntries,
                 joinCollectionLocalField, transaction);
         return leftEntries.stream().map(jsonObject -> {
@@ -287,13 +288,15 @@ public final class AggregationOperationHelper {
 
     private static Map<JsonBaseElement, JsonArray> groupByRemoteField(Stream<JsonObject> documents,
             String remoteField) {
-        return documents.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, remoteField))
-                .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, remoteField),
-                        HashMap::new, Collectors.collectingAndThen(Collectors.toList(), jsonObjects -> {
-                            final var jsonArray = new JsonArray();
-                            jsonObjects.forEach(jsonArray::add);
-                            return jsonArray;
-                        })));
+        try (var remoteDocuments = documents) {
+            return remoteDocuments.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, remoteField))
+                    .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, remoteField),
+                            HashMap::new, Collectors.collectingAndThen(Collectors.toList(), jsonObjects -> {
+                                final var jsonArray = new JsonArray();
+                                jsonObjects.forEach(jsonArray::add);
+                                return jsonArray;
+                            })));
+        }
     }
 
     private static Stream<JsonObject> processDistinctStep(BaseAggregationStep baseDistinctStep,
