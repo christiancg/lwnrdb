@@ -86,11 +86,36 @@ public class AntiEntropyService implements MembershipListener {
     }
 
     public AntiEntropyPayload buildDigest(String dbName, String collName) throws Exception {
-        return buildDigest(dbName, collName, null);
+        return buildDigest(dbName, collName, null, 0L);
     }
 
-    public AntiEntropyPayload buildDigest(String dbName, String collName, String peerSummary) throws Exception {
+    private long localIncarnation(String dbName, String collName) {
+        final var entry = cache.getAdminCollectionEntry(dbName, collName);
+        return entry == null ? 0L : entry.getIncarnation();
+    }
+
+    private static boolean incarnationsDiffer(long local, long peer) {
+        return local != 0L && peer != 0L && local != peer;
+    }
+
+    private AntiEntropyPayload staleIncarnationAnswer(String dbName, String collName, long local, long peer) {
+        logger.warning("Refusing to describe " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                + " to a peer: its documents belong to incarnation " + local + " and the peer asked for incarnation "
+                + peer);
         final var payload = new AntiEntropyPayload(dbName, collName);
+        payload.setIncarnationValue(local);
+        payload.setStaleIncarnation(true);
+        return payload;
+    }
+
+    public AntiEntropyPayload buildDigest(String dbName, String collName, String peerSummary, long peerIncarnation)
+            throws Exception {
+        final var incarnation = localIncarnation(dbName, collName);
+        if (incarnationsDiffer(incarnation, peerIncarnation)) {
+            return staleIncarnationAnswer(dbName, collName, incarnation, peerIncarnation);
+        }
+        final var payload = new AntiEntropyPayload(dbName, collName);
+        payload.setIncarnationValue(incarnation);
         final var entries = new ArrayList<DigestEntry>();
         final var selfNodeId = selfNodeId();
         lockReadOrSkip(dbName, collName);
@@ -125,7 +150,17 @@ public class AntiEntropyService implements MembershipListener {
     }
 
     public AntiEntropyPayload buildPull(String dbName, String collName, List<String> ids) throws Exception {
+        return buildPull(dbName, collName, ids, 0L);
+    }
+
+    public AntiEntropyPayload buildPull(String dbName, String collName, List<String> ids, long peerIncarnation)
+            throws Exception {
+        final var incarnation = localIncarnation(dbName, collName);
+        if (incarnationsDiffer(incarnation, peerIncarnation)) {
+            return staleIncarnationAnswer(dbName, collName, incarnation, peerIncarnation);
+        }
         final var payload = new AntiEntropyPayload(dbName, collName);
+        payload.setIncarnationValue(incarnation);
         final var documents = new ArrayList<JsonObject>();
         final var versions = new ArrayList<String>();
         lockReadOrSkip(dbName, collName);
@@ -169,10 +204,19 @@ public class AntiEntropyService implements MembershipListener {
 
         final var self = membershipService.getSelf();
         final var peers = membershipService.membershipView().peers(self);
+        final var selfIncarnation = localIncarnation(dbName, collName);
         var everyPeerAnswered = true;
         for (final var member : peers) {
+            if (member.isAdminSyncing()) {
+                everyPeerAnswered = false;
+                continue;
+            }
             final var response = requestDigest(member.address(), dbName, collName, localSummary);
             if (response == null) {
+                everyPeerAnswered = false;
+                continue;
+            }
+            if (response.isStaleIncarnation() || incarnationsDiffer(selfIncarnation, response.incarnationValue())) {
                 everyPeerAnswered = false;
                 continue;
             }
@@ -273,6 +317,7 @@ public class AntiEntropyService implements MembershipListener {
         final var message = message(ClusterMessageType.DIGEST);
         final var query = new AntiEntropyPayload(dbName, collName);
         query.setSummary(summary);
+        query.setIncarnationValue(localIncarnation(dbName, collName));
         message.setAntiEntropy(query);
         final var response = send(address, message, ClusterMessageType.DIGEST_ACK);
         return response == null ? null : response.getAntiEntropy();
@@ -282,6 +327,7 @@ public class AntiEntropyService implements MembershipListener {
         final var message = message(ClusterMessageType.PULL);
         final var payload = new AntiEntropyPayload(dbName, collName);
         payload.setIds(ids);
+        payload.setIncarnationValue(localIncarnation(dbName, collName));
         message.setAntiEntropy(payload);
         final var response = send(address, message, ClusterMessageType.PULL_ACK);
         return response == null ? null : response.getAntiEntropy();

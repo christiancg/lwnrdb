@@ -52,4 +52,21 @@ public class AntiEntropyPayloadTest {
         blank.setDbName("d");
         assertEquals("d", blank.getDbName());
     }
+
+    @Test
+    public void test_incarnation_accessors() {
+        final var payload = new AntiEntropyPayload("db", "coll");
+        assertEquals(0L, payload.incarnationValue());
+        assertFalse(payload.isStaleIncarnation());
+
+        payload.setIncarnationValue(117333887563005952L);
+        payload.setStaleIncarnation(true);
+
+        assertEquals("117333887563005952", payload.getIncarnation());
+        assertEquals(117333887563005952L, payload.incarnationValue());
+        assertTrue(payload.isStaleIncarnation());
+
+        payload.setIncarnation("42");
+        assertEquals(42L, payload.incarnationValue());
+    }
 }

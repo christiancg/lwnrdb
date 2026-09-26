@@ -56,6 +56,10 @@ public class AdminAntiEntropyService implements MembershipListener {
         return !started || adminSyncCompleted.get();
     }
 
+    public boolean hasNotConformedSinceStart() {
+        return clusterConfig.isEnabled() && !adminSyncCompleted.get();
+    }
+
     // Gossiped so peers can keep a script off a node whose admin state is not caught up yet
     // (cluster/ScriptPlacement).
     private void publishSyncState() {

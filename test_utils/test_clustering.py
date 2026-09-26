@@ -310,6 +310,18 @@ def all_ports() -> list:
     return [n.client_port for n in nodes if n.alive]
 
 
+def holds_throughout(predicate: Callable[[], bool], seconds: float, interval_s: float = 0.5) -> bool:
+    deadline = time.time() + seconds
+    while time.time() < deadline:
+        try:
+            if not predicate():
+                return False
+        except (OSError, RuntimeError):
+            return False
+        time.sleep(interval_s)
+    return True
+
+
 def wait_until(predicate: Callable[[], bool], timeout_s: float, interval_s: float = 0.4) -> bool:
     deadline = time.time() + timeout_s
     while time.time() < deadline:
@@ -2373,28 +2385,13 @@ def test_drop_and_recreate_does_not_resurrect_documents():
 
     check("the survivors re-create the same name", wait_until(_recreated, timeout_s=30.0, interval_s=1.0))
 
+    check("the live incarnation's own documents commit",
+          seed_documents(nodes[0].client_port, DB, coll, [{"_id": f"live{i}", "v": i} for i in range(3)]))
+
     print(f"  Restarting node-{victim.index} ...")
     victim.start()
 
-    # An aggregate over an empty collection answers NOT_FOUND/404-3, which is "no documents" and not
-    # an error; anything else means the collection is unreadable rather than empty.
-    def _empty_everywhere():
-        for port in all_ports():
-            r = aggregate(port, DB, coll, [])
-            if r.get("status") not in ("OK", "NOT_FOUND"):
-                return False
-            if ids_of(r):
-                return False
-        return True
-
-    # antiEntropyIntervalMs is 3000 here, so this spans several sweeps: if the rejoined node were
-    # going to seed its pre-drop documents back, it would have done so well inside this window.
-    ok = wait_until(_empty_everywhere, timeout_s=90.0, interval_s=1.0)
-    per_node = {}
-    for port in all_ports():
-        r = aggregate(port, DB, coll, [])
-        per_node[port] = (r.get("status"), r.get("errorCode"), ids_of(r))
-    check("the re-created collection stays empty on every node", ok, f"per-node: {per_node}")
+    assert_no_resurrection(DB, coll, {"live0", "live1", "live2"}, victim)
 
     # The re-created collection is still usable: quarantining the dead incarnation must not take
     # the live one down with it.
@@ -2404,9 +2401,81 @@ def test_drop_and_recreate_does_not_resurrect_documents():
           all_nodes_see(DB, coll, "after", 1, ports=all_ports(), timeout_s=30.0))
 
 
-def _node_log_mentions_quarantine(node, coll) -> bool:
+def assert_no_resurrection(db, coll, live_ids, victim, seconds: float = 25.0):
+    check("the rejoined node recognised its documents as a dropped incarnation",
+          wait_until(lambda: _node_log_mentions_quarantine(victim, coll, db), timeout_s=60.0),
+          f"node-{victim.index} logged no quarantine for {db}|{coll}")
+
+    def _only_live_documents_on_disk():
+        for node in nodes:
+            if not node.alive:
+                continue
+            if set(stored_documents(node, db, coll)) - live_ids:
+                return False
+        return True
+
+    held = holds_throughout(_only_live_documents_on_disk, seconds=seconds)
+    per_node = {f"node-{n.index}": sorted(stored_documents(n, db, coll)) for n in nodes if n.alive}
+    check("no node seeds the dropped incarnation's documents back", held, f"per-node: {per_node}")
+
+    def _client_sees_only_live():
+        for port in all_ports():
+            r = aggregate(port, db, coll, [])
+            if r.get("status") not in ("OK", "NOT_FOUND"):
+                return False
+            if set(ids_of(r)) - live_ids:
+                return False
+        return True
+
+    served = {p: sorted(ids_of(aggregate(p, db, coll, []))) for p in all_ports()}
+    check("a client read returns none of the dropped incarnation's documents",
+          _client_sees_only_live(), f"per-port: {served}")
+
+    check("the rejoined node still catches up on the live incarnation",
+          wait_until(lambda: set(stored_documents(victim, db, coll)) == live_ids, timeout_s=60.0),
+          f"node-{victim.index} holds {sorted(stored_documents(victim, db, coll))}, expected {sorted(live_ids)}")
+
+
+def test_drop_database_and_recreate_does_not_resurrect_documents():
+    section("DROP_DATABASE + CREATE_DATABASE while one node is down")
+    db = "incarnation_db"
+    coll = "dbinc_coll"
+    check_status("create the database", create_db(nodes[0].client_port, db), "OK")
+    check_status("create the collection", create_coll(nodes[0].client_port, db, coll), "OK")
+    check("the pre-drop documents all committed",
+          seed_documents(nodes[0].client_port, db, coll, [{"_id": f"pre{i}", "v": i} for i in range(5)]))
+
+    def _all_hold_five():
+        return all(len(stored_documents(n, db, coll)) == 5 for n in nodes if n.alive)
+
+    check("every node holds the pre-drop documents", wait_until(_all_hold_five, timeout_s=30.0))
+
+    victim = nodes[2]
+    print(f"  Killing node-{victim.index} so it misses the drop ...")
+    victim.kill()
+
+    def _dropped():
+        return drop_db(nodes[0].client_port, db).get("status") == "OK"
+
+    check("the survivors drop the database", wait_until(_dropped, timeout_s=30.0, interval_s=1.0))
+
+    def _recreated():
+        return (create_db(nodes[0].client_port, db).get("status") == "OK"
+                and create_coll(nodes[0].client_port, db, coll).get("status") == "OK")
+
+    check("the survivors re-create the same names", wait_until(_recreated, timeout_s=30.0, interval_s=1.0))
+    check("the live incarnation's own documents commit",
+          seed_documents(nodes[0].client_port, db, coll, [{"_id": f"live{i}", "v": i} for i in range(3)]))
+
+    print(f"  Restarting node-{victim.index} ...")
+    victim.start()
+
+    assert_no_resurrection(db, coll, {"live0", "live1", "live2"}, victim)
+
+
+def _node_log_mentions_quarantine(node, coll, db: str = DB) -> bool:
     try:
-        return f"Quarantined collection {DB}|{coll}" in bu.read_log(node.log_path)
+        return f"Quarantined collection {db}|{coll}" in bu.read_log(node.log_path)
     except OSError:
         return False
 
@@ -2548,6 +2617,7 @@ def main():
         test_a_post_prepare_write_survives_2pc_recovery()
         test_a_trigger_fires_once_despite_a_replication_timeout()
         test_drop_and_recreate_does_not_resurrect_documents()
+        test_drop_database_and_recreate_does_not_resurrect_documents()
         test_rapid_collection_creates_are_not_quarantined()
         test_recreating_an_existing_collection_keeps_its_documents()
         test_schedule_rejoin_catch_up()

@@ -248,19 +248,33 @@ public class ClusterConnectionHandler implements Runnable {
         return response;
     }
 
+    private ClusterMessage notAdminSyncedYet() {
+        final var response = new ClusterMessage();
+        response.setType(ClusterMessageType.ERROR);
+        response.setErrorMessage("This node has not completed its first admin reconciliation, so its documents"
+                + " cannot be described yet");
+        return response;
+    }
+
     private ClusterMessage handleDigest(ClusterMessage request) {
+        if (adminAntiEntropyService.hasNotConformedSinceStart()) {
+            return notAdminSyncedYet();
+        }
         return ClusterMessages.reply(ClusterMessageType.DIGEST_ACK, "Failed to build digest", response -> {
             final var query = request.getAntiEntropy();
-            response.setAntiEntropy(
-                    antiEntropyService.buildDigest(query.getDbName(), query.getCollName(), query.getSummary()));
+            response.setAntiEntropy(antiEntropyService.buildDigest(query.getDbName(), query.getCollName(),
+                    query.getSummary(), query.incarnationValue()));
         });
     }
 
     private ClusterMessage handlePull(ClusterMessage request) {
+        if (adminAntiEntropyService.hasNotConformedSinceStart()) {
+            return notAdminSyncedYet();
+        }
         return ClusterMessages.reply(ClusterMessageType.PULL_ACK, "Failed to build pull response", response -> {
             final var query = request.getAntiEntropy();
-            response.setAntiEntropy(
-                    antiEntropyService.buildPull(query.getDbName(), query.getCollName(), query.getIds()));
+            response.setAntiEntropy(antiEntropyService.buildPull(query.getDbName(), query.getCollName(), query.getIds(),
+                    query.incarnationValue()));
         });
     }
 }

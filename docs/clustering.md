@@ -543,6 +543,30 @@ collections against the live members:
    versioned upsert; where a tombstone wins it deletes locally and records the tombstone. It
    never overwrites an id it already holds at the winning version.
 
+**Every digest and pull carries the collection's incarnation, and a mismatch stops the exchange.**
+Without it the whole mechanism above runs happily over documents belonging to a *dropped* creation
+of the collection name. A node that missed a `DROP_COLLECTION` or `DROP_DATABASE` keeps its admin
+entry and its documents; a peer asks it for a digest, sees ids the live incarnation has never held,
+and pulls them in. The version check cannot catch this — it compares versions *per id*, and these
+are ids nothing on the live side can be compared against. The owner then holds them, replicates
+them everywhere and serves them to clients, permanently.
+
+`AdminSnapshotConformer`'s quarantine does not prevent it: that is what the stale node does to its
+own copy, and it runs after the node has already answered. `AntiEntropyPayload` therefore carries
+the requester's incarnation on both `DIGEST` and `PULL`; a node whose own incarnation for that name
+differs answers `staleIncarnation` with no digest and no documents, and `reconcile` skips any peer
+that reports `staleIncarnation` or whose answer carries a different incarnation — leaving
+`everyPeerAnswered` false, so tombstone collection still waits. Like the versions above, the
+incarnation travels as **text**; `0` on either side means "unknown" and the exchange proceeds as
+before, so a collection created before the field existed is never affected.
+
+A node also refuses `DIGEST` and `PULL` with an `ERROR` until its first admin reconciliation has
+completed, because `Main` starts the cluster server and joins the membership before admin
+anti-entropy runs, and a peer sweeps the moment the node appears. `ADMIN_SNAPSHOT` is deliberately
+not gated — it is what lets the node conform and so open the gate. This narrows the window rather
+than closing it: `adminSyncCompleted` is cleared only on `stop()`, so a node that stayed up through
+a partition reports itself synced the whole time. The incarnation check is what covers that case.
+
 Because every node runs the same pull-newest reconciliation and the version totally orders
 writes per id, the cluster converges to the latest write regardless of which node became a
 collection's owner after a failure. No committed write is lost when ownership hands off, and

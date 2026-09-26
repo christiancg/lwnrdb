@@ -75,4 +75,16 @@ public class VersionWireFidelityTest {
         assertEquals(version, roundTripped.versionValue());
         assertEquals(1L, HybridClock.logicalOf(roundTripped.versionValue()));
     }
+
+    @Test
+    public void test_an_incarnation_with_a_logical_counter_round_trips_exactly() {
+        for (final var incarnation : packedRange()) {
+            final var payload = new AntiEntropyPayload("db", "coll");
+            payload.setIncarnationValue(incarnation);
+
+            final var roundTripped = eJson.fromJson(eJson.toJson(payload), AntiEntropyPayload.class);
+
+            assertEquals(incarnation, roundTripped.incarnationValue(), "logical " + HybridClock.logicalOf(incarnation));
+        }
+    }
 }
