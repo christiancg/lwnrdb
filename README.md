@@ -1047,7 +1047,9 @@ Example filters:
 | `databasePermissions`   | Grants `READ` or `READ_WRITE` to all collections in a database                        |
 | `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection`                    |
 
-Ownership takes precedence over `databasePermissions` and `collectionPermissions`. A collection-level grant takes precedence over a database-level one. `READ_WRITE` also covers `READ`.
+Ownership takes precedence over `databasePermissions` and `collectionPermissions`. A `collectionPermissions` entry is authoritative for the collection it names: it replaces the database-level grant for that collection, so it can widen it *or* narrow it — a database `READ_WRITE` grant next to a `db|coll` entry of `READ` leaves that one collection read-only. A collection with no entry of its own falls back to `databasePermissions`. `READ_WRITE` also covers `READ`. Because [`CREATE_COLLECTION`](#create_collection) needs `READ_WRITE` on the collection it names, a `READ` entry for a name that does not exist yet also stops that user creating it. There is no collection-level way to deny reads outright: the only levels are `READ` and `READ_WRITE`.
+
+> **Upgrade note.** Earlier versions unioned the two levels, so a `collectionPermissions` entry could only ever widen a `databasePermissions` grant and a carve-out silently had no effect. A user who holds both a database `READ_WRITE` grant and a `READ` entry for one of its collections loses write access to that collection on upgrade — which is the behaviour documented above finally taking effect. Check existing users with [`LIST_USERS`](#list_users-admin-only) before rolling out if you are unsure whether any grant pairs that way.
 
 `DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
 

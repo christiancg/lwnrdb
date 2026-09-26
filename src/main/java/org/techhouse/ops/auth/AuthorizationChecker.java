@@ -132,8 +132,8 @@ public final class AuthorizationChecker {
             PermissionLevel requiredLevel) {
         if (collName != null && !collName.isBlank()) {
             final var collPerm = user.getCollectionPermissions().get(dbName + "|" + collName);
-            if (collPerm != null && collPerm.covers(requiredLevel)) {
-                return false;
+            if (collPerm != null) {
+                return !collPerm.covers(requiredLevel);
             }
         }
         final var dbPerm = user.getDatabasePermissions().get(dbName);

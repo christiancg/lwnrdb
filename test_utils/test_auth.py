@@ -1,7 +1,7 @@
 import sys
 
 import base_utils as bu
-from base_utils import Conn, check_status, section
+from base_utils import Conn, check_code, check_status, section
 
 HOST = "127.0.0.1"
 PORT = 8989
@@ -61,8 +61,11 @@ def setup_fixtures(c):
         {"type": "CREATE_DATABASE", "databaseName": "auth_db"},
         {"type": "CREATE_COLLECTION", "databaseName": "auth_db", "collectionName": "allowed"},
         {"type": "CREATE_COLLECTION", "databaseName": "auth_db", "collectionName": "forbidden"},
+        {"type": "CREATE_COLLECTION", "databaseName": "auth_db", "collectionName": "carved"},
         {"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
          "object": {"_id": "doc1", "value": 42}},
+        {"type": "SAVE", "databaseName": "auth_db", "collectionName": "carved",
+         "object": {"_id": "doc1", "value": 7}},
     ]:
         c.send(msg)
 
@@ -197,6 +200,48 @@ def test_collection_permission_boundary(c):
           c.send({"type": "AGGREGATE", "databaseName": "auth_db",
                       "collectionName": "forbidden", "aggregationSteps": []}),
           "FORBIDDEN")
+
+
+def test_collection_carve_out(c):
+    section("User with db READ_WRITE and a collection carved down to READ")
+
+    check_status("AUTHENTICATE as 'carve_user'",
+          c.authenticate("carve_user", "carve_user1234"),
+          "OK")
+
+    check_status("SAVE on a collection with no entry of its own (OK)",
+          c.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
+                      "object": {"_id": "carve_probe", "value": 1}}),
+          "OK")
+
+    check_code("SAVE on the carved collection (FORBIDDEN)",
+          c.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "carved",
+                      "object": {"_id": "nope", "value": 1}}),
+          "FORBIDDEN", "403-1")
+
+    check_code("DELETE on the carved collection (FORBIDDEN)",
+          c.send({"type": "DELETE", "databaseName": "auth_db",
+                      "collectionName": "carved", "_id": "doc1"}),
+          "FORBIDDEN", "403-1")
+
+    check_code("CREATE_INDEX on the carved collection (FORBIDDEN)",
+          c.send({"type": "CREATE_INDEX", "databaseName": "auth_db",
+                      "collectionName": "carved", "fieldName": "value"}),
+          "FORBIDDEN", "403-1")
+
+    check_code("DROP_COLLECTION on the carved collection (FORBIDDEN)",
+          c.send({"type": "DROP_COLLECTION", "databaseName": "auth_db", "collectionName": "carved"}),
+          "FORBIDDEN", "403-1")
+
+    check_status("FIND_BY_ID on the carved collection (OK)",
+          c.send({"type": "FIND_BY_ID", "databaseName": "auth_db",
+                      "collectionName": "carved", "_id": "doc1"}),
+          "OK")
+
+    check_status("AGGREGATE (COUNT) on the carved collection (OK)",
+          c.send({"type": "AGGREGATE", "databaseName": "auth_db",
+                      "collectionName": "carved", "aggregationSteps": [{"type": "COUNT"}]}),
+          "OK")
 
 
 def test_admin_operations(c):
@@ -577,6 +622,9 @@ def main():
         create_user(c, "db_reader", "db_reader1234", db_perms={"auth_db": "READ"})
         create_user(c, "coll_reader", "coll_reader1234",
                     coll_perms={"auth_db|allowed": "READ"})
+        create_user(c, "carve_user", "carve_user1234",
+                    db_perms={"auth_db": "READ_WRITE"},
+                    coll_perms={"auth_db|carved": "READ"})
         create_user(c, "db_maker", "db_maker1234",
                     global_perms=["CREATE_DATABASE"])
         create_user(c, "new_owner", "new_owner1234")
@@ -598,6 +646,9 @@ def main():
         test_collection_permission_boundary(c)
 
     with Conn() as c:
+        test_collection_carve_out(c)
+
+    with Conn() as c:
         test_admin_operations(c)
 
     with Conn() as c:
@@ -616,7 +667,8 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(c)
-        for u in ("no_perms", "db_reader", "coll_reader", "db_maker", "new_owner", "pwd_user"):
+        for u in ("no_perms", "db_reader", "coll_reader", "carve_user", "db_maker", "new_owner",
+                  "pwd_user"):
             delete_user(c, u)
 
     # ── summary ───────────────────────────────────────────────────────
