@@ -49,7 +49,7 @@ public class JsonReader {
         for (;;) {
             firstToken = tokens.getFirst();
             String propertyName;
-            if (firstToken.getJsonType() == JsonBaseElement.JsonType.STRING) {
+            if (firstToken.isJsonString()) {
                 propertyName = ((JsonString) firstToken).getValue();
                 tokens = skipOneToken(tokens);
                 tokensToSkip++;

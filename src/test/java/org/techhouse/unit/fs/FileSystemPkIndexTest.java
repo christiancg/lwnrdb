@@ -41,6 +41,30 @@ public class FileSystemPkIndexTest {
     }
 
     @Test
+    public void test_a_malformed_line_does_not_throw_from_the_write_path() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var first = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        first.set_id("keep");
+        fileSystem.insertIntoCollection(first);
+        final var indexFile = new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator
+                + TestGlobals.COLL + File.separator + TestGlobals.COLL + "-pk.idx");
+        java.nio.file.Files.writeString(indexFile.toPath(), "this is not a pk index line" + System.lineSeparator(),
+                java.nio.file.StandardOpenOption.APPEND);
+
+        final var second = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        second.set_id("added");
+        assertDoesNotThrow(() -> fileSystem.insertIntoCollection(second),
+                "one torn line must not fail every write, the same way it does not fail every read");
+
+        final var index = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(index.stream().anyMatch(e -> e.getValue().equals("keep")));
+        assertTrue(index.stream().anyMatch(e -> e.getValue().equals("added")));
+    }
+
+    @Test
     public void test_delete_returns_compaction() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
@@ -193,5 +217,200 @@ public class FileSystemPkIndexTest {
         TestUtils.setDbPath(fs, TestGlobals.PATH);
         fs.compactTombstones(TestGlobals.DB, "noSuchColl", 0L);
         assertTrue(fs.readTombstones(TestGlobals.DB, "noSuchColl").isEmpty());
+    }
+
+    @Test
+    public void test_a_self_heal_does_not_erase_a_concurrent_append() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var seed = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        seed.set_id("seed");
+        fileSystem.insertIntoCollection(seed);
+        final var indexFile = new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator
+                + TestGlobals.COLL + File.separator + TestGlobals.COLL + "-pk.idx");
+
+        final var appended = java.util.Collections.synchronizedList(new ArrayList<String>());
+        final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        final var stop = new java.util.concurrent.atomic.AtomicBoolean();
+        final var writer = new Thread(() -> {
+            var i = 0;
+            while (!stop.get()) {
+                try {
+                    final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+                    entry.set_id("appended" + i++);
+                    fileSystem.insertIntoCollection(entry);
+                    appended.add(entry.get_id());
+                } catch (Exception e) {
+                    failure.compareAndSet(null, e);
+                    return;
+                }
+            }
+        }, "pk-append");
+        writer.start();
+        try {
+            for (var round = 0; round < 200; round++) {
+                java.nio.file.Files.writeString(indexFile.toPath(), "torn line " + round + System.lineSeparator(),
+                        java.nio.file.StandardOpenOption.APPEND);
+                fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+            }
+        } finally {
+            stop.set(true);
+            writer.join(10_000L);
+        }
+        if (failure.get() != null) {
+            throw new AssertionError("the appending writer failed", failure.get());
+        }
+
+        final var onDisk = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream()
+                .map(PkIndexEntry::getValue).collect(java.util.stream.Collectors.toSet());
+        final var lost = new ArrayList<String>();
+        for (final var id : List.copyOf(appended)) {
+            if (!onDisk.contains(id)) {
+                lost.add(id);
+            }
+        }
+        assertTrue(lost.isEmpty(), "the self-heal rewrote the whole file from a snapshot taken before these commits,"
+                + " and nothing rebuilds pk.idx from the documents, so the loss is permanent: " + lost);
+    }
+
+    @Test
+    public void test_two_concurrent_heals_do_not_collide() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var seed = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        seed.set_id("seed");
+        fileSystem.insertIntoCollection(seed);
+        final var indexFile = new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator
+                + TestGlobals.COLL + File.separator + TestGlobals.COLL + "-pk.idx");
+        java.nio.file.Files.writeString(indexFile.toPath(), "torn" + System.lineSeparator(),
+                java.nio.file.StandardOpenOption.APPEND);
+
+        final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+        final var threads = new ArrayList<Thread>();
+        for (var t = 0; t < 4; t++) {
+            final var thread = new Thread(() -> {
+                try {
+                    for (var i = 0; i < 50; i++) {
+                        fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+                    }
+                } catch (Exception e) {
+                    failure.compareAndSet(null, e);
+                }
+            }, "pk-heal-" + t);
+            threads.add(thread);
+            thread.start();
+        }
+        for (final var thread : threads) {
+            thread.join(10_000L);
+        }
+
+        assertNull(failure.get(), "two healers racing on the same file must not fail the read");
+        assertTrue(fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).stream()
+                .anyMatch(e -> e.getValue().equals("seed")));
+    }
+
+    private File pkIndexFile() {
+        return new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator + TestGlobals.COLL
+                + File.separator + TestGlobals.COLL + "-pk.idx");
+    }
+
+    private FileSystem seededFileSystem() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        for (final var id : new String[]{"a", "b"}) {
+            final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data.deepCopy().asJsonObject());
+            entry.set_id(id);
+            fileSystem.insertIntoCollection(entry);
+        }
+        return fileSystem;
+    }
+
+    @Test
+    public void test_a_pk_index_where_no_line_parses_is_not_truncated() throws Exception {
+        final var fileSystem = seededFileSystem();
+        final var file = pkIndexFile();
+        java.nio.file.Files.writeString(file.toPath(),
+                "not a pk line at all" + System.lineSeparator() + "nor is this one" + System.lineSeparator());
+        final var before = java.nio.file.Files.readAllBytes(file.toPath());
+
+        final var read = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+
+        assertTrue(read.isEmpty());
+        assertArrayEquals(before, java.nio.file.Files.readAllBytes(file.toPath()),
+                "nothing rebuilds the pk index, so a read that understood none of it must never rewrite it");
+    }
+
+    @Test
+    public void test_an_old_grammar_pk_index_is_left_intact() throws Exception {
+        final var fileSystem = seededFileSystem();
+        final var file = pkIndexFile();
+        java.nio.file.Files.writeString(file.toPath(),
+                "a|0|20|0|0" + System.lineSeparator() + "b|20|20|0|0" + System.lineSeparator());
+        final var before = java.nio.file.Files.readAllBytes(file.toPath());
+
+        final var read = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+
+        assertTrue(read.isEmpty(), "a file in the pre-change grammar is unparseable, not half-readable");
+        assertArrayEquals(before, java.nio.file.Files.readAllBytes(file.toPath()),
+                "an old data directory must fail loudly, never destructively");
+    }
+
+    @Test
+    public void test_a_single_torn_line_among_good_ones_is_still_healed() throws Exception {
+        final var fileSystem = seededFileSystem();
+        final var file = pkIndexFile();
+        java.nio.file.Files.writeString(file.toPath(), "torn line with no separators" + System.lineSeparator(),
+                java.nio.file.StandardOpenOption.APPEND);
+
+        final var read = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(2, read.size(), "the intact entries must survive: " + read);
+        assertFalse(java.nio.file.Files.readString(file.toPath()).contains("torn line"),
+                "one torn line among good ones must still be healed away");
+    }
+
+    @Test
+    public void test_a_document_read_from_disk_carries_its_write_version() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("versioned");
+        entry.setVersion(1720000000123L);
+        final var indexEntry = fileSystem.insertIntoCollection(entry);
+
+        final var readBack = fileSystem.getById(indexEntry);
+
+        assertEquals(1720000000123L, readBack.getVersion(),
+                "a positioned read must take its version from the index entry that located it");
+    }
+
+    @Test
+    public void test_every_document_read_by_index_entries_carries_its_write_version() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("name", "test");
+        final var indexEntries = new ArrayList<PkIndexEntry>();
+        for (final var id : new String[]{"v1", "v2"}) {
+            final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data.deepCopy().asJsonObject());
+            entry.set_id(id);
+            entry.setVersion(id.equals("v1") ? 11L : 22L);
+            indexEntries.add(fileSystem.insertIntoCollection(entry));
+        }
+
+        final var read = fileSystem.getByIndexEntries(indexEntries);
+
+        assertEquals(2, read.size());
+        for (final var entry : read) {
+            assertEquals(entry.get_id().equals("v1") ? 11L : 22L, entry.getVersion());
+        }
     }
 }

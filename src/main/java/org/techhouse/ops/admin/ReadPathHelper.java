@@ -5,6 +5,7 @@ import java.util.List;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Configuration;
 import org.techhouse.data.Transaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -28,6 +29,7 @@ public final class ReadPathHelper {
     private static final Logger logger = Logger.logFor(ReadPathHelper.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private static final Configuration configuration = Configuration.getInstance();
 
     private ReadPathHelper() {
     }
@@ -49,13 +51,14 @@ public final class ReadPathHelper {
         }
         final var lockSet = List.of(Cache.getCollectionIdentifier(dbName, collName));
         return OperationLocks.withReadLocks(findbyIdRequest.isDirtyRead(), lockSet, OperationType.FIND_BY_ID,
-                ErrorCode.ERROR_RETRIEVING, () -> {
+                ErrorCode.ERROR_RETRIEVING, activeTransaction != null, () -> {
                     final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
                     final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
                     if (foundIndexEntry < 0) {
                         return new OperationResponse(OperationType.FIND_BY_ID, ErrorCode.ENTRY_NOT_FOUND);
                     }
-                    final var entry = cache.getById(dbName, collName, primaryKeyIndex.get(foundIndexEntry));
+                    final var entry = cache.getById(dbName, collName,
+                            primaryKeyIndex.get(foundIndexEntry).detachedCopy());
                     CollectionAccessHelper.recordPkIndexAccess(dbName, collName);
                     CollectionAccessHelper.recordCollectionAccess(dbName, collName);
                     return new FindByIdResponse("Ok", entry.getData());
@@ -75,8 +78,15 @@ public final class ReadPathHelper {
                 ? activeTransaction.overlayFor(Cache.getCollectionIdentifier(dbName, collName))
                 : null;
         try {
-            readLocks = locks.acquireReadLocks(aggregateRequest.isDirtyRead(),
-                    AggregationOperationHelper.aggregateLockSet(aggregateRequest));
+            final var lockSet = AggregationOperationHelper.aggregateLockSet(aggregateRequest);
+            final var acquired = activeTransaction != null
+                    ? locks.acquireReadLocks(aggregateRequest.isDirtyRead(), lockSet,
+                            configuration.getTransactionLockTimeoutMs())
+                    : locks.acquireReadLocks(aggregateRequest.isDirtyRead(), lockSet);
+            if (acquired == null) {
+                return new OperationResponse(OperationType.AGGREGATE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+            }
+            readLocks = acquired;
             if (analyzeContext != null) {
                 readLocks.forEach(analyzeContext::addLock);
             }
@@ -87,9 +97,9 @@ public final class ReadPathHelper {
                 final var committed = cache.initializeStreamIfNecessary(null, dbName, collName);
                 final var source = TransactionOperationHelper.applyOverlayToStream(activeTransaction,
                         Cache.getCollectionIdentifier(dbName, collName), committed);
-                results = AggregationOperationHelper.processAggregation(aggregateRequest, source);
+                results = AggregationOperationHelper.processAggregation(aggregateRequest, source, activeTransaction);
             } else {
-                results = AggregationOperationHelper.processAggregation(aggregateRequest);
+                results = AggregationOperationHelper.processAggregation(aggregateRequest, null, activeTransaction);
             }
             CollectionAccessHelper.recordCollectionAccess(aggregateRequest.getDatabaseName(),
                     aggregateRequest.getCollectionName());

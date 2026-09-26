@@ -56,7 +56,7 @@ public class FilterOperatorHelperTest {
     // as after a background-processing failure) is re-tested against the document and dropped, so the
     // FILTER never returns a false positive.
     @Test
-    public void test_filter_rejects_stale_object_hash_hit() throws IOException {
+    public void test_filter_rejects_stale_object_hash_hit() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "o1", 0, 100, 0);
@@ -74,12 +74,94 @@ public class FilterOperatorHelperTest {
         assertEquals(Set.of("o2"), matched, "the stale hash hit o1 must be dropped after re-testing the document");
     }
 
-    private void addObjEntry(Cache cache, String id, int n) {
+    private void addNamed(Cache cache, String id, String name) throws IOException {
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString(id));
+        obj.add("name", new JsonString(name));
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id(id);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
+    }
+
+    private Set<String> filterNames(FieldOperatorType type, String value) throws IOException {
+        final var op = new FieldOperator(type, "name", new JsonString(value));
+        return FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+    }
+
+    private void seedCaseVariants() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
+        final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "a", 0, 100, 0);
+        cache.putAdminCollectionEntry(adminCollEntry, pk);
+        addNamed(cache, "a", "Bob");
+        addNamed(cache, "b", "bob");
+        addNamed(cache, "c", "bob");
+        addNamed(cache, "d", "carol");
+    }
+
+    @Test
+    public void test_a_path_through_a_scalar_matches_nothing() throws IOException {
+        final var cache = IocContainer.get(Cache.class);
+        cache.putAdminCollectionEntry(new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL),
+                new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "n1", 0, 100, 0));
+        final var nested = new JsonObject();
+        nested.addProperty("scalar", 5);
+        nested.addProperty("b", 7);
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("n1"));
+        obj.add("a", nested);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
+        entry.set_id("n1");
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
+
+        final var op = new FieldOperator(FieldOperatorType.EQUALS, "a.scalar.b",
+                new org.techhouse.ejson.elements.JsonNumber(7));
+        final var matched = FilterOperatorHelper.processOperator(op, null, TestGlobals.DB, TestGlobals.COLL)
+                .map(o -> o.get(Globals.PK_FIELD).asJsonString().getValue())
+                .collect(java.util.stream.Collectors.toSet());
+
+        assertTrue(matched.isEmpty(), "a path that walks through a scalar must not fall back to its parent");
+    }
+
+    @Test
+    public void test_equals_returns_every_case_variant_via_the_index() throws IOException, InterruptedException {
+        seedCaseVariants();
+        final var scanned = filterNames(FieldOperatorType.EQUALS, "bob");
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "name");
+
+        assertEquals(Set.of("a", "b", "c"), filterNames(FieldOperatorType.EQUALS, "bob"));
+        assertEquals(scanned, filterNames(FieldOperatorType.EQUALS, "bob"));
+    }
+
+    @Test
+    public void test_not_equals_excludes_every_case_variant_via_the_index() throws IOException, InterruptedException {
+        seedCaseVariants();
+        final var scanned = filterNames(FieldOperatorType.NOT_EQUALS, "bob");
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "name");
+
+        assertEquals(Set.of("d"), filterNames(FieldOperatorType.NOT_EQUALS, "bob"));
+        assertEquals(scanned, filterNames(FieldOperatorType.NOT_EQUALS, "bob"));
+    }
+
+    @Test
+    public void test_index_and_scan_agree_on_case_variants() throws IOException, InterruptedException {
+        seedCaseVariants();
+        final var scannedEquals = filterNames(FieldOperatorType.EQUALS, "BOB");
+        final var scannedNotEquals = filterNames(FieldOperatorType.NOT_EQUALS, "BOB");
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "name");
+
+        assertEquals(scannedEquals, filterNames(FieldOperatorType.EQUALS, "BOB"));
+        assertEquals(scannedNotEquals, filterNames(FieldOperatorType.NOT_EQUALS, "BOB"));
+    }
+
+    private void addObjEntry(Cache cache, String id, int n) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("data", objField(n));
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 }

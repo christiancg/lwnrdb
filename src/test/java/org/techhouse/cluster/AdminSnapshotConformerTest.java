@@ -195,4 +195,67 @@ public class AdminSnapshotConformerTest {
         assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
         assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.JOIN_COLL));
     }
+
+    private static JsonObject collJson(String db, String coll, Set<String> indexes, long incarnation) {
+        final var entry = new AdminCollEntry(db, coll, new HashSet<>(indexes));
+        entry.setIncarnation(incarnation);
+        final var json = entry.getData().deepCopy();
+        json.addProperty(Globals.PK_FIELD, Cache.getCollectionIdentifier(db, coll));
+        return json;
+    }
+
+    @Test
+    public void test_conform_quarantines_a_collection_from_a_dropped_incarnation() throws Exception {
+        conformer.conform(snapshot(List.of(dbJson("incdb", List.of())),
+                List.of(collJson("incdb", "inccoll", Set.of(), 100L)), List.of()));
+        assertEquals(100L, cache.getAdminCollectionEntry("incdb", "inccoll").getIncarnation());
+        final var save = new org.techhouse.ops.req.SaveRequest("incdb", "inccoll");
+        final var doc = new JsonObject();
+        doc.add(Globals.PK_FIELD, new JsonString("stale"));
+        save.setObject(doc);
+        save.set_id("stale");
+        IocContainer.get(org.techhouse.ops.OperationProcessor.class).processMessage(save);
+
+        conformer.conform(snapshot(List.of(dbJson("incdb", List.of())),
+                List.of(collJson("incdb", "inccoll", Set.of(), 200L)), List.of()));
+
+        final var entry = cache.getAdminCollectionEntry("incdb", "inccoll");
+        assertNotNull(entry, "the live incarnation must stay registered, or the collection is unwritable here"
+                + " while the rest of the cluster serves it");
+        assertEquals(200L, entry.getIncarnation());
+        assertTrue(cache.getPkIndexAndLoadIfNecessary("incdb", "inccoll").isEmpty(),
+                "documents held under an incarnation the cluster has since dropped must stop serving reads and"
+                        + " writes, or anti-entropy seeds the whole pre-drop collection back cluster-wide");
+        final var dbFolder = new File(TestGlobals.PATH + File.separator + "incdb");
+        final var quarantined = dbFolder.listFiles((dir, name) -> name.startsWith("inccoll.quarantined-100-"));
+        assertNotNull(quarantined);
+        assertEquals(1, quarantined.length,
+                "the documents are moved aside, never deleted: anti-entropy cannot restore what no node retains");
+    }
+
+    @Test
+    public void test_conform_keeps_a_collection_whose_incarnation_matches() throws Exception {
+        conformer.conform(snapshot(List.of(dbJson("samedb", List.of())),
+                List.of(collJson("samedb", "samecoll", Set.of(), 100L)), List.of()));
+
+        conformer.conform(snapshot(List.of(dbJson("samedb", List.of())),
+                List.of(collJson("samedb", "samecoll", Set.of(), 100L)), List.of()));
+
+        assertNotNull(cache.getAdminCollectionEntry("samedb", "samecoll"),
+                "an unchanged incarnation is the normal case and must never quarantine");
+    }
+
+    @Test
+    public void test_conform_adopts_the_snapshot_incarnation_for_an_unstamped_local_entry() throws Exception {
+        conformer.conform(snapshot(List.of(dbJson("legacydb", List.of())),
+                List.of(collJson("legacydb", "legacycoll", Set.of())), List.of()));
+        assertEquals(0L, cache.getAdminCollectionEntry("legacydb", "legacycoll").getIncarnation());
+
+        conformer.conform(snapshot(List.of(dbJson("legacydb", List.of())),
+                List.of(collJson("legacydb", "legacycoll", Set.of(), 300L)), List.of()));
+
+        assertNotNull(cache.getAdminCollectionEntry("legacydb", "legacycoll"),
+                "an entry written before incarnations existed carries 0 and must be adopted, not quarantined");
+        assertEquals(300L, cache.getAdminCollectionEntry("legacydb", "legacycoll").getIncarnation());
+    }
 }

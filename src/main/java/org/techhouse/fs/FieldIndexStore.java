@@ -12,8 +12,10 @@ import java.util.Map;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
+import org.techhouse.log.Logger;
 
 final class FieldIndexStore {
+    private static final Logger logger = Logger.logFor(FieldIndexStore.class);
     private static final byte[] NEWLINE_BYTES = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
     private static final byte SEPARATOR_BYTE = (byte) Globals.ID_SEPARATOR.charAt(0);
 
@@ -43,10 +45,10 @@ final class FieldIndexStore {
             FieldIndexEntry<String> insertedEntry, FieldIndexEntry<String> removedEntry) throws IOException {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, kind.label());
         if (removedEntry != null) {
-            removeIndexLine(indexFile, removedEntry.getValue(), removedEntry);
+            removeIndexLine(indexFile, getStringValue(removedEntry), removedEntry);
         }
         if (insertedEntry != null) {
-            upsertIndexLine(indexFile, insertedEntry.getValue(), insertedEntry);
+            upsertIndexLine(indexFile, getStringValue(insertedEntry), insertedEntry);
         }
     }
 
@@ -65,8 +67,9 @@ final class FieldIndexStore {
     boolean dropIndex(String dbName, String collName, String fieldName) {
         final var collFolder = paths.collectionFolder(dbName, collName);
         if (collFolder.exists()) {
-            final var indexFiles = collFolder.listFiles((_, name) -> name.endsWith(Globals.INDEX_FILE_EXTENSION) && name
-                    .contains(Globals.INDEX_FILE_NAME_SEPARATOR + fieldName + Globals.INDEX_FILE_NAME_SEPARATOR));
+            final var prefix = collName + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName
+                    + Globals.INDEX_FILE_NAME_SEPARATOR;
+            final var indexFiles = collFolder.listFiles((_, name) -> namesOneTypeOfThisField(name, prefix));
             if (indexFiles != null) {
                 final var deleted = new ArrayList<Boolean>();
                 for (var index : indexFiles) {
@@ -78,11 +81,23 @@ final class FieldIndexStore {
         return false;
     }
 
+    private static boolean namesOneTypeOfThisField(String fileName, String prefix) {
+        if (!fileName.endsWith(Globals.INDEX_FILE_EXTENSION) || !fileName.startsWith(prefix)) {
+            return false;
+        }
+        final var typeSegment = fileName.substring(prefix.length(),
+                fileName.length() - Globals.INDEX_FILE_EXTENSION.length());
+        return !typeSegment.isEmpty() && typeSegment.indexOf(Globals.INDEX_FILE_NAME_SEPARATOR) < 0;
+    }
+
     private File indexFileFor(String dbName, String collName, String fieldName, FieldIndexEntry<?> entry) {
         return paths.indexFile(dbName, collName, fieldName, IndexKind.fileLabel(entry.getValue().getClass()));
     }
 
     private void appendEntries(File indexFile, List<? extends FieldIndexEntry<?>> entries) {
+        if (indexFile == null) {
+            return;
+        }
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
         try (var writer = new BufferedWriter(new FileWriter(indexFile, StandardCharsets.UTF_8, true),
@@ -102,23 +117,39 @@ final class FieldIndexStore {
     }
 
     private void removeIndexLine(File indexFile, String value, FieldIndexEntry<?> entry) throws IOException {
+        if (indexFile == null) {
+            return;
+        }
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
-        try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-            final var wholeFile = readFully(writer);
-            final var indexOfExisting = searchIndexValue(wholeFile, value);
-            if (indexOfExisting >= 0) {
-                shiftOtherEntries(writer, wholeFile, indexOfExisting);
-                if (!entry.getIds().isEmpty()) {
-                    writeLine(writer, entry.toFileEntry());
+        try {
+            try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
+                final var wholeFile = readFully(writer);
+                final var indexOfExisting = searchIndexValue(wholeFile, value);
+                if (indexOfExisting >= 0) {
+                    shiftOtherEntries(writer, wholeFile, indexOfExisting);
+                    if (!entry.getIds().isEmpty()) {
+                        writeLine(writer, entry.toFileEntry());
+                    }
                 }
             }
+            deleteWhenNoEntriesRemain(indexFile);
         } finally {
             lock.unlock();
         }
     }
 
+    private static void deleteWhenNoEntriesRemain(File indexFile) {
+        if (indexFile.length() == 0 && !indexFile.delete()) {
+            logger.warning("Could not delete the now-empty index file " + indexFile.getName()
+                    + "; while it exists CONTAINS and NOT_IN decline this field's index until a REINDEX");
+        }
+    }
+
     private void upsertIndexLine(File indexFile, String value, FieldIndexEntry<?> entry) throws IOException {
+        if (indexFile == null) {
+            return;
+        }
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
         try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
@@ -209,7 +240,7 @@ final class FieldIndexStore {
     }
 
     private <K> String getStringValue(FieldIndexEntry<K> entry) {
-        return FieldIndexEntry.indexKeyOf(entry.getValue());
+        return FieldIndexEntry.fileKeyOf(entry.getValue());
     }
 
     private void shiftOtherEntries(RandomAccessFile writer, byte[] wholeFile, int indexOfExisting) throws IOException {

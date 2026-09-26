@@ -58,7 +58,12 @@ public final class TriggerRunResolution {
                 logger.warning("Ignoring trigger run '" + runId + "': unknown decision '" + decision + "'");
                 return false;
             }
-            final var event = TriggerRunRecovery.toEvent(chunks);
+            if (chunks.getFirst().getStatus() != TriggerRunStatus.DEAD) {
+                logger.warning("Refusing to replay trigger run '" + runId + "': it is " + chunks.getFirst().getStatus()
+                        + ", not dead-lettered");
+                return false;
+            }
+            final var event = TriggerRunRecovery.toEvent(chunks, 1);
             if (event == null) {
                 TriggerDispatcher.consumeQuietly(runId, chunks.getFirst().getTriggerName());
                 logger.info("Discarded trigger run '" + runId + "': the documents it applied to are gone");

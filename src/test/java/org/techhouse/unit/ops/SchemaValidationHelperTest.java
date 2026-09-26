@@ -12,6 +12,7 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -23,6 +24,7 @@ import org.techhouse.test.TestUtils;
 public class SchemaValidationHelperTest {
     private final Cache cache = IocContainer.get(Cache.class);
     private final EJson eJson = IocContainer.get(EJson.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
 
     @BeforeAll
     static void setUp() throws Exception {
@@ -39,6 +41,7 @@ public class SchemaValidationHelperTest {
     @BeforeEach
     void reset() {
         cache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
+        fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
     }
 
     private void installSchema() {
@@ -129,5 +132,72 @@ public class SchemaValidationHelperTest {
         withExtra.add("_id", new JsonString("alice"));
         withExtra.add("extra", new JsonString("nope"));
         assertNotNull(SchemaValidationHelper.check(save(withExtra)));
+    }
+
+    @Test
+    public void test_a_failed_schema_read_refuses_the_write() throws Exception {
+        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\": \"obj");
+
+        final var response = SchemaValidationHelper.check(save(doc("Alice")));
+
+        assertNotNull(response, "an unreadable schema must refuse the write, not silently permit it");
+        assertEquals("503-11", response.getErrorCode());
+    }
+
+    @Test
+    public void test_an_unparseable_schema_refuses_the_write() {
+        cache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL, eJson.fromJson("{\"type\":123}", JsonObject.class));
+
+        final var response = SchemaValidationHelper.check(save(doc("Alice")));
+
+        assertNotNull(response, "a schema that does not meta-validate must refuse the write, not permit every one");
+        assertEquals("503-11", response.getErrorCode());
+    }
+
+    @Test
+    public void test_an_unexpected_failure_refuses_the_write() {
+        installSchema();
+
+        final var response = SchemaValidationHelper.check(new SaveRequest(TestGlobals.DB, TestGlobals.COLL));
+
+        assertNotNull(response, "failing open would let an unvalidated document reach the collection");
+        assertEquals("503-11", response.getErrorCode());
+    }
+
+    @Test
+    public void test_a_non_string_id_still_reports_the_schema_failure() {
+        installSchema();
+        final var bad = new JsonObject();
+        bad.add("_id", new JsonNumber(7));
+        final var request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObjects(List.of(bad));
+
+        final var response = SchemaValidationHelper.check(request);
+
+        assertNotNull(response);
+        assertEquals("400-7", response.getErrorCode(),
+                "building the rejection message must not itself throw on a document whose _id is not a string");
+    }
+
+    @Test
+    public void test_replacing_the_schema_object_revalidates_against_the_new_one() {
+        installSchema();
+        assertNull(SchemaValidationHelper.check(save(doc("Alice"))));
+
+        cache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL,
+                eJson.fromJson("{\"type\":\"object\",\"required\":[\"age\"]}", JsonObject.class));
+
+        assertNotNull(SchemaValidationHelper.check(save(doc("Alice"))),
+                "the meta-check result is cached per schema instance, so a replacement must not reuse it");
+    }
+
+    @Test
+    public void test_a_valid_schema_still_validates_normally() {
+        installSchema();
+
+        assertNull(SchemaValidationHelper.check(save(doc("Alice"))));
+        final var refused = SchemaValidationHelper.check(save(doc(null)));
+        assertNotNull(refused);
+        assertEquals("400-7", refused.getErrorCode());
     }
 }

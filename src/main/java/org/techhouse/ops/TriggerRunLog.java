@@ -21,6 +21,8 @@ public final class TriggerRunLog {
     private static final Logger logger = Logger.logFor(TriggerRunLog.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
+    private static final org.techhouse.cluster.ClusterConfig clusterConfig = IocContainer
+            .get(org.techhouse.cluster.ClusterConfig.class);
     private static final Configuration configuration = Configuration.getInstance();
 
     public record TriggerRunDescriptor(String dbName, String collName, String triggerName, String procedureName,
@@ -50,15 +52,38 @@ public final class TriggerRunLog {
                         + " durable record, so it will be lost if this node dies before it completes.");
                 return null;
             }
-            for (var chunkSeq = 0; chunkSeq < chunks.size(); chunkSeq++) {
-                AdminOperationHelper
-                        .saveTriggerRun(chunks.get(chunkSeq).toEntry(runId, chunkSeq, currentNodeId(), descriptor));
+            var written = 0;
+            try {
+                for (var chunkSeq = 0; chunkSeq < chunks.size(); chunkSeq++) {
+                    AdminOperationHelper
+                            .saveTriggerRun(chunks.get(chunkSeq).toEntry(runId, chunkSeq, currentNodeId(), descriptor));
+                    written++;
+                }
+            } catch (Exception e) {
+                discardPartialRecord(runId, written);
+                throw e;
             }
             return runId;
         } catch (Exception e) {
             logger.warning("Failed to record the pending trigger run for '" + descriptor.triggerName() + "' on "
                     + descriptor.dbName() + "|" + descriptor.collName() + ": " + e.getMessage());
             return null;
+        }
+    }
+
+    private static void discardPartialRecord(String runId, int written) {
+        if (written == 0) {
+            return;
+        }
+        final var ids = new ArrayList<String>();
+        for (var chunkSeq = 0; chunkSeq < written; chunkSeq++) {
+            ids.add(AdminTriggerRunEntry.buildId(runId, chunkSeq));
+        }
+        try {
+            AdminOperationHelper.deleteTriggerRuns(ids);
+        } catch (Exception e) {
+            logger.error("Failed to discard the partially recorded trigger run '" + runId
+                    + "'; it may replay at the next startup", e);
         }
     }
 
@@ -116,7 +141,10 @@ public final class TriggerRunLog {
 
     public static String currentNodeId() {
         final var self = membershipService.getSelf();
-        return self == null ? Globals.STANDALONE_NODE_ID : self.getNodeId();
+        if (self != null) {
+            return self.getNodeId();
+        }
+        return clusterConfig.isEnabled() ? membershipService.resolveNodeId() : Globals.STANDALONE_NODE_ID;
     }
 
     private record Chunk(List<String> ids, List<JsonObject> documents) {

@@ -16,6 +16,7 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.CollectionReadinessGuard;
 import org.techhouse.ops.EntrySizeGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
@@ -49,7 +50,12 @@ public final class TransactionBuffer {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
+            final var readinessError = CollectionReadinessGuard.check(OperationType.SAVE, dbName, collName);
+            if (readinessError != null) {
+                return readinessError;
+            }
             final var object = request.getObject();
+            final var id = TransactionWrites.ensureId(object, request.get_id());
             final var entry = DbEntry.fromJsonObject(dbName, collName, object);
             final var entrySizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
             if (entrySizeError != null) {
@@ -59,7 +65,6 @@ public final class TransactionBuffer {
             if (lockResult != null) {
                 return lockResult;
             }
-            final var id = TransactionWrites.ensureId(object, request.get_id());
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
             final var insert = !TransactionWrites.isVisible(transaction, collId,
                     cache.getPkIndexAndLoadIfNecessary(dbName, collName), id);
@@ -76,12 +81,12 @@ public final class TransactionBuffer {
                 return sizeError;
             }
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_SAVE, dbName, collName,
-                    effective);
+                    effective, insert ? List.of(id) : List.of());
             if (insert) {
                 transaction.recordInserts(seq, List.of(id));
             }
             transaction.recordSave(collId, id, effective);
-            return new SaveResponse("Successfully saved", id);
+            return new SaveResponse("Successfully saved", id, insert);
         });
     }
 
@@ -90,18 +95,13 @@ public final class TransactionBuffer {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
-            final var seenIds = new HashSet<String>();
-            for (final var object : request.getObjects()) {
-                final var entry = DbEntry.fromJsonObject(dbName, collName, object);
-                final var entrySizeError = EntrySizeGuard.check(entry, OperationType.BULK_SAVE);
-                if (entrySizeError != null) {
-                    return entrySizeError;
-                }
-                final var id = TransactionWrites.ensureId(object, null);
-                if (!seenIds.add(id)) {
-                    return new OperationResponse(OperationType.BULK_SAVE, "Duplicate _id in bulk save request: " + id,
-                            ErrorCode.DUPLICATE_ID);
-                }
+            final var readinessError = CollectionReadinessGuard.check(OperationType.BULK_SAVE, dbName, collName);
+            if (readinessError != null) {
+                return readinessError;
+            }
+            final var validationError = validateBulkObjects(request, dbName, collName);
+            if (validationError != null) {
+                return validationError;
             }
             final var lockResult = ensureLock(transaction, OperationType.BULK_SAVE, dbName, collName, onLockTimeout);
             if (lockResult != null) {
@@ -113,6 +113,7 @@ public final class TransactionBuffer {
             final var array = new JsonArray();
             final var inserted = new ArrayList<String>();
             final var updated = new ArrayList<String>();
+            final var overlayUpdates = new java.util.LinkedHashMap<String, JsonObject>();
             for (final var object : request.getObjects()) {
                 final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
                 final var isUpdate = TransactionWrites.isVisible(transaction, collId, primaryKeyIndex, id);
@@ -135,11 +136,12 @@ public final class TransactionBuffer {
                 } else {
                     inserted.add(id);
                 }
-                transaction.recordSave(collId, id, effective);
+                overlayUpdates.put(id, effective);
             }
             payload.add(OBJECTS_FIELD, array);
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_BULK_SAVE, dbName, collName,
-                    payload);
+                    payload, inserted);
+            overlayUpdates.forEach((id, document) -> transaction.recordSave(collId, id, document));
             transaction.recordInserts(seq, inserted);
             return new BulkSaveResponse("Successfully saved entries", inserted, updated);
         });
@@ -151,6 +153,10 @@ public final class TransactionBuffer {
         final var collName = request.getCollectionName();
         final var id = request.get_id();
         return OperationResponse.respondOrError(OperationType.DELETE, ErrorCode.ERROR_TRANSACTION, () -> {
+            final var readinessError = CollectionReadinessGuard.check(OperationType.DELETE, dbName, collName);
+            if (readinessError != null) {
+                return readinessError;
+            }
             final var lockResult = ensureLock(transaction, OperationType.DELETE, dbName, collName, onLockTimeout);
             if (lockResult != null) {
                 return lockResult;
@@ -178,18 +184,40 @@ public final class TransactionBuffer {
         });
     }
 
-    private static long bufferOperation(Transaction transaction, String opType, String dbName, String collName,
+    private static void bufferOperation(Transaction transaction, String opType, String dbName, String collName,
             JsonObject payload) throws Exception {
+        bufferOperation(transaction, opType, dbName, collName, payload, List.of());
+    }
+
+    private static long bufferOperation(Transaction transaction, String opType, String dbName, String collName,
+            JsonObject payload, List<String> insertedIds) throws Exception {
         final var seq = transaction.nextSeq();
         final var opEntry = new AdminTransactionEntry(transaction.getTransactionId().toString(),
                 transaction.getClientId().toString(), seq, opType, dbName, collName, payload);
+        opEntry.setTriggerContext(insertedIds, clientTracker.getAuthenticatedUsername(transaction.getClientId()),
+                transaction.getTriggerDepth());
         AdminOperationHelper.saveTransactionOp(opEntry);
         transaction.addBufferedOpId(opEntry.get_id());
         return seq;
     }
 
-    // The collection write lock is taken on first touch and held until commit/rollback. Ending the
-    // transaction on timeout belongs to the lifecycle, so the caller supplies onTimeout.
+    private static OperationResponse validateBulkObjects(BulkSaveRequest request, String dbName, String collName) {
+        final var seenIds = new HashSet<String>();
+        for (final var object : request.getObjects()) {
+            final var id = TransactionWrites.ensureId(object, null);
+            final var entry = DbEntry.fromJsonObject(dbName, collName, object);
+            final var entrySizeError = EntrySizeGuard.check(entry, OperationType.BULK_SAVE);
+            if (entrySizeError != null) {
+                return entrySizeError;
+            }
+            if (!seenIds.add(id)) {
+                return new OperationResponse(OperationType.BULK_SAVE, "Duplicate _id in bulk save request: " + id,
+                        ErrorCode.DUPLICATE_ID);
+            }
+        }
+        return null;
+    }
+
     public static OperationResponse ensureLock(Transaction transaction, OperationType type, String dbName,
             String collName, Runnable onTimeout) throws InterruptedException {
         final var collId = Cache.getCollectionIdentifier(dbName, collName);

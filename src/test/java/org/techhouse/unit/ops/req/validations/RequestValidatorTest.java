@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.AggregateRequest;
@@ -103,6 +104,43 @@ public class RequestValidatorTest {
     public void validate_save_adminDb_returnsFail() {
         final var req = new SaveRequest("admin", "myColl");
         req.setObject(new JsonObject());
+        assertFalse(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void validate_save_objectIdWithInvalidChars_returnsFail() {
+        final var req = new SaveRequest("myDb", "myColl");
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("has spaces!"));
+        req.setObject(obj);
+        assertFalse(RequestValidator.validate(req).isValid(),
+                "an id only FIND_BY_ID and DELETE would refuse leaves the document unreachable forever");
+    }
+
+    @Test
+    public void validate_save_objectIdValid_returnsOk() {
+        final var req = new SaveRequest("myDb", "myColl");
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("valid-id_123"));
+        req.setObject(obj);
+        assertTrue(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void validate_save_nonStringObjectId_returnsFail() {
+        final var req = new SaveRequest("myDb", "myColl");
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonNumber(123));
+        req.setObject(obj);
+        assertFalse(RequestValidator.validate(req).isValid(), "a non-string _id must not reach the hard cast");
+    }
+
+    @Test
+    public void validate_bulkSave_nonStringObjectId_returnsFail() {
+        final var req = new BulkSaveRequest("myDb", "myColl");
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonNumber(123));
+        req.setObjects(List.of(obj));
         assertFalse(RequestValidator.validate(req).isValid());
     }
 
@@ -249,5 +287,30 @@ public class RequestValidatorTest {
         final var result = RequestValidator.validate(req);
         assertFalse(result.isValid());
         assertEquals("COUNT must be the last aggregation step", result.getErrorMessage());
+    }
+
+    @Test
+    public void validate_createIndex_rejectsThePkField() {
+        final var request = new org.techhouse.ops.req.CreateIndexRequest("testDb", "testColl", "_id");
+        assertFalse(RequestValidator.validate(request).isValid(),
+                "the pk index is named like a field index on _id, so an accepted request deletes it");
+    }
+
+    @Test
+    public void validate_dropIndex_rejectsThePkField() {
+        final var request = new org.techhouse.ops.req.DropIndexRequest("testDb", "testColl", "_id");
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_dropIndex_rejectsTheTombstoneName() {
+        final var request = new org.techhouse.ops.req.DropIndexRequest("testDb", "testColl", "tombstones");
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void validate_dropIndex_acceptsAnOrdinaryField() {
+        final var request = new org.techhouse.ops.req.DropIndexRequest("testDb", "testColl", "score");
+        assertTrue(RequestValidator.validate(request).isValid());
     }
 }

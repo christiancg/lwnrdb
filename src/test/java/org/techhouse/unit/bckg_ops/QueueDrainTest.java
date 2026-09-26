@@ -12,6 +12,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
@@ -107,5 +108,100 @@ public class QueueDrainTest {
         backgroundTaskManager.submitBackgroundTask(new org.techhouse.bckg_ops.events.UsageProfileCleanupEvent());
 
         assertEquals(0, backgroundTaskManager.pending());
+    }
+
+    private static void takenButNotYetCounted(Object executor) throws Exception {
+        TestUtils.getPrivateField(executor, "workerCount", AtomicInteger.class).set(1);
+        TestUtils.getPrivateField(executor, "parked", AtomicInteger.class).set(0);
+    }
+
+    private static void parkedOnAnEmptyQueue(Object executor) throws Exception {
+        TestUtils.getPrivateField(executor, "workerCount", AtomicInteger.class).set(1);
+        TestUtils.getPrivateField(executor, "parked", AtomicInteger.class).set(1);
+    }
+
+    @Test
+    public void test_drain_waits_for_an_event_taken_but_not_yet_counted() throws Exception {
+        final var manager = new BackgroundTaskManager();
+
+        takenButNotYetCounted(manager);
+        assertFalse(manager.drain(200L),
+                "an event already taken from the queue but not yet counted must not read as idle");
+
+        parkedOnAnEmptyQueue(manager);
+        assertTrue(manager.drain(2_000L), "a worker parked on an empty queue is idle");
+    }
+
+    @Test
+    public void test_trigger_drain_waits_for_an_event_taken_but_not_yet_counted() throws Exception {
+        final var executor = new TriggerExecutor();
+
+        takenButNotYetCounted(executor);
+        assertFalse(executor.drain(200L),
+                "a trigger already taken from the queue but not yet counted must not read as idle");
+
+        parkedOnAnEmptyQueue(executor);
+        assertTrue(executor.drain(2_000L), "a worker parked on an empty queue is idle");
+    }
+
+    @Test
+    public void test_schedule_drain_waits_for_an_event_taken_but_not_yet_counted() throws Exception {
+        final var executor = new ScheduleExecutor();
+
+        takenButNotYetCounted(executor);
+        assertFalse(executor.drain(200L),
+                "a schedule already taken from the queue but not yet counted must not read as idle");
+
+        parkedOnAnEmptyQueue(executor);
+        assertTrue(executor.drain(2_000L), "a worker parked on an empty queue is idle");
+    }
+
+    @Test
+    public void test_a_pending_retry_does_not_hold_the_drain_open() {
+        final var executor = new TriggerExecutor();
+        executor.start(_ -> {
+        });
+        executor.submitAfter(event("retry-later"), 60_000L);
+
+        final var start = System.nanoTime();
+        final var drained = executor.drain(1_000L);
+        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
+
+        assertTrue(drained, "a retry waiting on the scheduler is durable in the run log, so the drain must drop it"
+                + " rather than wait out a backoff that can be four times the whole shutdown budget");
+        assertTrue(elapsedMillis < 900L, "the drain waited " + elapsedMillis + "ms for a scheduled retry");
+    }
+
+    @Test
+    public void test_a_worker_that_died_does_not_wedge_the_drain() throws Exception {
+        final var executor = new ScheduleExecutor();
+        executor.start(_ -> {
+        });
+        final var pool = TestUtils.getPrivateField(executor, "pool", java.util.concurrent.ExecutorService.class);
+        pool.shutdownNow();
+        assertTrue(pool.awaitTermination(5, TimeUnit.SECONDS), "the worker never exited");
+
+        final var start = System.nanoTime();
+        final var drained = executor.drain(2_000L);
+        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
+
+        assertTrue(drained, "a worker that exited must stop being counted, or every later drain in this process"
+                + " waits out its whole budget for a parked worker that no longer exists");
+        assertTrue(elapsedMillis < 1_500L, "the drain waited " + elapsedMillis + "ms for a dead worker");
+    }
+
+    @Test
+    public void test_a_queue_with_no_live_worker_does_not_burn_the_budget() {
+        final var manager = new BackgroundTaskManager();
+        manager.submitBackgroundTask(new org.techhouse.bckg_ops.events.UsageProfileCleanupEvent());
+
+        final var start = System.nanoTime();
+        final var drained = manager.drain(5_000L);
+        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
+
+        assertFalse(drained, "the events really were abandoned, so the drain must still report that");
+        assertTrue(elapsedMillis < 1_000L,
+                "nothing is running to consume the queue, so waiting the whole budget delays the shutdown"
+                        + " without draining anything, but it took " + elapsedMillis + "ms");
     }
 }

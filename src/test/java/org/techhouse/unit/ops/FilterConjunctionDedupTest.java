@@ -120,10 +120,23 @@ public class FilterConjunctionDedupTest {
     }
 
     @Test
-    public void test_and_without_an_id_is_still_refused() {
-        final var source = List.of(doc(null, "admin", "yes"));
+    public void test_and_without_an_id_keys_on_the_row_itself() throws IOException {
+        final var source = List.of(doc(null, "admin", "yes"), doc(null, "user", "yes"));
 
-        assertThrows(IllegalStateException.class, () -> run(source, conjunction(ConjunctionOperatorType.AND)),
-                "AND grouping still requires _id");
+        final var result = run(source, conjunction(ConjunctionOperatorType.AND));
+
+        assertEquals(1, result.size());
+        assertEquals("admin", result.getFirst().get("role").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_every_conjunction_without_an_id_emits_each_row_once() throws IOException {
+        final var source = List.of(doc(null, "admin", "yes"), doc(null, "admin", "no"), doc(null, "user", "yes"));
+
+        assertEquals(1, run(source, conjunction(ConjunctionOperatorType.AND)).size());
+        assertEquals(2, run(source, conjunction(ConjunctionOperatorType.XOR)).size());
+        assertEquals(2, run(source, conjunction(ConjunctionOperatorType.NAND)).size());
+        assertEquals(0, run(source, conjunction(ConjunctionOperatorType.NOR)).size());
+        assertEquals(3, run(source, conjunction(ConjunctionOperatorType.OR)).size());
     }
 }

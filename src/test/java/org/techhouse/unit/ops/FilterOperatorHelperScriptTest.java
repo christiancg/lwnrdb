@@ -87,6 +87,18 @@ public class FilterOperatorHelperScriptTest {
     }
 
     @Test
+    public void test_a_non_finite_predicate_result_is_falsy_rather_than_a_refusal() throws IOException {
+        for (final var value : List.of("NaN", "1/0", "-1/0")) {
+            try (var context = new PipelineScriptContext()) {
+                final var operator = new ScriptOperator("export default (doc) => " + value + ";");
+                assertEquals(0, FilterOperatorHelper
+                        .processOperator(operator, documents(), TestGlobals.DB, TestGlobals.COLL, context).count(),
+                        value + " must be falsy, not a script error: FILTER never stores the value it tests");
+            }
+        }
+    }
+
+    @Test
     public void test_truthy_values_include() throws IOException {
         final var truthy = List.of("1", "'x'", "true", "({})", "[]");
         for (final var value : truthy) {
@@ -141,7 +153,7 @@ public class FilterOperatorHelperScriptTest {
         }
     }
 
-    private void seedCollection() {
+    private void seedCollection() throws IOException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         var position = 0;
@@ -152,7 +164,7 @@ public class FilterOperatorHelperScriptTest {
             entry.setCollectionName(TestGlobals.COLL);
             entry.setData(document);
             entry.set_id(id);
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
             cache.putAdminCollectionEntry(adminCollEntry,
                     new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, id, position, 100, 0));
             position += 100;

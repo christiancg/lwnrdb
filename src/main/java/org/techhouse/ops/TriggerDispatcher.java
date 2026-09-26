@@ -8,12 +8,14 @@ import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.simplejs.SimpleJs;
@@ -35,7 +37,7 @@ public final class TriggerDispatcher {
     }
 
     public static void dispatch(TriggerEvent event) {
-        if (event.getDepth() >= configuration.getTriggerMaxDepth()) {
+        if (event.getDepth() < 0 || event.getDepth() >= configuration.getTriggerMaxDepth()) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             triggerExecutor.countFailure();
             final var reason = "cascade depth " + event.getDepth() + " reached triggerMaxDepth";
@@ -43,7 +45,13 @@ public final class TriggerDispatcher {
             recordSkip(event, reason);
             return;
         }
-        final var trigger = findTrigger(event);
+        final TriggerDefinition trigger;
+        try {
+            trigger = findTrigger(event);
+        } catch (MetadataReadException e) {
+            retryUnreadableDefinition(event, e.getMessage());
+            return;
+        }
         if (trigger == null || !trigger.isEnabled() || trigger.isBefore()) {
             consumeQuietly(event.getRunId(), event.getTriggerName());
             return;
@@ -89,21 +97,29 @@ public final class TriggerDispatcher {
                 + event.getCollName() + " event=" + event.getType() + " definer=" + definer + " actingUser="
                 + event.getActingUser() + " runId=" + scriptRun.runId() + " durationMs="
                 + (System.currentTimeMillis() - start);
+        final var effectsAreDurable = committed.get();
         if (result.isError()) {
             triggerExecutor.countFailure();
             logger.warning(line + " outcome=" + result.getErrorName() + ": " + result.getErrorMessage()
                     + ScriptOperationHelper.renderStack(result.getErrorStack())
                     + (result.getLogs().isEmpty() ? "" : " logs=" + result.getLogs()));
-            final var retryable = !CANCELLED.equals(result.getErrorName());
+            final var retryable = !CANCELLED.equals(result.getErrorName()) && !effectsAreDurable;
             handleFailure(event, trigger, definer, scriptRun.runId(), start, result.getErrorName(),
-                    result.getErrorMessage(), result.getErrorStack(), result, retryable);
+                    result.getErrorMessage(), result.getErrorStack(), result, retryable,
+                    database.sawClusterUnavailable());
             return;
         }
-        if (!committed.get()) {
+        if (!effectsAreDurable) {
             triggerExecutor.countFailure();
+            if (database.lastCommitWasFenced()) {
+                logger.warning(line + " outcome=commit-fenced");
+                deadLetterFencedCommit(event, trigger, definer, scriptRun.runId(), start, result);
+                return;
+            }
             logger.warning(line + " outcome=commit-failed");
             handleFailure(event, trigger, definer, scriptRun.runId(), start, "CommitFailed",
-                    "the trigger's effects could not be committed", null, result, true);
+                    "the trigger's effects could not be committed", null, result, true,
+                    database.sawClusterUnavailable());
             return;
         }
         logger.info(line + " outcome=ok");
@@ -111,12 +127,34 @@ public final class TriggerDispatcher {
                 result);
     }
 
+    private static void deadLetterFencedCommit(TriggerEvent event, TriggerDefinition trigger, String definer,
+            String runId, long start, ScriptResult result) {
+        final var error = "CommitFenced: the trigger's effects were half applied and the collections are fenced";
+        if (event.getRunId() != null) {
+            TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.DEAD, event.getAttempt(), error, 0L);
+        }
+        triggerExecutor.countDeadLetter();
+        logger.error("Trigger '" + trigger.getName() + "' was dead-lettered after a half-applied commit; runId="
+                + event.getRunId() + " - recovery finishes the slice, so do not re-run it", null);
+        recordRun(event, trigger, definer, runId, start, ScriptRunRecord.OUTCOME_DEAD_LETTER, "CommitFenced", error,
+                null, result);
+    }
+
     private static void handleFailure(TriggerEvent event, TriggerDefinition trigger, String definer, String runId,
             long start, String errorName, String errorMessage, List<String> stack, ScriptResult result,
-            boolean retryable) {
+            boolean retryable, boolean clusterUnavailable) {
         final var attempt = event.getAttempt();
         final var maxAttempts = Math.max(1, configuration.getTriggerMaxAttempts());
         final var error = errorName + ": " + errorMessage;
+        if (retryable && event.getRunId() != null && clusterUnavailable && withinClusterRetryWindow(event)) {
+            final var delay = backoffFor(attempt);
+            TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
+                    System.currentTimeMillis() + delay);
+            triggerExecutor.submitAfter(event, delay);
+            logger.info("Trigger '" + trigger.getName() + "' is waiting for the cluster; retrying in " + delay
+                    + "ms without consuming an attempt");
+            return;
+        }
         if (retryable && event.getRunId() != null && attempt < maxAttempts) {
             final var delay = backoffFor(attempt);
             TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
@@ -154,6 +192,10 @@ public final class TriggerDispatcher {
         return delay < 0 || delay > ceiling ? ceiling : delay;
     }
 
+    private static boolean withinClusterRetryWindow(TriggerEvent event) {
+        return System.currentTimeMillis() - event.getFiredAt() < Math.max(0L, configuration.getTriggerRunRetentionMs());
+    }
+
     private static TriggerEvent retryOf(TriggerEvent event) {
         return new TriggerEvent(event.getType(), event.getDbName(), event.getCollName(), event.getTriggerName(),
                 event.getProcedureName(), event.isBatchMode(), event.getEntries(), event.getActingUser(),
@@ -181,7 +223,7 @@ public final class TriggerDispatcher {
         database.beginTransaction();
         try {
             body.run();
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
             rollbackQuietly(database, triggerName);
             throw e;
         }
@@ -245,6 +287,32 @@ public final class TriggerDispatcher {
             args.add("document", entry.getData());
         }
         return args;
+    }
+
+    private static void retryUnreadableDefinition(TriggerEvent event, String cause) {
+        final var attempt = event.getAttempt();
+        final var maxAttempts = Math.max(1, configuration.getTriggerMaxAttempts());
+        final var error = "MetadataReadException: " + cause;
+        triggerExecutor.countFailure();
+        if (event.getRunId() == null) {
+            logger.warning("Could not read the triggers for " + event.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR
+                    + event.getCollName() + "; the run is not logged and cannot be replayed: " + cause);
+            return;
+        }
+        if (attempt < maxAttempts) {
+            final var delay = backoffFor(attempt);
+            TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
+                    System.currentTimeMillis() + delay);
+            triggerExecutor.submitAfter(retryOf(event), delay);
+            logger.warning("Could not read the triggers for " + event.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR
+                    + event.getCollName() + "; the run stays pending and is retried in " + delay + "ms: " + cause);
+            return;
+        }
+        TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.DEAD, attempt, error, 0L);
+        triggerExecutor.countDeadLetter();
+        logger.error("Could not read the triggers for " + event.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR
+                + event.getCollName() + " after " + attempt + " attempt(s); the run was dead-lettered, runId="
+                + event.getRunId() + " - resolve it with RESOLVE_TRIGGER_RUN", null);
     }
 
     private static TriggerDefinition findTrigger(TriggerEvent event) {

@@ -1,7 +1,9 @@
 package org.techhouse.conn;
 
 import java.io.BufferedWriter;
+import java.io.IOException;
 import java.net.Socket;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.HashMap;
 import java.util.Map;
@@ -16,6 +18,7 @@ import org.techhouse.data.Transaction;
 
 public class ClientTracker {
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
+    private final Map<UUID, Runnable> disconnectSignals = new ConcurrentHashMap<>();
     private final Map<String, TxSession> txSessions = new ConcurrentHashMap<>();
     private final Configuration configuration = Configuration.getInstance();
 
@@ -24,6 +27,7 @@ public class ClientTracker {
         if (maxConnections == 0 || maxConnections > clients.size()) {
             final var clientId = UUID.randomUUID();
             clients.put(clientId, new Client(socket.getInetAddress().getHostAddress()));
+            disconnectSignals.put(clientId, () -> closeQuietly(socket));
             return clientId;
         }
         return null;
@@ -31,6 +35,23 @@ public class ClientTracker {
 
     public void removeById(UUID clientId) {
         clients.remove(clientId);
+        disconnectSignals.remove(clientId);
+    }
+
+    public boolean signalDisconnect(UUID clientId) {
+        final var signal = disconnectSignals.get(clientId);
+        if (signal == null) {
+            return false;
+        }
+        signal.run();
+        return true;
+    }
+
+    private static void closeQuietly(Socket socket) {
+        try {
+            socket.close();
+        } catch (IOException ignored) {
+        }
     }
 
     // The caller must removeById this transient client when the operation completes, or it leaks.
@@ -101,6 +122,12 @@ public class ClientTracker {
         }
     }
 
+    public long millisSinceLastCommand(UUID clientId) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        final var last = client != null ? client.getLastCommandTime() : null;
+        return last == null ? 0 : Duration.between(last, LocalDateTime.now()).toMillis();
+    }
+
     public void updateLastCommandTime(UUID clientId) {
         if (clientId == null)
             return;
@@ -158,6 +185,19 @@ public class ClientTracker {
             return null;
         final var client = clients.get(clientId);
         return client != null ? client.getActiveTransaction() : null;
+    }
+
+    public boolean hasActiveTransaction(String transactionId) {
+        if (transactionId == null) {
+            return false;
+        }
+        for (final var client : clients.values()) {
+            final var transaction = client.getActiveTransaction();
+            if (transaction != null && transaction.getTransactionId().toString().equals(transactionId)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public void setActiveTransaction(UUID clientId, Transaction transaction) {

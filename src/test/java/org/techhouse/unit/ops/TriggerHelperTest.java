@@ -128,6 +128,21 @@ public class TriggerHelperTest {
     }
 
     @Test
+    public void test_the_reserved_history_collection_short_circuits_the_id_path_too() {
+        cache.putTriggers(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME,
+                List.of(new TriggerDefinition("t", new LinkedHashSet<>(Set.of(EventType.CREATED)), "recalc",
+                        TriggerDefinition.MODE_DOCUMENT, false, true, "owner", 1L, 1L, 1L, "owner")));
+
+        assertTrue(
+                capture(() -> TriggerHelper.afterWriteIds(TestGlobals.DB,
+                        org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME, EventType.CREATED, List.of("a"),
+                        "alice", 0)).isEmpty(),
+                "the history sweep must not pay a document read per row for a trigger that never fires");
+
+        cache.removeTriggers(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME);
+    }
+
+    @Test
     public void test_fires_only_matching_event_type() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
         assertEquals(1, capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
@@ -220,5 +235,27 @@ public class TriggerHelperTest {
     public void test_after_bulk_save_fires_nothing_for_a_failed_write() {
         assertTrue(capture(() -> TriggerHelper.afterBulkSave(TestGlobals.DB, TestGlobals.COLL,
                 new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING), "alice", 0)).isEmpty());
+    }
+
+    @Test
+    public void test_an_unreadable_trigger_file_does_not_fail_a_committed_write() {
+        install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
+        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+        final var file = new java.io.File(
+                TestGlobals.PATH + java.io.File.separator + TestGlobals.DB + java.io.File.separator + TestGlobals.COLL
+                        + java.io.File.separator + TestGlobals.COLL + "-triggers.json");
+        if (file.exists()) {
+            assertTrue(file.delete());
+        }
+        assertTrue(file.mkdirs());
+        try {
+            assertTrue(
+                    capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                            entry("a"), "alice", 0)).isEmpty(),
+                    "the write has already committed, so an unreadable trigger file must not fail it");
+        } finally {
+            assertTrue(file.delete());
+            cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+        }
     }
 }

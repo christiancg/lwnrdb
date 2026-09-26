@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -48,10 +49,19 @@ public class ListenValidatorTest {
     @Test
     public void validate_listen_withFilterStep_returnsOk() {
         final var req = new ListenRequest("myDb", "myColl");
-        final var op = new FieldOperator(FieldOperatorType.EQUALS, "status", null);
+        final var op = new FieldOperator(FieldOperatorType.EQUALS, "status", new JsonString("active"));
         req.setAggregationSteps(List.of(new FilterAggregationStep(op)));
 
         assertTrue(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void validate_listen_withValuelessFilterStep_returnsFail() {
+        final var req = new ListenRequest("myDb", "myColl");
+        final var op = new FieldOperator(FieldOperatorType.EQUALS, "status", null);
+        req.setAggregationSteps(List.of(new FilterAggregationStep(op)));
+
+        assertFalse(RequestValidator.validate(req).isValid());
     }
 
     @Test

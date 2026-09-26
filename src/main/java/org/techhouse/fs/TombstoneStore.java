@@ -12,6 +12,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.function.ObjLongConsumer;
 import org.techhouse.config.Globals;
+import org.techhouse.data.FieldIndexEntry;
 
 final class TombstoneStore {
     private TombstoneStore() {
@@ -21,7 +22,8 @@ final class TombstoneStore {
         final var lock = FileLocks.lockFor(file).writeLock();
         lock.lock();
         try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true), Globals.BUFFER_SIZE)) {
-            writer.append(id).append(Globals.INDEX_ENTRY_SEPARATOR).append(String.valueOf(version));
+            writer.append(FieldIndexEntry.escapeIndexToken(id)).append(Globals.ID_SEPARATOR)
+                    .append(String.valueOf(version));
             writer.newLine();
         } finally {
             lock.unlock();
@@ -58,7 +60,7 @@ final class TombstoneStore {
             });
             final var lines = new ArrayList<String>(kept.size());
             for (final var entry : kept.entrySet()) {
-                lines.add(entry.getKey() + Globals.INDEX_ENTRY_SEPARATOR + entry.getValue());
+                lines.add(FieldIndexEntry.escapeIndexToken(entry.getKey()) + Globals.ID_SEPARATOR + entry.getValue());
             }
             FileLocks.rewriteFileAtomically(file.toPath(), lines);
         } finally {
@@ -67,14 +69,15 @@ final class TombstoneStore {
     }
 
     private static void forEachEntry(File file, ObjLongConsumer<String> consumer) throws IOException {
-        for (final var line : Files.readAllLines(file.toPath(), StandardCharsets.UTF_8)) {
-            final var cleaned = line.trim();
-            final var sep = cleaned.lastIndexOf(Globals.INDEX_ENTRY_SEPARATOR);
+        for (final var line : FileLocks.decodeLines(Files.readAllBytes(file.toPath()))) {
+            final var cleaned = line.replace("\r", "").replace("\n", "");
+            final var sep = cleaned.indexOf(Globals.ID_SEPARATOR);
             if (sep <= 0) {
                 continue;
             }
             try {
-                consumer.accept(cleaned.substring(0, sep), Long.parseLong(cleaned.substring(sep + 1)));
+                consumer.accept(FieldIndexEntry.unescapeIndexToken(cleaned.substring(0, sep)),
+                        Long.parseLong(cleaned.substring(sep + Globals.ID_SEPARATOR.length())));
             } catch (NumberFormatException ignored) {
             }
         }

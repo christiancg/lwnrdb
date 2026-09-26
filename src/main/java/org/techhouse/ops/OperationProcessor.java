@@ -75,6 +75,10 @@ public class OperationProcessor {
                 && !TransactionOperationHelper.isAllowedDuringTransaction(operationRequest.getType())) {
             return new OperationResponse(operationRequest.getType(), ErrorCode.OPERATION_NOT_ALLOWED_IN_TRANSACTION);
         }
+        if (activeTransaction != null && activeTransaction.isAborted()
+                && !TransactionOperationHelper.isAllowedOnAbortedTransaction(operationRequest.getType())) {
+            return new OperationResponse(operationRequest.getType(), ErrorCode.TRANSACTION_NOT_USABLE);
+        }
         final var adminGuard = ClusterAdminHelper.guard(operationRequest);
         if (adminGuard != null) {
             return adminGuard;
@@ -111,7 +115,7 @@ public class OperationProcessor {
                 UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
             case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
             case LISTEN -> processListenOperation((ListenRequest) operationRequest, clientId);
-            case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest);
+            case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest, clientId);
             case START_TRANSACTION ->
                 TransactionOperationHelper.start(clientId, UUID.randomUUID(), operationRequest.getTriggerDepth());
             case COMMIT_TRANSACTION -> TransactionOperationHelper.commit(clientId);
@@ -216,8 +220,8 @@ public class OperationProcessor {
         return ListenOperationHelper.processListenOperation(listenRequest, clientId);
     }
 
-    private OperationResponse processStopListenOperation(StopListenRequest request) {
-        return ListenOperationHelper.processStopListenOperation(request);
+    private OperationResponse processStopListenOperation(StopListenRequest request, UUID clientId) {
+        return ListenOperationHelper.processStopListenOperation(request, clientId);
     }
 
     private OperationResponse processRunScriptOperation(RunScriptRequest request, String actingUser, UUID clientId) {
@@ -246,14 +250,16 @@ public class OperationProcessor {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_TRIGGER,
-                ErrorCode.ERROR_SAVING_TRIGGER, () -> TriggerOperationHelper.executeSave(request, actingUser));
+                ErrorCode.ERROR_SAVING_TRIGGER, request.isReplicated(),
+                () -> TriggerOperationHelper.executeSave(request, actingUser));
     }
 
     private OperationResponse processDeleteTrigger(DeleteTriggerRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_TRIGGER,
-                ErrorCode.ERROR_DELETING_TRIGGER, () -> TriggerOperationHelper.executeDelete(request));
+                ErrorCode.ERROR_DELETING_TRIGGER, request.isReplicated(),
+                () -> TriggerOperationHelper.executeDelete(request));
     }
 
     private OperationResponse processListTriggers(ListTriggersRequest request) {
@@ -292,15 +298,23 @@ public class OperationProcessor {
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING,
                 () -> {
+                    final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.BULK_SAVE, dbName,
+                            collName);
+                    if (ownershipError != null) {
+                        return ownershipError;
+                    }
+                    final var readinessError = CollectionReadinessGuard.check(OperationType.BULK_SAVE, dbName,
+                            collName);
+                    if (readinessError != null) {
+                        return readinessError;
+                    }
                     final var hookError = BeforeHookHelper.beforeBulkSave(bulkSaveRequest, actingUser);
                     if (hookError != null) {
                         return hookError;
                     }
-                    final var response = ClusterWriteHelper.afterBulkSave(dbName, collName,
-                            SaveOperationHelper.executeBulkSave(bulkSaveRequest));
-                    TriggerHelper.afterBulkSave(dbName, collName, response, actingUser,
-                            bulkSaveRequest.getTriggerDepth());
-                    return response;
+                    final var local = SaveOperationHelper.executeBulkSave(bulkSaveRequest);
+                    TriggerHelper.afterBulkSave(dbName, collName, local, actingUser, bulkSaveRequest.getTriggerDepth());
+                    return ClusterWriteHelper.afterBulkSave(dbName, collName, local);
                 });
     }
 
@@ -315,20 +329,26 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
-        final var isInsert = saveRequest.get_id() == null || saveRequest.get_id().isBlank();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
-            final var hookError = BeforeHookHelper.beforeSave(saveRequest,
-                    isInsert ? EventType.CREATED : EventType.UPDATED, actingUser);
+            final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.SAVE, dbName, collName);
+            if (ownershipError != null) {
+                return ownershipError;
+            }
+            final var readinessError = CollectionReadinessGuard.check(OperationType.SAVE, dbName, collName);
+            if (readinessError != null) {
+                return readinessError;
+            }
+            final var hookError = BeforeHookHelper.beforeSave(saveRequest, actingUser);
             if (hookError != null) {
                 return hookError;
             }
-            final var response = ClusterWriteHelper.afterSave(dbName, collName,
-                    SaveOperationHelper.executeSave(saveRequest));
-            if (response instanceof SaveResponse saveResponse) {
-                TriggerHelper.afterWriteIds(dbName, collName, isInsert ? EventType.CREATED : EventType.UPDATED,
+            final var local = SaveOperationHelper.executeSave(saveRequest);
+            if (local instanceof SaveResponse saveResponse) {
+                TriggerHelper.afterWriteIds(dbName, collName,
+                        saveResponse.isInserted() ? EventType.CREATED : EventType.UPDATED,
                         List.of(saveResponse.get_id()), actingUser, saveRequest.getTriggerDepth());
             }
-            return response;
+            return ClusterWriteHelper.afterSave(dbName, collName, local);
         });
     }
 
@@ -345,6 +365,15 @@ public class OperationProcessor {
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE, ErrorCode.ERROR_DELETING,
                 () -> {
+                    final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.DELETE, dbName,
+                            collName);
+                    if (ownershipError != null) {
+                        return ownershipError;
+                    }
+                    final var readinessError = CollectionReadinessGuard.check(OperationType.DELETE, dbName, collName);
+                    if (readinessError != null) {
+                        return readinessError;
+                    }
                     // Read before the delete: afterWrite needs the document that is about to disappear.
                     final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),
                             deleteRequest.getTriggerDepth());
@@ -352,13 +381,15 @@ public class OperationProcessor {
                     if (hookError != null) {
                         return hookError;
                     }
-                    final var response = ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
-                            DeleteOperationHelper.executeDelete(deleteRequest));
-                    if (response instanceof DeleteResponse) {
+                    final var reservedVersion = ClusterWriteHelper.reserveDelete(dbName, collName,
+                            deleteRequest.get_id());
+                    final var local = DeleteOperationHelper.executeDelete(deleteRequest);
+                    if (local instanceof DeleteResponse) {
                         TriggerHelper.afterWrite(dbName, collName, EventType.DELETED, deleted, actingUser,
                                 deleteRequest.getTriggerDepth());
                     }
-                    return response;
+                    return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(), reservedVersion,
+                            local);
                 });
     }
 
@@ -382,14 +413,16 @@ public class OperationProcessor {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_SCHEMA,
-                ErrorCode.ERROR_SAVING_SCHEMA, () -> SchemaOperationHelper.executeSaveSchema(request));
+                ErrorCode.ERROR_SAVING_SCHEMA, request.isReplicated(),
+                () -> SchemaOperationHelper.executeSaveSchema(request));
     }
 
     private OperationResponse processDeleteSchema(DeleteSchemaRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_SCHEMA,
-                ErrorCode.ERROR_DELETING_SCHEMA, () -> SchemaOperationHelper.executeDeleteSchema(request));
+                ErrorCode.ERROR_DELETING_SCHEMA, request.isReplicated(),
+                () -> SchemaOperationHelper.executeDeleteSchema(request));
     }
 
 }

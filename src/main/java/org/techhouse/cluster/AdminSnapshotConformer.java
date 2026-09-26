@@ -17,15 +17,20 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
 
 // The admin epoch is the ordering, so there is no per-record version, and every step is
 // idempotent so the periodic sweep does not rewrite an already-converged node.
 final class AdminSnapshotConformer {
+    private final Logger logger = Logger.logFor(AdminSnapshotConformer.class);
+    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
+    private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final EJson eJson = IocContainer.get(EJson.class);
@@ -36,12 +41,18 @@ final class AdminSnapshotConformer {
     private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
 
     void conform(AdminSnapshotPayload snapshot) throws Exception {
+        final var epochAtStart = adminEpoch.current();
         final var snapshotUsers = conformUsers(snapshot);
         removeAbsentUsers(snapshotUsers);
         final var snapshotDbs = conformDatabases(snapshot);
         conformProcedures(snapshot, snapshotDbs);
         conformSchedules(snapshot, snapshotDbs);
-        final var snapshotColls = conformCollections(snapshot, snapshotDbs);
+        final var snapshotColls = conformCollections(snapshot, snapshotDbs, epochAtStart);
+        if (adminEpoch.current() != epochAtStart) {
+            logger.warning("Skipping the quarantine phase of the admin conform: a local admin op committed"
+                    + " during it. The next round reconciles from the newer local state.");
+            return;
+        }
         dropAbsentCollections(snapshotDbs, snapshotColls);
         dropAbsentDatabases(snapshotDbs);
     }
@@ -51,7 +62,10 @@ final class AdminSnapshotConformer {
         for (final var userJson : snapshot.getUsers()) {
             final var user = AdminUserEntry.fromJsonObject(userJson);
             snapshotUsers.add(user.get_id());
-            AdminOperationHelper.saveUserEntry(user);
+            final var local = cache.getAdminUserEntry(user.get_id());
+            if (local == null || !local.getData().equals(user.getData())) {
+                AdminOperationHelper.saveUserEntry(user);
+            }
         }
         return snapshotUsers;
     }
@@ -77,15 +91,15 @@ final class AdminSnapshotConformer {
             if (cache.getAdminDbEntry(db.get_id()) == null) {
                 AdminOperationHelper.saveDatabaseEntry(
                         new AdminDbEntry(db.get_id(), new ArrayList<>(), new ArrayList<>(db.getOwners())));
-            } else {
+            } else if (!cache.getAdminDbEntry(db.get_id()).getOwners().equals(db.getOwners())) {
                 AdminOperationHelper.updateDatabaseOwners(db.get_id(), db.getOwners());
             }
         }
         return snapshotDbs;
     }
 
-    private HashSet<String> conformCollections(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs)
-            throws Exception {
+    private HashSet<String> conformCollections(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs,
+            long epochAtStart) {
         final var snapshotColls = new HashSet<String>();
         for (final var collJson : snapshot.getCollections()) {
             final var coll = AdminCollEntry.fromJsonObject(collJson);
@@ -98,7 +112,13 @@ final class AdminSnapshotConformer {
             snapshotColls.add(coll.get_id());
             final var schemaEl = snapshot.getSchemas().get(coll.get_id());
             final var desiredSchema = schemaEl != null && schemaEl.isJsonObject() ? schemaEl.asJsonObject() : null;
-            conformCollection(dbName, collName, coll.getIndexes(), desiredSchema, snapshot.getTriggers());
+            try {
+                conformCollection(dbName, collName, coll.getIndexes(), desiredSchema, snapshot.getTriggers(),
+                        epochAtStart, coll.getIncarnation());
+            } catch (Exception e) {
+                logger.warning("Skipping the admin conform of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                        + " for this round: " + e.getMessage());
+            }
         }
         return snapshotColls;
     }
@@ -110,7 +130,12 @@ final class AdminSnapshotConformer {
             desired.put(entry.getKey(), entry.getValue().asJsonObject());
         }
         for (final var dbName : snapshotDbs.keySet()) {
-            locks.lock(dbName, Globals.PROCEDURES_FOLDER);
+            final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+            if (!locks.tryLockWrite(dbName, Globals.PROCEDURES_FOLDER, waitMillis)) {
+                logger.warning("Skipping the procedures conform of " + dbName + ": its lock stayed held" + " for "
+                        + waitMillis + "ms. The next round retries it.");
+                continue;
+            }
             try {
                 for (final var existingName : new ArrayList<>(fs.listProcedureNames(dbName))) {
                     if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
@@ -125,14 +150,31 @@ final class AdminSnapshotConformer {
                         continue;
                     }
                     final var definition = ProcedureDefinition.fromJsonObject(entry.getValue());
-                    if (!definition.equals(cache.loadProcedureUncached(dbName, parts[1]))) {
+                    if (!definition.equals(localProcedure(dbName, parts[1]))) {
                         fs.writeProcedure(dbName, parts[1], eJson.toJson(entry.getValue()));
                         cache.removeProcedure(dbName, parts[1]);
+                        compiledProcedures.invalidateProcedure(dbName, parts[1]);
                     }
                 }
             } finally {
                 locks.release(dbName, Globals.PROCEDURES_FOLDER);
             }
+        }
+    }
+
+    private ProcedureDefinition localProcedure(String dbName, String name) {
+        try {
+            return cache.loadProcedureUncached(dbName, name);
+        } catch (MetadataReadException e) {
+            return null;
+        }
+    }
+
+    private ScheduleDefinition localSchedule(String dbName, String name) {
+        try {
+            return cache.loadScheduleUncached(dbName, name);
+        } catch (MetadataReadException e) {
+            return null;
         }
     }
 
@@ -144,7 +186,12 @@ final class AdminSnapshotConformer {
         }
         for (final var dbName : snapshotDbs.keySet()) {
             var changed = false;
-            locks.lock(dbName, Globals.SCHEDULES_FOLDER);
+            final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+            if (!locks.tryLockWrite(dbName, Globals.SCHEDULES_FOLDER, waitMillis)) {
+                logger.warning("Skipping the schedules conform of " + dbName + ": its lock stayed held" + " for "
+                        + waitMillis + "ms. The next round retries it.");
+                continue;
+            }
             try {
                 for (final var existingName : new ArrayList<>(fs.listScheduleNames(dbName))) {
                     if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
@@ -159,7 +206,7 @@ final class AdminSnapshotConformer {
                         continue;
                     }
                     final var definition = ScheduleDefinition.fromJsonObject(entry.getValue());
-                    if (!definition.equals(cache.loadScheduleUncached(dbName, parts[1]))) {
+                    if (!definition.equals(localSchedule(dbName, parts[1]))) {
                         fs.writeSchedule(dbName, parts[1], eJson.toJson(entry.getValue()));
                         cache.removeSchedule(dbName, parts[1]);
                         changed = true;
@@ -193,15 +240,31 @@ final class AdminSnapshotConformer {
     }
 
     private void conformCollection(String dbName, String collName, java.util.Set<String> desiredIndexes,
-            JsonObject desiredSchema, JsonObject snapshotTriggers) throws Exception {
-        locks.lock(dbName, collName);
+            JsonObject desiredSchema, JsonObject snapshotTriggers, long epochAtStart, long snapshotIncarnation)
+            throws Exception {
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+        if (!locks.tryLockWrite(dbName, collName, waitMillis)) {
+            logger.warning("Skipping the conform of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                    + ": its write lock stayed held for " + waitMillis + "ms. The next round retries it.");
+            return;
+        }
         try {
-            // Same reason as the database folder above: idempotent, and run on every sweep so a collection
-            // whose directory went missing under a live admin entry is repaired rather than left unwritable.
+            if (adminEpoch.current() != epochAtStart) {
+                logger.warning("Skipping the conform of " + dbName + "|" + collName + ": a local admin op committed"
+                        + " during it. The next round reconciles from the newer local state.");
+                return;
+            }
+            quarantineStaleIncarnation(dbName, collName, snapshotIncarnation);
             fs.createCollectionFile(dbName, collName);
-            if (cache.getAdminCollectionEntry(dbName, collName) == null) {
+            final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
+            if (localEntry == null) {
                 AdminOperationHelper.createPageCollections(dbName, collName);
-                AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
+                final var entry = new AdminCollEntry(dbName, collName);
+                entry.setIncarnation(snapshotIncarnation);
+                AdminOperationHelper.saveCollectionEntry(entry);
+            } else if (localEntry.getIncarnation() != snapshotIncarnation && snapshotIncarnation != 0) {
+                localEntry.setIncarnation(snapshotIncarnation);
+                AdminOperationHelper.saveCollectionEntry(localEntry);
             }
             final var existing = new HashSet<>(cache.getIndexesForCollection(dbName, collName));
             for (final var field : desiredIndexes) {
@@ -223,8 +286,34 @@ final class AdminSnapshotConformer {
         }
     }
 
+    private void quarantineStaleIncarnation(String dbName, String collName, long snapshotIncarnation) throws Exception {
+        final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
+        if (localEntry == null || snapshotIncarnation == 0 || localEntry.getIncarnation() == 0
+                || localEntry.getIncarnation() >= snapshotIncarnation) {
+            return;
+        }
+        final var stale = localEntry.getIncarnation();
+        cache.evictCollection(dbName, collName);
+        AdminOperationHelper.deleteCollectionEntry(dbName, collName);
+        AdminOperationHelper.deletePageCollections(dbName, collName);
+        listenManager.unregisterAllForCollection(dbName, collName);
+        final var moved = fs.quarantineCollectionFiles(dbName, collName, stale);
+        logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                + ": its documents belong to incarnation " + stale + ", which was dropped, and the cluster has since"
+                + " re-created the name as incarnation " + snapshotIncarnation + ". They were "
+                + (moved ? "moved aside on disk" : "left on disk") + " and the collection is now empty here.");
+    }
+
+    private JsonObject localSchema(String dbName, String collName) {
+        try {
+            return cache.loadSchemaUncached(dbName, collName);
+        } catch (MetadataReadException e) {
+            return null;
+        }
+    }
+
     private void conformSchema(String dbName, String collName, JsonObject desiredSchema) throws Exception {
-        final var current = cache.loadSchemaUncached(dbName, collName);
+        final var current = localSchema(dbName, collName);
         if (desiredSchema != null) {
             if (!desiredSchema.equals(current)) {
                 fs.writeCollectionSchema(dbName, collName, eJson.toJson(desiredSchema));
@@ -253,21 +342,23 @@ final class AdminSnapshotConformer {
     }
 
     private void dropCollection(String dbName, String collName) throws Exception {
-        locks.lock(dbName, collName);
-        var dropped = false;
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+        if (!locks.tryLockWrite(dbName, collName, waitMillis)) {
+            logger.warning("Skipping the quarantine of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                    + ": its write lock stayed held for " + waitMillis + "ms. The next round retries it.");
+            return;
+        }
         try {
-            if (fs.deleteCollectionFiles(dbName, collName)) {
-                cache.evictCollection(dbName, collName);
-                AdminOperationHelper.deleteCollectionEntry(dbName, collName);
-                AdminOperationHelper.deletePageCollections(dbName, collName);
-                listenManager.unregisterAllForCollection(dbName, collName);
-                dropped = true;
-            }
+            cache.evictCollection(dbName, collName);
+            AdminOperationHelper.deleteCollectionEntry(dbName, collName);
+            AdminOperationHelper.deletePageCollections(dbName, collName);
+            listenManager.unregisterAllForCollection(dbName, collName);
+            logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                    + ": it is absent from the winning admin snapshot. Its documents are left on disk and it no"
+                    + " longer serves reads or writes until an operator reinstates or removes it.");
         } finally {
             locks.release(dbName, collName);
-            if (dropped) {
-                locks.removeLock(dbName, collName);
-            }
+            locks.removeLock(dbName, collName);
         }
     }
 
@@ -284,22 +375,30 @@ final class AdminSnapshotConformer {
         final var collNames = dbEntry != null ? new ArrayList<>(dbEntry.getCollections()) : new ArrayList<String>();
         Collections.sort(collNames);
         final var lockedColls = new ArrayList<String>();
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
         try {
             for (final var collName : collNames) {
-                locks.lock(dbName, collName);
+                if (!locks.tryLockWrite(dbName, collName, waitMillis)) {
+                    logger.warning("Skipping the quarantine of database " + dbName + ": the write lock of " + collName
+                            + " stayed held for " + waitMillis + "ms. The next round retries it.");
+                    return;
+                }
                 lockedColls.add(collName);
             }
-            if (fs.deleteDatabase(dbName)) {
-                cache.evictDatabase(dbName);
-                for (final var collName : lockedColls) {
-                    locks.removeLock(dbName, collName);
-                }
-                AdminOperationHelper.deleteDatabaseEntry(dbName);
-                listenManager.unregisterAllForDatabase(dbName);
-            }
+            cache.evictDatabase(dbName);
+            AdminOperationHelper.deleteDatabaseEntry(dbName);
+            compiledProcedures.invalidateDatabase(dbName);
+            scheduleRegistry.removeDatabase(dbName);
+            listenManager.unregisterAllForDatabase(dbName);
+            logger.warning("Quarantined database " + dbName
+                    + ": it is absent from the winning admin snapshot. Its documents are left on disk and it no"
+                    + " longer serves reads or writes until an operator reinstates or removes it.");
         } finally {
             for (final var collName : lockedColls) {
                 locks.release(dbName, collName);
+            }
+            for (final var collName : lockedColls) {
+                locks.removeLock(dbName, collName);
             }
         }
     }

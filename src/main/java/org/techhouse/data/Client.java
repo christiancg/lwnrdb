@@ -14,7 +14,7 @@ public class Client {
     private String authenticatedUsername;
     private volatile BufferedWriter writer;
     private final ReentrantLock writerLock = new ReentrantLock();
-    private Transaction activeTransaction;
+    private volatile Transaction activeTransaction;
     private volatile boolean hasLocalSlice;
     private final Set<String> transactionParticipants = ConcurrentHashMap.newKeySet();
 

@@ -47,7 +47,7 @@ import threading
 import time
 
 import base_utils as bu
-from base_utils import check, check_code, check_result, check_status, section
+from base_utils import check, check_code, check_field, check_result, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SCRIPT_TEST_PORT", "8995"))
@@ -466,6 +466,27 @@ def test_history_kinds(conn: Conn):
     check("an ad-hoc run is not recorded under the default kinds", not ad_hoc, f"rows={ad_hoc!r}")
 
 
+def test_a_script_cannot_mutate_the_run_history(conn: Conn):
+    section("Reserved collections are closed to scripts")
+
+    forged = conn.run("import db from 'db';"
+                      " db.save(db.name, 'script_runs', { _id: 'forged', kind: 'RUN_SCRIPT' });"
+                      " return 'wrote';")
+    check("a script cannot forge a run-history row", forged.get("status") != "OK", f"got {forged!r}")
+
+    erased = conn.run("import db from 'db'; db.delete(db.name, 'script_runs', 'forged'); return 'deleted';")
+    check("a script cannot erase a run-history row", erased.get("status") != "OK", f"got {erased!r}")
+
+    readable = conn.run("import db from 'db';"
+                        " return db.aggregate(db.name, 'script_runs', []).length >= 0;")
+    check_result("a script can still read the run history", readable, True)
+
+    bad_id = conn.run("import db from 'db';"
+                      " db.save(db.name, '" + COLL + "', { _id: 'has spaces!', v: 1 });"
+                      " return 'wrote';")
+    check("a script cannot write an _id the client API refuses", bad_id.get("status") != "OK", f"got {bad_id!r}")
+
+
 def test_history_kinds_enabled(conn: Conn):
     section("Run history with RUN_SCRIPT recorded")
     check_result("a recorded ad-hoc run", conn.run("let t = 0; for (let i = 0; i < 20; i++) t += i; return t;"), 190)
@@ -481,6 +502,21 @@ def test_history_kinds_enabled(conn: Conn):
         check("the row reports the outcome", rows[0].get("outcome") == "ok", f"row={rows[0]!r}")
         check("the row carries metrics",
               (rows[0].get("metrics") or {}).get("instructions", 0) > 0, f"row={rows[0]!r}")
+        check("an ad-hoc run has no collection of its own", rows[0].get("collection") is None, f"row={rows[0]!r}")
+        is_null = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
+                             "aggregationSteps": [{"type": "FILTER", "operator": {
+                                 "type": "FIELD", "field": "collection",
+                                 "fieldOperatorType": "EQUALS", "value": None}}]})
+        matched = {row.get("_id") for row in (is_null.get("results") or [])}
+        check("EQUALS null finds the freshly written row the response showed as null",
+              rows[0].get("_id") in matched, f"matched={matched!r} row={rows[0]!r}")
+        not_null = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
+                              "aggregationSteps": [{"type": "FILTER", "operator": {
+                                  "type": "FIELD", "field": "collection",
+                                  "fieldOperatorType": "NOT_EQUALS", "value": None}}]})
+        check("NOT_EQUALS null excludes that same row",
+              rows[0].get("_id") not in {row.get("_id") for row in (not_null.get("results") or [])},
+              f"got {not_null.get('results')!r}")
 
 
 def test_fetch_unavailable(conn: Conn):
@@ -746,6 +782,77 @@ def test_custom_types(conn: Conn):
                           f'return db.findById(db.name, "{COLL}", "t1").when.toString();'), "#time(23:15:42)")
     check_result("a geo value is queryable from the wire after a script wrote it",
                  conn.run('import db from "db";\nreturn typeof Geo.from("#geo(1,2)").geoHash;'), "string")
+
+
+def test_value_guards(conn: Conn):
+    section("Host interface — values a document cannot hold")
+    for label, literal in (("1/0", "1/0"), ("-1/0", "-1/0"), ("0/0", "0/0"),
+                           ("an overflow", "Number.MAX_VALUE * 2")):
+        check_failed_script(f"storing {label} is refused", conn.run(
+            'import db from "db";\n'
+            f'db.save(db.name, "{COLL}", {{ _id: "nonfinite", v: {literal} }});'),
+            "400-9", "is not a JSON number")
+    check_result("the refusal is catchable inside the script", conn.run(
+        'import db from "db";\n'
+        f'try {{ db.save(db.name, "{COLL}", {{ _id: "nonfinite", v: 1/0 }}); return "saved"; }}\n'
+        "catch (e) { return e.name; }"), "TypeError")
+    check_failed_script("returning a non-finite number is refused too",
+                        conn.run("return 1/0;"), "400-9", "is not a JSON number")
+    check_code("no refused write reached the collection",
+               conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                          "_id": "nonfinite"}), "NOT_FOUND", "404-2")
+
+    check_failed_script("an unregistered custom type is refused", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "badcustom", f: "#nosuch(1)" }});'),
+        "400-9", "nosuch")
+    check_failed_script("a malformed custom value is refused", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "badcustom", f: "#geo(bad)" }});'), "400-9", "Cannot serialize")
+    check_code("neither reached the collection",
+               conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                          "_id": "badcustom"}), "NOT_FOUND", "404-2")
+
+    check_result("a custom-shaped string stores as the custom type the wire would build", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "promoted", loc: "#geo(3.0,4.0)" }});\n'
+        f'const stored = db.findById(db.name, "{COLL}", "promoted");\n'
+        "return [typeof stored.loc, stored.loc.lat, stored.loc.toString()];"),
+        ["object", 3, "#geo(3.0,4.0)"])
+    check_status("store an unnormalised custom value from a script", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "promoted2", loc: "#geo(1,2)" }});'), "OK")
+    check_field("promotion keeps the raw wire text rather than normalising it",
+                conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                           "_id": "promoted2"}), "object.loc", "#geo(1,2)")
+    check_result("JSON.stringify still treats a custom-shaped string as a string",
+                 conn.run("return JSON.stringify({ a: '#geo(1,2)', b: 1/0 });"),
+                 '{"a":"#geo(1,2)","b":null}')
+
+
+def test_db_module_arity(conn: Conn):
+    section("Host interface - a db call with too few arguments")
+    for label, call in (("db.save", f'db.save("{COLL}", {{ _id: "arity" }})'),
+                        ("db.aggregate", f'db.aggregate(db.name, "{COLL}")'),
+                        ("db.bulkSave", f'db.bulkSave("{COLL}", [{{ _id: "arity" }}])'),
+                        ("db.cursor", f'db.cursor(db.name, "{COLL}")')):
+        check_failed_script(f"{label} with too few arguments is a TypeError",
+                            conn.run(f'import db from "db";\n{call};'), "400-9", "TypeError")
+        check_status(f"the connection still answers after {label} was refused",
+                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                                "_id": "arity"}), "NOT_FOUND")
+
+    check_result("the refusal is catchable inside the script", conn.run(
+        'import db from "db";\n'
+        f'try {{ db.save("{COLL}", {{ _id: "arity" }}); return "saved"; }}\n'
+        "catch (e) { return e.name; }"), "TypeError")
+    check_failed_script("a third argument of the wrong shape is refused the same way",
+                        conn.run('import db from "db";\n'
+                                 f'db.aggregate(db.name, "{COLL}", {{}});'), "400-9", "TypeError")
+    check_failed_script("an empty bulkSave array reaches request validation, not the arity guard",
+                        conn.run('import db from "db";\n'
+                                 f'db.bulkSave(db.name, "{COLL}", []);'),
+                        "400-9", "at least one object")
 
 
 def test_capabilities(conn: Conn):
@@ -1361,6 +1468,7 @@ def main():
             test_sandbox_limits(conn)
             test_run_metrics(conn)
             test_history_kinds(conn)
+            test_a_script_cannot_mutate_the_run_history(conn)
             test_fetch_unavailable(conn)
             test_locale_arguments(conn)
             test_request_validation(conn)
@@ -1371,6 +1479,8 @@ def main():
             test_schema_interaction(conn)
             test_arguments(conn)
             test_custom_types(conn)
+            test_value_guards(conn)
+            test_db_module_arity(conn)
             test_capabilities(conn)
             test_procedure_imports(conn)
             test_language_surface(conn)

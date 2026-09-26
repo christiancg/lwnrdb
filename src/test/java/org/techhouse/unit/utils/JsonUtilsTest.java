@@ -426,4 +426,22 @@ public class JsonUtilsTest {
         object.add("field", value);
         return object;
     }
+
+    @Test
+    public void test_large_doubles_canonicalize_distinctly() {
+        assertNotEquals(JsonUtils.canonicalize(new JsonNumber(1e20)), JsonUtils.canonicalize(new JsonNumber(2e20)),
+                "narrowing to long saturates at Long.MAX_VALUE, collapsing every value above it to one token");
+        assertNotEquals(JsonUtils.canonicalize(new JsonNumber(1e20)), JsonUtils.canonicalize(new JsonNumber(1e300)));
+    }
+
+    @Test
+    public void test_hash_element_distinguishes_1e20_from_2e20() {
+        assertNotEquals(JsonUtils.hashElement(new JsonNumber(1e20)), JsonUtils.hashElement(new JsonNumber(2e20)));
+    }
+
+    @Test
+    public void test_values_inside_the_exact_range_still_canonicalize_as_integers() {
+        assertEquals("42", JsonUtils.canonicalize(new JsonNumber(42)));
+        assertEquals("-7", JsonUtils.canonicalize(new JsonNumber(-7)));
+    }
 }

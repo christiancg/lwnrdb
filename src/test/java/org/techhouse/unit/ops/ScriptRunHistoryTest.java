@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -16,6 +17,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ScriptRunHistory;
@@ -231,6 +233,19 @@ public class ScriptRunHistoryTest {
                 null, "u1", "u2", System.currentTimeMillis(), 1L, 1, ScriptRunRecord.OUTCOME_ERROR, "Error", "boom",
                 null, null, null, false));
         assertEquals(1L, ScriptRunHistory.getRecorded());
+    }
+
+    @Test
+    public void test_a_row_stores_json_nulls_for_the_absent_fields() {
+        ScriptRunHistory.write(new ScriptRunRecord("run-absent-fields", ScriptRunKind.TRIGGER, TestGlobals.DB, "job",
+                null, null, null, "u1", "u2", System.currentTimeMillis(), 1L, 1, ScriptRunRecord.OUTCOME_OK, null, null,
+                null, new ScriptRunMetrics(1L, 1L, 1L, 1L, 1L, 1L), null, false));
+        final var document = Objects.requireNonNull(readRow("run-absent-fields"));
+        assertSame(JsonNull.INSTANCE, document.get("procedure"));
+        assertSame(JsonNull.INSTANCE, document.get("collection"));
+        assertSame(JsonNull.INSTANCE, document.get("event"));
+        assertSame(JsonNull.INSTANCE, document.get("errorName"));
+        assertSame(JsonNull.INSTANCE, document.get("errorMessage"));
     }
 
     @Test

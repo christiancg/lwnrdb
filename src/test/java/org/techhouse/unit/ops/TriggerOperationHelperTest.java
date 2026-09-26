@@ -9,9 +9,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -78,6 +80,20 @@ public class TriggerOperationHelperTest {
         assertEquals(1, stored.size());
         assertEquals("audit", stored.getFirst().getName());
         assertEquals("recalc", stored.getFirst().getProcedureName());
+    }
+
+    @Test
+    public void test_save_rejects_the_reserved_history_collection() throws Exception {
+        IocContainer.get(FileSystem.class).createCollectionFile(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME);
+        AdminOperationHelper.createPageCollections(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME);
+        AdminOperationHelper.saveCollectionEntry(
+                new org.techhouse.data.admin.AdminCollEntry(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME));
+
+        final var response = TriggerOperationHelper.executeSave(new SaveTriggerRequest(TestGlobals.DB,
+                Globals.SCRIPT_RUNS_COLLECTION_NAME, "t", List.of("CREATED"), "recalc"), ACTOR);
+
+        assertEquals(ErrorCode.INVALID_TRIGGER.getCode(), response.getErrorCode(),
+                "accepting it reports success for a trigger that afterWrite short-circuits and never fires");
     }
 
     @Test

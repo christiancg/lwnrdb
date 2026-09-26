@@ -63,13 +63,14 @@ public class JsonUtilsPathTest {
     }
 
     @Test
-    public void test_non_object_intermediate_keeps_the_cursor() {
+    public void test_non_object_intermediate_resolves_to_absent() {
         final var obj = nested();
-        assertTrue(JsonUtils.hasInPath(obj, "a.scalar.b"));
-        assertSame(JsonUtils.getFromPath(obj, "a.b"), JsonUtils.getFromPath(obj, "a.scalar.b"));
-        assertTrue(JsonUtils.hasInPath(obj, "a.scalar.scalar"));
-        assertEquals(7, JsonUtils.getFromPath(obj, "a.scalar.scalar").asJsonNumber().getValue());
+        assertFalse(JsonUtils.hasInPath(obj, "a.scalar.b"),
+                "a path that walks through a scalar names nothing and must not fall back to its parent");
+        assertEquals(JsonNull.INSTANCE, JsonUtils.getFromPath(obj, "a.scalar.b"));
+        assertFalse(JsonUtils.hasInPath(obj, "a.scalar.scalar"));
         assertFalse(JsonUtils.hasInPath(obj, "a.scalar.nope"));
+        assertTrue(JsonUtils.hasInPath(obj, "a.scalar"), "the scalar itself still resolves");
     }
 
     @Test

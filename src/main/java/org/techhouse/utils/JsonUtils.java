@@ -6,6 +6,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.function.ToIntBiFunction;
+import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -17,6 +18,8 @@ import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 
 public final class JsonUtils {
+    private static final double MAX_EXACT_LONG = 9007199254740992d;
+
     private JsonUtils() {
     }
 
@@ -74,8 +77,8 @@ public final class JsonUtils {
             return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
         }
         if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
-            return Double.compare(o1Primitive.asJsonNumber().getValue().doubleValue(),
-                    o2Primitive.asJsonNumber().getValue().doubleValue());
+            return FieldIndexEntry.compareIndexedNumbers(o1Primitive.asJsonNumber().getValue(),
+                    o2Primitive.asJsonNumber().getValue());
         }
         if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
             return Boolean.compare(o1Primitive.asJsonBoolean().getValue(), o2Primitive.asJsonBoolean().getValue());
@@ -171,7 +174,7 @@ public final class JsonUtils {
 
     private static String normalizeNumber(Number value) {
         final var asDouble = value.doubleValue();
-        if (asDouble % 1.0 == 0 && !Double.isInfinite(asDouble)) {
+        if (asDouble % 1.0 == 0 && !Double.isInfinite(asDouble) && Math.abs(asDouble) <= MAX_EXACT_LONG) {
             return String.valueOf((long) asDouble);
         }
         return String.valueOf(asDouble);
@@ -219,11 +222,14 @@ public final class JsonUtils {
             if (step == null) {
                 return null;
             }
-            if (step.isJsonObject()) {
-                currentPart = step.asJsonObject();
-            }
             result = step;
             start = dot + 1;
+            if (start <= limit) {
+                if (!step.isJsonObject()) {
+                    return null;
+                }
+                currentPart = step.asJsonObject();
+            }
         }
         return result;
     }

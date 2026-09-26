@@ -22,7 +22,7 @@ public class StringTypeAdapter implements TypeAdapter<String> {
 
     @Override
     public String fromJson(JsonBaseElement value) {
-        if (value.getJsonType() == JsonBaseElement.JsonType.STRING) {
+        if (value.isJsonString()) {
             return value.asJsonString().getValue();
         }
         return null;

@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.ex.CollectionBusyException;
 
 /**
  * The locks here are always acquired <em>above</em> the per-file locks held inside
@@ -25,11 +26,18 @@ public class ResourceLocking {
         lockFor(lockName).writeLock().lockInterruptibly();
     }
 
-    public void releaseWrite(String lockName) {
+    public boolean holdsCollectionLock(String dbName, String collName) {
+        final var lock = locks.get(Cache.getCollectionIdentifier(dbName, collName));
+        return lock != null && (lock.getReadHoldCount() > 0 || lock.isWriteLockedByCurrentThread());
+    }
+
+    public boolean releaseWrite(String lockName) {
         final var lock = locks.get(lockName);
         if (lock != null && lock.isWriteLockedByCurrentThread()) {
             lock.writeLock().unlock();
+            return true;
         }
+        return false;
     }
 
     public void lockReadByName(String lockName) throws InterruptedException {
@@ -51,8 +59,12 @@ public class ResourceLocking {
         releaseWrite(dbName, collName);
     }
 
-    public void releaseWrite(String dbName, String collName) {
-        releaseWrite(Cache.getCollectionIdentifier(dbName, collName));
+    public boolean releaseWrite(String dbName, String collName) {
+        return releaseWrite(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
+    public boolean isWriteLockedByCurrentThread(String lockName) {
+        return lockFor(lockName).isWriteLockedByCurrentThread();
     }
 
     public boolean tryLockWrite(String dbName, String collName) {
@@ -80,6 +92,27 @@ public class ResourceLocking {
         }
     }
 
+    public <T> T withWriteLocks(Collection<String> collectionIds, long timeoutMillis, LockedAction<T> action)
+            throws Exception {
+        final var acquired = new ArrayList<String>();
+        final var deadline = System.currentTimeMillis() + timeoutMillis;
+        try {
+            for (final var collId : new TreeSet<>(collectionIds)) {
+                final var remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0 || !lockFor(collId).writeLock().tryLock(remaining,
+                        java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    throw new CollectionBusyException(collId, timeoutMillis);
+                }
+                acquired.add(collId);
+            }
+            return action.run();
+        } finally {
+            for (final var collId : acquired) {
+                releaseWrite(collId);
+            }
+        }
+    }
+
     // Transactions hold their write locks until commit/rollback; the timeout is what stops two of
     // them deadlocking, by making the caller abort instead of waiting forever.
     public boolean tryLockWrite(String dbName, String collName, long timeoutMillis) throws InterruptedException {
@@ -89,6 +122,11 @@ public class ResourceLocking {
 
     public void lockRead(String dbName, String collName) throws InterruptedException {
         lockReadByName(Cache.getCollectionIdentifier(dbName, collName));
+    }
+
+    public boolean tryLockRead(String dbName, String collName, long timeoutMillis) throws InterruptedException {
+        return lockFor(Cache.getCollectionIdentifier(dbName, collName)).readLock().tryLock(timeoutMillis,
+                java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
     public void releaseRead(String dbName, String collName) {
@@ -116,6 +154,29 @@ public class ResourceLocking {
         return acquired;
     }
 
+    public List<String> acquireReadLocks(boolean dirtyRead, List<String> identifiers, long timeoutMillis)
+            throws InterruptedException {
+        if (dirtyRead) {
+            return List.of();
+        }
+        final var sorted = identifiers.stream().distinct().sorted().toList();
+        final var acquired = new ArrayList<String>();
+        try {
+            for (var identifier : sorted) {
+                if (!lockFor(identifier).readLock().tryLock(timeoutMillis,
+                        java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    releaseReadLocks(acquired);
+                    return null;
+                }
+                acquired.add(identifier);
+            }
+        } catch (InterruptedException e) {
+            releaseReadLocks(acquired);
+            throw e;
+        }
+        return acquired;
+    }
+
     public void releaseReadLocks(List<String> acquired) {
         for (var i = acquired.size() - 1; i >= 0; i--) {
             releaseReadByName(acquired.get(i));
@@ -128,6 +189,10 @@ public class ResourceLocking {
 
     public void lockIndex(String dbName, String collName, String fieldName) throws InterruptedException {
         lockWrite(getIndexIdentifier(dbName, collName, fieldName));
+    }
+
+    public boolean tryLockIndex(String dbName, String collName, String fieldName) {
+        return lockFor(getIndexIdentifier(dbName, collName, fieldName)).writeLock().tryLock();
     }
 
     public void releaseIndex(String dbName, String collName, String fieldName) {
@@ -144,12 +209,16 @@ public class ResourceLocking {
 
     public void removeLock(String dbName, String collName) {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        locks.remove(collIdentifier);
+        locks.computeIfPresent(collIdentifier, (_, lock) -> isEvictable(lock) ? null : lock);
         final var indexPrefix = collIdentifier + Globals.COLL_IDENTIFIER_SEPARATOR;
-        locks.entrySet().removeIf(entry -> entry.getKey().startsWith(indexPrefix) && isUnheld(entry.getValue()));
+        for (final var key : List.copyOf(locks.keySet())) {
+            if (key.startsWith(indexPrefix)) {
+                locks.computeIfPresent(key, (_, lock) -> isEvictable(lock) ? null : lock);
+            }
+        }
     }
 
-    private static boolean isUnheld(ReentrantReadWriteLock lock) {
-        return !lock.isWriteLocked() && lock.getReadLockCount() == 0;
+    private static boolean isEvictable(ReentrantReadWriteLock lock) {
+        return !lock.isWriteLocked() && lock.getReadLockCount() == 0 && !lock.hasQueuedThreads();
     }
 }

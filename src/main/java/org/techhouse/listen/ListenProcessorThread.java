@@ -52,7 +52,8 @@ public class ListenProcessorThread implements Runnable {
             logger.error("Error re-running listen query for " + listenId, e);
             return;
         }
-        final var newHash = ResultHasher.hash(results);
+        final var newHash = ResultHasher.hash(results,
+                ResultHasher.ordersResults(registration.request().getAggregationSteps()));
         final var oldHash = registration.lastHash().get();
         if (newHash.equals(oldHash)) {
             return;

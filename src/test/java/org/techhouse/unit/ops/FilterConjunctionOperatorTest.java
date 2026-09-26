@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.io.IOException;
 import java.util.List;
 import java.util.function.BiPredicate;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.FilterOperatorHelper;
+import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
@@ -82,7 +84,7 @@ public class FilterConjunctionOperatorTest {
             entry.setCollectionName(TestGlobals.COLL);
             entry.set_id(obj.get(Globals.PK_FIELD).asJsonString().getValue());
             entry.setData(obj);
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         cache.putAdminCollectionEntry(adminCollEntry,
@@ -117,7 +119,7 @@ public class FilterConjunctionOperatorTest {
             entry.setCollectionName(TestGlobals.COLL);
             entry.set_id(obj.get(Globals.PK_FIELD).asJsonString().getValue());
             entry.setData(obj);
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         cache.putAdminCollectionEntry(adminCollEntry,
@@ -152,7 +154,7 @@ public class FilterConjunctionOperatorTest {
             entry.setCollectionName(TestGlobals.COLL);
             entry.set_id(obj.get(Globals.PK_FIELD).asJsonString().getValue());
             entry.setData(obj);
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         cache.putAdminCollectionEntry(adminCollEntry,
@@ -224,7 +226,7 @@ public class FilterConjunctionOperatorTest {
         entry.setDatabaseName(TestGlobals.DB);
         entry.setCollectionName(TestGlobals.COLL);
         final var cache = IocContainer.get(Cache.class);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         cache.putAdminCollectionEntry(adminCollEntry,
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "nested1", 0, 100, 0));
@@ -326,5 +328,76 @@ public class FilterConjunctionOperatorTest {
         JsonObject arrDoc = new JsonObject();
         arrDoc.add("data", arrField("x", "y"));
         assertTrue(FilterOperatorHelper.getTester(arrInOp, FieldOperatorType.IN).test(arrDoc, "data"));
+    }
+
+    private static JsonObject rowWithoutId(String category, int score) {
+        final var row = new JsonObject();
+        row.addProperty("category", category);
+        row.addProperty("score", score);
+        return row;
+    }
+
+    @Test
+    public void test_and_conjunction_over_rows_without_an_id() throws IOException {
+        final var matching = rowWithoutId("books", 10);
+        final var other = rowWithoutId("music", 10);
+
+        ConjunctionOperator andOp = new ConjunctionOperator(ConjunctionOperatorType.AND,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, "category", new JsonString("books")),
+                        new FieldOperator(FieldOperatorType.EQUALS, "score", new JsonNumber(10))));
+
+        List<JsonObject> result = FilterOperatorHelper
+                .processOperator(andOp, Stream.of(matching, other), TestGlobals.DB, TestGlobals.COLL).toList();
+
+        assertEquals(1, result.size());
+        assertEquals("books", result.getFirst().get("category").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_xor_nor_and_nand_over_rows_without_an_id() throws IOException {
+        final var books = rowWithoutId("books", 10);
+        final var music = rowWithoutId("music", 20);
+        final var booksOperator = new FieldOperator(FieldOperatorType.EQUALS, "category", new JsonString("books"));
+        final var scoreOperator = new FieldOperator(FieldOperatorType.EQUALS, "score", new JsonNumber(10));
+
+        List<JsonObject> xor = FilterOperatorHelper.processOperator(
+                new ConjunctionOperator(ConjunctionOperatorType.XOR,
+                        List.of(booksOperator,
+                                new FieldOperator(FieldOperatorType.EQUALS, "score", new JsonNumber(20)))),
+                Stream.of(books, music), TestGlobals.DB, TestGlobals.COLL).toList();
+        List<JsonObject> nor = FilterOperatorHelper
+                .processOperator(new ConjunctionOperator(ConjunctionOperatorType.NOR, List.of(booksOperator)),
+                        Stream.of(books, music), TestGlobals.DB, TestGlobals.COLL)
+                .toList();
+        List<JsonObject> nand = FilterOperatorHelper.processOperator(
+                new ConjunctionOperator(ConjunctionOperatorType.NAND, List.of(booksOperator, scoreOperator)),
+                Stream.of(books, music), TestGlobals.DB, TestGlobals.COLL).toList();
+
+        assertEquals(2, xor.size());
+        assertEquals(1, nor.size());
+        assertEquals("music", nor.getFirst().get("category").asJsonString().getValue());
+        assertEquals(1, nand.size());
+        assertEquals("music", nand.getFirst().get("category").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_and_conjunction_collapses_equal_rows_without_an_id_like_or_does() throws IOException {
+        final var first = rowWithoutId("books", 10);
+        final var duplicate = rowWithoutId("books", 10);
+        final var operators = List.<BaseOperator>of(
+                new FieldOperator(FieldOperatorType.EQUALS, "category", new JsonString("books")),
+                new FieldOperator(FieldOperatorType.EQUALS, "score", new JsonNumber(10)));
+
+        List<JsonObject> and = FilterOperatorHelper
+                .processOperator(new ConjunctionOperator(ConjunctionOperatorType.AND, operators),
+                        Stream.of(first, duplicate), TestGlobals.DB, TestGlobals.COLL)
+                .toList();
+        List<JsonObject> or = FilterOperatorHelper
+                .processOperator(new ConjunctionOperator(ConjunctionOperatorType.OR, operators),
+                        Stream.of(first, duplicate), TestGlobals.DB, TestGlobals.COLL)
+                .toList();
+
+        assertEquals(1, and.size());
+        assertEquals(1, or.size());
     }
 }

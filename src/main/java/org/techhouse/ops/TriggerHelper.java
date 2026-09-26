@@ -26,13 +26,23 @@ public final class TriggerHelper {
     private TriggerHelper() {
     }
 
+    private static List<org.techhouse.data.TriggerDefinition> triggersOrNone(String dbName, String collName) {
+        try {
+            return cache.getTriggersFor(dbName, collName);
+        } catch (org.techhouse.ex.MetadataReadException e) {
+            logger.warning("Could not read the triggers for " + dbName + "|" + collName
+                    + "; firing none for this write: " + e.getMessage());
+            return List.of();
+        }
+    }
+
     public static void afterWrite(String dbName, String collName, EventType type, List<DbEntry> entries,
             String actingUser, int depth) {
         if (!configuration.isTriggersEnabled() || entries == null || entries.isEmpty()
                 || Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName)) {
             return;
         }
-        final var triggers = cache.getTriggersFor(dbName, collName);
+        final var triggers = triggersOrNone(dbName, collName);
         if (triggers.isEmpty()) {
             return;
         }
@@ -107,10 +117,10 @@ public final class TriggerHelper {
     }
 
     private static boolean hasNotTriggerFor(String dbName, String collName, EventType type, int depth) {
-        if (!configuration.isTriggersEnabled()) {
+        if (!configuration.isTriggersEnabled() || Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName)) {
             return true;
         }
-        for (final var trigger : cache.getTriggersFor(dbName, collName)) {
+        for (final var trigger : triggersOrNone(dbName, collName)) {
             if (!trigger.isBefore() && trigger.isEnabled() && trigger.getEvents().contains(type)
                     && (depth == 0 || trigger.isAllowCascade())) {
                 return false;

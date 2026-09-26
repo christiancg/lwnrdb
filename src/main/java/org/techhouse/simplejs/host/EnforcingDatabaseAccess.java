@@ -30,6 +30,7 @@ import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
+import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
@@ -59,6 +60,8 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private JsObject errorPrototype;
     private UUID sessionClientId;
     private Thread sessionThread;
+    private volatile boolean lastCommitFenced;
+    private volatile boolean clusterUnavailable;
 
     public EnforcingDatabaseAccess(String username, UUID clientId) {
         this(username, clientId, null);
@@ -207,10 +210,17 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (sessionClientId == null) {
             throw jsError("No transaction is active on this script");
         }
+        var fenced = false;
         try {
-            requireOk(dispatch(request));
+            final var response = dispatch(request);
+            fenced = ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(response.getErrorCode());
+            lastCommitFenced = fenced;
+            if (response.getStatus() != OperationStatus.OK
+                    && !ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode())) {
+                throw jsError(response.getMessage());
+            }
         } finally {
-            clearSession();
+            clearSession(fenced);
         }
     }
 
@@ -231,12 +241,24 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         return sessionClientId != null;
     }
 
+    public boolean lastCommitWasFenced() {
+        return lastCommitFenced;
+    }
+
+    public boolean sawClusterUnavailable() {
+        return clusterUnavailable;
+    }
+
     private void clearSession() {
-        if (sessionClientId != null) {
+        clearSession(false);
+    }
+
+    private void clearSession(boolean fenced) {
+        if (sessionClientId != null && !fenced) {
             clientTracker.clearTransactionState(sessionClientId);
-        }
-        if (sessionClientId != null && !sessionClientId.equals(clientId)) {
-            clientTracker.removeById(sessionClientId);
+            if (!sessionClientId.equals(clientId)) {
+                clientTracker.removeById(sessionClientId);
+            }
         }
         sessionClientId = null;
         sessionThread = null;
@@ -272,6 +294,10 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (user == null) {
             throw jsError("User '" + username + "' not found");
         }
+        final var validation = RequestValidator.validate(request);
+        if (!validation.isValid()) {
+            throw jsError(validation.getErrorMessage());
+        }
         if (!isTransactionControl(request)) {
             final var authorization = AuthorizationChecker.check(request, user);
             if (!authorization.isAllowed()) {
@@ -283,17 +309,25 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
             throw jsError(schemaError.getMessage());
         }
         if (sessionClientId != null) {
-            return routeOrProcess(request, rawJson, sessionClientId);
+            return recordClusterAvailability(routeOrProcess(request, rawJson, sessionClientId));
         }
         if (clientId != null) {
-            return routeOrProcess(request, rawJson, clientId);
+            return recordClusterAvailability(routeOrProcess(request, rawJson, clientId));
         }
         final var forwardedClientId = clientTracker.registerForwardedClient(username);
         try {
-            return routeOrProcess(request, rawJson, forwardedClientId);
+            return recordClusterAvailability(routeOrProcess(request, rawJson, forwardedClientId));
         } finally {
             clientTracker.removeById(forwardedClientId);
         }
+    }
+
+    private OperationResponse recordClusterAvailability(OperationResponse response) {
+        if (ErrorCode.NO_QUORUM.getCode().equals(response.getErrorCode())
+                || ErrorCode.NOT_COLLECTION_OWNER.getCode().equals(response.getErrorCode())) {
+            clusterUnavailable = true;
+        }
+        return response;
     }
 
     private OperationResponse routeOrProcess(OperationRequest request, String rawJson, UUID effectiveClientId) {

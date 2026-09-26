@@ -13,6 +13,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -30,7 +31,7 @@ import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.OperationResponse;
 
 public class MessageProcessor implements Runnable {
-    private final EJson eJson = IocContainer.get(EJson.class);
+    private static final EJson eJson = IocContainer.get(EJson.class);
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
@@ -59,9 +60,6 @@ public class MessageProcessor implements Runnable {
                 while (!close) {
                     final var message = reader.readLine();
                     if (message == null) {
-                        TransactionOperationHelper.cleanupOnDisconnect(clientId);
-                        listenManager.unregisterAllForClient(clientId);
-                        clientTracker.removeById(clientId);
                         break;
                     }
                     if (!message.isBlank()) {
@@ -82,9 +80,6 @@ public class MessageProcessor implements Runnable {
                                     final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
                                     if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
                                         close = true;
-                                        TransactionOperationHelper.cleanupOnDisconnect(clientId);
-                                        listenManager.unregisterAllForClient(clientId);
-                                        clientTracker.removeById(clientId);
                                     }
                                     response = eJson.toJson(responseObj);
                                 } else {
@@ -107,9 +102,6 @@ public class MessageProcessor implements Runnable {
                                                 response = handled.response();
                                                 if (handled.close()) {
                                                     close = true;
-                                                    TransactionOperationHelper.cleanupOnDisconnect(clientId);
-                                                    listenManager.unregisterAllForClient(clientId);
-                                                    clientTracker.removeById(clientId);
                                                 }
                                             }
                                         }
@@ -144,32 +136,49 @@ public class MessageProcessor implements Runnable {
                 }
             }
         } catch (SSLException e) {
-            if (clientId != null) {
-                TransactionOperationHelper.cleanupOnDisconnect(clientId);
-                clientTracker.removeById(clientId);
-            }
             logger.warning("Rejected connection: TLS handshake failed (non-TLS or incompatible client)");
         } catch (IOException e) {
+            logger.error("General error in MessageProcessor", e);
+        } catch (RuntimeException e) {
+            logger.error("Unexpected failure in MessageProcessor", e);
+            throw e;
+        } catch (Throwable t) {
+            logger.error("Unexpected failure in MessageProcessor", new Exception(t));
+            throw t;
+        } finally {
             if (clientId != null) {
                 TransactionOperationHelper.cleanupOnDisconnect(clientId);
                 listenManager.unregisterAllForClient(clientId);
                 clientTracker.removeById(clientId);
             }
-            logger.error("General error in MessageProcessor", e);
         }
     }
 
     private record Handled(String response, boolean close) {
     }
 
+    private static String withoutTriggerDepth(String rawMessage) {
+        if (rawMessage == null || !rawMessage.contains(Globals.TRIGGER_DEPTH_FIELD)) {
+            return rawMessage;
+        }
+        try {
+            final var root = eJson.fromJson(rawMessage, JsonObject.class);
+            root.remove(Globals.TRIGGER_DEPTH_FIELD);
+            return eJson.toJson(root);
+        } catch (Exception e) {
+            return rawMessage;
+        }
+    }
+
     private Handled handleAuthorized(OperationRequest parsedMessage, String rawMessage, UUID clientId) {
         // A cascade depth that arrived on the wire is never trusted: only a running trigger may set one.
         parsedMessage.setTriggerDepth(0);
+        parsedMessage.setReplicated(false);
         final var schemaError = org.techhouse.ops.SchemaValidationHelper.check(parsedMessage);
         if (schemaError != null) {
             return new Handled(eJson.toJson(schemaError), false);
         }
-        final var forwarded = clusterRouter.forward(parsedMessage, rawMessage,
+        final var forwarded = clusterRouter.forward(parsedMessage, withoutTriggerDepth(rawMessage),
                 clientTracker.getActiveTransaction(clientId) != null, clientTracker.getAuthenticatedUsername(clientId),
                 clientId);
         if (forwarded != null) {

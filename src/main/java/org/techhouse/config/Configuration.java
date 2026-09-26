@@ -177,6 +177,10 @@ public final class Configuration {
         return longValue(ConfigKey.DEAD_TIMEOUT_MS);
     }
 
+    public long getDeadEvictionMs() {
+        return longValue(ConfigKey.DEAD_EVICTION_MS);
+    }
+
     public long getReplicationAckTimeoutMs() {
         return longValue(ConfigKey.REPLICATION_ACK_TIMEOUT_MS);
     }

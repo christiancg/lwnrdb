@@ -13,8 +13,10 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.resp.OperationResponse;
 
@@ -56,30 +58,51 @@ public class Tx2pcCoordinator {
             logger.error("Failed to record the 2PC commit decision for " + dtxId, e);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         }
+        var localApplied = true;
         if (local) {
-            TransactionOperationHelper.commitPrepared(clientId);
+            final var localResult = TwoPhaseParticipant.commitPrepared(clientId);
+            localApplied = localResult.getStatus() == OperationStatus.OK;
+            if (!localApplied) {
+                logger.error("The coordinator's own slice of " + dtxId
+                        + " failed to apply; keeping the commit marker for recovery to re-drive");
+            }
         }
-        sendToAll(remotes, ClusterMessageType.COMMIT_TX, sessionId, dtxId, ClusterMessageType.COMMIT_TX_ACK, null);
-        deleteCoordinatorMarkerQuietly(dtxId);
+        final var allAcked = sendToAll(remotes, ClusterMessageType.COMMIT_TX, sessionId, dtxId,
+                ClusterMessageType.COMMIT_TX_ACK, null);
+        if (allAcked && localApplied) {
+            deleteCoordinatorMarkerQuietly(dtxId);
+        } else {
+            logger.warning("Not every participant acknowledged the commit of " + dtxId
+                    + "; keeping the coordinator marker so recovery can re-drive it");
+        }
         finishEdge(clientId, local);
-        return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
+        return localApplied
+                ? OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed")
+                : new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_INDETERMINATE);
     }
 
     public OperationResponse forceResolve(String dtxId, boolean commit) {
+        final var self = membershipService.getSelf();
+        final var peers = membershipService.membershipView().peers(self).stream()
+                .map(member -> member.address().toString()).toList();
         try {
             if (commit && !Tx2pcLog.isCommitted(dtxId)) {
-                Tx2pcLog.recordCoordinatorCommit(dtxId, List.of());
+                Tx2pcLog.recordCoordinatorCommit(dtxId, peers);
             }
-            TransactionOperationHelper.resolveFromDurable(dtxId, commit);
+            TwoPhaseParticipant.resolveFromDurable(dtxId, commit);
         } catch (Exception e) {
             logger.error("Failed to force-resolve transaction " + dtxId, e);
             return new OperationResponse(OperationType.RESOLVE_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         }
-        final var self = membershipService.getSelf();
         final var type = commit ? ClusterMessageType.COMMIT_TX : ClusterMessageType.ABORT_TX;
         final var ack = commit ? ClusterMessageType.COMMIT_TX_ACK : ClusterMessageType.ABORT_TX_ACK;
-        for (final var member : membershipService.membershipView().peers(self)) {
-            send(member.address().toString(), type, dtxId, dtxId, ack, null);
+        var allAcked = true;
+        for (final var address : peers) {
+            allAcked &= send(address, type, dtxId, dtxId, ack, null);
+        }
+        if (commit && !allAcked) {
+            logger.warning("Not every participant acknowledged the forced commit of " + dtxId
+                    + "; keeping the coordinator marker so recovery can re-drive it");
         }
         return OperationResponse.ok(OperationType.RESOLVE_TRANSACTION,
                 "Transaction " + (commit ? "committed" : "aborted"));
@@ -101,7 +124,7 @@ public class Tx2pcCoordinator {
 
     private boolean prepareAll(UUID clientId, String sessionId, String dtxId, boolean local, ArrayList<String> remotes,
             String selfAddress, List<String> participants) {
-        if (local && !TransactionOperationHelper.prepare(clientId, selfAddress, participants)) {
+        if (local && !TwoPhaseParticipant.prepare(clientId, selfAddress, participants)) {
             return false;
         }
         return sendToAll(remotes, ClusterMessageType.PREPARE_TX, sessionId, dtxId, ClusterMessageType.PREPARE_TX_ACK,

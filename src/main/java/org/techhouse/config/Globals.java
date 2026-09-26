@@ -6,12 +6,14 @@ public final class Globals {
     private Globals() {
     }
     public static final String PK_FIELD = "_id";
+    public static final String TRIGGER_DEPTH_FIELD = "triggerDepth";
     public static final String INDEX_TYPE_NUMBER = "Number";
     public static final String INDEX_TYPE_STRING = "String";
     public static final String INDEX_TYPE_BOOLEAN = "Boolean";
     public static final String INDEX_TYPE_NULL = "JsonNull";
     public static final String INDEX_TYPE_OBJECT = "Object";
     public static final String INDEX_TYPE_ARRAY = "Array";
+    public static final String HASH_INDEX_KEY_PREFIX = "#";
     public static final int BUFFER_SIZE = 32768;
     public static final String DB_FILE_EXTENSION = ".dat";
     public static final String JSON_FILE_EXTENSION = ".json";
@@ -29,8 +31,8 @@ public final class Globals {
     public static final char COLL_IDENTIFIER_SEPARATOR = '|';
     public static final String COLL_IDENTIFIER_SEPARATOR_REGEX = "\\|";
     public static final char INDEX_FILE_NAME_SEPARATOR = '-';
-    public static final String INDEX_ENTRY_SEPARATOR = "|";
     public static final String TOMBSTONE_FILE_NAME = "tombstones";
+    public static final String PK_INDEX_FILE_NAME = "pk";
     public static final String ID_SEPARATOR = "";
     public static final String STRING_LITERAL_PREFIX = "-";
     public static final String FILE_CONFIG_NAME = "lwnrdb.cfg";

@@ -11,12 +11,16 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.Cache;
+import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
+import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
@@ -162,5 +166,58 @@ public class ClusterConnectionHandlerTest {
 
         assertEquals(ClusterMessageType.FORWARD_RESPONSE, save.getType());
         assertEquals(ClusterMessageType.ADMIN_SNAPSHOT_ACK, snapshot.getType());
+    }
+
+    private void markAdminSyncCompleted(boolean completed) throws Exception {
+        TestUtils.getPrivateField(IocContainer.get(AdminAntiEntropyService.class), "adminSyncCompleted",
+                AtomicBoolean.class).set(completed);
+    }
+
+    private ClusterMessage antiEntropyRequest(ClusterMessageType type, long incarnation) {
+        final var message = envelope(type);
+        final var payload = new AntiEntropyPayload(TestGlobals.DB, TestGlobals.COLL);
+        payload.setIds(List.of("a"));
+        payload.setIncarnationValue(incarnation);
+        message.setAntiEntropy(payload);
+        return message;
+    }
+
+    @Test
+    public void test_digest_is_refused_before_the_first_admin_sync() throws Exception {
+        markAdminSyncCompleted(false);
+
+        final var response = pool.request(cluster.serverAddress(), antiEntropyRequest(ClusterMessageType.DIGEST, 0L),
+                ACK_TIMEOUT_MS);
+
+        assertEquals(ClusterMessageType.ERROR, response.getType(), "a node that has not conformed to the admin"
+                + " snapshot yet must not describe its documents, or a peer pulls a dropped incarnation back");
+    }
+
+    @Test
+    public void test_pull_is_refused_before_the_first_admin_sync() throws Exception {
+        markAdminSyncCompleted(false);
+
+        final var response = pool.request(cluster.serverAddress(), antiEntropyRequest(ClusterMessageType.PULL, 0L),
+                ACK_TIMEOUT_MS);
+
+        assertEquals(ClusterMessageType.ERROR, response.getType());
+    }
+
+    @Test
+    public void test_digest_carries_the_queried_incarnation_into_the_service() throws Exception {
+        markAdminSyncCompleted(true);
+        try {
+            IocContainer.get(Cache.class).getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL)
+                    .setIncarnation(100L);
+
+            final var response = pool.request(cluster.serverAddress(),
+                    antiEntropyRequest(ClusterMessageType.DIGEST, 200L), ACK_TIMEOUT_MS);
+
+            assertEquals(ClusterMessageType.DIGEST_ACK, response.getType());
+            assertTrue(response.getAntiEntropy().isStaleIncarnation(),
+                    "the incarnation on the query must reach the service, or the mismatch goes undetected");
+        } finally {
+            markAdminSyncCompleted(false);
+        }
     }
 }

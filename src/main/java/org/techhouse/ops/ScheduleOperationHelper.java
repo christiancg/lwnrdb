@@ -1,6 +1,8 @@
 package org.techhouse.ops;
 
 import java.io.IOException;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
@@ -88,10 +90,14 @@ public final class ScheduleOperationHelper {
             return invalid("timeoutMs must not be negative");
         }
         if (hasCron) {
+            final CronExpression expression;
             try {
-                CronExpression.parse(request.getCron());
+                expression = CronExpression.parse(request.getCron());
             } catch (InvalidCronException e) {
                 return invalid(e.getMessage());
+            }
+            if (expression.nextAfter(ZonedDateTime.now(ZoneId.of(configuration.getScriptTimeZone()))) == null) {
+                return invalid("cron '" + request.getCron() + "' has no occurrence within the search horizon");
             }
         }
         return null;
@@ -115,7 +121,11 @@ public final class ScheduleOperationHelper {
         request.setStampedUpdatedAt(updatedAt);
         request.setStampedUpdatedBy(updatedBy);
         request.setStampedDefiner(definer);
-        final var createdAt = existing == null ? updatedAt : existing.getCreatedAt();
+        final var localCreatedAt = existing == null ? updatedAt : existing.getCreatedAt();
+        final var createdAt = alreadyStamped && request.getStampedCreatedAt() > 0
+                ? request.getStampedCreatedAt()
+                : localCreatedAt;
+        request.setStampedCreatedAt(createdAt);
         return new ScheduleDefinition(request.getName(), request.getProcedureName(), request.getCron(),
                 request.getIntervalMs(), request.getArgs(), request.getTimeoutMs(), request.isEnabled(), definer,
                 request.getDescription(), version, createdAt, updatedAt, updatedBy);

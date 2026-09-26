@@ -7,18 +7,24 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.ReplicatedTxApplyHelper;
+import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.RequestParser;
+import org.techhouse.ops.resp.OperationResponse;
 
 final class ClusterTxMessageHandler {
     private static final EJson eJson = IocContainer.get(EJson.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private static final Tx2pcDirectory tx2pcDirectory = IocContainer.get(Tx2pcDirectory.class);
+    private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
 
     private ClusterTxMessageHandler() {
@@ -32,6 +38,12 @@ final class ClusterTxMessageHandler {
             final var session = clientTracker.registerTxSession(sessionId, request.getActingUser(), edgeNodeId);
             final var clientId = session.clientId();
             final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            final var schemaError = SchemaValidationHelper.check(parsed);
+            if (schemaError != null) {
+                response.setType(ClusterMessageType.FORWARD_RESPONSE);
+                response.setForwardBody(ForwardBody.encode(eJson.toJson(schemaError)));
+                return response;
+            }
             final var type = parsed.getType();
             // Run every op of the session on its own single-thread executor so the collection write locks it
             // holds across messages are acquired and released by the same thread.
@@ -40,11 +52,13 @@ final class ClusterTxMessageHandler {
                 if (startsTransaction(type) && clientTracker.getActiveTransaction(clientId) == null) {
                     // Start with the coordinator's distributed-tx id so the buffered slice and 2PC markers
                     // key on the same id everywhere.
-                    TransactionOperationHelper.start(clientId, java.util.UUID.fromString(txId));
+                    TransactionOperationHelper.start(clientId, java.util.UUID.fromString(txId),
+                            parsed.getTriggerDepth());
                 }
                 return operationProcessor.processMessage(parsed, clientId);
             }).get();
-            if (type == OperationType.COMMIT_TRANSACTION || type == OperationType.ROLLBACK_TRANSACTION) {
+            clientTracker.updateLastCommandTime(clientId);
+            if (finishesSession(type) && releasedItsLocks(result)) {
                 clientTracker.removeTxSession(sessionId);
             }
             response.setType(ClusterMessageType.FORWARD_RESPONSE);
@@ -56,6 +70,14 @@ final class ClusterTxMessageHandler {
         return response;
     }
 
+    private static boolean finishesSession(OperationType type) {
+        return type == OperationType.COMMIT_TRANSACTION || type == OperationType.ROLLBACK_TRANSACTION;
+    }
+
+    private static boolean releasedItsLocks(OperationResponse response) {
+        return response == null || !ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(response.getErrorCode());
+    }
+
     private static boolean startsTransaction(OperationType type) {
         return switch (type) {
             case SAVE, BULK_SAVE, DELETE, FIND_BY_ID, AGGREGATE -> true;
@@ -65,7 +87,7 @@ final class ClusterTxMessageHandler {
 
     static ClusterMessage handleReplicateTx(ClusterMessage request) {
         final var response = new ClusterMessage();
-        if (ReplicatedTxApplyHelper.apply(request.getTxReplication())) {
+        if (ReplicatedTxApplyHelper.apply(request.getTxReplication(), clusterConfig.replicationAckTimeoutMs())) {
             response.setType(ClusterMessageType.REPLICATE_TX_ACK);
         } else {
             response.setType(ClusterMessageType.ERROR);
@@ -82,8 +104,8 @@ final class ClusterTxMessageHandler {
         var vote = false;
         if (session != null) {
             try {
-                vote = session.submit(
-                        () -> TransactionOperationHelper.prepare(session.clientId(), coordinatorAddress, participants))
+                vote = session
+                        .submit(() -> TwoPhaseParticipant.prepare(session.clientId(), coordinatorAddress, participants))
                         .get();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -114,12 +136,19 @@ final class ClusterTxMessageHandler {
         final var session = clientTracker.txSession(sessionId);
         try {
             if (session != null) {
-                session.submit(() -> commit
-                        ? TransactionOperationHelper.commitPrepared(session.clientId())
+                final var result = session.submit(() -> commit
+                        ? TwoPhaseParticipant.commitPrepared(session.clientId())
                         : TransactionOperationHelper.abort(session.clientId())).get();
-                clientTracker.removeTxSession(sessionId);
+                if (releasedItsLocks(result)) {
+                    clientTracker.removeTxSession(sessionId);
+                }
+                if (result != null && result.getStatus() != OperationStatus.OK) {
+                    response.setType(ClusterMessageType.ERROR);
+                    response.setErrorMessage("Participant failed to resolve transaction: " + result.getMessage());
+                    return response;
+                }
             } else {
-                TransactionOperationHelper.resolveFromDurable(request.getTxId(), commit);
+                TwoPhaseParticipant.resolveFromDurable(request.getTxId(), commit);
             }
             response.setType(ackType);
         } catch (InterruptedException e) {

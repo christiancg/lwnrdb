@@ -6,6 +6,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.AggregationStepType;
@@ -52,8 +53,8 @@ public final class RequestParser {
                 case BULK_SAVE -> eJson.fromJson(root, BulkSaveRequest.class);
                 case SAVE -> {
                     final var parsed = eJson.fromJson(root, SaveRequest.class);
-                    if (parsed.getObject().has(Globals.PK_FIELD)) {
-                        parsed.set_id(parsed.getObject().get(Globals.PK_FIELD).asJsonString().getValue());
+                    if (parsed.getObject().get(Globals.PK_FIELD) instanceof JsonString objectId) {
+                        parsed.set_id(objectId.getValue());
                     }
                     yield parsed;
                 }

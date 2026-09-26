@@ -2,6 +2,7 @@ package org.techhouse.fs;
 
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -77,6 +78,7 @@ final class DocumentPageStore {
                 continue;
             try {
                 final var entry = DbEntry.fromString(dbName, collectionName, line);
+                entry.setPage(page);
                 result.put(entry.get_id(), entry);
             } catch (Exception e) {
                 // Skip-and-log only: the .idx files store byte offsets into this .dat, so dropping a
@@ -92,21 +94,38 @@ final class DocumentPageStore {
         if (!Files.exists(collectionFolder)) {
             return Stream.empty();
         }
-        final var pathStream = Files.list(collectionFolder);
-        return pathStream.filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION)).map(path -> {
-            final var fileName = path.toFile().getName();
-            final var fileParts = fileName.replace(Globals.DB_FILE_EXTENSION, "").split(Globals.FILE_PAGE_SEPARATOR);
-            final var page = Long.parseLong(fileParts[fileParts.length - 1]);
+        final List<Long> pages;
+        try (var pathStream = Files.list(collectionFolder)) {
+            pages = pathStream.map(path -> path.toFile().getName())
+                    .filter(name -> name.endsWith(Globals.DB_FILE_EXTENSION)).map(DocumentPageStore::pageNumberOf)
+                    .sorted().toList();
+        }
+        return pages.stream().map(page -> {
             try {
                 return readWholeCollectionPage(dbName, collName, page);
             } catch (IOException e) {
-                throw new RuntimeException(e);
+                throw new UncheckedIOException(e);
             }
-        }).onClose(pathStream::close);
+        });
+    }
+
+    private static long pageNumberOf(String fileName) {
+        final var fileParts = fileName.replace(Globals.DB_FILE_EXTENSION, "").split(Globals.FILE_PAGE_SEPARATOR);
+        return Long.parseLong(fileParts[fileParts.length - 1]);
     }
 
     Stream<DbEntry> streamEntries(String dbName, String collName) throws IOException {
         return streamPages(dbName, collName).flatMap(map -> map.values().stream());
+    }
+
+    long pageFileCount(String dbName, String collName) throws IOException {
+        final var collectionFolder = paths.collectionFolder(dbName, collName).toPath();
+        if (!Files.exists(collectionFolder)) {
+            return 0;
+        }
+        try (var pathStream = Files.list(collectionFolder)) {
+            return pathStream.filter(path -> path.toFile().getName().endsWith(Globals.DB_FILE_EXTENSION)).count();
+        }
     }
 
     DbEntry readEntryFromOpenFile(RandomAccessFile reader, PkIndexEntry pkIndexEntry) throws IOException {
@@ -116,11 +135,20 @@ final class DocumentPageStore {
         reader.readFully(buffer, 0, entryLength);
         final var strEntry = new String(buffer, StandardCharsets.UTF_8);
         final var jsonObject = eJson.fromJson(strEntry, JsonObject.class);
+        final var storedId = jsonObject.get(Globals.PK_FIELD);
+        if (storedId != null && storedId.isJsonString()
+                && !storedId.asJsonString().getValue().equals(pkIndexEntry.getValue())) {
+            throw new IOException("Index entry for '" + pkIndexEntry.getValue() + "' in "
+                    + pkIndexEntry.getCollectionName() + " points at '" + storedId.asJsonString().getValue()
+                    + "'; run REINDEX on this collection");
+        }
         final var entry = new DbEntry();
         entry.setDatabaseName(pkIndexEntry.getDatabaseName());
         entry.setCollectionName(pkIndexEntry.getCollectionName());
         entry.set_id(pkIndexEntry.getValue());
         entry.setData(jsonObject);
+        entry.setPage(pkIndexEntry.getPage());
+        entry.setVersion(pkIndexEntry.getVersion());
         return entry;
     }
 }

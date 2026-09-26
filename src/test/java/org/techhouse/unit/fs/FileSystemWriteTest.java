@@ -210,6 +210,26 @@ public class FileSystemWriteTest {
     }
 
     @Test
+    public void test_bulk_update_preserves_the_write_version()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        FileSystem fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var data = new JsonObject();
+        data.addProperty("_id", "v1");
+        data.addProperty("field", "value");
+        final var seed = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        seed.setVersion(11L);
+        final var inserted = fileSystem.bulkInsertIntoCollection(TestGlobals.DB, TestGlobals.COLL, List.of(seed));
+        final var updated = inserted.getFirst();
+        updated.getData().get("field").asJsonString().setValue("changed");
+        updated.setVersion(22L);
+
+        final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, List.of(updated));
+
+        assertEquals(22L, result.updated().getFirst().getIndex().getVersion());
+    }
+
+    @Test
     public void test_bulk_update_empty_entries_list() throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
@@ -335,5 +355,68 @@ public class FileSystemWriteTest {
         assertEquals("updated-longer-value-for-a", FileSystemPages.readValueFromDisk(fs, "a"));
         assertEquals("updated-longer-value-for-b", FileSystemPages.readValueFromDisk(fs, "b"));
         assertEquals("updated-longer-value-for-c", FileSystemPages.readValueFromDisk(fs, "c"));
+    }
+
+    private static File pageFile() {
+        return new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + "0.dat");
+    }
+
+    private static DbEntry entry(String id) {
+        final var object = new JsonObject();
+        object.addProperty("_id", id);
+        object.addProperty("name", "value");
+        return DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, object);
+    }
+
+    @Test
+    public void test_a_failed_index_write_truncates_the_page() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        fileSystem.insertIntoCollection(entry("kept"));
+        final var lengthBefore = pageFile().length();
+        final var folder = pageFile().getParentFile();
+        final var indexFile = new File(folder, TestGlobals.COLL + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
+        assertTrue(indexFile.delete() || !indexFile.exists());
+        assertTrue(indexFile.mkdir(), "the index path must be unwritable for this test to inject a failure");
+
+        assertThrows(IOException.class, () -> fileSystem.insertIntoCollection(entry("orphan")));
+
+        assertEquals(lengthBefore, pageFile().length(),
+                "a document whose index entry could not be written must not stay in the page: full scans would"
+                        + " return it while FIND_BY_ID says it does not exist");
+    }
+
+    @Test
+    public void test_quarantine_moves_the_collection_folder_aside() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        fileSystem.createDatabaseFolder(TestGlobals.DB);
+        fileSystem.createCollectionFile(TestGlobals.DB, TestGlobals.COLL);
+        final var data = new JsonObject();
+        data.addProperty("pad", "x");
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
+        entry.set_id("kept");
+        fileSystem.insertIntoCollection(entry);
+
+        assertTrue(fileSystem.quarantineCollectionFiles(TestGlobals.DB, TestGlobals.COLL, 42L));
+
+        final var dbFolder = new File(TestGlobals.PATH + File.separator + TestGlobals.DB);
+        final var moved = dbFolder.listFiles((_, name) -> name.startsWith(TestGlobals.COLL + ".quarantined-42-"));
+        assertNotNull(moved);
+        assertEquals(1, moved.length, "the documents are moved aside, never deleted");
+        assertTrue(Objects.requireNonNull(moved[0].listFiles()).length > 0);
+        assertFalse(new File(dbFolder, TestGlobals.COLL).exists(),
+                "the live path is cleared so the collection can be re-created empty at the new incarnation");
+    }
+
+    @Test
+    public void test_quarantine_of_a_collection_with_no_folder_reports_nothing_moved() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        fileSystem.createDatabaseFolder(TestGlobals.DB);
+
+        assertFalse(fileSystem.quarantineCollectionFiles(TestGlobals.DB, "never_created", 7L));
     }
 }

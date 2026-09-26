@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonTime;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -222,7 +223,7 @@ public class MapOperatorHelperTest {
     }
 
     @Test
-    public void test_nor_condition_returns_false_skips_field() {
+    public void test_nor_condition_adds_the_field_when_no_child_matches() {
         JsonObject input = new JsonObject();
         input.addProperty("x", 5);
 
@@ -234,7 +235,7 @@ public class MapOperatorHelperTest {
                 new ArrayParamMidOperator(MidOperationType.SUM, operands));
 
         JsonObject result = MapOperatorHelper.processOperator(op, input);
-        assertFalse(result.has("result"));
+        assertTrue(result.has("result"));
     }
 
     @Test
@@ -302,6 +303,39 @@ public class MapOperatorHelperTest {
         ArrayParamMidOperator op = new ArrayParamMidOperator(MidOperationType.CONCAT, operands);
         JsonObject result = MapOperatorHelper.processOperator(new AddFieldMapOperator("out", null, op), input);
         assertEquals("10:30", result.get("out").asJsonString().getValue());
+    }
+
+    private static String concatOf(JsonObject document, JsonBaseElement... operands) {
+        final var operandArray = new JsonArray();
+        for (final var operand : operands) {
+            operandArray.add(operand);
+        }
+        final var operator = new AddFieldMapOperator("joined", null,
+                new ArrayParamMidOperator(MidOperationType.CONCAT, operandArray));
+        return MapOperatorHelper.processOperator(operator, document).get("joined").asJsonString().getValue();
+    }
+
+    @Test
+    public void test_concat_spells_a_literal_null_the_same_as_a_null_field() {
+        final var input = new JsonObject();
+        input.add("nullField", JsonNull.INSTANCE);
+        final var fromLiteral = concatOf(input, new JsonString("-x"), JsonNull.INSTANCE, new JsonString("-y"));
+        final var fromField = concatOf(input, new JsonString("-x"), new JsonString("nullField"), new JsonString("-y"));
+        assertEquals(fromField, fromLiteral);
+        assertEquals("xnully", fromLiteral);
+    }
+
+    @Test
+    public void test_concat_output_is_stable_across_instances() {
+        final var joined = concatOf(new JsonObject(), new JsonString("-x"), JsonNull.INSTANCE);
+        assertFalse(joined.contains("@"), "a Java identity string changes on every JVM start: " + joined);
+        assertFalse(joined.contains("org.techhouse"), "a Java identity string leaks the package name: " + joined);
+    }
+
+    @Test
+    public void test_concat_of_no_operands_and_of_only_nulls() {
+        assertEquals("", concatOf(new JsonObject()));
+        assertEquals("nullnull", concatOf(new JsonObject(), JsonNull.INSTANCE, JsonNull.INSTANCE));
     }
 
     @Test

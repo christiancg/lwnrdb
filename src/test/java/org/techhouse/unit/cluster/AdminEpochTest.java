@@ -1,6 +1,8 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -22,11 +24,13 @@ public class AdminEpochTest {
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
+        TestUtils.setPrivateField(adminEpoch, "unreadable", false);
     }
 
     @AfterEach
     public void tearDown() throws Exception {
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
+        TestUtils.setPrivateField(adminEpoch, "unreadable", false);
         TestUtils.standardTearDown();
     }
 
@@ -66,11 +70,56 @@ public class AdminEpochTest {
     }
 
     @Test
-    public void test_load_ignores_malformed_content() throws Exception {
+    public void test_load_flags_malformed_content_as_unreadable() throws Exception {
         Files.createDirectories(Objects.requireNonNull(epochPath().getParent()));
         Files.writeString(epochPath(), "not-a-number", StandardCharsets.UTF_8);
+
         adminEpoch.load();
+
         assertEquals(0L, adminEpoch.current());
+        assertTrue(adminEpoch.isUnreadable(),
+                "a file that exists but cannot be parsed is not an absent one: bidding 0 with real data on disk"
+                        + " loses every comparison and unregisters it");
+    }
+
+    @Test
+    public void test_load_flags_a_torn_file_as_unreadable() throws Exception {
+        Files.createDirectories(Objects.requireNonNull(epochPath().getParent()));
+        Files.writeString(epochPath(), "", StandardCharsets.UTF_8);
+
+        adminEpoch.load();
+
+        assertTrue(adminEpoch.isUnreadable(),
+                "an empty file is the shape a crash mid-write leaves, and it used to load as a silent zero");
+    }
+
+    @Test
+    public void test_an_absent_file_is_a_genuinely_new_node() {
+        adminEpoch.load();
+
+        assertEquals(0L, adminEpoch.current());
+        assertFalse(adminEpoch.isUnreadable(), "a node that never committed an admin op starts at 0 legitimately");
+    }
+
+    @Test
+    public void test_a_persisted_epoch_clears_the_unreadable_flag() throws Exception {
+        Files.createDirectories(Objects.requireNonNull(epochPath().getParent()));
+        Files.writeString(epochPath(), "garbage", StandardCharsets.UTF_8);
+        adminEpoch.load();
+        assertTrue(adminEpoch.isUnreadable());
+
+        adminEpoch.bump();
+
+        assertFalse(adminEpoch.isUnreadable(), "once it writes a good value the node has authority again");
+        assertEquals("1", Files.readString(epochPath(), StandardCharsets.UTF_8).trim());
+    }
+
+    @Test
+    public void test_persist_leaves_no_temp_file_behind() {
+        adminEpoch.bump();
+
+        final var tmp = epochPath().resolveSibling(epochPath().getFileName() + ".tmp");
+        assertFalse(Files.exists(tmp), "the atomic write must move its temp file into place, not leave it");
     }
 
     @Test

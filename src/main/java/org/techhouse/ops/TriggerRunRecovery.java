@@ -108,6 +108,10 @@ public final class TriggerRunRecovery {
     }
 
     static TriggerEvent toEvent(List<AdminTriggerRunEntry> chunks) throws Exception {
+        return toEvent(chunks, chunks.getFirst().getAttempts() + 1);
+    }
+
+    static TriggerEvent toEvent(List<AdminTriggerRunEntry> chunks, int attempt) throws Exception {
         final var first = chunks.getFirst();
         final var entries = new ArrayList<DbEntry>();
         if (first.getEventType() == EventType.DELETED) {
@@ -128,6 +132,6 @@ public final class TriggerRunRecovery {
         }
         return new TriggerEvent(first.getEventType(), first.getDbName(), first.getCollName(), first.getTriggerName(),
                 first.getProcedureName(), first.isBatchMode(), entries, first.getActingUser(), first.getDepth(),
-                first.getRunId());
+                first.getRunId(), Math.max(1, attempt));
     }
 }

@@ -361,7 +361,9 @@ data half.
 realm `Error.prototype`) whenever the underlying `OperationResponse` is not OK — a denial, a
 schema violation, an entry-too-large, a cluster rejection, an internal error. Only genuine
 absence stays a value: `findById` answers `null`, `aggregate` answers `[]`, and `delete` of an
-absent id is a no-op.
+absent id is a no-op. A call that omits a required argument, or passes one of the wrong shape, is a
+catchable `TypeError` too — `db.save` needs a document and `db.aggregate`, `db.bulkSave` and
+`db.cursor` each need an array.
 
 **`db.cursor(database, collection, pipeline, options)`** walks a pipeline one batch at a time so
 a script can read a collection larger than its memory budget. Each batch is an ordinary
@@ -407,6 +409,19 @@ emits real `JsonGeo`/`JsonVector`/… values, so a document saved from a script 
 storage and index layers already understand; a custom type registered later with no value type
 here degrades to its wire text rather than silently vanishing.
 
+A **plain string in custom wire format is promoted on the way into a document**, so
+`'#geo(1,2)'` and `Geo.from('#geo(1,2)')` store exactly the same thing and a script-written
+value is indexed in the same family as the identical bytes arriving over the wire. The promotion
+keeps the raw text verbatim — `#geo(1,2)` is stored as `#geo(1,2)`, not normalised to
+`#geo(1.0,2.0)` — so it changes the value's *type* and never its bytes. An unregistered or
+malformed one (`#nosuch(1)`, `#geo(bad)`) fails the write with a `TypeError` naming the member,
+exactly as the wire path already refuses the identical document at parse time. `JSON.stringify`
+is deliberately unaffected: a custom-shaped string stringifies as the string it is.
+
+Nothing on disk needs migrating, because the promotion never changed a stored byte. A collection
+that a script wrote a custom value into *before* this behaviour existed does hold that value in
+the wrong index family, though, and one `REINDEX` of the collection moves it into the right one.
+
 ### What a run reports back
 
 - **Result contract**: a top-level `return` if the module runs one, else `export default`, else
@@ -416,6 +431,10 @@ here degrades to its wire text rather than silently vanishing.
   interpreter's lifetime, so an accessor-valued property is read through its getter and the
   getter's work is charged to the run's budgets. The converted result is measured against
   `scriptMaxResultBytes` (`400-15`); a trigger passes `-1`, since its result is discarded.
+  A **non-finite number cannot cross into a run result or a document**: `Infinity`, `-Infinity`
+  and `NaN` fail the conversion with a `TypeError`, because the engine's own reader cannot parse
+  the token `NumberFormatter` spells for them. `JSON.stringify` keeps its own ECMAScript-mandated
+  answer of `null` for the same values.
 - **Console output** is captured on **every** exit path — value, throw, syntax error, abort — as
   a ring buffer keeping the newest `maxLogLines` (a longer line is clipped at
   `maxLogLineChars`, both setting a `logsTruncated` flag), and teed to the host sink when one
@@ -458,10 +477,10 @@ where the run sits relative to the write path.
 | Surface | Authority | `db` | Budgets | Console | Notes |
 |---|---|---|---|---|---|
 | `RUN_SCRIPT` | caller | yes | `script*` | returned | ad-hoc; parse cached by source hash |
-| `CALL_PROCEDURE` | **invoker** (caller) | yes | `script*` | returned | parse cached by `db\|name\|version` |
+| `CALL_PROCEDURE` | **invoker** (caller) | yes | `script*` | returned | parse cached by `db\|name\|version`, checked by source hash |
 | After trigger | **definer** (installer) | yes | `script*`, `triggerTimeoutMs` | logged | async, exactly-once, retried |
 | Before-write hook | recorded, not enforced | **no** | `beforeHook*` | discarded | synchronous, in the write lock, fail-closed |
-| Schedule | **definer** | yes | `scheduleTimeoutMs` | logged | at-most-once per due instant |
+| Schedule | **definer** | yes | `scheduleTimeoutMs` | logged | at-most-once per due instant under a stable view |
 | Pipeline script | the query's caller | **no** | `aggregationScript*` | discarded | one callable per pipeline, per document |
 
 ### Ad-hoc scripts and stored procedures
@@ -514,7 +533,12 @@ inside a trigger is rejected (the run is already transactional); and the guarant
 *database effects*, so a replayed run's console output can repeat.
 
 A failed run is **retried** — the state machine lives on the pending-run record itself, which is
-what keeps exactly-once intact (a record still present is still un-applied). A retryable failure
+what keeps exactly-once intact (a record still present is still un-applied). An error raised
+*after* the run's transaction committed is the exception: the module body is wrapped in that
+transaction and the event loop is drained once the wrapper has returned, so a pending timer or a
+throwing microtask surfaces as a script error on a run whose effects are already durable and
+whose record is already gone. Such a run is recorded as an error and **never re-queued** —
+re-running it would apply the effects a second time. A retryable failure
 (a script error or a commit failure) increments `attempts` and re-queues after a doubling
 backoff up to `triggerMaxAttempts`, after which the record is marked `DEAD` with its payload and
 last error kept. Everything else is terminal and consumes the record: a missing definer or
@@ -522,6 +546,25 @@ procedure, exceeded depth, a queue-overflow drop, and a **cancellation** — the
 exactly-once guarantee is deliberately waived, because an operator cancelling a runaway trigger
 wants it stopped. `LIST_TRIGGER_RUNS`/`RESOLVE_TRIGGER_RUN` are the admin-only operator surface,
 fanned out cluster-wide because `admin/trigger_runs` is not replicated.
+
+Two outcomes are neither ordinary retries nor terminal consumes, and both used to be misfiled.
+
+**A definition that cannot be *read* is not a definition that was deleted.** `findTrigger` answered
+`null` for both, and the caller consumes the pending run on `null` — so a transient I/O failure
+reading `{coll}-triggers.json` deleted the only record that would have replayed the run, and an
+after trigger for a committed write silently never ran. It is worst at startup, where every run
+`TriggerRunRecovery` re-queues is exposed at once, so one brief disk stall could consume all of
+them. An unreadable definition now leaves the record `PENDING` and retries with the same doubling
+backoff, dead-lettering only once `triggerMaxAttempts` is exhausted. `AdminCache` already refuses
+to cache such a failure as an absence (`MetadataReadException`); the dispatcher now agrees.
+
+**A half-applied commit is not a retryable failure.** `TRANSACTION_HALF_APPLIED` (500-33) means the
+transaction passed its commit point, applied some of its ops, and deliberately kept both its write
+locks and its commit-log marker so recovery can finish the slice. Re-running the body would apply
+those ops a second time — the counter-incrementing trigger double-counts, which is precisely what
+exactly-once exists to prevent. The run is dead-lettered instead, leaving it visible to
+`RESOLVE_TRIGGER_RUN`. `REPLICATION_TIMEOUT` was already special-cased in the same seam; this is
+the second status that needs it.
 
 Triggers are **queued** from `OperationProcessor`'s write handlers and `TransactionOperationHelper.commit`
 — never from the write helpers, since a replicated apply reaches those directly and would fire
@@ -572,8 +615,13 @@ unsatisfiable expression such as `0 0 30 2 *` answers `null` instead of spinning
 walked as *local* date-times and only then resolved against `scriptTimeZone`, which is what makes
 a daily schedule fire once across a DST transition.
 
-Delivery is **at-most-once per due instant**: a node taking a schedule over computes the next
-*future* occurrence, so a handoff may drop a tick but can never replay one. `nextRunAt` is
+Delivery is **at-most-once per due instant under a stable membership view**: a node taking a
+schedule over computes the next *future* occurrence, so a handoff may drop a tick but can never
+replay one, and `ScheduleExecutor` fires only when this node both holds a write quorum and owns
+the ring key — without the quorum gate a partitioned minority owns every schedule and re-runs it.
+While the view is still converging after a join or leave, two nodes can each believe they own the
+same key and both hold quorum, so an occurrence can still fire twice; a job that must not run
+twice has to be idempotent. `nextRunAt` is
 therefore never persisted — a durable `lastRunAt` would mean a DDL write per run and would churn
 the admin epoch. Missed runs while a node was down are skipped, not caught up, so a job that must
 not miss an occurrence should be idempotent and driven off data rather than off the clock. A run

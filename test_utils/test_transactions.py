@@ -15,6 +15,7 @@ ADMIN_PASSWORD = "administrator"
 
 DB = "txn_test_db"
 COLL = "orders"
+JOIN_COLL = "order_configs"
 
 bu.configure(host=HOST, port=PORT, username=ADMIN_USERNAME, password=ADMIN_PASSWORD)
 
@@ -76,6 +77,7 @@ def aggregate(c, steps=None, coll=COLL, db=DB) -> dict:
 def setup_fixtures(c):
     c.send({"type": "CREATE_DATABASE", "databaseName": DB})
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COLL})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": JOIN_COLL})
 
 
 def teardown_fixtures(c):
@@ -109,6 +111,35 @@ def test_commit_and_read_your_writes(c):
         after = find_by_id(oc, "c1")
         check_status("committed document is visible to other connections", after, "OK")
         check_field("committed value is correct", after, "object.total", 42)
+
+
+def test_save_reports_whether_it_inserted(c):
+    section("The inserted flag is the same inside and outside a transaction")
+    coll = "inserted_flag"
+    check_status("create the collection",
+                 c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+
+    outside = save(c, {"_id": "ins1", "total": 1}, coll=coll)
+    check("a non-transactional SAVE of a new id reports inserted", outside.get("inserted") is True,
+          f"got inserted={outside.get('inserted')!r}")
+    check("a non-transactional SAVE of an existing id reports not inserted",
+          save(c, {"_id": "ins1", "total": 2}, coll=coll).get("inserted") is False)
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    buffered_insert = save(c, {"_id": "ins2", "total": 1}, coll=coll)
+    check("a buffered SAVE of a new id reports inserted", buffered_insert.get("inserted") is True,
+          f"got inserted={buffered_insert.get('inserted')!r}")
+    check("a buffered SAVE of an existing id reports not inserted",
+          save(c, {"_id": "ins1", "total": 3}, coll=coll).get("inserted") is False)
+    check("a second buffered SAVE of the same new id reports not inserted",
+          save(c, {"_id": "ins2", "total": 2}, coll=coll).get("inserted") is False)
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    check_status("START_TRANSACTION again", start_txn(c), "OK")
+    check_status("buffered DELETE", delete(c, "ins2", coll=coll), "OK")
+    check("a SAVE after a buffered DELETE reports inserted again",
+          save(c, {"_id": "ins2", "total": 9}, coll=coll).get("inserted") is True)
+    check_status("COMMIT_TRANSACTION again", commit_txn(c), "OK")
 
 
 def test_rollback_discards(c):
@@ -245,6 +276,90 @@ def test_table_locking_blocks_other_clients(c):
                    f"resumed={resumed!r}")
 
 
+def test_lock_timeout_aborts_and_refuses_retries(c):
+    section("A lock timeout aborts the transaction instead of silently ending it")
+
+    check_status("holder: START_TRANSACTION", start_txn(c), "OK")
+    check_status("holder: SAVE takes the collection write lock", save(c, {"_id": "to-holder", "v": 1}), "OK")
+
+    with authed_conn() as bc:
+        check_status("waiter: START_TRANSACTION", start_txn(bc), "OK")
+        timed_out = save(bc, {"_id": "to-waiter", "v": 1})
+        check("waiter: the contended write times out with 409-5",
+              timed_out.get("errorCode") == "409-5", f"got {timed_out}")
+
+        retried = save(bc, {"_id": "to-waiter", "v": 2})
+        check("waiter: retrying the statement is refused rather than silently committed standalone",
+              retried.get("errorCode") == "409-9", f"got {retried}")
+
+        committed = commit_txn(bc)
+        check("waiter: committing an aborted transaction fails",
+              committed.get("errorCode") == "409-9", f"got {committed}")
+
+    check_status("holder: COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    with authed_conn() as reader:
+        orphan = reader.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "to-waiter"})
+        check("the refused write never landed as a standalone document",
+              orphan.get("status") == "NOT_FOUND", f"got {orphan}")
+
+
+def test_crossed_read_and_write_sets_do_not_hang(c):
+    section("Two transactions whose read and write sets cross time out instead of deadlocking")
+    # A transaction holds its write locks until commit, and a read taken inside one used to park with
+    # no timeout: T1 holding write(A) and reading B, against T2 holding write(B) and reading A, parked
+    # on each other forever - and a write lock is thread-owned, so nothing could ever recover them.
+    # Both transactions are aborted by the timeout, which tears their connections down, so this runs
+    # on two of its own rather than on the suite's shared connection.
+    other = "orders_crossed"
+    check_status("create the second collection",
+                 c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": other}), "OK")
+    check_status("seed the second collection", c.send(
+        {"type": "SAVE", "databaseName": DB, "collectionName": other, "object": {"_id": "seed", "v": 0}}), "OK")
+
+    with authed_conn() as t1, authed_conn() as t2:
+        check_status("T1: START_TRANSACTION", start_txn(t1), "OK")
+        check_status("T1: SAVE takes write(orders)", save(t1, {"_id": "crossed-1", "v": 1}), "OK")
+        check_status("T2: START_TRANSACTION", start_txn(t2), "OK")
+        check_status("T2: SAVE takes write(orders_crossed)",
+                     save(t2, {"_id": "crossed-2", "v": 1}, coll=other), "OK")
+
+        # Each now reads the collection the other holds. The assertion is that neither request hangs:
+        # a timeout answer is a correct outcome, a socket that never comes back is not.
+        started = time.time()
+        t1_reads_other = aggregate(t1, [], coll=other)
+        t2_reads_orders = aggregate(t2, [])
+        elapsed = time.time() - started
+
+        check("both crossed reads answered rather than parking forever", elapsed < 60.0,
+              f"took {elapsed:.1f}s")
+        for label, response in (("T1 reading the collection T2 holds", t1_reads_other),
+                                ("T2 reading the collection T1 holds", t2_reads_orders)):
+            check(f"{label} is refused with 409-5 rather than hanging",
+                  isinstance(response, dict) and response.get("errorCode") == "409-5", f"got {response}")
+
+    with authed_conn() as after:
+        check_status("the collections are usable once both transactions are gone",
+                     after.send({"type": "SAVE", "databaseName": DB, "collectionName": other,
+                                 "object": {"_id": "after", "v": 1}}), "OK")
+        check_status("and so is the first one",
+                     after.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                                 "object": {"_id": "after", "v": 1}}), "OK")
+
+
+def test_entry_size_is_checked_after_the_id_is_assigned(c):
+    section("An oversized-once-identified document is refused at buffer time")
+
+    # 1Mb is the shipped maxEntrySize. A document that fits only until the generated _id is
+    # injected used to pass the buffer check and then be dropped at commit, which reported OK.
+    padding = "x" * (1024 * 1024 - 30)
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    buffered = save(c, {"pad": padding})
+    check("the buffer refuses it rather than reporting success",
+          buffered.get("errorCode") == "400-2", f"got errorCode={buffered.get('errorCode')!r}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+
 def test_auto_rollback_on_disconnect():
     section("Disconnecting with an open transaction auto-rolls-back")
 
@@ -273,6 +388,81 @@ def test_auto_rollback_on_disconnect():
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
+
+def test_join_reads_your_own_writes(c):
+    section("A JOIN inside a transaction reads the transaction's own writes")
+    # The joined collection is read through the same overlay as the source: a document the
+    # transaction wrote there must join, and one it deleted there must not.
+    save(c, {"_id": "jrw_left", "k": "shared"})
+    save(c, {"_id": "jrw_committed", "k": "shared"}, coll=JOIN_COLL)
+
+    join_steps = [{"type": "JOIN", "joinCollection": JOIN_COLL, "localField": "k",
+                   "remoteField": "k", "asField": "cfg"}]
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    save(c, {"_id": "jrw_buffered", "k": "shared"}, coll=JOIN_COLL)
+    r = aggregate(c, join_steps)
+    rows = r.get("results") or []
+    attached = sorted(d.get("_id") for d in (rows[0].get("cfg") or [])) if rows else []
+    check("a document written to the joined collection in this transaction joins",
+          attached == ["jrw_buffered", "jrw_committed"],
+          f"expected=['jrw_buffered', 'jrw_committed']  got={attached!r}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_status("DELETE the committed config inside the transaction",
+                 delete(c, "jrw_committed", coll=JOIN_COLL), "OK")
+    r = aggregate(c, join_steps)
+    rows = r.get("results") or []
+    attached = sorted(d.get("_id") for d in (rows[0].get("cfg") or [])) if rows else []
+    check("a document deleted from the joined collection in this transaction no longer joins",
+          attached == [], f"expected=[]  got={attached!r}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+    # After the rollback the joined collection is back to its committed state.
+    r = aggregate(c, join_steps)
+    rows = r.get("results") or []
+    attached = sorted(d.get("_id") for d in (rows[0].get("cfg") or [])) if rows else []
+    check("the rollback restores the joined collection's committed state",
+          attached == ["jrw_committed"], f"expected=['jrw_committed']  got={attached!r}")
+
+
+def test_custom_typed_writes_are_readable_inside_the_transaction(c):
+    section("Read-your-writes keeps custom types (#datetime / #geo) typed in the overlay")
+
+    when = "#datetime(2024-01-01T10:00:00)"
+    where = "#geo(40.0,-74.0)"
+
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    save(c, {"_id": "custom-1", "when": when, "where": where})
+
+    found = find_by_id(c, "custom-1")
+    check_status("FIND_BY_ID sees the buffered custom-typed document", found, "OK")
+    obj = found.get("object") or {}
+    check("the buffered #datetime value round-trips", obj.get("when") == when, f"got {obj.get('when')!r}")
+    check("the buffered #geo value round-trips", obj.get("where") == where, f"got {obj.get('where')!r}")
+
+    equality = aggregate(c, [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "EQUALS", "field": "when", "value": when}}])
+    check("a #datetime EQUALS filter inside the transaction sees its own write",
+          result_ids(equality) == ["custom-1"], f"ids={result_ids(equality)}")
+
+    geo = aggregate(c, [{"type": "FILTER", "operator": {
+        "customOperatorName": "distance", "field": "where", "value": where,
+        "comparator": "SMALLER_THAN", "distance": 1000}}])
+    check("a geo distance filter inside the transaction sees its own write",
+          result_ids(geo) == ["custom-1"], f"ids={result_ids(geo)}")
+
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    with authed_conn() as oc:
+        committed = aggregate(oc, [{"type": "FILTER", "operator": {
+            "fieldOperatorType": "EQUALS", "field": "when", "value": when}}])
+        check("the committed custom-typed document is still matched by the same filter",
+              result_ids(committed) == ["custom-1"], f"ids={result_ids(committed)}")
+        delete(oc, "custom-1")
+
+
 def main():
     bu.banner("Transactions test suite", HOST, PORT)
 
@@ -290,11 +480,17 @@ def main():
     with authed_conn() as (c):
         test_commit_and_read_your_writes(c)
     with authed_conn() as (c):
+        test_save_reports_whether_it_inserted(c)
+    with authed_conn() as (c):
         test_rollback_discards(c)
     with authed_conn() as (c):
         test_read_your_writes_aggregate(c)
     with authed_conn() as (c):
         test_buffered_delete_reads_as_not_found(c)
+    with authed_conn() as (c):
+        test_custom_typed_writes_are_readable_inside_the_transaction(c)
+    with authed_conn() as (c):
+        test_join_reads_your_own_writes(c)
     with authed_conn() as (c):
         test_bulk_save_in_transaction(c)
     with authed_conn() as (c):
@@ -303,6 +499,12 @@ def main():
         test_ddl_forbidden_during_transaction(c)
     with authed_conn() as (c):
         test_table_locking_blocks_other_clients(c)
+    with authed_conn() as (c):
+        test_lock_timeout_aborts_and_refuses_retries(c)
+    with authed_conn() as (c):
+        test_crossed_read_and_write_sets_do_not_hang(c)
+    with authed_conn() as (c):
+        test_entry_size_is_checked_after_the_id_is_assigned(c)
     test_auto_rollback_on_disconnect()
 
     with authed_conn() as (c):

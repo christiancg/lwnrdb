@@ -23,6 +23,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ReplicatedApplyHelper;
 import org.techhouse.ops.ReplicatedUserApplyHelper;
+import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.ScriptRunRegistry;
 import org.techhouse.ops.TriggerRunResolution;
 import org.techhouse.ops.req.RequestParser;
@@ -83,8 +84,6 @@ public class ClusterConnectionHandler implements Runnable {
         }
     }
 
-    // Everything else must keep the order the peer sent it in: ReplicatedApplyHelper does not compare
-    // versions before applying, so this connection is the only thing sequencing a coordinator's writes.
     private static boolean mayOvertake(ClusterMessageType type) {
         return type == ClusterMessageType.GOSSIP || type == ClusterMessageType.FORWARD_REQUEST;
     }
@@ -149,7 +148,8 @@ public class ClusterConnectionHandler implements Runnable {
 
     private ClusterMessage handleForward(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.FORWARD_RESPONSE, "Failed to execute forwarded request",
-                response -> response.setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request)))));
+                response -> response
+                        .setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request, false)))));
     }
 
     private ClusterMessage handleListScripts() {
@@ -195,7 +195,7 @@ public class ClusterConnectionHandler implements Runnable {
     private ClusterMessage handleReplicateAdmin(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.REPLICATE_ADMIN_ACK, "Failed to apply replicated admin op",
                 response -> {
-                    final var result = executeForwarded(request);
+                    final var result = executeForwarded(request, true);
                     if (result.getStatus() == OperationStatus.OK) {
                         adminEpoch.adopt(request.getAdminEpoch());
                     } else {
@@ -207,11 +207,16 @@ public class ClusterConnectionHandler implements Runnable {
 
     // Goes straight to OperationProcessor, bypassing the router, so a forwarded request cannot forward
     // again. The synthetic client carries the acting user so admin ops apply with the correct identity.
-    private OperationResponse executeForwarded(ClusterMessage request) {
+    private OperationResponse executeForwarded(ClusterMessage request, boolean replicated) {
         final var actingUser = request.getActingUser();
         final var clientId = actingUser != null ? clientTracker.registerForwardedClient(actingUser) : null;
         try {
             final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            parsed.setReplicated(replicated);
+            final var schemaError = SchemaValidationHelper.check(parsed);
+            if (schemaError != null) {
+                return schemaError;
+            }
             return operationProcessor.processMessage(parsed, clientId);
         } finally {
             if (clientId != null) {
@@ -234,7 +239,7 @@ public class ClusterConnectionHandler implements Runnable {
 
     private ClusterMessage handleReplicate(ClusterMessage request) {
         final var response = new ClusterMessage();
-        if (ReplicatedApplyHelper.apply(request.getReplication())) {
+        if (ReplicatedApplyHelper.apply(request.getReplication(), clusterConfig.replicationAckTimeoutMs())) {
             response.setType(ClusterMessageType.REPLICATE_ACK);
         } else {
             response.setType(ClusterMessageType.ERROR);
@@ -243,19 +248,33 @@ public class ClusterConnectionHandler implements Runnable {
         return response;
     }
 
+    private ClusterMessage notAdminSyncedYet() {
+        final var response = new ClusterMessage();
+        response.setType(ClusterMessageType.ERROR);
+        response.setErrorMessage("This node has not completed its first admin reconciliation, so its documents"
+                + " cannot be described yet");
+        return response;
+    }
+
     private ClusterMessage handleDigest(ClusterMessage request) {
+        if (adminAntiEntropyService.hasNotConformedSinceStart()) {
+            return notAdminSyncedYet();
+        }
         return ClusterMessages.reply(ClusterMessageType.DIGEST_ACK, "Failed to build digest", response -> {
             final var query = request.getAntiEntropy();
-            response.setAntiEntropy(
-                    antiEntropyService.buildDigest(query.getDbName(), query.getCollName(), query.getSummary()));
+            response.setAntiEntropy(antiEntropyService.buildDigest(query.getDbName(), query.getCollName(),
+                    query.getSummary(), query.incarnationValue()));
         });
     }
 
     private ClusterMessage handlePull(ClusterMessage request) {
+        if (adminAntiEntropyService.hasNotConformedSinceStart()) {
+            return notAdminSyncedYet();
+        }
         return ClusterMessages.reply(ClusterMessageType.PULL_ACK, "Failed to build pull response", response -> {
             final var query = request.getAntiEntropy();
-            response.setAntiEntropy(
-                    antiEntropyService.buildPull(query.getDbName(), query.getCollName(), query.getIds()));
+            response.setAntiEntropy(antiEntropyService.buildPull(query.getDbName(), query.getCollName(), query.getIds(),
+                    query.incarnationValue()));
         });
     }
 }

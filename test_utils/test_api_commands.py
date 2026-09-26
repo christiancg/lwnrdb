@@ -128,11 +128,13 @@ def wait_for_index(c, coll, field, db=DB, timeout_s=15.0):
 
 COLL_CRUD = "crud"
 COLL_AGG = "agg"
+COLL_CASTS = "casts"
 COLL_JOIN_LEFT = "agg_join_left"
 COLL_JOIN_RIGHT = "agg_join_right"
 COLL_TYPES = "types"
 COLL_FLOWS = "flows"
 COLL_PERM = "perm_coll"
+COLL_MATH = "map_math"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -274,6 +276,41 @@ def test_crud(c):
                save(c, COLL_CRUD, {"_id": "bad id!", "v": 1}), "ERROR", "400-1")
     check_code("SAVE invalid _id (too long) -> 400-1",
                save(c, COLL_CRUD, {"_id": "x" * 65, "v": 1}), "ERROR", "400-1")
+    check_code("SAVE non-string _id -> 400-1",
+               save(c, COLL_CRUD, {"_id": 123, "v": 1}), "ERROR", "400-1")
+    check_code("BULK_SAVE non-string _id -> 400-1",
+               bulk_save(c, COLL_CRUD, [{"_id": 123, "v": 1}]), "ERROR", "400-1")
+    check_code("BULK_SAVE invalid _id (illegal chars) -> 400-1",
+               bulk_save(c, COLL_CRUD, [{"_id": "bad id!", "v": 1}]), "ERROR", "400-1")
+
+
+def test_top_level_id(c):
+    section("SAVE with a top-level _id")
+
+    check_status("seed the target document", save(c, COLL_CRUD, {"_id": "tl1", "name": "alpha"}), "OK")
+    r = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_CRUD,
+                "_id": "tl1", "object": {"name": "beta"}})
+    check_status("SAVE with only a top-level _id", r, "OK")
+    check("the response names the same document", r.get("_id") == "tl1", detail=f"got {r.get('_id')!r}")
+
+    found = find_by_id(c, COLL_CRUD, "tl1")
+    check_status("the target document still exists", found, "OK")
+    check_field("and carries the new value", found, "object.name", "beta")
+
+    r = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_CRUD,
+                "_id": "tl2", "object": {"name": "gamma"}})
+    check_status("a top-level _id for a new document inserts under that id", r, "OK")
+    check_field("the document is readable under that id", find_by_id(c, COLL_CRUD, "tl2"), "object.name", "gamma")
+
+    # When both ids are present on the wire the parser gives the object's _id precedence, so the two
+    # can never disagree by the time the write runs. What matters is that exactly one document is
+    # written, under the object's id, and no stray document appears under the top-level one.
+    check_status("a top-level _id alongside an object _id is accepted",
+                 c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_CRUD,
+                         "_id": "outside", "object": {"_id": "inside", "name": "x"}}), "OK")
+    check_field("the object's _id wins", find_by_id(c, COLL_CRUD, "inside"), "object.name", "x")
+    check_code("no document is written under the discarded top-level _id",
+               find_by_id(c, COLL_CRUD, "outside"), "NOT_FOUND", "404-2")
 
 
 def test_value_types(c):
@@ -349,6 +386,14 @@ def test_filter_operators(c):
                ids_of(aggregate(c, COLL_AGG, [filter_step("name", "NOT_IN", ["alice", "bob"])])) == ["a3", "a4"])
     check("IN over a list of Objects (element-match)",
                ids_of(aggregate(c, COLL_AGG, [filter_step("meta", "IN", [{"k": 1}, {"k": 3}])])) == ["a1", "a3", "a4"])
+    check("IN uses the same string equality as EQUALS, so a case-mismatched operand matches",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("name", "IN", ["ALICE", "Bob"])])) == ["a1", "a2"])
+    check("NOT_IN excludes a case-mismatched operand for the same reason",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("name", "NOT_IN", ["ALICE", "Bob"])])) == ["a3", "a4"])
+    check("_id IN stays exact, matching FIND_BY_ID",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("_id", "IN", ["A1", "a2"])])) == ["a2"])
+    check("_id NOT_IN stays exact too",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("_id", "NOT_IN", ["A1"])])) == ["a1", "a2", "a3", "a4"])
 
     check("CONTAINS on an array field",
                ids_of(aggregate(c, COLL_AGG, [filter_step("tags", "CONTAINS", "z")])) == ["a2", "a3"])
@@ -404,6 +449,177 @@ def test_conjunctions(c):
     # NOR/NAND complement against the PK universe via the index-only COUNT path.
     r = aggregate(c, COLL_AGG, conj("NAND", active, rating45) + [{"type": "COUNT"}])
     check_field("COUNT after NAND conjunction", r, "results.0.count", 2)
+
+
+def test_map_conditions_and_number_casts(c):
+    section("MAP conditions agree with FILTER; CAST to STRING spells numbers like the document does")
+
+    active = {"fieldOperatorType": "EQUALS", "field": "active", "value": True}
+    rating45 = {"fieldOperatorType": "EQUALS", "field": "rating", "value": 4.5}
+    age25 = {"fieldOperatorType": "EQUALS", "field": "age", "value": 25}
+
+    for conj_type, leaves in (("AND", [active, rating45]), ("OR", [age25, active]),
+                              ("XOR", [active, rating45]), ("NOR", [age25]),
+                              ("NAND", [active, rating45])):
+        condition = {"conjunctionType": conj_type, "operators": leaves}
+        by_filter = ids_of(aggregate(c, COLL_AGG, [{"type": "FILTER", "operator": condition}]))
+        mapped = aggregate(c, COLL_AGG, [{"type": "MAP", "operators": [
+            {"fieldName": "meta", "condition": condition}]}])
+        by_map = sorted(d.get("_id") for d in (mapped.get("results") or []) if "meta" not in d)
+        check(f"a {conj_type} MAP condition selects exactly what the same FILTER selects",
+              by_map == by_filter, detail=f"FILTER={by_filter}, MAP={by_map}")
+
+    create_coll(c, COLL_CASTS)
+    save(c, COLL_CASTS, {"_id": "big", "n": 3000000000})
+    save(c, COLL_CASTS, {"_id": "small", "n": 123})
+    cast_step = [{"type": "MAP", "operators": [
+        {"fieldName": "asText", "operator": {"type": "CAST", "fieldName": "n", "toType": "STRING"}}]}]
+    by_id = {d.get("_id"): d for d in (aggregate(c, COLL_CASTS, cast_step).get("results") or [])}
+    check("CAST to STRING of a number past the int range is not clamped",
+          by_id.get("big", {}).get("asText") == "3000000000",
+          detail=f"got {by_id.get('big', {}).get('asText')!r}")
+    check("CAST to STRING of a small integral number is unchanged",
+          by_id.get("small", {}).get("asText") == "123",
+          detail=f"got {by_id.get('small', {}).get('asText')!r}")
+
+    nearest_condition = {"customOperatorName": "nearest", "field": "embedding",
+                         "value": "#vector(1.0,0.0)", "k": 3}
+    refused = aggregate(c, COLL_AGG, [{"type": "MAP", "operators": [
+        {"fieldName": "meta", "condition": nearest_condition}]}])
+    check_status("a ranking operator used as a MAP condition", refused, "ERROR")
+    check("the refusal names the operator and its role",
+          "nearest" in (refused.get("message") or "") and "MAP condition" in (refused.get("message") or ""),
+          detail=f"got {refused.get('message')!r}")
+
+    still_ranks = aggregate(c, COLL_AGG, [{"type": "FILTER", "operator": nearest_condition}])
+    check("the same ranking operator is still accepted by FILTER",
+          still_ranks.get("errorCode") != "400-1",
+          detail=f"got {still_ranks.get('status')!r} {still_ranks.get('message')!r}")
+
+
+def raw_send(c, payload) -> str:
+    """The response line before json.loads sees it.
+
+    base_utils.Conn.send parses with plain json.loads, which accepts Infinity/-Infinity/NaN
+    as a Python extension; RFC 8259 does not, and neither does any other client's parser.
+    """
+    c.s.sendall((json.dumps(payload) + "\n").encode())
+    return c.f.readline().decode().strip()
+
+
+def map_math(c, operation, operands, field="r"):
+    steps = [{"type": "MAP", "operators": [
+        {"fieldName": field, "operator": {"type": operation, "operands": operands}}]}]
+    return (aggregate(c, COLL_MATH, steps).get("results") or [{}])[0].get(field)
+
+
+def test_map_arithmetic(c):
+    section("MAP arithmetic: the first valid operand seeds the fold, and no sentinel leaks")
+
+    create_coll(c, COLL_MATH)
+    save(c, COLL_MATH, {"_id": "m1", "a": 10, "b": 2, "z": 0, "big": 3000000000, "nullField": None})
+
+    for operation in ("MULTIPLY", "SUBS", "DIVIDE", "POW", "ROOT"):
+        from_literals = map_math(c, operation, [10, 2])
+        from_fields = map_math(c, operation, ["a", "b"])
+        check(f"{operation} answers the same for literal and field operands",
+              from_literals == from_fields,
+              detail=f"literals={from_literals!r} fields={from_fields!r}")
+
+    check("MULTIPLY [10,2] is 20", map_math(c, "MULTIPLY", [10, 2]) == 20,
+          detail=f"got {map_math(c, 'MULTIPLY', [10, 2])!r}")
+    check("MULTIPLY [2,'a'] does not depend on operand order",
+          map_math(c, "MULTIPLY", [2, "a"]) == map_math(c, "MULTIPLY", ["a", 2]) == 20,
+          detail=f"got {map_math(c, 'MULTIPLY', [2, 'a'])!r}")
+    check("a field holding zero does not restart the fold",
+          map_math(c, "MULTIPLY", ["a", "z", "b"]) == 0 and map_math(c, "MULTIPLY", ["z", "a", "b"]) == 0,
+          detail=f"a,z,b={map_math(c, 'MULTIPLY', ['a', 'z', 'b'])!r} "
+                 f"z,a,b={map_math(c, 'MULTIPLY', ['z', 'a', 'b'])!r}")
+    check("SUBS and DIVIDE keep left-to-right order",
+          map_math(c, "SUBS", [10, 2, 1]) == 7 and map_math(c, "DIVIDE", [100, 5, 2]) == 10,
+          detail=f"subs={map_math(c, 'SUBS', [10, 2, 1])!r} divide={map_math(c, 'DIVIDE', [100, 5, 2])!r}")
+    check("POW seeds from the first operand", map_math(c, "POW", [2, 10]) == 1024,
+          detail=f"got {map_math(c, 'POW', [2, 10])!r}")
+    check("SUM is unchanged", map_math(c, "SUM", [10, 2]) == 12,
+          detail=f"got {map_math(c, 'SUM', [10, 2])!r}")
+
+    check("MIN over a value past the int range does not leak Integer.MAX_VALUE",
+          map_math(c, "MIN", ["big"]) == 3000000000, detail=f"got {map_math(c, 'MIN', ['big'])!r}")
+    check("MAX over a value past the int range does not leak Integer.MIN_VALUE",
+          map_math(c, "MAX", ["big"]) == 3000000000, detail=f"got {map_math(c, 'MAX', ['big'])!r}")
+    for operation in ("MIN", "MAX", "AVG", "MULTIPLY"):
+        for operand in ("missing", "nullField"):
+            check(f"{operation} over only {operand} answers null",
+                  map_math(c, operation, [operand]) is None,
+                  detail=f"got {map_math(c, operation, [operand])!r}")
+    check("a divide by zero answers null", map_math(c, "DIVIDE", ["a", "z"]) is None,
+          detail=f"got {map_math(c, 'DIVIDE', ['a', 'z'])!r}")
+
+    concat_literal_null = map_math(c, "CONCAT", ["-x", None, "-y"])
+    concat_null_field = map_math(c, "CONCAT", ["-x", "nullField", "-y"])
+    check("CONCAT spells a literal null like a null-valued field",
+          concat_literal_null == concat_null_field == "xnully",
+          detail=f"literal={concat_literal_null!r} field={concat_null_field!r}")
+    check("CONCAT never emits a Java identity string",
+          "@" not in (concat_literal_null or "") and "org.techhouse" not in (concat_literal_null or ""),
+          detail=f"got {concat_literal_null!r}")
+
+    save(c, COLL_MATH, {"_id": "m2", "a": 10, "b": 2, "z": 0, "big": 3000000000, "nullField": None})
+    save(c, COLL_MATH, {"_id": "m3", "b": 2, "z": 0, "big": 3000000000, "nullField": None})
+    derive_avg = {"type": "MAP", "operators": [
+        {"fieldName": "derived", "operator": {"type": "AVG", "operands": ["a"]}}]}
+
+    derived = aggregate(c, COLL_MATH, [derive_avg]).get("results") or []
+    missing_row = next((row for row in derived if row.get("_id") == "m3"), None)
+    check("a fold with no valid operand answers a real null",
+          missing_row is not None and "derived" in missing_row and missing_row["derived"] is None,
+          detail=f"got {missing_row!r}")
+
+    sorted_after_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "SORT", "fieldName": "derived",
+                                                             "ascending": True}])
+    check_status("SORT after a MAP that answered null", sorted_after_map, "OK")
+
+    filtered_after_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "FILTER", "operator": {
+        "type": "FIELD", "field": "derived", "fieldOperatorType": "GREATER_THAN", "value": 0}}])
+    check_status("a numeric FILTER after a MAP that answered null", filtered_after_map, "OK")
+    check("the numeric FILTER keeps only the rows that have a value",
+          sorted({row["_id"] for row in filtered_after_map.get("results") or []}) == ["m1", "m2"],
+          detail=f"got {filtered_after_map.get('results')!r}")
+
+    is_null_after_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "FILTER", "operator": {
+        "type": "FIELD", "field": "derived", "fieldOperatorType": "EQUALS", "value": None}}])
+    check("EQUALS null matches the row whose response showed null",
+          [row["_id"] for row in is_null_after_map.get("results") or []] == ["m3"],
+          detail=f"got {is_null_after_map.get('results')!r}")
+
+    second_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "MAP", "operators": [
+        {"fieldName": "plusOne", "operator": {"type": "SUM", "operands": ["derived", 1]}}]}])
+    check_status("a second MAP reading a null result", second_map, "OK")
+
+
+def test_every_aggregate_response_is_strict_json(c):
+    section("Every AGGREGATE response parses under a strict RFC 8259 reader")
+
+    def reject(token):
+        raise ValueError(f"non-RFC JSON token {token!r}")
+
+    shapes = {
+        "a divide by zero": {"type": "DIVIDE", "operands": ["a", "z"]},
+        "an average of nothing": {"type": "AVG", "operands": ["missing"]},
+        "a min of nothing": {"type": "MIN", "operands": ["missing"]},
+        "an overflowing pow": {"type": "POW", "operands": [1.7976931348623157e308, 2]},
+    }
+    for label, operator in shapes.items():
+        raw = raw_send(c, {"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_MATH,
+                           "aggregationSteps": [{"type": "MAP", "operators": [
+                               {"fieldName": "r", "operator": operator}]}]})
+        try:
+            json.loads(raw, parse_constant=reject)
+            ok = True
+        except ValueError as failure:
+            ok = False
+            raw = f"{failure}: {raw}"
+        check(f"the response for {label} is strict JSON", ok, detail=raw)
 
 
 def test_aggregation_steps(c):
@@ -676,11 +892,15 @@ def main():
         test_database_and_collection_ops,
         test_reserved_script_runs_collection,
         test_crud,
+        test_top_level_id,
         test_value_types,
         test_filter_operators,
         test_filter_with_indexes,
         test_conjunctions,
         test_aggregation_steps,
+        test_map_conditions_and_number_casts,
+        test_map_arithmetic,
+        test_every_aggregate_response_is_strict_json,
         test_analyze,
         test_empty_collection_aggregate,
         test_index_ops,

@@ -12,7 +12,9 @@ import org.techhouse.ejson.elements.JsonObject;
 
 public class AdminCollEntry extends DbEntry {
     private static final String INDEXES_FIELD_NAME = "indexes";
+    private static final String INCARNATION_FIELD_NAME = "incarnation";
     private Set<String> indexes;
+    private long incarnation;
 
     private AdminCollEntry() {
         super.setDatabaseName(Globals.ADMIN_DB_NAME);
@@ -32,7 +34,21 @@ public class AdminCollEntry extends DbEntry {
         final var arr = new JsonArray();
         indexes.forEach(arr::add);
         json.add(INDEXES_FIELD_NAME, arr);
+        json.addProperty(INCARNATION_FIELD_NAME, Long.toString(incarnation));
         this.setData(json);
+    }
+
+    public void setIncarnation(long incarnation) {
+        this.incarnation = incarnation;
+        final var data = getData();
+        if (data != null) {
+            data.addProperty(INCARNATION_FIELD_NAME, Long.toString(incarnation));
+            this.setData(data);
+        }
+    }
+
+    public long getIncarnation() {
+        return incarnation;
     }
 
     public static AdminCollEntry fromJsonObject(JsonObject object) {
@@ -43,6 +59,9 @@ public class AdminCollEntry extends DbEntry {
         final var collections = object.get(INDEXES_FIELD_NAME).asJsonArray().asList().stream()
                 .map(element -> element.asJsonString().getValue()).collect(Collectors.toSet());
         result.setIndexes(collections);
+        result.incarnation = object.has(INCARNATION_FIELD_NAME)
+                ? Long.parseLong(object.get(INCARNATION_FIELD_NAME).asJsonString().getValue())
+                : 0L;
         result.setDatabaseName(Globals.ADMIN_DB_NAME);
         result.setCollectionName(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
         return result;

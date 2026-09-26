@@ -14,7 +14,10 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.DigestEntry;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -28,6 +31,7 @@ public class AntiEntropyService implements MembershipListener {
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final CoalescingSweep sweep = new CoalescingSweep(logger, "cluster-anti-entropy", "Anti-entropy",
             this::reconcileAllCollections);
 
@@ -39,7 +43,11 @@ public class AntiEntropyService implements MembershipListener {
     }
 
     public void stop() {
-        sweep.stopPeriodic();
+        stop(clusterConfig.antiEntropyIntervalMs());
+    }
+
+    public void stop(long awaitMillis) {
+        sweep.stop(awaitMillis);
     }
 
     @Override
@@ -57,6 +65,13 @@ public class AntiEntropyService implements MembershipListener {
         sweep.schedule();
     }
 
+    private void lockReadOrSkip(String dbName, String collName) throws InterruptedException {
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+        if (!locks.tryLockRead(dbName, collName, waitMillis)) {
+            throw new CollectionBusyException(dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName, waitMillis);
+        }
+    }
+
     private void reconcileAllCollections() {
         for (final var dbName : cache.getUserDatabaseNames()) {
             for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
@@ -71,17 +86,49 @@ public class AntiEntropyService implements MembershipListener {
     }
 
     public AntiEntropyPayload buildDigest(String dbName, String collName) throws Exception {
-        return buildDigest(dbName, collName, null);
+        return buildDigest(dbName, collName, null, 0L);
     }
 
-    public AntiEntropyPayload buildDigest(String dbName, String collName, String peerSummary) throws Exception {
+    private long localIncarnation(String dbName, String collName) {
+        final var entry = cache.getAdminCollectionEntry(dbName, collName);
+        return entry == null ? 0L : entry.getIncarnation();
+    }
+
+    private static boolean incarnationsDiffer(long local, long peer) {
+        return local != 0L && peer != 0L && local != peer;
+    }
+
+    private AntiEntropyPayload staleIncarnationAnswer(String dbName, String collName, long local, long peer) {
+        logger.warning("Refusing to describe " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                + " to a peer: its documents belong to incarnation " + local + " and the peer asked for incarnation "
+                + peer);
         final var payload = new AntiEntropyPayload(dbName, collName);
-        final var entries = new ArrayList<DigestEntry>();
-        for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
-            entries.add(new DigestEntry(entry.getValue(), entry.getVersion(), false));
+        payload.setIncarnationValue(local);
+        payload.setStaleIncarnation(true);
+        return payload;
+    }
+
+    public AntiEntropyPayload buildDigest(String dbName, String collName, String peerSummary, long peerIncarnation)
+            throws Exception {
+        final var incarnation = localIncarnation(dbName, collName);
+        if (incarnationsDiffer(incarnation, peerIncarnation)) {
+            return staleIncarnationAnswer(dbName, collName, incarnation, peerIncarnation);
         }
-        for (final var tombstone : fs.readTombstones(dbName, collName).entrySet()) {
-            entries.add(new DigestEntry(tombstone.getKey(), tombstone.getValue(), true));
+        final var payload = new AntiEntropyPayload(dbName, collName);
+        payload.setIncarnationValue(incarnation);
+        final var entries = new ArrayList<DigestEntry>();
+        final var selfNodeId = selfNodeId();
+        lockReadOrSkip(dbName, collName);
+        try {
+            for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
+                entries.add(
+                        new DigestEntry(entry.getValue(), entry.getVersion(), false, selfNodeId, entry.getLength()));
+            }
+            for (final var tombstone : fs.readTombstones(dbName, collName).entrySet()) {
+                entries.add(new DigestEntry(tombstone.getKey(), tombstone.getValue(), true, selfNodeId));
+            }
+        } finally {
+            locks.releaseRead(dbName, collName);
         }
         final var summary = summaryOf(entries);
         payload.setSummary(summary);
@@ -96,24 +143,39 @@ public class AntiEntropyService implements MembershipListener {
     static String summaryOf(List<DigestEntry> entries) {
         final var canonical = new ArrayList<String>(entries.size());
         for (final var entry : entries) {
-            canonical.add(entry.getId() + '|' + entry.getVersion() + '|' + entry.isDeleted());
+            canonical.add(entry.getId() + '|' + entry.getVersion() + '|' + entry.isDeleted() + '|' + entry.getLength());
         }
         canonical.sort(null);
         return entries.size() + ":" + JsonUtils.sha256(String.join("\u001f", canonical));
     }
 
     public AntiEntropyPayload buildPull(String dbName, String collName, List<String> ids) throws Exception {
+        return buildPull(dbName, collName, ids, 0L);
+    }
+
+    public AntiEntropyPayload buildPull(String dbName, String collName, List<String> ids, long peerIncarnation)
+            throws Exception {
+        final var incarnation = localIncarnation(dbName, collName);
+        if (incarnationsDiffer(incarnation, peerIncarnation)) {
+            return staleIncarnationAnswer(dbName, collName, incarnation, peerIncarnation);
+        }
         final var payload = new AntiEntropyPayload(dbName, collName);
+        payload.setIncarnationValue(incarnation);
         final var documents = new ArrayList<JsonObject>();
-        final var versions = new ArrayList<Long>();
-        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        for (final var id : ids) {
-            final var position = Collections.binarySearch(pkIndex, id);
-            if (position >= 0) {
-                final var indexEntry = pkIndex.get(position);
-                documents.add(cache.getById(dbName, collName, indexEntry).getData());
-                versions.add(indexEntry.getVersion());
+        final var versions = new ArrayList<String>();
+        lockReadOrSkip(dbName, collName);
+        try {
+            final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+            for (final var id : ids) {
+                final var position = Collections.binarySearch(pkIndex, id);
+                if (position >= 0) {
+                    final var indexEntry = pkIndex.get(position).detachedCopy();
+                    documents.add(cache.getById(dbName, collName, indexEntry).getData());
+                    versions.add(Long.toString(indexEntry.getVersion()));
+                }
             }
+        } finally {
+            locks.releaseRead(dbName, collName);
         }
         payload.setDocuments(documents);
         payload.setVersions(versions);
@@ -121,35 +183,55 @@ public class AntiEntropyService implements MembershipListener {
     }
 
     void reconcile(String dbName, String collName) throws Exception {
-        final var localLive = new HashMap<String, Long>();
-        for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
-            localLive.put(entry.getValue(), entry.getVersion());
+        final var localLive = new HashMap<String, LocalEntry>();
+        final Map<String, Long> localTombstones;
+        lockReadOrSkip(dbName, collName);
+        try {
+            for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
+                localLive.put(entry.getValue(), new LocalEntry(entry.getVersion(), entry.getLength()));
+            }
+            localTombstones = fs.readTombstones(dbName, collName);
+        } finally {
+            locks.releaseRead(dbName, collName);
         }
-        final var localTombstones = fs.readTombstones(dbName, collName);
 
+        final var selfNodeId = selfNodeId();
         final var best = new HashMap<String, Best>();
-        localLive.forEach((id, version) -> merge(best, id, version, false, null));
-        localTombstones.forEach((id, version) -> merge(best, id, version, true, null));
+        localLive.forEach((id, live) -> merge(best, id, live.version(), false, null, selfNodeId));
+        localTombstones.forEach((id, version) -> merge(best, id, version, true, null, selfNodeId));
 
-        final var localEntries = new ArrayList<DigestEntry>(localLive.size() + localTombstones.size());
-        localLive.forEach((id, version) -> localEntries.add(new DigestEntry(id, version, false)));
-        localTombstones.forEach((id, version) -> localEntries.add(new DigestEntry(id, version, true)));
-        final var localSummary = summaryOf(localEntries);
+        final var localSummary = summaryOf(localDigest(localLive, localTombstones));
 
         final var self = membershipService.getSelf();
-        for (final var member : membershipService.membershipView().peers(self)) {
+        final var peers = membershipService.membershipView().peers(self);
+        final var selfIncarnation = localIncarnation(dbName, collName);
+        var everyPeerAnswered = true;
+        for (final var member : peers) {
+            if (member.isAdminSyncing()) {
+                everyPeerAnswered = false;
+                continue;
+            }
             final var response = requestDigest(member.address(), dbName, collName, localSummary);
-            if (response == null || response.isSummaryMatch() || response.getDigest() == null) {
+            if (response == null) {
+                everyPeerAnswered = false;
+                continue;
+            }
+            if (response.isStaleIncarnation() || incarnationsDiffer(selfIncarnation, response.incarnationValue())) {
+                everyPeerAnswered = false;
+                continue;
+            }
+            if (response.isSummaryMatch() || response.getDigest() == null) {
                 continue;
             }
             for (final var digestEntry : response.getDigest()) {
-                merge(best, digestEntry.getId(), digestEntry.getVersion(), digestEntry.isDeleted(), member.address());
+                merge(best, digestEntry.getId(), digestEntry.versionValue(), digestEntry.isDeleted(), member.address(),
+                        digestEntry.getNodeId());
             }
         }
 
         final var pullByPeer = new HashMap<NodeAddress, List<String>>();
         final var deleteIds = new ArrayList<String>();
-        final var deleteVersions = new ArrayList<Long>();
+        final var deleteVersions = new ArrayList<String>();
         for (final var idBest : best.entrySet()) {
             final var id = idBest.getKey();
             final var winner = idBest.getValue();
@@ -157,11 +239,12 @@ public class AntiEntropyService implements MembershipListener {
                 final var localTombstone = localTombstones.get(id);
                 if (localLive.containsKey(id) || localTombstone == null || localTombstone < winner.version) {
                     deleteIds.add(id);
-                    deleteVersions.add(winner.version);
+                    deleteVersions.add(Long.toString(winner.version));
                 }
             } else if (winner.source != null) {
-                final var localVersion = localLive.get(id);
-                if (localVersion == null || localVersion < winner.version) {
+                final var local = localLive.get(id);
+                if (local == null || local.version() < winner.version
+                        || (local.version() == winner.version && outranksOnNodeId(winner.nodeId, selfNodeId))) {
                     pullByPeer.computeIfAbsent(winner.source, ignored -> new ArrayList<>()).add(id);
                 }
             }
@@ -169,39 +252,72 @@ public class AntiEntropyService implements MembershipListener {
 
         if (!deleteIds.isEmpty()) {
             ReplicatedApplyHelper.apply(
-                    new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, deleteVersions));
+                    new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, deleteVersions),
+                    clusterConfig.replicationAckTimeoutMs());
         }
         for (final var pull : pullByPeer.entrySet()) {
             final var response = requestPull(pull.getKey(), dbName, collName, pull.getValue());
             if (response != null && response.getDocuments() != null && !response.getDocuments().isEmpty()) {
                 ReplicatedApplyHelper.apply(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT,
-                        response.getDocuments(), null, response.getVersions()));
+                        response.getDocuments(), null, response.getVersions()),
+                        clusterConfig.replicationAckTimeoutMs());
             }
         }
-        garbageCollectTombstones(dbName, collName);
+        garbageCollectTombstones(dbName, collName, everyPeerAnswered && !peers.isEmpty());
     }
 
-    private void garbageCollectTombstones(String dbName, String collName) throws IOException {
+    private void garbageCollectTombstones(String dbName, String collName, boolean everyPeerAnswered)
+            throws IOException {
         final var retention = clusterConfig.tombstoneRetentionMs();
-        if (retention <= 0) {
+        if (retention <= 0 || !everyPeerAnswered) {
             return;
         }
-        fs.compactTombstones(dbName, collName, System.currentTimeMillis() - retention);
+        fs.compactTombstones(dbName, collName, HybridClock.pack(System.currentTimeMillis() - retention, 0));
     }
 
-    private void merge(Map<String, Best> best, String id, long version, boolean deleted, NodeAddress source) {
+    private static List<DigestEntry> localDigest(Map<String, LocalEntry> localLive, Map<String, Long> localTombstones) {
+        final var entries = new ArrayList<DigestEntry>(localLive.size() + localTombstones.size());
+        localLive.forEach((id, live) -> entries.add(new DigestEntry(id, live.version(), false, null, live.length())));
+        localTombstones.forEach((id, version) -> entries.add(new DigestEntry(id, version, true, null)));
+        return entries;
+    }
+
+    private void merge(Map<String, Best> best, String id, long version, boolean deleted, NodeAddress source,
+            String nodeId) {
         final var current = best.get(id);
-        // Higher version wins; on an equal version a tombstone beats a live document (delete wins ties).
-        if (current == null || version > current.version
-                || (version == current.version && deleted && !current.deleted)) {
-            best.put(id, new Best(version, deleted, source));
+        if (current == null || wins(version, deleted, nodeId, current)) {
+            best.put(id, new Best(version, deleted, source, nodeId));
         }
+    }
+
+    private String selfNodeId() {
+        final var self = membershipService.getSelf();
+        return self == null ? null : self.getNodeId();
+    }
+
+    private static boolean outranksOnNodeId(String winnerNodeId, String selfNodeId) {
+        return winnerNodeId != null && selfNodeId != null && winnerNodeId.compareTo(selfNodeId) > 0;
+    }
+
+    private static boolean wins(long version, boolean deleted, String nodeId, Best current) {
+        if (version != current.version()) {
+            return version > current.version();
+        }
+        if (deleted != current.deleted()) {
+            return deleted;
+        }
+        final var currentNodeId = current.nodeId();
+        if (nodeId == null || currentNodeId == null) {
+            return false;
+        }
+        return nodeId.compareTo(currentNodeId) > 0;
     }
 
     private AntiEntropyPayload requestDigest(NodeAddress address, String dbName, String collName, String summary) {
         final var message = message(ClusterMessageType.DIGEST);
         final var query = new AntiEntropyPayload(dbName, collName);
         query.setSummary(summary);
+        query.setIncarnationValue(localIncarnation(dbName, collName));
         message.setAntiEntropy(query);
         final var response = send(address, message, ClusterMessageType.DIGEST_ACK);
         return response == null ? null : response.getAntiEntropy();
@@ -211,6 +327,7 @@ public class AntiEntropyService implements MembershipListener {
         final var message = message(ClusterMessageType.PULL);
         final var payload = new AntiEntropyPayload(dbName, collName);
         payload.setIds(ids);
+        payload.setIncarnationValue(localIncarnation(dbName, collName));
         message.setAntiEntropy(payload);
         final var response = send(address, message, ClusterMessageType.PULL_ACK);
         return response == null ? null : response.getAntiEntropy();
@@ -234,6 +351,9 @@ public class AntiEntropyService implements MembershipListener {
         return new ClusterMessage(null, type, clusterConfig.secret(), membershipService.getSelf(), null);
     }
 
-    private record Best(long version, boolean deleted, NodeAddress source) {
+    private record Best(long version, boolean deleted, NodeAddress source, String nodeId) {
+    }
+
+    private record LocalEntry(long version, long length) {
     }
 }

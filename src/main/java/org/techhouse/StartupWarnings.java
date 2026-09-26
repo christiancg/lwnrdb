@@ -2,6 +2,8 @@ package org.techhouse;
 
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.fs.FileSystem;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.simplejs.host.HostAllowlist;
 
@@ -10,6 +12,14 @@ public final class StartupWarnings {
     private static final Logger logger = Logger.logFor(StartupWarnings.class);
 
     private StartupWarnings() {
+    }
+
+    public static void warnIfIndexesLeftDirty() {
+        final var dirty = IocContainer.get(FileSystem.class).listDirtyIndexCollections();
+        if (!dirty.isEmpty()) {
+            logger.warning("These collections stopped with field-index work outstanding, so their indexes may be"
+                    + " missing entries: " + String.join(", ", dirty) + ". Run REINDEX on each of them.");
+        }
     }
 
     public static void warnIfDefaultAdminPassword() {

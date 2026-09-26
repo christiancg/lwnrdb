@@ -345,4 +345,67 @@ public class UserCacheEvictionTest {
         assertTrue(pkIndexMap.containsKey(collIdFoobar), "foobar|coll2 must not be evicted");
         assertTrue(collectionMap.containsKey(collIdFoobar), "foobar|coll2 must not be evicted");
     }
+
+    @Test
+    public void test_evict_database_removes_a_pk_index_with_no_cached_documents()
+            throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        final var collId = Cache.getCollectionIdentifier("testDb", "coll1");
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
+        pkIndexMap.put(collId, List.of(new PkIndexEntry("testDb", "coll1", "1", 0, 10, 0)));
+
+        cache.evictDatabase("testDb");
+
+        assertFalse(pkIndexMap.containsKey(collId), "a pk index with no cached documents must still be evicted");
+    }
+
+    @Test
+    public void test_evict_database_removes_a_field_index_with_no_cached_documents()
+            throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        final var collId = Cache.getCollectionIdentifier("testDb", "coll1");
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", type);
+        Map<String, List<FieldIndexEntry<?>>> inner = new ConcurrentHashMap<>();
+        inner.put(Cache.getIndexIdentifier("f", String.class),
+                List.of(new FieldIndexEntry<>("testDb", "coll1", "v", Set.of("id1"))));
+        fieldIndexMap.put(collId, inner);
+
+        cache.evictDatabase("testDb");
+
+        assertFalse(fieldIndexMap.containsKey(collId), "a field index with no cached documents must still be evicted");
+    }
+
+    @Test
+    public void test_evict_database_after_document_only_eviction() throws NoSuchFieldException, IllegalAccessException {
+        UserCache cache = new UserCache();
+        final var collId = Cache.getCollectionIdentifier("testDb", "coll1");
+        final var typePk = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {
+        };
+        final var pkIndexMap = TestUtils.getPrivateField(cache, "pkIndexMap", typePk);
+        final var typeColl = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", typeColl);
+        final var typeBytes = new ReflectionUtils.TypeToken<Map<String, java.util.concurrent.atomic.AtomicLong>>() {
+        };
+        final var collectionBytes = TestUtils.getPrivateField(cache, "collectionBytes", typeBytes);
+        final var typeField = new ReflectionUtils.TypeToken<Map<String, Map<String, List<FieldIndexEntry<?>>>>>() {
+        };
+        final var fieldIndexMap = TestUtils.getPrivateField(cache, "fieldIndexMap", typeField);
+        pkIndexMap.put(collId, List.of(new PkIndexEntry("testDb", "coll1", "1", 0, 10, 0)));
+        collectionMap.put(collId, new ConcurrentHashMap<>());
+        collectionBytes.put(collId, new java.util.concurrent.atomic.AtomicLong(10L));
+        fieldIndexMap.put(collId, new ConcurrentHashMap<>());
+
+        cache.evictCollectionDocuments("testDb", "coll1");
+        cache.evictDatabase("testDb");
+
+        assertFalse(pkIndexMap.containsKey(collId));
+        assertFalse(collectionMap.containsKey(collId));
+        assertFalse(collectionBytes.containsKey(collId));
+        assertFalse(fieldIndexMap.containsKey(collId));
+    }
 }

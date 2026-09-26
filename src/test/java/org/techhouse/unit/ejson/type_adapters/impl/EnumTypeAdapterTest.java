@@ -14,6 +14,38 @@ public class EnumTypeAdapterTest {
         VALUE1, VALUE2, VALUE3, VALUE_ONE
     }
 
+    enum RenamedInToString {
+        ACTIVE {
+            @Override
+            public String toString() {
+                return "active";
+            }
+        }
+    }
+
+    @Test
+    public void test_an_overridden_tostring_does_not_change_the_wire_format() {
+        EnumTypeAdapter<RenamedInToString> adapter = new EnumTypeAdapter<>(RenamedInToString.class);
+
+        final var serialised = adapter.toJson(RenamedInToString.ACTIVE);
+        final var builder = new StringBuilder();
+        adapter.toJson(RenamedInToString.ACTIVE, builder);
+
+        assertEquals("\"ACTIVE\"", serialised,
+                "serialising toString() while deserialising by name() would round-trip to null the moment"
+                        + " any enum overrode toString");
+        assertEquals(serialised, builder.toString(), "both toJson overloads must agree");
+    }
+
+    @Test
+    public void test_an_overridden_tostring_still_round_trips() {
+        EnumTypeAdapter<RenamedInToString> adapter = new EnumTypeAdapter<>(RenamedInToString.class);
+
+        final var parsed = adapter.fromJson(new JsonString("ACTIVE"));
+
+        assertEquals(RenamedInToString.ACTIVE, parsed, "fromJson looks the constant up by name()");
+    }
+
     @Test
     public void test_valid_enum_to_json_string() {
         EnumTypeAdapter<TestEnum> adapter = new EnumTypeAdapter<>(TestEnum.class);

@@ -166,6 +166,21 @@ public class ClusterRouterIntegrationTest {
     }
 
     @Test
+    public void test_an_error_reply_to_a_write_is_outcome_unknown() throws Exception {
+        cluster.configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
+        final var coll = collectionOwnedByOther();
+        final var request = new SaveRequest(TestGlobals.DB, coll);
+        request.setObject(doc("z"));
+
+        final var relayed = router.forward(request, "{not json", false, null, null);
+
+        assertNotNull(relayed);
+        assertTrue(relayed.contains("503-8"),
+                "the owner answered after processMessage ran, so the write may have committed and replicated;"
+                        + " reporting it as unreachable reads as nothing happened: " + relayed);
+    }
+
+    @Test
     public void test_forward_request_handler_executes_write_on_owner() throws Exception {
         cluster.configureMembership(1, node("self", cluster.serverPort()));
         final var message = new ClusterMessage(null, ClusterMessageType.FORWARD_REQUEST, SECRET, null, null);

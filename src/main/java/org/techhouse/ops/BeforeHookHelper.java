@@ -1,6 +1,7 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import org.techhouse.bckg_ops.events.EventType;
@@ -21,20 +22,32 @@ public final class BeforeHookHelper {
     private BeforeHookHelper() {
     }
 
-    public static OperationResponse beforeSave(SaveRequest request, EventType event, String actingUser) {
+    public static OperationResponse beforeSave(SaveRequest request, String actingUser) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
+        if (!BeforeHookContext.hasHooksFor(dbName, collName, EventType.CREATED)
+                && !BeforeHookContext.hasHooksFor(dbName, collName, EventType.UPDATED)) {
             return null;
         }
-        try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser)) {
-            final var outcome = hooks.apply(request.getObject(), request.get_id(), OperationType.SAVE);
-            if (outcome.isRejected()) {
-                return outcome.rejection();
+        return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
+            final var event = isInsert(dbName, collName, request.get_id()) ? EventType.CREATED : EventType.UPDATED;
+            if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
+                return null;
             }
-            request.setObject(outcome.document());
-            return null;
-        }
+            try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser)) {
+                final var outcome = hooks.apply(request.getObject(), request.get_id(), OperationType.SAVE);
+                if (outcome.isRejected()) {
+                    return outcome.rejection();
+                }
+                request.setObject(outcome.document());
+                return null;
+            }
+        });
+    }
+
+    private static boolean isInsert(String dbName, String collName, String id) throws java.io.IOException {
+        return id == null || id.isBlank()
+                || Collections.binarySearch(cache.getPkIndexAndLoadIfNecessary(dbName, collName), id) < 0;
     }
 
     public static OperationResponse beforeBulkSave(BulkSaveRequest request, String actingUser) {

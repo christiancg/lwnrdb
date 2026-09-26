@@ -267,6 +267,18 @@ public class TriggerRetryTest {
     }
 
     @Test
+    public void test_replay_is_refused_for_a_run_that_is_still_pending() throws Exception {
+        final var runId = recordRun("t17", EventType.DELETED);
+
+        assertFalse(TriggerRunResolution.resolveLocal(runId, ResolveTriggerRunRequest.DECISION_REPLAY),
+                "an in-flight run would be dispatched a second time");
+
+        final var entry = firstChunk(runId);
+        assertNotNull(entry);
+        assertEquals(TriggerRunStatus.PENDING, entry.getStatus());
+    }
+
+    @Test
     public void test_an_unknown_decision_is_refused() throws Exception {
         final var runId = recordRun("t16");
         assertFalse(TriggerRunResolution.resolveLocal(runId, "sideways"));

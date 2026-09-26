@@ -1,8 +1,11 @@
 package org.techhouse.unit.bckg_ops;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
@@ -25,8 +28,11 @@ import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.ScriptRunKind;
 import org.techhouse.ops.ScriptRunRecord;
@@ -188,4 +194,66 @@ public class EventProcessorHelperTest {
                 "No orphan page metadata must be created for a dropped collection");
     }
 
+    private static DbEntry indexedEntry(String collName, String id, int value) {
+        final var data = new JsonObject();
+        data.add(Globals.PK_FIELD, new JsonString(id));
+        data.addProperty("f", value);
+        final var entry = DbEntry.fromJsonObject(TestGlobals.DB, collName, data);
+        entry.set_id(id);
+        return entry;
+    }
+
+    private static List<Event> cacheAndBuild(String collName, List<String> ids) {
+        final var cache = IocContainer.get(Cache.class);
+        final var events = new ArrayList<Event>();
+        var value = 1;
+        for (final var id : ids) {
+            final var entry = indexedEntry(collName, id, value++);
+            cache.addEntryToCache(TestGlobals.DB, collName, entry);
+            events.add(new EntityEvent(EventType.CREATED, TestGlobals.DB, collName, entry));
+        }
+        return events;
+    }
+
+    private static void indexField(String collName) throws InterruptedException {
+        IndexHelper.createIndex(TestGlobals.DB, collName, "f");
+        IocContainer.get(Cache.class).getAdminCollectionEntry(TestGlobals.DB, collName).setIndexes(Set.of("f"));
+    }
+
+    private void runBatchWithAFailingFirstGroup() throws Exception {
+        TestUtils.createTestDatabaseAndCollection();
+        TestUtils.createTestJoinCollection();
+        final var batch = new ArrayList<>(cacheAndBuild(TestGlobals.COLL, List.of("a1", "a2")));
+        indexField(TestGlobals.COLL);
+        indexField(TestGlobals.JOIN_COLL);
+        batch.addAll(cacheAndBuild(TestGlobals.JOIN_COLL, List.of("b1", "b2")));
+
+        final var fs = IocContainer.get(FileSystem.class);
+        TestUtils.deleteFolder(new File(TestUtils.getDbPath(fs), TestGlobals.DB + File.separator + TestGlobals.COLL));
+
+        EventProcessorHelper.processBatch(batch);
+    }
+
+    @Test
+    public void test_one_failing_group_does_not_skip_the_rest() throws Exception {
+        runBatchWithAFailingFirstGroup();
+
+        final var index = IocContainer.get(Cache.class).getFieldIndexAndLoadIfNecessary(TestGlobals.DB,
+                TestGlobals.JOIN_COLL, "f", Number.class);
+        Assertions.assertNotNull(index, "the second group must still have been indexed");
+        final var indexed = index.stream().flatMap(e -> e.getIds().stream()).collect(Collectors.toSet());
+        Assertions.assertEquals(Set.of("b1", "b2"), indexed,
+                "one transient failure must not abort the rest of the batch");
+    }
+
+    @Test
+    public void test_a_failing_group_still_clears_its_pending_ids() throws Exception {
+        final var pending = IocContainer.get(PendingIndexWrites.class);
+        pending.mark(TestGlobals.DB, TestGlobals.COLL, List.of("a1", "a2"));
+
+        runBatchWithAFailingFirstGroup();
+
+        Assertions.assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).isEmpty(),
+                "a group that failed must still clear its overlay entries, or the overlay grows without bound");
+    }
 }

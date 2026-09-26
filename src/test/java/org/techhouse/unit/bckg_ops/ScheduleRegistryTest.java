@@ -60,6 +60,71 @@ public class ScheduleRegistryTest {
         cache.removeSchedule(dbName, name);
     }
 
+    private void writeCorruptSchedule(String name) throws Exception {
+        fs.writeSchedule(TestGlobals.DB, name, "{\"name\": \"" + name);
+        cache.removeSchedule(TestGlobals.DB, name);
+    }
+
+    @Test
+    public void test_an_unreadable_definition_is_skipped_and_its_siblings_still_load() throws Exception {
+        writeSchedule(TestGlobals.DB, "good", null, 2000L);
+        writeCorruptSchedule("torn");
+
+        assertDoesNotThrow(registry::loadAll, "one torn file must not stop the node booting");
+
+        assertNotNull(registry.get(TestGlobals.DB, "good"));
+        assertNull(registry.get(TestGlobals.DB, "torn"), "an unreadable definition is not registered");
+    }
+
+    @Test
+    public void test_an_unreadable_definition_does_not_unregister_a_working_entry() throws Exception {
+        writeSchedule(TestGlobals.DB, "flaky", null, 2000L);
+        registry.loadAll();
+        assertNotNull(registry.get(TestGlobals.DB, "flaky"));
+
+        writeCorruptSchedule("flaky");
+        registry.reload(TestGlobals.DB);
+
+        assertNotNull(registry.get(TestGlobals.DB, "flaky"),
+                "a read failure is not an absence, so the entry must survive the reload's removeIf");
+    }
+
+    @Test
+    public void test_an_interval_run_advances_from_the_scheduled_instant() throws Exception {
+        writeSchedule(TestGlobals.DB, "ticker", null, 60_000L);
+        registry.loadAll();
+        final var entry = registry.get(TestGlobals.DB, "ticker");
+        assertNotNull(entry);
+        entry.setNextRunAt(1_000_000L);
+
+        assertEquals(1_060_000L, registry.nextRunAfter(entry, 1_000_500L),
+                "folding the tick's latency into every period loses fires over a day");
+    }
+
+    @Test
+    public void test_an_interval_run_skips_rather_than_storms_after_downtime() throws Exception {
+        writeSchedule(TestGlobals.DB, "ticker", null, 60_000L);
+        registry.loadAll();
+        final var entry = registry.get(TestGlobals.DB, "ticker");
+        assertNotNull(entry);
+        entry.setNextRunAt(1_000_000L);
+
+        final var next = registry.nextRunAfter(entry, 4_600_000L);
+
+        assertTrue(next > 4_600_000L, "the missed hour must not queue up sixty catch-up runs");
+        assertEquals(4_660_000L, next);
+    }
+
+    @Test
+    public void test_a_first_interval_run_is_one_period_from_now() throws Exception {
+        writeSchedule(TestGlobals.DB, "fresh", null, 60_000L);
+        registry.loadAll();
+        final var entry = registry.get(TestGlobals.DB, "fresh");
+        assertNotNull(entry);
+
+        assertTrue(entry.getNextRunAt() > System.currentTimeMillis() + 50_000L);
+    }
+
     @Test
     public void test_load_all_picks_up_every_database() throws Exception {
         writeSchedule(TestGlobals.DB, "a", null, 2000L);

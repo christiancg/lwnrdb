@@ -11,6 +11,7 @@ import org.mockito.Mockito;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Client;
+import org.techhouse.data.Transaction;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
@@ -164,5 +165,20 @@ public class ClientTrackerTest {
     public void test_get_authenticated_username_null_client_id() {
         ClientTracker clientTracker = new ClientTracker();
         assertNull(clientTracker.getAuthenticatedUsername(null));
+    }
+
+    @Test
+    public void test_has_active_transaction_finds_a_live_session_by_its_id() {
+        ClientTracker clientTracker = new ClientTracker();
+        final var clientId = clientTracker.registerForwardedClient("tx-owner");
+        final var transactionId = UUID.randomUUID();
+        clientTracker.setActiveTransaction(clientId, new Transaction(transactionId, clientId));
+
+        assertTrue(clientTracker.hasActiveTransaction(transactionId.toString()));
+        assertFalse(clientTracker.hasActiveTransaction(UUID.randomUUID().toString()));
+        assertFalse(clientTracker.hasActiveTransaction(null));
+
+        clientTracker.clearActiveTransaction(clientId);
+        assertFalse(clientTracker.hasActiveTransaction(transactionId.toString()));
     }
 }

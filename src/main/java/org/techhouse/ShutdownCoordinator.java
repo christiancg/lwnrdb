@@ -58,8 +58,8 @@ public class ShutdownCoordinator {
             memoryManagement.stopSweepThread();
             scriptRunHistory.stopSweep();
             if (clusterConfig.isEnabled()) {
-                antiEntropyService.stop();
-                adminAntiEntropyService.stop();
+                antiEntropyService.stop(remaining(deadline));
+                adminAntiEntropyService.stop(remaining(deadline));
                 tx2pcRecovery.stop();
             }
         });

@@ -13,6 +13,7 @@ import java.util.List;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.log.Logger;
 import org.techhouse.simplejs.builtins.InterpreterOps;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.exceptions.RangeErrorException;
@@ -52,6 +53,7 @@ import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsClass;
 import org.techhouse.simplejs.values.JsFunction;
 import org.techhouse.simplejs.values.JsNativeFunction;
+import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsPromise;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -59,6 +61,9 @@ import org.techhouse.simplejs.values.JsValue;
 import org.techhouse.utils.JsonUtils;
 
 public final class SimpleJs {
+    private static final String INTERNAL_ERROR = "InternalError";
+    private static final Logger logger = Logger.logFor(SimpleJs.class);
+
     public CompiledScript compile(String source, boolean strictScriptGoal) {
         final var program = Parser.parse(Lexer.lexWithPositions(source), strictScriptGoal);
         return new CompiledScript(program, source, strictScriptGoal, JsonUtils.sha256(source));
@@ -192,35 +197,47 @@ public final class SimpleJs {
         return new ScriptCallableException(error.name(), error.message(), error.stack());
     }
 
+    private enum NonFiniteResult {
+        NULLED, REFUSED
+    }
+
     private record SessionCallable(Session session, JsValue function) implements ScriptCallable {
         @Override
         public JsonBaseElement apply(JsonObject document) {
-            return invoke(List.of(EJsonInterop.fromEjson(document)), document, null);
+            return invoke(List.of(EJsonInterop.fromEjson(document)), document, null, NonFiniteResult.NULLED);
         }
 
         @Override
         public JsonBaseElement apply(JsonBaseElement accumulator, JsonObject document) {
             return invoke(List.of(EJsonInterop.fromEjson(accumulator), EJsonInterop.fromEjson(document)), document,
-                    accumulator);
+                    accumulator, NonFiniteResult.NULLED);
         }
 
         @Override
         public JsonBaseElement applyWithContext(JsonObject document, JsonObject context) {
-            return invoke(List.of(EJsonInterop.fromEjson(document), EJsonInterop.fromEjson(context)), document,
-                    context);
+            return invoke(List.of(EJsonInterop.fromEjson(document), EJsonInterop.fromEjson(context)), document, context,
+                    NonFiniteResult.REFUSED);
         }
 
-        private JsonBaseElement invoke(List<JsValue> args, JsonObject document, JsonBaseElement accumulator) {
+        private JsonBaseElement invoke(List<JsValue> args, JsonObject document, JsonBaseElement accumulator,
+                NonFiniteResult nonFinite) {
             final var charged = EJsonInterop.estimatedBytes(document)
                     + (accumulator == null ? 0 : EJsonInterop.estimatedBytes(accumulator));
             session.charge(charged);
             try {
-                return EJsonInterop.toHostEjson(settled(session.call(function, args)));
+                final var returned = settled(session.call(function, args));
+                return nonFinite == NonFiniteResult.NULLED && isNonFinite(returned)
+                        ? JsonNull.INSTANCE
+                        : EJsonInterop.toHostEjson(returned);
             } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
                 throw asCallableException(failure);
             } finally {
                 session.release(charged);
             }
+        }
+
+        private static boolean isNonFinite(JsValue value) {
+            return value instanceof JsNumber number && !Double.isFinite(number.getValue());
         }
 
         @Override
@@ -261,11 +278,19 @@ public final class SimpleJs {
             case ScriptPendingResultException error ->
                 new ScriptError(PENDING_RESULT, error.getMessage(), error.getCapturedStack());
             case SimpleJsRuntimeException error ->
-                new ScriptError("InternalError", error.getMessage(), error.getCapturedStack());
+                new ScriptError(INTERNAL_ERROR, error.getMessage(), error.getCapturedStack());
             case OutOfMemoryError _ -> new ScriptError(MEMORY, EXHAUSTED_MEMORY_MESSAGE);
             case StackOverflowError _ -> new ScriptError(MEMORY, EXHAUSTED_MEMORY_MESSAGE);
+            case ScriptCallableException _ -> null;
+            case RuntimeException unmapped -> reportedInternalError(unmapped);
             default -> null;
         };
+    }
+
+    private static ScriptError reportedInternalError(RuntimeException unmapped) {
+        logger.error("A script run failed with an exception the engine does not map, so it is reported as "
+                + INTERNAL_ERROR + " rather than escaping the interpreter", unmapped);
+        return new ScriptError(INTERNAL_ERROR, unmapped.getClass().getSimpleName() + ": " + unmapped.getMessage());
     }
 
     private static ScriptError throwName(JsThrowException thrown) {

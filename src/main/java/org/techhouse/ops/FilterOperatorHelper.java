@@ -27,6 +27,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.filter.FieldPredicateFactory;
 import org.techhouse.ops.index.PendingWriteReconciler;
+import org.techhouse.ops.index.PrimaryKeyIndexResolver;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
@@ -59,7 +60,14 @@ public class FilterOperatorHelper {
     private static Stream<JsonObject> processConjunctionOperator(ConjunctionOperator operator,
             Stream<JsonObject> resultStream, String dbName, String collName, PipelineScriptContext context)
             throws IOException {
-        final var buffered = resultStream == null ? null : resultStream.toList();
+        final List<JsonObject> buffered;
+        if (resultStream == null) {
+            buffered = null;
+        } else {
+            try (var documents = resultStream) {
+                buffered = documents.toList();
+            }
+        }
         List<Stream<JsonObject>> combinationResult = new ArrayList<>();
         for (var step : operator.getOperators()) {
             final var stepStream = buffered == null ? null : buffered.stream();
@@ -90,25 +98,23 @@ public class FilterOperatorHelper {
     }
 
     private static Stream<JsonObject> andXorConjunction(List<Stream<JsonObject>> combinationResult, int matches) {
-        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream)
+        return combinationResult.stream().flatMap(FilterOperatorHelper::distinctByConjunctionKey)
                 .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
                 .filter(matching -> matching.size() == matches).map(List::getFirst);
     }
 
-    private static JsonBaseElement conjunctionKey(JsonObject jsonObject) {
+    private static Stream<JsonObject> distinctByConjunctionKey(Stream<JsonObject> rows) {
+        final var seen = new HashSet<>();
+        return rows.filter(jsonObject -> seen.add(conjunctionKey(jsonObject)));
+    }
+
+    private static Object conjunctionKey(JsonObject jsonObject) {
         final var id = jsonObject.get(Globals.PK_FIELD);
-        if (id == null) {
-            throw new IllegalStateException("Document missing _id in conjunction grouping");
-        }
-        return id;
+        return id != null ? id : jsonObject;
     }
 
     private static Stream<JsonObject> orConjunction(List<Stream<JsonObject>> combinationResult) {
-        final var seen = new HashSet<>();
-        return combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream).filter(jsonObject -> {
-            final var id = jsonObject.get(Globals.PK_FIELD);
-            return seen.add(id != null ? id : jsonObject);
-        });
+        return distinctByConjunctionKey(combinationResult.stream().flatMap(jsonObjectStream -> jsonObjectStream));
     }
 
     private static Stream<JsonObject> norNandAllStreamAggregation(Stream<JsonObject> combined,
@@ -117,7 +123,7 @@ public class FilterOperatorHelper {
             // Blocking step (documented exception): NOR/NAND must diff against the full collection.
             resultStream = cache.getWholeCollection(dbName, collName).values().stream().map(DbEntry::getData);
         }
-        return Stream.concat(resultStream, combined)
+        return Stream.concat(distinctByConjunctionKey(resultStream), combined)
                 .collect(Collectors.groupingBy(FilterOperatorHelper::conjunctionKey)).values().stream()
                 .filter(matching -> matching.size() == 1).map(List::getFirst);
     }
@@ -238,18 +244,20 @@ public class FilterOperatorHelper {
             args.put(entry.getKey(), entry.getValue());
         }
         final var heap = new PriorityQueue<>(Comparator.comparingDouble(ScoredDocument::score));
-        candidates.forEach(document -> {
-            final var score = scoreDocument(document, fieldName, operatorName, args);
-            if (score == null) {
-                return;
-            }
-            if (heap.size() < k) {
-                heap.offer(new ScoredDocument(document, score));
-            } else if (heap.peek().score() < score) {
-                heap.poll();
-                heap.offer(new ScoredDocument(document, score));
-            }
-        });
+        try (var scored = candidates) {
+            scored.forEach(document -> {
+                final var score = scoreDocument(document, fieldName, operatorName, args);
+                if (score == null) {
+                    return;
+                }
+                if (heap.size() < k) {
+                    heap.offer(new ScoredDocument(document, score));
+                } else if (heap.peek().score() < score) {
+                    heap.poll();
+                    heap.offer(new ScoredDocument(document, score));
+                }
+            });
+        }
         return heap.stream().sorted(Comparator.comparingDouble(ScoredDocument::score).reversed())
                 .map(ScoredDocument::document);
     }
@@ -299,9 +307,7 @@ public class FilterOperatorHelper {
         return switch (operator.getType()) {
             case FIELD -> {
                 final var fieldOperator = (FieldOperator) operator;
-                // A hash index hit is only a candidate and the index-only COUNT cannot confirm it, so
-                // disqualify it and let the caller fall back to the document-reading COUNT.
-                if (usesHashIndex(fieldOperator)) {
+                if (hitsAreUnconfirmedCandidates(fieldOperator)) {
                     yield null;
                 }
                 yield indexMatchingIds(fieldOperator, dbName, collName);
@@ -311,6 +317,10 @@ public class FilterOperatorHelper {
             case CUSTOM -> null;
             case SCRIPT -> null;
         };
+    }
+
+    private static boolean hitsAreUnconfirmedCandidates(FieldOperator operator) {
+        return !Globals.PK_FIELD.equals(operator.getField()) && usesHashIndex(operator);
     }
 
     // Mirrors the dispatch in UserCache.doGetIdsFromIndex / getIdsFromInList: object operands and array
@@ -336,6 +346,9 @@ public class FilterOperatorHelper {
     // re-added by re-testing the operator against the current document, keeping the result exact.
     private static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
+        if (Globals.PK_FIELD.equals(operator.getField())) {
+            return PrimaryKeyIndexResolver.resolve(operator, dbName, collName);
+        }
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final var raw = rawIndexMatchingIds(operator, dbName, collName);
         if (raw == null) {
@@ -357,6 +370,9 @@ public class FilterOperatorHelper {
     private static Set<String> rawIndexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
         final var fieldName = operator.getField();
+        if (cache.hasNoIndex(dbName, collName, fieldName)) {
+            return null;
+        }
         final var value = operator.getValue();
         return switch (value) {
             case JsonObject jsonObject -> cache.getIdsFromIndex(dbName, collName, fieldName, operator, jsonObject);

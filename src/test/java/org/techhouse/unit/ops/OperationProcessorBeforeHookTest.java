@@ -105,6 +105,47 @@ public class OperationProcessorBeforeHookTest {
     }
 
     @Test
+    public void test_save_with_an_explicit_id_for_a_new_document_fires_the_created_hook() throws Exception {
+        installHook("created", "createdOnly", "export default (d) => ({ ...d, stamped: 'created' });",
+                EventType.CREATED);
+
+        assertEquals(OperationStatus.OK, save("brand-new").getStatus());
+
+        final var stored = find("brand-new");
+        assertNotNull(stored);
+        assertTrue(stored.has("stamped"),
+                "a SAVE carrying an _id for a document that does not exist is an insert and must run the CREATED hook");
+        assertEquals("created", stored.get("stamped").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_save_with_an_explicit_id_for_an_existing_document_fires_the_updated_hook() throws Exception {
+        assertEquals(OperationStatus.OK, save("existing").getStatus());
+        installHook("updated", "updatedOnly", "export default (d) => ({ ...d, stamped: 'updated' });",
+                EventType.UPDATED);
+
+        assertEquals(OperationStatus.OK, save("existing").getStatus());
+
+        final var stored = find("existing");
+        assertNotNull(stored);
+        assertTrue(stored.has("stamped"), "a SAVE over an existing _id must run the UPDATED hook");
+        assertEquals("updated", stored.get("stamped").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_a_created_hook_does_not_run_on_an_update() throws Exception {
+        assertEquals(OperationStatus.OK, save("already-there").getStatus());
+        installHook("created", "createdOnly", "export default (d) => ({ ...d, stamped: 'created' });",
+                EventType.CREATED);
+
+        assertEquals(OperationStatus.OK, save("already-there").getStatus());
+
+        final var stored = find("already-there");
+        assertNotNull(stored);
+        assertFalse(stored.has("stamped"), "the CREATED hook must not run on a write over an existing document");
+    }
+
+    @Test
     public void test_save_writes_the_replacement_document() throws Exception {
         installHook("calc", "calc", "export default (d) => ({ ...d, total: d.qty * d.price });", EventType.CREATED,
                 EventType.UPDATED);
@@ -218,7 +259,7 @@ public class OperationProcessorBeforeHookTest {
         installHook("calc", "calc", "export default (d) => ({ ...d, total: 999 });", EventType.CREATED,
                 EventType.UPDATED);
         final var payload = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                List.of(document("r1")), List.of(), List.of(1L));
+                List.of(document("r1")), List.of(), List.of("1"));
         ReplicatedApplyHelper.apply(payload);
         final var stored = find("r1");
         assertNotNull(stored);

@@ -10,9 +10,9 @@ public final class GeoUtils {
     }
 
     private static final char[] BASE32 = "0123456789bcdefghjkmnpqrstuvwxyz".toCharArray();
-    // Approximate: only ever sizes a candidate bounding box, and candidates are re-tested with the
-    // exact haversine distance.
-    private static final double METERS_PER_DEGREE_LAT = 111320.0;
+    // The box must be a superset of the true circle: FILTER can drop a false positive but can never
+    // recover a point the box excluded, so it is sized from the same sphere haversineMeters uses.
+    private static final double BBOX_SAFETY = 1.001;
 
     public record BoundingBox(double minLat, double minLng, double maxLat, double maxLng) {
         public boolean contains(GeoPoint point) {
@@ -87,18 +87,23 @@ public final class GeoUtils {
         return inside;
     }
 
-    // Near a pole (cos ~ 0) the box is clamped to the full longitude range, or candidates are missed.
     public static BoundingBox boundingBoxForRadius(GeoPoint center, double radiusMeters) {
-        final var latDelta = radiusMeters / METERS_PER_DEGREE_LAT;
+        final var angular = radiusMeters / Globals.EARTH_RADIUS_METERS;
+        final var latDelta = Math.toDegrees(angular) * BBOX_SAFETY;
         final var cosLat = Math.cos(Math.toRadians(center.lat()));
+        final var sinAngular = Math.sin(angular);
         final double lngDelta;
-        if (cosLat < 1e-9) {
+        if (angular >= Math.PI / 2 || cosLat < 1e-9 || sinAngular >= cosLat) {
             lngDelta = 180;
         } else {
-            lngDelta = radiusMeters / (METERS_PER_DEGREE_LAT * cosLat);
+            lngDelta = Math.toDegrees(Math.asin(sinAngular / cosLat)) * BBOX_SAFETY;
         }
-        return new BoundingBox(clampLat(center.lat() - latDelta), clampLng(center.lng() - lngDelta),
-                clampLat(center.lat() + latDelta), clampLng(center.lng() + lngDelta));
+        final var minLng = center.lng() - lngDelta;
+        final var maxLng = center.lng() + lngDelta;
+        if (lngDelta >= 180 || minLng < -180 || maxLng > 180) {
+            return new BoundingBox(clampLat(center.lat() - latDelta), -180, clampLat(center.lat() + latDelta), 180);
+        }
+        return new BoundingBox(clampLat(center.lat() - latDelta), minLng, clampLat(center.lat() + latDelta), maxLng);
     }
 
     public static BoundingBox boundingBoxOf(List<GeoPoint> points) {

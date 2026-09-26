@@ -1,5 +1,7 @@
 package org.techhouse.cluster;
 
+import java.util.LinkedHashSet;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
@@ -66,8 +68,7 @@ public class Replicator {
         // The coordinator has already applied the change locally, so it counts as one towards the majority.
         final var requiredAcks = Math.max(0, ownershipManager.majority() - 1);
         final var latch = new CountDownLatch(requiredAcks);
-        for (final var member : membershipService.membershipView().peers(self)) {
-            final var address = member.address();
+        for (final var address : distinctPeerAddresses(self)) {
             Thread.ofVirtual().name("cluster-replicate")
                     .start(() -> sendTo(address, messageFactory.get(), ackType, latch));
         }
@@ -79,6 +80,17 @@ public class Replicator {
             Thread.currentThread().interrupt();
             return ReplicationOutcome.TIMEOUT;
         }
+    }
+
+    private Set<NodeAddress> distinctPeerAddresses(NodeInfo self) {
+        final var addresses = new LinkedHashSet<NodeAddress>();
+        for (final var member : membershipService.membershipView().peers(self)) {
+            if (!addresses.add(member.address())) {
+                logger.warning("Two node ids advertise " + member.address()
+                        + "; counting it once, because both requests ride one socket to one process");
+            }
+        }
+        return addresses;
     }
 
     private void sendTo(NodeAddress address, ClusterMessage message, ClusterMessageType ackType, CountDownLatch latch) {

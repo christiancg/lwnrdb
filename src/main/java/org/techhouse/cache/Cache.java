@@ -26,6 +26,8 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     private final AdminCache adminCache = IocContainer.get(AdminCache.class);
     private final UserCache userCache = IocContainer.get(UserCache.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final org.techhouse.concurrency.ResourceLocking locks = IocContainer
+            .get(org.techhouse.concurrency.ResourceLocking.class);
     @Override
     public UserCache userCache() {
         return userCache;
@@ -49,13 +51,17 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + typeLabel;
     }
 
+    public static String getHashIndexIdentifier(String fieldName, String typeLabel) {
+        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + Globals.HASH_INDEX_KEY_PREFIX + typeLabel;
+    }
+
     public void shiftPkPositionsAfterCompaction(PkCompaction compaction) {
         if (compaction == null) {
             return;
         }
         if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())
                 || Globals.ADMIN_PAGES_DB_NAME.equals(compaction.dbName())) {
-            adminCache.shiftPkPositionsAfterCompaction(compaction.collName(), compaction.page(),
+            adminCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),
                     compaction.removedPosition(), compaction.removedLength());
         } else {
             userCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),
@@ -110,13 +116,15 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         // Gate completeness on the synchronous PK index size, never on the admin page entry counts:
         // those lag behind committed writes and would accept an incomplete cached map.
         if (wholeCollection != null && !wholeCollection.isEmpty()
-                && wholeCollection.size() >= pkIndexSize(dbName, collName)) {
+                && wholeCollection.size() == pkIndexSize(dbName, collName)) {
             recordScanned(wholeCollection.size());
             return wholeCollection;
         }
         try {
             final var loaded = readWholeCollection(dbName, collName);
-            final var admitted = userCache.admitWholeCollection(dbName, collName, loaded);
+            final var admitted = locks.holdsCollectionLock(dbName, collName)
+                    ? userCache.admitWholeCollection(dbName, collName, loaded)
+                    : loaded;
             recordScanned(admitted.size());
             return admitted;
         } catch (IOException e) {
@@ -124,7 +132,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         }
     }
 
-    private int pkIndexSize(String dbName, String collName) {
+    public int pkIndexSize(String dbName, String collName) {
         try {
             return userCache.getPkIndexAndLoadIfNecessary(dbName, collName).size();
         } catch (IOException e) {
@@ -135,7 +143,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     public Stream<DbEntry> streamCollection(String dbName, String collName) throws IOException {
         if (!userCache.isCachingDisabled(dbName)) {
             final var cached = userCache.getCachedCollection(dbName, collName);
-            if (cached != null && !cached.isEmpty() && cached.size() >= pkIndexSize(dbName, collName)) {
+            if (cached != null && !cached.isEmpty() && cached.size() == pkIndexSize(dbName, collName)) {
                 return decorateScan(cached.values().stream());
             }
         }
@@ -152,7 +160,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
 
     private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName) throws IOException {
         final var collPages = adminCache.getAdminPageEntries(dbName, collName);
-        if (collPages == null || collPages.isEmpty()) {
+        if (collPages == null || collPages.isEmpty() || collPages.size() < fs.pageFileCount(dbName, collName)) {
             return fs.streamEntries(dbName, collName);
         }
         final var maxPageBytes = configuration.getMaxPageSize();

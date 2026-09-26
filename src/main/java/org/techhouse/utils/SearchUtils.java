@@ -28,22 +28,34 @@ public final class SearchUtils {
     }
 
     private static <T> Set<String> findingEquals(List<FieldIndexEntry<T>> entries, T value) {
-        final var indexIndex = Collections.binarySearch(entries, value);
-        return indexIndex >= 0 ? entries.get(indexIndex).getIds() : Set.of();
+        final var run = equalRun(entries, value);
+        return run == null ? Set.of() : toIdSet(entries, run[0], run[1]);
     }
 
     private static <T> Set<String> findingNotEquals(List<FieldIndexEntry<T>> entries, T value) {
-        final var indexIndex = Collections.binarySearch(entries, value);
-        if (indexIndex < 0) {
+        final var run = equalRun(entries, value);
+        if (run == null) {
             return toIdSet(entries, 0, entries.size());
         }
-        final var ids = new HashSet<String>();
-        for (var i = 0; i < entries.size(); i++) {
-            if (i != indexIndex) {
-                ids.addAll(entries.get(i).getIds());
-            }
-        }
+        final var ids = toIdSet(entries, 0, run[0]);
+        ids.addAll(toIdSet(entries, run[1], entries.size()));
         return ids;
+    }
+
+    private static <T> int[] equalRun(List<FieldIndexEntry<T>> entries, T value) {
+        final var hit = Collections.binarySearch(entries, value);
+        if (hit < 0) {
+            return null;
+        }
+        var from = hit;
+        while (from > 0 && entries.get(from - 1).compareTo(value) == 0) {
+            from--;
+        }
+        var to = hit + 1;
+        while (to < entries.size() && entries.get(to).compareTo(value) == 0) {
+            to++;
+        }
+        return new int[]{from, to};
     }
 
     private static <T> Set<String> findingRange(List<FieldIndexEntry<T>> entries, T value,
@@ -70,7 +82,7 @@ public final class SearchUtils {
     }
 
     private static <T> int compareAsDouble(T entryValue, Double target) {
-        return Double.compare(((Number) entryValue).doubleValue(), target);
+        return FieldIndexEntry.compareIndexedNumbers((Number) entryValue, target);
     }
 
     private static <T> int compareAsCustom(T entryValue, JsonCustom<Object> target) {
@@ -154,27 +166,35 @@ public final class SearchUtils {
     }
 
     private static <T> Set<String> findingMembership(List<FieldIndexEntry<T>> entries, List<T> value, boolean present) {
-        final var operands = new HashSet<T>(value);
+        final var matched = new HashSet<String>();
+        for (final var operand : value) {
+            matched.addAll(findingEquals(entries, operand));
+        }
+        if (present) {
+            return matched;
+        }
         final var ids = new HashSet<String>();
         for (final var entry : entries) {
-            if (operands.contains(entry.getValue()) == present) {
-                ids.addAll(entry.getIds());
+            for (final var id : entry.getIds()) {
+                if (!matched.contains(id)) {
+                    ids.add(id);
+                }
             }
         }
         return ids;
     }
 
     private static <T> Set<String> findingContains(List<FieldIndexEntry<T>> entries, T value) {
-        if (value instanceof String s) {
-            final var ids = new HashSet<String>();
-            for (final var entry : entries) {
-                if (((String) entry.getValue()).contains(s)) {
-                    ids.addAll(entry.getIds());
-                }
-            }
-            return ids;
+        if (!(value instanceof String s)) {
+            return null;
         }
-        return Set.of();
+        final var ids = new HashSet<String>();
+        for (final var entry : entries) {
+            if (((String) entry.getValue()).contains(s)) {
+                ids.addAll(entry.getIds());
+            }
+        }
+        return ids;
     }
 
     private enum GreaterSmallerEqualsType {

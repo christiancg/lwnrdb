@@ -34,6 +34,7 @@ public final class DeleteOperationHelper {
         if (foundIndexEntry.isPresent()) {
             final var idxEntry = foundIndexEntry.get();
             final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
+            entryToBeDeleted.setPage(idxEntry.getPage());
             final var compaction = fs.deleteFromCollection(idxEntry);
             cache.shiftPkPositionsAfterCompaction(compaction);
             primaryKeyIndex.remove(idxEntry);

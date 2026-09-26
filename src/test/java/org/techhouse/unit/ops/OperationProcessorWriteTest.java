@@ -18,6 +18,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.DeleteRequest;
@@ -407,5 +408,36 @@ public class OperationProcessorWriteTest {
         assertTrue(page0After.isPresent());
         assertEquals(countBefore, page0After.get().getEntryCount(), "entryCount must not be incremented again");
         assertEquals(sizeBefore, page0After.get().getPageSize(), "pageSize must not be incremented again");
+    }
+
+    @Test
+    public void test_a_failed_relocation_insert_preserves_the_original() throws Exception {
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.add("_id", new JsonString("reloc"));
+        object.add("source", new JsonString("original"));
+        save.setObject(object);
+        save.set_id("reloc");
+        assertEquals(OperationStatus.OK, processor.processMessage(save).getStatus());
+
+        final var cache = IocContainer.get(Cache.class);
+        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL);
+        final var idxEntry = pkIndex.stream().filter(entry -> entry.getValue().equals("reloc")).findFirst()
+                .orElseThrow();
+        final var broken = new DbEntry();
+        broken.setDatabaseName(TestGlobals.DB);
+        broken.setCollectionName(TestGlobals.COLL);
+        broken.set_id("reloc");
+
+        assertThrows(Exception.class, () -> SaveOperationHelper.relocateOnGrowUpdate(TestGlobals.DB, TestGlobals.COLL,
+                broken, idxEntry, pkIndex));
+
+        final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        find.set_id("reloc");
+        final var response = processor.processMessage(find);
+        assertInstanceOf(FindByIdResponse.class, response);
+        assertEquals("original", ((FindByIdResponse) response).getObject().get("source").asJsonString().getValue(),
+                "a relocation is a delete followed by an insert, so a failing insert must put the previously"
+                        + " committed document back rather than lose it");
     }
 }
