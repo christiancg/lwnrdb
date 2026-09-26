@@ -502,6 +502,21 @@ def test_history_kinds_enabled(conn: Conn):
         check("the row reports the outcome", rows[0].get("outcome") == "ok", f"row={rows[0]!r}")
         check("the row carries metrics",
               (rows[0].get("metrics") or {}).get("instructions", 0) > 0, f"row={rows[0]!r}")
+        check("an ad-hoc run has no collection of its own", rows[0].get("collection") is None, f"row={rows[0]!r}")
+        is_null = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
+                             "aggregationSteps": [{"type": "FILTER", "operator": {
+                                 "type": "FIELD", "field": "collection",
+                                 "fieldOperatorType": "EQUALS", "value": None}}]})
+        matched = {row.get("_id") for row in (is_null.get("results") or [])}
+        check("EQUALS null finds the freshly written row the response showed as null",
+              rows[0].get("_id") in matched, f"matched={matched!r} row={rows[0]!r}")
+        not_null = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
+                              "aggregationSteps": [{"type": "FILTER", "operator": {
+                                  "type": "FIELD", "field": "collection",
+                                  "fieldOperatorType": "NOT_EQUALS", "value": None}}]})
+        check("NOT_EQUALS null excludes that same row",
+              rows[0].get("_id") not in {row.get("_id") for row in (not_null.get("results") or [])},
+              f"got {not_null.get('results')!r}")
 
 
 def test_fetch_unavailable(conn: Conn):

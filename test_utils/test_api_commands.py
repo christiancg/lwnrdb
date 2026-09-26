@@ -482,6 +482,20 @@ def test_map_conditions_and_number_casts(c):
           by_id.get("small", {}).get("asText") == "123",
           detail=f"got {by_id.get('small', {}).get('asText')!r}")
 
+    nearest_condition = {"customOperatorName": "nearest", "field": "embedding",
+                         "value": "#vector(1.0,0.0)", "k": 3}
+    refused = aggregate(c, COLL_AGG, [{"type": "MAP", "operators": [
+        {"fieldName": "meta", "condition": nearest_condition}]}])
+    check_status("a ranking operator used as a MAP condition", refused, "ERROR")
+    check("the refusal names the operator and its role",
+          "nearest" in (refused.get("message") or "") and "MAP condition" in (refused.get("message") or ""),
+          detail=f"got {refused.get('message')!r}")
+
+    still_ranks = aggregate(c, COLL_AGG, [{"type": "FILTER", "operator": nearest_condition}])
+    check("the same ranking operator is still accepted by FILTER",
+          still_ranks.get("errorCode") != "400-1",
+          detail=f"got {still_ranks.get('status')!r} {still_ranks.get('message')!r}")
+
 
 def raw_send(c, payload) -> str:
     """The response line before json.loads sees it.
@@ -549,6 +563,38 @@ def test_map_arithmetic(c):
     check("CONCAT never emits a Java identity string",
           "@" not in (concat_literal_null or "") and "org.techhouse" not in (concat_literal_null or ""),
           detail=f"got {concat_literal_null!r}")
+
+    save(c, COLL_MATH, {"_id": "m2", "a": 10, "b": 2, "z": 0, "big": 3000000000, "nullField": None})
+    save(c, COLL_MATH, {"_id": "m3", "b": 2, "z": 0, "big": 3000000000, "nullField": None})
+    derive_avg = {"type": "MAP", "operators": [
+        {"fieldName": "derived", "operator": {"type": "AVG", "operands": ["a"]}}]}
+
+    derived = aggregate(c, COLL_MATH, [derive_avg]).get("results") or []
+    missing_row = next((row for row in derived if row.get("_id") == "m3"), None)
+    check("a fold with no valid operand answers a real null",
+          missing_row is not None and "derived" in missing_row and missing_row["derived"] is None,
+          detail=f"got {missing_row!r}")
+
+    sorted_after_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "SORT", "fieldName": "derived",
+                                                             "ascending": True}])
+    check_status("SORT after a MAP that answered null", sorted_after_map, "OK")
+
+    filtered_after_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "FILTER", "operator": {
+        "type": "FIELD", "field": "derived", "fieldOperatorType": "GREATER_THAN", "value": 0}}])
+    check_status("a numeric FILTER after a MAP that answered null", filtered_after_map, "OK")
+    check("the numeric FILTER keeps only the rows that have a value",
+          sorted({row["_id"] for row in filtered_after_map.get("results") or []}) == ["m1", "m2"],
+          detail=f"got {filtered_after_map.get('results')!r}")
+
+    is_null_after_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "FILTER", "operator": {
+        "type": "FIELD", "field": "derived", "fieldOperatorType": "EQUALS", "value": None}}])
+    check("EQUALS null matches the row whose response showed null",
+          [row["_id"] for row in is_null_after_map.get("results") or []] == ["m3"],
+          detail=f"got {is_null_after_map.get('results')!r}")
+
+    second_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "MAP", "operators": [
+        {"fieldName": "plusOne", "operator": {"type": "SUM", "operands": ["derived", 1]}}]}])
+    check_status("a second MAP reading a null result", second_map, "OK")
 
 
 def test_every_aggregate_response_is_strict_json(c):

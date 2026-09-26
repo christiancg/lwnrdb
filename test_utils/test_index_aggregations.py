@@ -1062,6 +1062,7 @@ REG_GEO_WRAP = "idxagg_reg_geowrap"
 REG_TIES = "idxagg_reg_ties"
 REG_VALUELESS = "idxagg_reg_valueless"
 REG_CAST = "idxagg_reg_cast"
+REG_NULLFOLD = "idxagg_reg_nullfold"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -1587,11 +1588,62 @@ def probe_cast_to_boolean_answers_null_for_an_unparseable_string(c):
               detail=f"got {rows.get(doc_id)!r}")
 
 
+AVG_FOLD_STEPS = [{"type": "MAP", "operators": [
+    {"fieldName": "derived", "operator": {"type": "AVG", "operands": ["price"]}}]}]
+
+
+def probe_a_map_null_result_is_a_real_json_null(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NULLFOLD})
+    save_doc(c, REG_NULLFOLD, {"_id": "priced", "price": 10})
+    save_doc(c, REG_NULLFOLD, {"_id": "unpriced", "label": "no price here"})
+    wait_for_background()
+
+    rows = {row["_id"]: row for row in (agg(c, REG_NULLFOLD, AVG_FOLD_STEPS).get("results") or [])}
+    check("a fold with no valid operand answers null",
+          "derived" in rows.get("unpriced", {}) and rows.get("unpriced", {}).get("derived") is None,
+          detail=f"got {rows.get('unpriced')!r}")
+
+    ordered = agg(c, REG_NULLFOLD, AVG_FOLD_STEPS + [{"type": "SORT", "fieldName": "derived", "ascending": True}])
+    check("a SORT after that MAP is not a server error", ordered.get("status") == "OK",
+          detail=f"got {ordered.get('status')!r} {ordered.get('message')!r}")
+
+    selected = agg(c, REG_NULLFOLD, AVG_FOLD_STEPS + [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "GREATER_THAN", "field": "derived", "value": 0}}])
+    selected_ids = sorted(row["_id"] for row in (selected.get("results") or []))
+    check("a numeric filter after that MAP keeps only the row that really is a number",
+          selected_ids == ["priced"], detail=f"got {selected_ids}")
+
+    is_null = agg(c, REG_NULLFOLD, AVG_FOLD_STEPS + [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "EQUALS", "field": "derived", "value": None}}])
+    null_ids = sorted(row["_id"] for row in (is_null.get("results") or []))
+    check("EQUALS null matches the row the same response showed as null",
+          null_ids == ["unpriced"], detail=f"got {null_ids}")
+
+
+def probe_indexing_a_field_written_as_null_is_consistent(c):
+    save_doc(c, REG_NULLFOLD, {"_id": "explicit", "price": None})
+    wait_for_background()
+
+    before = reg_filter(c, REG_NULLFOLD, "price", 10)
+    created = c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_NULLFOLD,
+                      "fieldName": "price"})
+    check("an index builds over a collection holding a null value", created.get("status") == "OK",
+          detail=f"got {created.get('status')!r} {created.get('message')!r}")
+    wait_for_background()
+
+    check("the indexed answer agrees with the scan", reg_filter(c, REG_NULLFOLD, "price", 10) == before,
+          detail=f"scan={before} index={reg_filter(c, REG_NULLFOLD, 'price', 10)}")
+    is_null = reg_filter(c, REG_NULLFOLD, "price", None)
+    check("EQUALS null still names only the null-valued document", is_null == ["explicit"],
+          detail=f"got {is_null}")
+
+
 def regression_suite(c):
     section("Correctness regressions: non-ASCII index values, index values containing the file's own "
             "delimiters, repeated CREATE_INDEX, single-valued index ranges, low-cardinality numeric "
             "indexes, conjunctions over a filtered stream, custom values across a MAP step, "
-            "conjunctions over rows with no _id, valueless field operands, the MAP CAST value boundary")
+            "conjunctions over rows with no _id, valueless field operands, the MAP CAST value boundary, "
+            "one spelling of JSON null across a MAP step and an index build")
     probe_non_ascii_indexed_values(c)
     probe_index_values_containing_delimiters(c)
     probe_repeated_create_index_is_idempotent(c)
@@ -1612,6 +1664,8 @@ def regression_suite(c):
     probe_a_field_operator_without_a_value_is_refused(c)
     probe_cast_keeps_the_value_boundary(c)
     probe_cast_to_boolean_answers_null_for_an_unparseable_string(c)
+    probe_a_map_null_result_is_a_real_json_null(c)
+    probe_indexing_a_field_written_as_null_is_consistent(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════
