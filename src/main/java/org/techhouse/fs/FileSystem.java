@@ -371,6 +371,7 @@ public class FileSystem {
             updatedIndexEntry.setCollectionName(collName);
             updatedIndexEntry.setDatabaseName(dbName);
             updatedIndexEntry.setData(entry.getData());
+            updatedIndexEntry.setVersion(result.indexEntry().getVersion());
             updatedIndexEntry.setPreviousByteSize(target.getLength());
             updated.add(updatedIndexEntry);
             final var compaction = result.compaction();

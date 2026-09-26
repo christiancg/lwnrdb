@@ -115,7 +115,7 @@ public final class IndexEntryReader {
                 return null;
             }
             entries.sort(order);
-            ordered = collectIds(entries, maxIds);
+            ordered = idsInOrder(entries, order, maxIds);
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);
         }
@@ -137,15 +137,32 @@ public final class IndexEntryReader {
         return covered.size() < cache.pkIndexSize(dbName, collName);
     }
 
-    private static List<String> collectIds(List<FieldIndexEntry<?>> entries, long maxIds) {
+    public static List<String> idsInOrder(List<FieldIndexEntry<?>> sortedEntries, Comparator<FieldIndexEntry<?>> order,
+            long maxIds) {
         final var ordered = new ArrayList<String>();
-        for (final var entry : entries) {
-            ordered.addAll(sortedIds(entry));
-            if (ordered.size() >= maxIds) {
-                break;
+        var runStart = 0;
+        while (runStart < sortedEntries.size() && ordered.size() < maxIds) {
+            var runEnd = runStart + 1;
+            while (runEnd < sortedEntries.size()
+                    && order.compare(sortedEntries.get(runStart), sortedEntries.get(runEnd)) == 0) {
+                runEnd++;
             }
+            ordered.addAll(mergedIds(sortedEntries.subList(runStart, runEnd)));
+            runStart = runEnd;
         }
         return ordered;
+    }
+
+    private static List<String> mergedIds(List<FieldIndexEntry<?>> run) {
+        if (run.size() == 1) {
+            return sortedIds(run.getFirst());
+        }
+        final var ids = new ArrayList<String>();
+        for (final var entry : run) {
+            ids.addAll(entry.getIds());
+        }
+        Collections.sort(ids);
+        return ids;
     }
 
     public static List<String> sortedIds(FieldIndexEntry<?> entry) {

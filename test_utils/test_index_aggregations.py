@@ -765,12 +765,15 @@ AGREE_IN_CASE = "idxagg_agree_in_case"
 AGREE_NOT_IN_CASE = "idxagg_agree_notin_case"
 AGREE_IN_CUSTOM = "idxagg_agree_in_custom"
 AGREE_NOT_IN_CUSTOM = "idxagg_agree_notin_custom"
+AGREE_CUSTOM_SORT = "idxagg_agree_custom_sort"
+AGREE_CUSTOM_TIES = "idxagg_agree_custom_ties"
 
 AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, AGREE_NOT_IN_ARR,
                      AGREE_JOIN_REMOTE, AGREE_JOIN_LEFT, AGREE_JOIN_NULL_REMOTE, AGREE_JOIN_NULL_LEFT,
                      AGREE_SORT_BOOL, AGREE_SORT_BOOL_DESC, AGREE_SORT_MIXED, AGREE_SORT_TIES,
                      AGREE_SIBLING, AGREE_OBJ_SORT, AGREE_CUSTOM, AGREE_MIXED_BOX, AGREE_GEO,
-                     AGREE_IN_CASE, AGREE_NOT_IN_CASE, AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM)
+                     AGREE_IN_CASE, AGREE_NOT_IN_CASE, AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM,
+                     AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES)
 
 
 def agree_ids(r):
@@ -981,6 +984,23 @@ def probe_custom_values_bucket_the_same_either_way(c):
           indexed == scanned + 1, f"scan over 2 docs={scanned}  indexed over 3 docs={indexed}")
 
 
+def probe_custom_sort_keys_order_by_the_type_comparator(c):
+    """SORT compared custom values by their raw wire text, so #geo(10.0,5.0) sorted before
+    #geo(9.0,5.0) - the opposite of the geohash order the range operators and the index use."""
+    for doc_id, location in (("x", "#geo(10.0,5.0)"), ("y", "#geo(9.0,5.0)"), ("z", "#geo(8.0,5.0)")):
+        save_doc(c, AGREE_CUSTOM_SORT, {"_id": doc_id, "location": location})
+    agree(c, "SORT over geo values", AGREE_CUSTOM_SORT,
+          [{"type": "SORT", "fieldName": "location", "ascending": True}],
+          AGREE_CUSTOM_SORT, "location", extract=agree_ordered_ids, expected=["z", "y", "x"])
+
+    for doc_id, when in (("b", "#datetime(2024-01-01T10:00)"), ("a", "#datetime(2024-01-01T10:00:00)"),
+                         ("c", "#datetime(2024-06-01T10:00:00)")):
+        save_doc(c, AGREE_CUSTOM_TIES, {"_id": doc_id, "when": when})
+    agree(c, "SORT + LIMIT over two spellings of one instant", AGREE_CUSTOM_TIES,
+          [{"type": "SORT", "fieldName": "when", "ascending": True}, {"type": "LIMIT", "limit": 1}],
+          AGREE_CUSTOM_TIES, "when", extract=agree_ordered_ids, expected=["a"])
+
+
 def probe_membership_uses_the_same_equality_as_equals(c):
     agree(c, "IN with a case-mismatched string operand", AGREE_IN_CASE,
           [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "tag",
@@ -1034,6 +1054,7 @@ def agreement_suite(c):
     probe_dropping_an_index_spares_a_sibling_field(c)
     probe_object_sort_keys_break_ties_on_id(c)
     probe_custom_values_bucket_the_same_either_way(c)
+    probe_custom_sort_keys_order_by_the_type_comparator(c)
     probe_a_scalar_membership_operand_is_refused(c)
     probe_membership_uses_the_same_equality_as_equals(c)
     probe_mixed_number_boxes_group_the_same_either_way(c)
@@ -1063,6 +1084,7 @@ REG_TIES = "idxagg_reg_ties"
 REG_VALUELESS = "idxagg_reg_valueless"
 REG_CAST = "idxagg_reg_cast"
 REG_NULLFOLD = "idxagg_reg_nullfold"
+REG_CUSTOM_ORDER = "idxagg_reg_customorder"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -1638,12 +1660,28 @@ def probe_indexing_a_field_written_as_null_is_consistent(c):
           detail=f"got {is_null}")
 
 
+def probe_custom_sort_agrees_with_the_range_filter(c):
+    """SORT ordered custom values by wire text while GREATER_THAN used the type's own comparator, so
+    the two disagreed about which of two geo points comes first."""
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CUSTOM_ORDER})
+    for doc_id, location in (("x", "#geo(10.0,5.0)"), ("y", "#geo(9.0,5.0)"), ("z", "#geo(8.0,5.0)")):
+        save_doc(c, REG_CUSTOM_ORDER, {"_id": doc_id, "location": location})
+
+    ordered = [d.get("_id") for d in (agg(c, REG_CUSTOM_ORDER, [
+        {"type": "SORT", "fieldName": "location", "ascending": True}]).get("results") or [])]
+    above = reg_filter(c, REG_CUSTOM_ORDER, "location", "#geo(9.0,5.0)", op="GREATER_THAN")
+
+    check("SORT over geo values follows the same order as GREATER_THAN",
+          ordered == ["z", "y", "x"] and above == ["x"],
+          detail=f"sorted={ordered} above the middle point={above}")
+
+
 def regression_suite(c):
     section("Correctness regressions: non-ASCII index values, index values containing the file's own "
             "delimiters, repeated CREATE_INDEX, single-valued index ranges, low-cardinality numeric "
             "indexes, conjunctions over a filtered stream, custom values across a MAP step, "
             "conjunctions over rows with no _id, valueless field operands, the MAP CAST value boundary, "
-            "one spelling of JSON null across a MAP step and an index build")
+            "one spelling of JSON null across a MAP step and an index build, custom-typed SORT order")
     probe_non_ascii_indexed_values(c)
     probe_index_values_containing_delimiters(c)
     probe_repeated_create_index_is_idempotent(c)
@@ -1666,6 +1704,7 @@ def regression_suite(c):
     probe_cast_to_boolean_answers_null_for_an_unparseable_string(c)
     probe_a_map_null_result_is_a_real_json_null(c)
     probe_indexing_a_field_written_as_null_is_consistent(c)
+    probe_custom_sort_agrees_with_the_range_filter(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════

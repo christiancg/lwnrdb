@@ -50,8 +50,9 @@ public class IndexHelper {
         return IndexEntryReader.getMatchingIdsForJoin(dbName, collName, fieldName, localValues);
     }
 
-    public static List<String> sortedIds(FieldIndexEntry<?> entry) {
-        return IndexEntryReader.sortedIds(entry);
+    public static List<String> idsInOrder(List<FieldIndexEntry<?>> sortedEntries,
+            java.util.Comparator<FieldIndexEntry<?>> order, long maxIds) {
+        return IndexEntryReader.idsInOrder(sortedEntries, order, maxIds);
     }
 
     public static JsonBaseElement indexValueToElement(Object value) {

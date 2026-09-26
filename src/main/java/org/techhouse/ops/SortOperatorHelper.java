@@ -3,7 +3,6 @@ package org.techhouse.ops;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -43,8 +42,7 @@ public final class SortOperatorHelper {
         final var fieldName = sortStep.getFieldName();
         final var ascending = sortStep.getAscending();
         if (resultStream == null) {
-            final var orderedIds = IndexHelper.getSortedIdsForField(dbName, collName, fieldName,
-                    (a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending),
+            final var orderedIds = IndexHelper.getSortedIdsForField(dbName, collName, fieldName, entryOrder(ascending),
                     bound > 0 ? bound : Long.MAX_VALUE);
             if (orderedIds != null) {
                 return fetchInOrder(orderedIds, dbName, collName, bound);
@@ -119,33 +117,15 @@ public final class SortOperatorHelper {
 
     private static Stream<JsonObject> sortViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
             String collName, boolean ascending, long bound) {
+        final var order = entryOrder(ascending);
         final var sortedEntries = new ArrayList<>(indexEntries);
-        sortedEntries.sort((a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending));
-        return fetchInOrder(idsWithTiesBrokenById(sortedEntries, ascending), dbName, collName, bound);
+        sortedEntries.sort(order);
+        return fetchInOrder(IndexHelper.idsInOrder(sortedEntries, order, bound > 0 ? bound : Long.MAX_VALUE), dbName,
+                collName, bound);
     }
 
-    private static List<String> idsWithTiesBrokenById(List<FieldIndexEntry<?>> sortedEntries, boolean ascending) {
-        final var ordered = new ArrayList<String>();
-        var runStart = 0;
-        while (runStart < sortedEntries.size()) {
-            var runEnd = runStart + 1;
-            while (runEnd < sortedEntries.size() && compareIndexValues(sortedEntries.get(runStart).getValue(),
-                    sortedEntries.get(runEnd).getValue(), ascending) == 0) {
-                runEnd++;
-            }
-            if (runEnd - runStart == 1) {
-                ordered.addAll(IndexHelper.sortedIds(sortedEntries.get(runStart)));
-            } else {
-                final var tied = new ArrayList<String>();
-                for (var i = runStart; i < runEnd; i++) {
-                    tied.addAll(IndexHelper.sortedIds(sortedEntries.get(i)));
-                }
-                Collections.sort(tied);
-                ordered.addAll(tied);
-            }
-            runStart = runEnd;
-        }
-        return ordered;
+    private static Comparator<FieldIndexEntry<?>> entryOrder(boolean ascending) {
+        return (a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending);
     }
 
     private static int firstChunkSize(long bound) {

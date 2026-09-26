@@ -227,6 +227,9 @@ public class FileSystemWriteTest {
         final var result = fileSystem.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, List.of(updated));
 
         assertEquals(22L, result.updated().getFirst().getIndex().getVersion());
+        assertEquals(22L, result.updated().getFirst().toDbEntry().getVersion(),
+                "the published document must not differ from the pk index that describes it");
+        assertEquals(22L, fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).getFirst().getVersion());
     }
 
     @Test

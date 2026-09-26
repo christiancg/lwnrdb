@@ -69,9 +69,10 @@ public final class JsonUtils {
     }
 
     private static int ascendingPrimitives(JsonPrimitive<?> o1Primitive, JsonPrimitive<?> o2Primitive) {
-        if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom()
-                && o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
-            return o1Primitive.asJsonCustom().getValue().compareTo(o2Primitive.asJsonCustom().getValue());
+        if (o1Primitive.isJsonCustom() || o2Primitive.isJsonCustom()) {
+            return o1Primitive.getClass() == o2Primitive.getClass()
+                    ? compareSameCustom(o1Primitive.asJsonCustom(), o2Primitive.asJsonCustom())
+                    : compareByType(o1Primitive, o2Primitive);
         }
         if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
             return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
@@ -84,6 +85,11 @@ public final class JsonUtils {
             return Boolean.compare(o1Primitive.asJsonBoolean().getValue(), o2Primitive.asJsonBoolean().getValue());
         }
         return compareByType(o1Primitive, o2Primitive);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static int compareSameCustom(JsonCustom<?> left, JsonCustom<?> right) {
+        return ((JsonCustom<Object>) left).compareToCustom((JsonCustom<Object>) right);
     }
 
     // Values of different types still need a total order, or each compares greater than the other and
