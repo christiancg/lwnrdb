@@ -17,6 +17,8 @@ import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.CastMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.CastToType;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 import org.techhouse.ops.req.agg.mid_operators.OneParamMidOperator;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
@@ -155,7 +157,64 @@ public class MapOperatorArithmeticTest {
         JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject);
 
         assertTrue(result.has("sum"));
-        assertNull(result.get("sum").asJsonNumber().getValue());
+        assertTrue(result.get("sum").isJsonNull());
+    }
+
+    @Test
+    public void test_abs_of_a_missing_field_is_a_json_null() {
+        JsonObject input = new JsonObject();
+
+        OneParamMidOperator absOperator = new OneParamMidOperator(MidOperationType.ABS, "missing");
+        AddFieldMapOperator operator = new AddFieldMapOperator("absResult", null, absOperator);
+
+        JsonObject result = MapOperatorHelper.processOperator(operator, input);
+
+        assertSame(JsonNull.INSTANCE, result.get("absResult"));
+    }
+
+    @Test
+    public void test_size_of_a_missing_field_is_a_json_null() {
+        JsonObject input = new JsonObject();
+
+        OneParamMidOperator sizeOperator = new OneParamMidOperator(MidOperationType.SIZE, "missing");
+        AddFieldMapOperator operator = new AddFieldMapOperator("sizeResult", null, sizeOperator);
+
+        JsonObject result = MapOperatorHelper.processOperator(operator, input);
+
+        assertSame(JsonNull.INSTANCE, result.get("sizeResult"));
+    }
+
+    @Test
+    public void test_avg_over_no_valid_operand_is_a_json_null() {
+        JsonObject input = new JsonObject();
+        input.addProperty("label", "not a number");
+
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("label"));
+        ArrayParamMidOperator avgOperator = new ArrayParamMidOperator(MidOperationType.AVG, operands);
+        AddFieldMapOperator operator = new AddFieldMapOperator("average", null, avgOperator);
+
+        JsonObject result = MapOperatorHelper.processOperator(operator, input);
+
+        assertSame(JsonNull.INSTANCE, result.get("average"));
+    }
+
+    @Test
+    public void test_a_null_fold_result_and_a_null_cast_result_are_the_same_element() {
+        JsonObject input = new JsonObject();
+        input.addProperty("label", "not a number");
+
+        JsonArray operands = new JsonArray();
+        operands.add(new JsonString("label"));
+        AddFieldMapOperator fold = new AddFieldMapOperator("folded", null,
+                new ArrayParamMidOperator(MidOperationType.AVG, operands));
+        AddFieldMapOperator cast = new AddFieldMapOperator("casted", null,
+                new CastMidOperator("label", CastToType.NUMBER));
+
+        JsonObject result = MapOperatorHelper.processOperator(cast, MapOperatorHelper.processOperator(fold, input));
+
+        assertSame(JsonNull.INSTANCE, result.get("casted"));
+        assertSame(JsonNull.INSTANCE, result.get("folded"));
     }
 
     @Test
@@ -214,9 +273,8 @@ public class MapOperatorArithmeticTest {
             operandArray.add(operand);
         }
         final var operator = new AddFieldMapOperator("folded", null, new ArrayParamMidOperator(type, operandArray));
-        final var folded = MapOperatorHelper.processOperator(operator, document).get("folded").asJsonNumber()
-                .getValue();
-        return folded == null ? null : folded.doubleValue();
+        final var folded = MapOperatorHelper.processOperator(operator, document).get("folded");
+        return folded.isJsonNull() ? null : folded.asJsonNumber().getValue().doubleValue();
     }
 
     @Test

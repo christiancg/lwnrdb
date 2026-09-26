@@ -145,6 +145,50 @@ public class AggregationOperatorValidatorTest {
         assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
     }
 
+    @Test
+    public void validate_mapStep_conditionWithRankingOperator_returnsInvalid() {
+        new org.techhouse.ejson.EJson();
+        final var mapOp = new AddFieldMapOperator("result", nearestOperator(5, null),
+                new OneParamMidOperator(MidOperationType.ABS, "score"));
+        final var result = AggregationStepValidator.validate(new MapAggregationStep(List.of(mapOp)));
+        assertFalse(result.isValid());
+        assertTrue(result.getErrorMessage().contains("nearest"));
+    }
+
+    @Test
+    public void validate_mapStep_conditionWithRankingOperatorNestedInConjunction_returnsInvalid() {
+        new org.techhouse.ejson.EJson();
+        final var condition = new ConjunctionOperator(ConjunctionOperatorType.AND,
+                List.of(distanceOperator("location"), nearestOperator(5, null)));
+        final var mapOp = new AddFieldMapOperator("result", condition,
+                new OneParamMidOperator(MidOperationType.ABS, "score"));
+        assertFalse(AggregationStepValidator.validate(new MapAggregationStep(List.of(mapOp))).isValid());
+    }
+
+    @Test
+    public void validate_mapStep_conditionWithGeoDistanceOperator_returnsOk() {
+        new org.techhouse.ejson.EJson();
+        final var mapOp = new AddFieldMapOperator("result", distanceOperator("location"),
+                new OneParamMidOperator(MidOperationType.ABS, "score"));
+        assertTrue(AggregationStepValidator.validate(new MapAggregationStep(List.of(mapOp))).isValid());
+    }
+
+    @Test
+    public void validate_filterStep_withRankingOperator_returnsOk() {
+        new org.techhouse.ejson.EJson();
+        assertTrue(AggregationStepValidator.validate(new FilterAggregationStep(nearestOperator(5, null))).isValid());
+    }
+
+    @Test
+    public void validate_mapStep_conditionWithRankingOperatorAndInvalidK_reportsTheRoleNotTheArgument() {
+        new org.techhouse.ejson.EJson();
+        final var mapOp = new AddFieldMapOperator("result", nearestOperator(0, null),
+                new OneParamMidOperator(MidOperationType.ABS, "score"));
+        final var result = AggregationStepValidator.validate(new MapAggregationStep(List.of(mapOp)));
+        assertFalse(result.isValid());
+        assertTrue(result.getErrorMessage().contains("cannot be a MAP condition"));
+    }
+
     private static org.techhouse.ops.req.agg.operators.CustomOperator nearestOperator(int k, JsonBaseElement exact) {
         final var target = new org.techhouse.ejson.custom_types.JsonVector("#vector(1.0,0.0)");
         final var args = new org.techhouse.ejson.elements.JsonObject();

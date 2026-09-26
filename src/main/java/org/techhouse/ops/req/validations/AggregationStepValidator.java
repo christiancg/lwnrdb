@@ -144,7 +144,7 @@ public class AggregationStepValidator {
                 return ValidationResult.fail("MAP operator requires a non-blank fieldName");
             }
             if (op.getCondition() != null) {
-                final var conditionResult = validateOperator(op.getCondition());
+                final var conditionResult = validateOperator(op.getCondition(), OperatorContext.MAP_CONDITION);
                 if (!conditionResult.isValid()) {
                     return conditionResult;
                 }
@@ -232,6 +232,10 @@ public class AggregationStepValidator {
     }
 
     public static ValidationResult validateOperator(BaseOperator operator) {
+        return validateOperator(operator, OperatorContext.FILTER_STEP);
+    }
+
+    private static ValidationResult validateOperator(BaseOperator operator, OperatorContext context) {
         if (operator.getType() == OperatorType.FIELD) {
             final var fieldOp = (FieldOperator) operator;
             if (fieldOp.getField() == null || fieldOp.getField().isBlank()) {
@@ -245,7 +249,7 @@ public class AggregationStepValidator {
             }
             return validateMembershipOperand(fieldOp);
         } else if (operator.getType() == OperatorType.CUSTOM) {
-            return validateCustomOperator((CustomOperator) operator);
+            return validateCustomOperator((CustomOperator) operator, context);
         } else if (operator.getType() == OperatorType.SCRIPT) {
             return validateScriptSource(((ScriptOperator) operator).getSource(), "Script operator");
         } else {
@@ -257,7 +261,7 @@ public class AggregationStepValidator {
                 return ValidationResult.fail("Conjunction operator requires at least one nested operator");
             }
             for (var nested : conjOp.getOperators()) {
-                final var result = validateOperator(nested);
+                final var result = validateOperator(nested, context);
                 if (!result.isValid()) {
                     return result;
                 }
@@ -266,7 +270,7 @@ public class AggregationStepValidator {
         return ValidationResult.ok();
     }
 
-    private static ValidationResult validateCustomOperator(CustomOperator operator) {
+    private static ValidationResult validateCustomOperator(CustomOperator operator, OperatorContext context) {
         if (operator.getField() == null || operator.getField().isBlank()) {
             return ValidationResult.fail("Custom operator requires a non-blank field name");
         }
@@ -276,6 +280,9 @@ public class AggregationStepValidator {
         }
         if (!CustomTypeFactory.isKnownCustomOperator(name)) {
             return ValidationResult.fail("Unknown custom operator: " + name);
+        }
+        if (context == OperatorContext.MAP_CONDITION && CustomTypeFactory.isRankingOperator(name)) {
+            return ValidationResult.fail(name + " ranks a whole stream and cannot be a MAP condition");
         }
         final var args = operator.getArgs();
         return switch (name) {
@@ -345,6 +352,10 @@ public class AggregationStepValidator {
         } catch (IllegalArgumentException e) {
             return null;
         }
+    }
+
+    private enum OperatorContext {
+        FILTER_STEP, MAP_CONDITION
     }
 
     public static ValidationResult validateMidOperator(BaseMidOperator midOperator) {
