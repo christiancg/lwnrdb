@@ -957,21 +957,40 @@ def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
     return sorted(f for f in os.listdir(folder) if f.endswith("-indexes.dirty"))
 
 
-def write_until_indexes_are_dirty(conn: Conn, work_dir: str) -> bool:
+def kill_while_the_indexes_are_dirty(conn: Conn, work_dir: str, proc) -> bool:
+    """Kill the server with field-index work still queued, and report whether it really was.
+
+    The marker only exists while the background worker is behind, and it drains up to 256 events at
+    a time, so a burst that stops to look at the marker has usually let it clear again before the
+    kill lands. A writer thread keeps the queue backed up until the moment of the kill, and the
+    marker is re-read afterwards, where SIGKILL makes the answer authoritative.
+    """
     check_status("create the collection whose indexes will be left dirty",
                  conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": DIRTY_COLL}), "OK")
     check_status("index a field on it",
                  conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": DIRTY_COLL,
                             "fieldName": "n"}), "OK")
-    deadline = time.time() + 15.0
-    index = 0
-    while time.time() < deadline:
-        for _ in range(50):
-            conn.save({"_id": f"d{index:05d}", "n": index, "pad": PAD}, coll=DIRTY_COLL)
-            index += 1
-        if dirty_markers(work_dir):
-            return True
-    return False
+    stop = threading.Event()
+
+    def writer():
+        with admin_conn() as writer_conn:
+            index = 0
+            while not stop.is_set():
+                writer_conn.save({"_id": f"d{index:05d}", "n": index, "pad": PAD}, coll=DIRTY_COLL)
+                index += 1
+
+    thread = threading.Thread(target=writer, daemon=True)
+    thread.start()
+    try:
+        deadline = time.time() + 30.0
+        while time.time() < deadline:
+            if dirty_markers(work_dir):
+                proc.kill()
+                return bool(dirty_markers(work_dir))
+        return False
+    finally:
+        stop.set()
+        thread.join(timeout=5.0)
 
 
 def test_an_unclean_stop_is_reported_at_the_next_startup(work_dir: str, log_path: str, log_offset: int):
@@ -1187,11 +1206,10 @@ def main():
             test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn)
             test_non_finite_numbers_are_refused(conn)
 
-            check("a burst of indexed writes leaves an index-dirty marker on disk",
-                  write_until_indexes_are_dirty(conn, work_dir),
-                  "the background queue drained faster than the test could write")
-        print("\n  Killing the server without a drain ...")
-        proc.kill()
+            print("\n  Killing the server without a drain ...")
+            check("the unclean stop left an index-dirty marker on disk",
+                  kill_while_the_indexes_are_dirty(conn, work_dir, proc),
+                  "the background queue drained before the kill landed")
         proc.wait(timeout=30)
         log_offset = os.path.getsize(log_path)
         proc = None
