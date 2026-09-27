@@ -212,12 +212,18 @@ class Conn:
 
     def send(self, payload: dict, timeout: Optional[float] = None) -> dict:
         """Send one request, read one response line. Never raises on a dead connection."""
+        return self.send_raw(json.dumps(payload), timeout)
+
+    def send_raw(self, line: str, timeout: Optional[float] = None) -> dict:
         if timeout is not None:
             self.s.settimeout(timeout)
         try:
-            self.s.sendall((json.dumps(payload) + "\n").encode())
+            self.s.sendall((line + "\n").encode())
         except (BrokenPipeError, OSError):
             return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
+        return self._read_response()
+
+    def _read_response(self) -> dict:
         try:
             raw = self.f.readline().decode().strip()
         except (OSError, ConnectionError):

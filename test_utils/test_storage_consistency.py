@@ -118,7 +118,7 @@ class Conn(bu.Conn):
     def run(self, script: str, db=DB) -> dict:
         return self.send({"type": "RUN_SCRIPT", "databaseName": db, "script": script})
 
-    def send_raw(self, line: str) -> dict:
+    def send_raw_strict(self, line: str) -> dict:
         """Send a pre-serialised line and refuse a non-RFC constant in the reply.
 
         json.dumps cannot express 1e400 (a Python float overflows to inf, which serialises as the
@@ -1088,7 +1088,7 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
 
 
 def save_raw_number(conn: Conn, coll: str, doc_id: str, literal: str) -> dict:
-    return conn.send_raw('{"type":"SAVE","databaseName":"%s","collectionName":"%s",'
+    return conn.send_raw_strict('{"type":"SAVE","databaseName":"%s","collectionName":"%s",'
                          '"object":{"_id":"%s","v":%s}}' % (DB, coll, doc_id, literal))
 
 
