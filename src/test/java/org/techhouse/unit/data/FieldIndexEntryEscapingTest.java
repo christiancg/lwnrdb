@@ -2,11 +2,13 @@ package org.techhouse.unit.data;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.PkIndexEntry;
+import org.techhouse.ejson.exceptions.NonFiniteNumberException;
 
 public class FieldIndexEntryEscapingTest {
     private static final String SEPARATOR = Globals.ID_SEPARATOR;
@@ -79,6 +81,80 @@ public class FieldIndexEntryEscapingTest {
     public void test_multiple_ids_round_trip() {
         final var parsed = roundTrip("value", Set.of("id1", "id2", "id3"));
         assertEquals(Set.of("id1", "id2", "id3"), parsed.getIds());
+    }
+
+    @Test
+    public void test_unpaired_high_surrogate_round_trips() {
+        final var value = "a\ud800b";
+        assertEquals(value, FieldIndexEntry.unescapeIndexToken(FieldIndexEntry.escapeIndexToken(value)));
+        assertEquals(value, roundTrip(value, Set.of("id1")).getValue());
+    }
+
+    @Test
+    public void test_unpaired_low_surrogate_round_trips() {
+        final var value = "ab\udc00";
+        assertEquals(value, FieldIndexEntry.unescapeIndexToken(FieldIndexEntry.escapeIndexToken(value)));
+        assertEquals(value, roundTrip(value, Set.of("id1")).getValue());
+    }
+
+    @Test
+    public void test_lone_surrogate_only_value_round_trips() {
+        assertEquals("\ud800", FieldIndexEntry.unescapeIndexToken(FieldIndexEntry.escapeIndexToken("\ud800")));
+        assertEquals("\udc00", FieldIndexEntry.unescapeIndexToken(FieldIndexEntry.escapeIndexToken("\udc00")));
+    }
+
+    @Test
+    public void test_paired_surrogate_is_written_unescaped() {
+        final var emoji = "a😀b";
+        assertEquals(emoji, FieldIndexEntry.escapeIndexToken(emoji));
+        assertEquals(emoji, roundTrip(emoji, Set.of("id1")).getValue());
+    }
+
+    @Test
+    public void test_escaped_surrogate_survives_utf8_encoding() {
+        final var escaped = FieldIndexEntry.escapeIndexToken("a\ud800b");
+        final var encoded = new String(escaped.getBytes(StandardCharsets.UTF_8), StandardCharsets.UTF_8);
+        assertEquals(escaped, encoded);
+    }
+
+    @Test
+    public void test_two_distinct_lone_surrogates_produce_distinct_file_keys() {
+        assertNotEquals(FieldIndexEntry.fileKeyOf("a\ud800b"), FieldIndexEntry.fileKeyOf("a\udc00b"));
+        assertNotEquals(FieldIndexEntry.fileKeyOf("a\ud800b"), FieldIndexEntry.fileKeyOf("a?b"));
+    }
+
+    @Test
+    public void test_literal_backslash_u_is_unambiguous() {
+        final var value = "a\\u0041b";
+        assertEquals(value, FieldIndexEntry.unescapeIndexToken(FieldIndexEntry.escapeIndexToken(value)));
+        assertNotEquals(FieldIndexEntry.escapeIndexToken(value), FieldIndexEntry.escapeIndexToken("a\ud800b"));
+    }
+
+    @Test
+    public void test_truncated_unicode_escape_is_kept_verbatim() {
+        assertEquals("a\\u00", FieldIndexEntry.unescapeIndexToken("a\\u00"));
+        assertEquals("a\\uZZZZb", FieldIndexEntry.unescapeIndexToken("a\\uZZZZb"));
+    }
+
+    @Test
+    public void test_legacy_question_mark_key_still_parses() {
+        final var parsed = FieldIndexEntry.fromIndexFileEntry("db", "coll", "a?b" + SEPARATOR + "id1", String.class);
+        assertEquals("a?b", parsed.getValue());
+        assertEquals(Set.of("id1"), parsed.getIds());
+    }
+
+    @Test
+    public void test_non_finite_numeric_key_is_refused() {
+        assertThrows(NonFiniteNumberException.class,
+                () -> FieldIndexEntry.fromIndexFileEntry("db", "coll", "Infinity" + SEPARATOR + "id1", Number.class));
+        assertThrows(NonFiniteNumberException.class,
+                () -> FieldIndexEntry.fromIndexFileEntry("db", "coll", "-Infinity" + SEPARATOR + "id1", Number.class));
+    }
+
+    @Test
+    public void test_finite_numeric_key_still_parses() {
+        final var parsed = FieldIndexEntry.fromIndexFileEntry("db", "coll", "5" + SEPARATOR + "id1", Number.class);
+        assertEquals(5d, parsed.getValue());
     }
 
     @Test

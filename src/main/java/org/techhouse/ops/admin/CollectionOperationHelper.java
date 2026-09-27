@@ -11,6 +11,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateCollectionRequest;
@@ -40,6 +41,13 @@ public final class CollectionOperationHelper {
                     // CREATE_DATABASE returns early), and createCollectionFile only mkdirs one level.
                     if (cache.getAdminDbEntry(dbName) != null) {
                         fs.createDatabaseFolder(dbName);
+                    }
+                    final var colliding = createCollectionRequest.isReplicated()
+                            ? null
+                            : OnDiskNameRegistry.collidingCollection(dbName, collName);
+                    if (colliding != null) {
+                        return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.NAME_COLLIDES_ON_DISK,
+                                colliding);
                     }
                     final var result = fs.createCollectionFile(dbName, collName);
                     if (result) {

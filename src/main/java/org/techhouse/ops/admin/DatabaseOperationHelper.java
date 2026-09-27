@@ -16,6 +16,7 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
@@ -45,6 +46,13 @@ public final class DatabaseOperationHelper {
                     // a duplicate CREATE_DATABASE would overwrite the existing admin entry and report success.
                     if (cache.getAdminDbEntry(dbName) != null) {
                         return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
+                    }
+                    final var colliding = createDatabaseRequest.isReplicated()
+                            ? null
+                            : OnDiskNameRegistry.collidingDatabase(dbName);
+                    if (colliding != null) {
+                        return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.NAME_COLLIDES_ON_DISK,
+                                colliding);
                     }
                     final var result = fs.createDatabaseFolder(dbName);
                     if (result) {

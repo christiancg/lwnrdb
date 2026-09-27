@@ -10,6 +10,7 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.exceptions.NonFiniteNumberException;
 import org.techhouse.ejson.internal.Lexer;
 
 public class LexerTest {
@@ -94,5 +95,18 @@ public class LexerTest {
     public void test_lex_unterminated_string_throws() {
         String input = "\"unclosed";
         assertThrows(org.techhouse.ejson.exceptions.MissingEndOfStringException.class, () -> Lexer.lex(input));
+    }
+
+    @Test
+    public void test_overflowing_number_token_aborts_the_lex() {
+        assertThrows(NonFiniteNumberException.class, () -> Lexer.lex("{\"x\":1e400}"));
+        assertThrows(NonFiniteNumberException.class, () -> Lexer.lex("{\"x\":-1e400}"));
+    }
+
+    @Test
+    public void test_representable_number_token_still_lexes() {
+        final var result = Lexer.lex("1.7976931348623157e308");
+        assertEquals(1, result.size());
+        assertEquals(Double.MAX_VALUE, ((JsonNumber) result.getFirst()).getValue().doubleValue());
     }
 }

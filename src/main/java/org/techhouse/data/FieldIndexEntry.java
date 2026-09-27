@@ -7,11 +7,14 @@ import java.util.Set;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonCustom;
+import org.techhouse.ejson.exceptions.NonFiniteNumberException;
 
 public class FieldIndexEntry<T> extends CollectionScopedEntry implements Comparable<T> {
     private static final char ESCAPE_CHAR = '\\';
     private static final char SEPARATOR_CHAR = Globals.ID_SEPARATOR.charAt(0);
     private static final int ESCAPE_HEADROOM = 8;
+    private static final char[] HEX_DIGITS = "0123456789abcdef".toCharArray();
+    private static final int UNICODE_ESCAPE_DIGITS = 4;
     private T value;
     private Set<String> ids;
 
@@ -36,8 +39,7 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
     public static String escapeIndexToken(String raw) {
         var needsEscaping = false;
         for (var i = 0; i < raw.length(); i++) {
-            final var current = raw.charAt(i);
-            if (current == ESCAPE_CHAR || current == '\n' || current == '\r' || current == SEPARATOR_CHAR) {
+            if (needsEscaping(raw, i)) {
                 needsEscaping = true;
                 break;
             }
@@ -52,6 +54,10 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
                 builder.append(ESCAPE_CHAR).append('s');
                 continue;
             }
+            if (isUnpairedSurrogate(raw, i)) {
+                appendUnicodeEscape(builder, current);
+                continue;
+            }
             switch (current) {
                 case ESCAPE_CHAR -> builder.append(ESCAPE_CHAR).append(ESCAPE_CHAR);
                 case '\n' -> builder.append(ESCAPE_CHAR).append('n');
@@ -60,6 +66,27 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
             }
         }
         return builder.toString();
+    }
+
+    private static boolean needsEscaping(String raw, int index) {
+        final var current = raw.charAt(index);
+        return current == ESCAPE_CHAR || current == '\n' || current == '\r' || current == SEPARATOR_CHAR
+                || isUnpairedSurrogate(raw, index);
+    }
+
+    private static boolean isUnpairedSurrogate(String raw, int index) {
+        final var current = raw.charAt(index);
+        if (Character.isHighSurrogate(current)) {
+            return index + 1 >= raw.length() || !Character.isLowSurrogate(raw.charAt(index + 1));
+        }
+        return Character.isLowSurrogate(current) && (index == 0 || !Character.isHighSurrogate(raw.charAt(index - 1)));
+    }
+
+    private static void appendUnicodeEscape(StringBuilder builder, char codeUnit) {
+        builder.append(ESCAPE_CHAR).append('u');
+        for (var shift = 12; shift >= 0; shift -= 4) {
+            builder.append(HEX_DIGITS[(codeUnit >> shift) & 0xF]);
+        }
     }
 
     public static String unescapeIndexToken(String escaped) {
@@ -79,10 +106,29 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
                 case 'n' -> builder.append('\n');
                 case 'r' -> builder.append('\r');
                 case 's' -> builder.append(SEPARATOR_CHAR);
+                case 'u' -> i = appendUnicodeEscapeValue(builder, escaped, i + 1);
                 default -> builder.append(ESCAPE_CHAR).append(next);
             }
         }
         return builder.toString();
+    }
+
+    private static int appendUnicodeEscapeValue(StringBuilder builder, String escaped, int from) {
+        if (from + UNICODE_ESCAPE_DIGITS > escaped.length()) {
+            builder.append(ESCAPE_CHAR).append('u');
+            return from - 1;
+        }
+        var codeUnit = 0;
+        for (var offset = 0; offset < UNICODE_ESCAPE_DIGITS; offset++) {
+            final var digit = Character.digit(escaped.charAt(from + offset), 16);
+            if (digit < 0) {
+                builder.append(ESCAPE_CHAR).append('u');
+                return from - 1;
+            }
+            codeUnit = codeUnit * 16 + digit;
+        }
+        builder.append((char) codeUnit);
+        return from + UNICODE_ESCAPE_DIGITS - 1;
     }
 
     public static String indexKeyOf(Object indexedValue) {
@@ -120,7 +166,7 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
         final var strValue = unescapeIndexToken(line.substring(0, separatorIdx));
         Object value;
         if (Number.class.isAssignableFrom(tClass)) {
-            value = Double.parseDouble(strValue);
+            value = parseFiniteIndexedNumber(strValue);
         } else if (tClass == Boolean.class) {
             value = Boolean.parseBoolean(strValue);
         } else if (tClass == String.class) {
@@ -130,6 +176,14 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
         }
         return new FieldIndexEntry<>(databaseName, collectionName, tClass.cast(value),
                 parseIds(line, separatorIdx + Globals.ID_SEPARATOR.length()));
+    }
+
+    private static double parseFiniteIndexedNumber(String strValue) {
+        final var parsed = Double.parseDouble(strValue);
+        if (!Double.isFinite(parsed)) {
+            throw new NonFiniteNumberException(strValue);
+        }
+        return parsed;
     }
 
     private static Set<String> parseIds(String line, int from) {

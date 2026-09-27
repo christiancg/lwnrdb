@@ -2,9 +2,11 @@ package org.techhouse.unit.ejson.elements;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.exceptions.NonFiniteNumberException;
 
 public class JsonNumberTest {
     @Test
@@ -113,5 +115,38 @@ public class JsonNumberTest {
         assertEquals(42, new JsonNumber("42").getValue());
         assertEquals(Integer.MAX_VALUE, new JsonNumber("2147483647").getValue());
         assertEquals(-2147483647, new JsonNumber("-2147483647").getValue());
+    }
+
+    @Test
+    public void test_overflowing_literal_is_refused() {
+        assertThrows(NonFiniteNumberException.class, () -> new JsonNumber("1e400"));
+    }
+
+    @Test
+    public void test_negative_overflowing_literal_is_refused() {
+        assertThrows(NonFiniteNumberException.class, () -> new JsonNumber("-1e400"));
+    }
+
+    @Test
+    public void test_long_digit_string_overflowing_is_refused() {
+        assertThrows(NonFiniteNumberException.class, () -> new JsonNumber("1" + "0".repeat(400)));
+    }
+
+    @Test
+    public void test_max_double_is_accepted() {
+        assertEquals(Double.MAX_VALUE, new JsonNumber("1.7976931348623157e308").getValue().doubleValue());
+    }
+
+    @Test
+    public void test_underflowing_literal_narrows_to_zero() {
+        assertEquals(0, new JsonNumber("1e-400").getValue());
+    }
+
+    @Test
+    public void test_negative_zero_and_int_bounds_keep_their_narrowing() {
+        assertEquals(0, new JsonNumber("-0.0").getValue());
+        assertEquals(0, new JsonNumber("0").getValue());
+        assertEquals(Integer.MAX_VALUE, new JsonNumber("2147483647").getValue());
+        assertEquals(-2147483648d, new JsonNumber("-2147483648").getValue().doubleValue());
     }
 }

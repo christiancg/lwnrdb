@@ -292,6 +292,19 @@ def test_procedure_lifecycle(conn: Conn):
                  conn.save_procedure("guarded", "return 2;", ifVersion=first.get("version")), "OK")
 
 
+def test_procedure_name_case_collision(conn: Conn):
+    section("Procedure name case collisions")
+    # .procedures/<name>.json puts the name straight into a file name, so MyProc and myproc are one
+    # file on a case-insensitive volume and the second save silently replaces the first.
+    check_status("save MyProc", conn.save_procedure("MyProc", "return 1;"), "OK")
+    check_code("saving myproc beside it -> 409-11", conn.save_procedure("myproc", "return 2;"), "ERROR", "409-11")
+    resaved = conn.save_procedure("MyProc", "return 3;")
+    check_status("re-saving MyProc still updates it", resaved, "OK")
+    check("re-saving MyProc bumped its version", (resaved.get("version") or 0) > 1,
+          detail=str(resaved)[:160])
+    conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "MyProc"})
+
+
 def test_procedure_validation(conn: Conn):
     section("Procedure validation")
     check_code("unknown database", conn.save_procedure("valid_name", "return 1;", db="no_such_db"), "NOT_FOUND", "404-4")
@@ -1646,6 +1659,7 @@ def main():
             setup_data(conn)
             test_procedure_lifecycle(conn)
             test_procedure_validation(conn)
+            test_procedure_name_case_collision(conn)
         test_permissions()
         with admin_conn() as conn:
             test_triggers(conn)

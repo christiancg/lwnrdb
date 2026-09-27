@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.AggregateRequest;
@@ -100,5 +101,58 @@ public class CreateIndexIdempotencyTest {
         createIndex();
         createIndex();
         assertEquals(2, countMatching(FieldOperatorType.EQUALS));
+    }
+
+    @Test
+    public void test_nested_path_field_can_be_indexed() {
+        final var nested = new JsonObject();
+        nested.addProperty("city", "lisbon");
+        final var object = new JsonObject();
+        object.addProperty("_id", "n1");
+        object.add("address", nested);
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        save.setObject(object);
+        save.set_id("n1");
+        assertEquals(OperationStatus.OK, processor.processMessage(save).getStatus());
+
+        final var created = processor
+                .processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "address.city"));
+        assertEquals(OperationStatus.OK, created.getStatus());
+
+        final var filter = new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "address.city",
+                new org.techhouse.ejson.elements.JsonString("lisbon")));
+        final var indexed = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        indexed.setAggregationSteps(List.of(filter));
+        final var scanned = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        scanned.setAggregationSteps(List.of(new org.techhouse.ops.req.agg.step.SkipAggregationStep(0), filter));
+
+        final var viaIndex = (AggregateResponse) processor.processMessage(indexed);
+        final var viaScan = (AggregateResponse) processor.processMessage(scanned);
+        assertEquals(1, viaIndex.getResults().size());
+        assertEquals(viaScan.getResults().size(), viaIndex.getResults().size());
+    }
+
+    @Test
+    public void test_case_differing_field_is_refused() {
+        createIndex();
+        final var colliding = processor
+                .processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "STATUS"));
+        assertEquals(ErrorCode.NAME_COLLIDES_ON_DISK.getCode(), colliding.getErrorCode());
+    }
+
+    @Test
+    public void test_case_differing_field_is_refused_on_an_empty_collection() {
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "neverWritten"));
+        final var colliding = processor
+                .processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "NeverWritten"));
+        assertEquals(ErrorCode.NAME_COLLIDES_ON_DISK.getCode(), colliding.getErrorCode());
+    }
+
+    @Test
+    public void test_replicated_create_index_skips_the_collision_check() {
+        createIndex();
+        final var replicated = new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "STATUS");
+        replicated.setReplicated(true);
+        assertEquals(OperationStatus.OK, processor.processMessage(replicated).getStatus());
     }
 }

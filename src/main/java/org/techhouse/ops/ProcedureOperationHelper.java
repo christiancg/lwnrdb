@@ -79,6 +79,12 @@ public final class ProcedureOperationHelper {
                     && request.getIfVersion() != (existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
             }
+            final var colliding = request.isReplicated()
+                    ? null
+                    : OnDiskNameRegistry.collidingDefinition(fs.listProcedureNames(dbName), request.getName());
+            if (colliding != null) {
+                return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
+            }
             final var definition = stampedDefinition(request, existing, actingUser);
             fs.writeProcedure(dbName, definition.getName(), eJson.toJson(definition.toJsonObject()));
             cache.putProcedure(dbName, definition);

@@ -2,6 +2,7 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.AfterAll;
@@ -10,9 +11,12 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.req.DropCollectionRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -134,5 +138,51 @@ public class CollectionIncarnationTest {
                 "the numeric field stays so an older peer can still read it");
         assertTrue(json.contains("\"incarnationText\":\"117309440008060933\""),
                 "the text field is the authoritative one and is exact");
+    }
+
+    @Test
+    public void test_case_differing_collection_is_refused() {
+        final var created = processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "caseProbe"));
+        assertEquals(OperationStatus.OK, created.getStatus());
+        final var colliding = processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "CaseProbe"));
+        assertEquals(ErrorCode.NAME_COLLIDES_ON_DISK.getCode(), colliding.getErrorCode());
+    }
+
+    @Test
+    public void test_replicated_create_collection_skips_the_collision_check() {
+        final var created = processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "replicaProbe"));
+        assertEquals(OperationStatus.OK, created.getStatus());
+        final var replicated = new CreateCollectionRequest(TestGlobals.DB, "ReplicaProbe");
+        replicated.setReplicated(true);
+        assertEquals(OperationStatus.OK, processor.processMessage(replicated).getStatus());
+    }
+
+    @Test
+    public void test_recreating_the_same_collection_name_is_still_idempotent() {
+        final var first = processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "idemProbe"));
+        assertEquals(OperationStatus.OK, first.getStatus());
+        final var second = processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "idemProbe"));
+        assertEquals(OperationStatus.OK, second.getStatus());
+    }
+
+    @Test
+    public void test_dropping_then_recreating_a_collection_name_is_not_a_collision() {
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "dropProbe")).getStatus());
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new DropCollectionRequest(TestGlobals.DB, "dropProbe")).getStatus());
+        final var recreated = processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "dropProbe"));
+        assertEquals(OperationStatus.OK, recreated.getStatus());
+        assertNull(OnDiskNameRegistry.collidingCollection(TestGlobals.DB, "dropProbe"));
+    }
+
+    @Test
+    public void test_a_dropped_collection_name_frees_its_case_variants_too() {
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "freedProbe")).getStatus());
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new DropCollectionRequest(TestGlobals.DB, "freedProbe")).getStatus());
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "FreedProbe")).getStatus());
     }
 }

@@ -65,8 +65,33 @@ All messages are line-delimited JSON sent over a TCP connection. Every request m
 
 ### Naming rules
 
-- **Database / collection names**: 3–64 characters, alphanumeric + `_` and `-`. The name `admin` is reserved.
+- **Database / collection names**: 3–64 characters, alphanumeric + `_` and `-`. The names `admin` and
+  `admin_pages` are reserved, and the collection name `script_runs` is reserved; all three are matched
+  case-insensitively, so `Admin` is refused too.
 - **IDs (`_id`)**: 1–64 characters, alphanumeric + `_` and `-`.
+- **Index field names**: 1–64 characters from `A-Z a-z 0-9 _ . -`. A dot addresses a nested path
+  (`address.city`). A field whose name falls outside this set cannot be indexed, but stays fully
+  queryable — `FILTER` answers it with a collection scan, as it does for any unindexed field.
+- **Names must differ by more than case.** Every name above becomes a path segment or a file name on
+  disk, and a case-insensitive filesystem (macOS APFS, Windows NTFS) would give two such names one
+  file. `CREATE_DATABASE`, `CREATE_COLLECTION`, `CREATE_INDEX`, `SAVE_PROCEDURE` and `SAVE_SCHEDULE`
+  therefore answer `409-11` when a sibling name differs from the new one only by case. The refusal is
+  unconditional, including on a case-sensitive filesystem, so a data directory stays portable and
+  every node of a cluster agrees on which name is legal.
+
+> **Upgrade note.** Three refusals are new. A `CREATE_*` whose name differs from an existing sibling
+> only by case now answers `409-11` where it used to succeed; a `CREATE_INDEX` on a field name
+> outside `A-Z a-z 0-9 _ . -` now answers `400-1`; and `admin`, `admin_pages` and `script_runs` are
+> matched case-insensitively, so `Admin` is refused as reserved rather than resolving to the internal
+> `admin` database. If you already run on a case-insensitive filesystem, look for databases,
+> collections, indexed fields or procedures whose names differ only by case before upgrading: they
+> already share one set of files, and the server names them at startup with a
+> *"share one on-disk path"* warning.
+>
+> Separately, a field index written by an earlier version that holds a string containing an unpaired
+> surrogate stores that character as `?`, which collapses distinct values onto one key. Run
+> [`REINDEX`](#reindex) once on any such collection after upgrading; the rebuild now writes those
+> values escaped.
 
 ### Operations
 
@@ -112,6 +137,11 @@ The id may also be sent beside the object instead of inside it; the two forms ad
 ```json
 {"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","_id":"user-1","object":{"name":"Alice"}}
 ```
+Every number is stored as an IEEE-754 double, and a request carrying one outside that range —
+`1e400`, `-1e400`, or a digit string that overflows — is refused as an unparseable command rather
+than stored. Earlier versions answered `OK` and wrote `null` in its place, so the cached document and
+the stored one disagreed until the next restart. `Infinity` and `NaN` were already refused as invalid
+JSON.
 
 #### `BULK_SAVE`
 At least one object required.
@@ -1137,6 +1167,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-7` | `ERROR` | Transaction aborted: a participant could not prepare |
 | `409-8` | `ERROR` | The procedure, trigger or schedule was modified by someone else |
 | `409-9` | `ERROR` | The transaction was aborted and must be rolled back before continuing |
+| `409-11` | `ERROR` | A name that differs only by case already exists and would share storage with it |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |

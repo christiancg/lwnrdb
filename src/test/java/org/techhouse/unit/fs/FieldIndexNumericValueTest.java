@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -11,6 +13,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
@@ -120,5 +123,43 @@ public class FieldIndexNumericValueTest {
 
         final var index = read(fileSystem);
         assertEquals(2, index.size());
+    }
+
+    @Test
+    public void test_non_finite_index_line_is_dropped_and_file_rewritten() throws Exception {
+        final var fileSystem = fs();
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, numberEntry(5d, "finite"), null);
+        Files.writeString(numberIndexFile().toPath(), "Infinity" + Globals.ID_SEPARATOR + "a" + Globals.NEWLINE,
+                StandardCharsets.UTF_8, java.nio.file.StandardOpenOption.APPEND);
+
+        final var index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, Number.class);
+
+        assertNotNull(index);
+        assertEquals(1, index.size());
+        assertEquals(5d, index.getFirst().getValue());
+        final var rewritten = Files.readString(numberIndexFile().toPath(), StandardCharsets.UTF_8);
+        assertFalse(rewritten.contains("Infinity"), "the loader must drop the unreadable line");
+    }
+
+    @Test
+    public void test_file_of_only_non_finite_lines_is_left_untouched() throws Exception {
+        final var fileSystem = fs();
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, numberEntry(7d, "seed"), null);
+        final var onlyNonFinite = "Infinity" + Globals.ID_SEPARATOR + "a" + Globals.NEWLINE;
+        Files.writeString(numberIndexFile().toPath(), onlyNonFinite, StandardCharsets.UTF_8);
+
+        final var index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, Number.class);
+
+        assertNull(index, "a file no line of which parses is not a torn file");
+        assertEquals(onlyNonFinite, Files.readString(numberIndexFile().toPath(), StandardCharsets.UTF_8));
+    }
+
+    private static FieldIndexEntry<Double> numberEntry(Double value, String... ids) {
+        return new FieldIndexEntry<>(TestGlobals.DB, TestGlobals.COLL, value, Set.of(ids));
+    }
+
+    private static File numberIndexFile() {
+        return new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-" + FIELD + "-Number.idx");
     }
 }

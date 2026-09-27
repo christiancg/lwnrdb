@@ -875,6 +875,41 @@ def test_operation_permissions(c):
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
+def test_name_case_collisions(c):
+    section("A name that differs only by case is refused, on every filesystem")
+    # FilePaths uses the logical name verbatim as a path segment, so on a case-insensitive volume
+    # MyColl and mycoll share one folder: each collection then serves the other's documents after a
+    # restart and DROP_COLLECTION destroys both. The refusal is unconditional, so this section
+    # asserts the same codes on a case-sensitive host.
+    check_status("CREATE_DATABASE CaseDb", create_db(c, "CaseDb"), "OK")
+    check_code("CREATE_DATABASE casedb -> 409-11", create_db(c, "casedb"), "ERROR", "409-11")
+    check_code("CREATE_DATABASE CaseDb again is still the duplicate code",
+               create_db(c, "CaseDb"), "ERROR", "409-2")
+
+    check_status("CREATE_COLLECTION MyColl", create_coll(c, "MyColl", db="CaseDb"), "OK")
+    check_code("CREATE_COLLECTION mycoll -> 409-11",
+               create_coll(c, "mycoll", db="CaseDb"), "ERROR", "409-11")
+    check_status("CREATE_COLLECTION MyColl again stays idempotent",
+                 create_coll(c, "MyColl", db="CaseDb"), "OK")
+
+    check_status("CREATE_INDEX Foo", create_index(c, "MyColl", "Foo", db="CaseDb"), "OK")
+    check_code("CREATE_INDEX foo -> 409-11",
+               create_index(c, "MyColl", "foo", db="CaseDb"), "ERROR", "409-11")
+
+    check_code("CREATE_DATABASE Admin -> 400-1 reserved", create_db(c, "Admin"), "ERROR", "400-1")
+    check_code("CREATE_DATABASE ADMIN -> 400-1 reserved", create_db(c, "ADMIN"), "ERROR", "400-1")
+    check_code("CREATE_COLLECTION inside Admin is refused with it",
+               create_coll(c, "users", db="Admin"), "ERROR", "400-1")
+
+    check_code("CREATE_INDEX with a space in the field name -> 400-1",
+               create_index(c, "MyColl", "a b", db="CaseDb"), "ERROR", "400-1")
+    check_status("CREATE_INDEX on a nested path is accepted",
+                 create_index(c, "MyColl", "address.city", db="CaseDb"), "OK")
+    check_status("CREATE_INDEX on a hyphenated field is accepted",
+                 create_index(c, "MyColl", "first-name", db="CaseDb"), "OK")
+    drop_db(c, "CaseDb")
+
+
 def main():
     bu.banner("API commands & aggregations integration suite", HOST, PORT)
 
@@ -890,6 +925,7 @@ def main():
 
     groups = [
         test_database_and_collection_ops,
+        test_name_case_collisions,
         test_reserved_script_runs_collection,
         test_crud,
         test_top_level_id,

@@ -67,8 +67,15 @@ public final class ScheduleOperationHelper {
                     && request.getIfVersion() != (existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
             }
-            if (existing == null && fs.listScheduleNames(dbName).size() >= configuration.getScheduleMaxPerDatabase()) {
+            final var scheduleNames = fs.listScheduleNames(dbName);
+            if (existing == null && scheduleNames.size() >= configuration.getScheduleMaxPerDatabase()) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.TOO_MANY_SCHEDULES);
+            }
+            final var colliding = request.isReplicated()
+                    ? null
+                    : OnDiskNameRegistry.collidingDefinition(scheduleNames, request.getName());
+            if (colliding != null) {
+                return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
             }
             final var definition = stampedDefinition(request, existing, actingUser);
             fs.writeSchedule(dbName, definition.getName(), eJson.toJson(definition.toJsonObject()));

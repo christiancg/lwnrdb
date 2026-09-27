@@ -128,6 +128,10 @@ public final class DataRequestValidator {
         if (request.getFieldName() == null || request.getFieldName().isBlank()) {
             return ValidationResult.fail("CREATE_INDEX request requires a non-blank fieldName");
         }
+        final var charset = NameValidations.validateIndexFieldName(request.getFieldName());
+        if (!charset.isValid()) {
+            return charset;
+        }
         return validateIndexFieldNotReserved("CREATE_INDEX", request.getFieldName());
     }
 
@@ -157,6 +161,10 @@ public final class DataRequestValidator {
         if (request.getFieldName() == null || request.getFieldName().isBlank()) {
             return ValidationResult.fail("DROP_INDEX request requires a non-blank fieldName");
         }
+        final var charset = NameValidations.validateIndexFieldName(request.getFieldName());
+        if (!charset.isValid()) {
+            return charset;
+        }
         return validateIndexFieldNotReserved("DROP_INDEX", request.getFieldName());
     }
 
@@ -168,6 +176,10 @@ public final class DataRequestValidator {
         for (var fieldName : request.getFieldNames()) {
             if (fieldName == null || fieldName.isBlank()) {
                 return ValidationResult.fail("REINDEX fieldNames must not contain blank entries");
+            }
+            final var charset = NameValidations.validateIndexFieldName(fieldName);
+            if (!charset.isValid()) {
+                return charset;
             }
         }
         return ValidationResult.ok();

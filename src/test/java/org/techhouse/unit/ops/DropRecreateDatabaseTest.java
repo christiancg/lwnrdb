@@ -3,6 +3,7 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
+import java.util.Locale;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -11,6 +12,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.AggregateRequest;
@@ -81,5 +83,26 @@ public class DropRecreateDatabaseTest {
         save("after");
 
         assertEquals("after", valueOf());
+    }
+
+    @Test
+    public void test_case_differing_database_is_refused() {
+        final var colliding = processor
+                .processMessage(new CreateDatabaseRequest(TestGlobals.DB.toUpperCase(Locale.ROOT)));
+        assertEquals(ErrorCode.NAME_COLLIDES_ON_DISK.getCode(), colliding.getErrorCode());
+    }
+
+    @Test
+    public void test_dropping_then_recreating_the_same_case_still_works() {
+        assertEquals(OperationStatus.OK, processor.processMessage(new DropDatabaseRequest(TestGlobals.DB)).getStatus());
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CreateDatabaseRequest(TestGlobals.DB)).getStatus());
+    }
+
+    @Test
+    public void test_replicated_create_database_skips_the_collision_check() {
+        final var replicated = new CreateDatabaseRequest(TestGlobals.DB.toUpperCase(Locale.ROOT));
+        replicated.setReplicated(true);
+        assertEquals(OperationStatus.OK, processor.processMessage(replicated).getStatus());
     }
 }

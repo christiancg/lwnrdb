@@ -103,6 +103,7 @@ public class Main {
         StartupWarnings.warnIfDefaultAdminPassword();
         StartupWarnings.warnIfScriptFetchEnabled();
         StartupWarnings.warnIfIndexesLeftDirty();
+        StartupWarnings.warnIfNamesShareAnOnDiskKey();
         startClusterIfEnabled();
         TriggerRunRecovery.recoverLocal();
         final var sslServerSocketFactory = createTlsFactory();

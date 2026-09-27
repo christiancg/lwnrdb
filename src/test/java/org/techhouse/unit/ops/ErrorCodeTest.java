@@ -120,4 +120,11 @@ public class ErrorCodeTest {
         assertEquals(ErrorCode.SCRIPT_TIMEOUT, ErrorCode.byCode("408-1"));
         assertEquals(ErrorCode.SCRIPT_MEMORY_EXCEEDED, ErrorCode.byCode("400-12"));
     }
+
+    @Test
+    public void test_name_collides_on_disk_code_and_status() {
+        assertEquals("409-11", ErrorCode.NAME_COLLIDES_ON_DISK.getCode());
+        assertEquals(OperationStatus.ERROR, ErrorCode.NAME_COLLIDES_ON_DISK.getStatus());
+        assertFalse(ErrorCode.NAME_COLLIDES_ON_DISK.getDefaultMessage().isBlank());
+    }
 }

@@ -9,6 +9,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateIndexRequest;
@@ -35,6 +36,13 @@ public final class IndexOperationHelper {
                     if (!cache.hasNoIndex(dbName, collName, fieldName)) {
                         return OperationResponse.ok(OperationType.CREATE_INDEX,
                                 "Index already exists for field: " + fieldName);
+                    }
+                    final var colliding = createIndexRequest.isReplicated()
+                            ? null
+                            : OnDiskNameRegistry.collidingIndexField(dbName, collName, fieldName);
+                    if (colliding != null) {
+                        return new OperationResponse(OperationType.CREATE_INDEX, ErrorCode.NAME_COLLIDES_ON_DISK,
+                                colliding);
                     }
                     IndexHelper.createIndex(dbName, collName, fieldName);
                     AdminOperationHelper.saveNewIndex(dbName, collName, fieldName);

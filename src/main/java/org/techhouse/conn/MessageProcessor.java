@@ -109,6 +109,7 @@ public class MessageProcessor implements Runnable {
                                 }
                             }
                         } catch (InvalidCommandException exception) {
+                            logger.warning("Refused an unparseable request: " + causeMessageOf(exception));
                             response = exception.getMessage();
                         }
                         clientTracker.updateLastCommandTime(clientId);
@@ -155,6 +156,11 @@ public class MessageProcessor implements Runnable {
     }
 
     private record Handled(String response, boolean close) {
+    }
+
+    private static String causeMessageOf(InvalidCommandException exception) {
+        final var cause = exception.getCause();
+        return cause == null ? exception.getMessage() : cause.getClass().getSimpleName() + ": " + cause.getMessage();
     }
 
     private static String withoutTriggerDepth(String rawMessage) {

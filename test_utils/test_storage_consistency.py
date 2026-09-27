@@ -74,6 +74,7 @@ LOCK_COLL = "items"
 DIRTY_COLL = "dirty_index_docs"
 HEAL_COLL = "heal_race_docs"
 SCRIPT_COLL = "script_written"
+NON_FINITE_COLL = "non_finite_numbers"
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
@@ -101,6 +102,10 @@ PERM_USERS = 6
 PERM_ROUNDS = 10
 
 
+def _refuse_non_rfc_constant(token: str):
+    raise ValueError(f"the server answered with the non-RFC JSON constant {token}")
+
+
 class Conn(bu.Conn):
     def save(self, doc, db=DB, coll=COLL) -> dict:
         return self.send({"type": "SAVE", "databaseName": db, "collectionName": coll, "object": doc})
@@ -112,6 +117,25 @@ class Conn(bu.Conn):
 
     def run(self, script: str, db=DB) -> dict:
         return self.send({"type": "RUN_SCRIPT", "databaseName": db, "script": script})
+
+    def send_raw(self, line: str) -> dict:
+        """Send a pre-serialised line and refuse a non-RFC constant in the reply.
+
+        json.dumps cannot express 1e400 (a Python float overflows to inf, which serialises as the
+        Infinity token the lexer refuses for a different reason), and a plain json.loads would
+        accept Infinity/NaN coming back as a Python extension.
+        """
+        try:
+            self.s.sendall((line + "\n").encode())
+            raw = self.f.readline().decode().strip()
+        except (OSError, ConnectionError):
+            return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
+        if not raw:
+            return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
+        try:
+            return json.loads(raw, parse_constant=_refuse_non_rfc_constant)
+        except json.JSONDecodeError:
+            return {"status": "ERROR", "message": raw}
 
     def count_via_scan(self, db=DB, coll=COLL) -> int:
         response = self.send({"type": "AGGREGATE", "databaseName": db, "collectionName": coll,
@@ -1063,6 +1087,57 @@ def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, l
                                 "_id": doc_id}), "OK")
 
 
+def save_raw_number(conn: Conn, coll: str, doc_id: str, literal: str) -> dict:
+    return conn.send_raw('{"type":"SAVE","databaseName":"%s","collectionName":"%s",'
+                         '"object":{"_id":"%s","v":%s}}' % (DB, coll, doc_id, literal))
+
+
+def test_non_finite_numbers_are_refused(conn: Conn):
+    section("A number the serializer cannot spell is refused instead of stored as null")
+    # The wire parser was the one unguarded producer: 1e400 parsed to Infinity, the cache held it
+    # and NumberTypeAdapter wrote null, so the same FILTER answered differently warm and cold.
+    coll = NON_FINITE_COLL
+    bu.check_status("create the collection",
+                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+
+    for label, literal in (("1e400", "1e400"), ("-1e400", "-1e400"), ("a 401-digit integer", "1" + "0" * 400)):
+        response = save_raw_number(conn, coll, "refused", literal)
+        bu.check(f"SAVE of {label} is refused", response.get("status") != "OK", detail=str(response)[:160])
+
+    bu.check_status("SAVE of the largest representable double is accepted",
+                    save_raw_number(conn, coll, "big", "1.7976931348623157e308"), "OK")
+    bu.check_status("SAVE of an ordinary number is accepted", save_raw_number(conn, coll, "small", "5"), "OK")
+
+    bu.check_status("CREATE_INDEX on the field",
+                    conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
+                               "fieldName": "v"}), "OK")
+    time.sleep(1.5)
+    assert_count_agrees_with_rows(conn, coll, "warm")
+
+
+def assert_count_agrees_with_rows(conn: Conn, coll: str, phase: str):
+    gt = {"type": "FILTER", "operator": {"fieldOperatorType": "GREATER_THAN", "field": "v", "value": 1}}
+    rows = aggregate_ids(conn, coll, [gt])
+    counted = aggregate_count(conn, coll, [gt])
+    bu.check(f"index-only COUNT equals the rows the same FILTER returns ({phase})", counted == len(rows),
+             detail=f"count={counted} rows={rows}")
+
+
+def test_non_finite_numbers_stay_refused_after_a_restart(conn: Conn):
+    section("The non-finite refusal and its index survive a restart")
+    coll = NON_FINITE_COLL
+    stored = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": "big"})
+    bu.check("the largest representable double reads back unchanged",
+             (stored.get("object") or {}).get("v") == 1.7976931348623157e308, detail=str(stored)[:200])
+    bu.check("the refused document was never stored",
+             conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll,
+                        "_id": "refused"}).get("status") != "OK")
+    assert_count_agrees_with_rows(conn, coll, "cold")
+    bu.check_status("REINDEX the collection",
+                    conn.send({"type": "REINDEX", "databaseName": DB, "collectionName": coll}), "OK")
+    assert_count_agrees_with_rows(conn, coll, "after REINDEX")
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -1110,6 +1185,7 @@ def main():
             test_count_agrees_with_a_scan_after_a_restart(conn)
             test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn)
             test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn)
+            test_non_finite_numbers_are_refused(conn)
 
             check("a burst of indexed writes leaves an index-dirty marker on disk",
                   write_until_indexes_are_dirty(conn, work_dir),
@@ -1126,6 +1202,7 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         test_an_unclean_stop_is_reported_at_the_next_startup(work_dir, log_path, log_offset)
         with admin_conn() as conn:
+            test_non_finite_numbers_stay_refused_after_a_restart(conn)
             test_the_committed_transaction_is_all_there_after_the_restart(conn)
             test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)
             test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn, work_dir)

@@ -767,13 +767,14 @@ AGREE_IN_CUSTOM = "idxagg_agree_in_custom"
 AGREE_NOT_IN_CUSTOM = "idxagg_agree_notin_custom"
 AGREE_CUSTOM_SORT = "idxagg_agree_custom_sort"
 AGREE_CUSTOM_TIES = "idxagg_agree_custom_ties"
+AGREE_SURROGATE = "idxagg_agree_surrogate"
 
 AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, AGREE_NOT_IN_ARR,
                      AGREE_JOIN_REMOTE, AGREE_JOIN_LEFT, AGREE_JOIN_NULL_REMOTE, AGREE_JOIN_NULL_LEFT,
                      AGREE_SORT_BOOL, AGREE_SORT_BOOL_DESC, AGREE_SORT_MIXED, AGREE_SORT_TIES,
                      AGREE_SIBLING, AGREE_OBJ_SORT, AGREE_CUSTOM, AGREE_MIXED_BOX, AGREE_GEO,
                      AGREE_IN_CASE, AGREE_NOT_IN_CASE, AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM,
-                     AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES)
+                     AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES, AGREE_SURROGATE)
 
 
 def agree_ids(r):
@@ -1042,6 +1043,44 @@ def probe_mixed_number_boxes_group_the_same_either_way(c):
           AGREE_MIXED_BOX, "score", extract=lambda r: len(r.get("results") or []), expected=2)
 
 
+def probe_lone_surrogate_values_index_the_same_as_they_scan(c):
+    """escapeIndexToken left an unpaired surrogate raw, so the UTF-8 writer substituted '?' and two
+    distinct values collapsed onto one file key: an index-backed EQUALS missed its own document, and
+    the next update made removeIndexLine delete an unrelated document's line."""
+    values = {"hi": "a\ud800b", "lo": "a\udc00b", "plain": "a?b", "emoji": "a\U0001f600b"}
+    for doc_id, value in values.items():
+        save_doc(c, AGREE_SURROGATE, {"_id": doc_id, "v": value})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SURROGATE, "fieldName": "v"})
+    wait_for_indexes(c, [(AGREE_SURROGATE, "v")])
+
+    for doc_id, value in values.items():
+        steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "v", "value": value}}]
+        indexed = agree_ids(agg(c, AGREE_SURROGATE, steps))
+        scanned = agree_ids(agg(c, AGREE_SURROGATE, [{"type": "SKIP", "skip": 0}] + steps))
+        counted = agg(c, AGREE_SURROGATE, steps + [{"type": "COUNT"}])
+        rows = len(indexed) if isinstance(indexed, list) else -1
+        counted_rows = ((counted.get("results") or [{}])[0]).get("count")
+        check(f"an index-backed EQUALS on the {doc_id} value equals the scan",
+              indexed == scanned == [doc_id], f"index={indexed!r} scan={scanned!r}")
+        check(f"index-only COUNT agrees with the rows for the {doc_id} value", counted_rows == rows,
+              f"count={counted_rows} rows={rows}")
+
+    distinct_indexed = sorted(d.get("v") for d in (agg(c, AGREE_SURROGATE,
+                              [{"type": "DISTINCT", "fieldName": "v"}]).get("results") or []))
+    distinct_scanned = sorted(d.get("v") for d in (agg(c, AGREE_SURROGATE,
+                              [{"type": "SKIP", "skip": 0}, {"type": "DISTINCT", "fieldName": "v"}])
+                              .get("results") or []))
+    check("DISTINCT keeps every surrogate value distinct", distinct_indexed == distinct_scanned == sorted(
+        values.values()), f"index={distinct_indexed!r} scan={distinct_scanned!r}")
+
+    save_doc(c, AGREE_SURROGATE, {"_id": "hi", "v": "zzz"})
+    wait_for_indexes(c, [(AGREE_SURROGATE, "v")])
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "v", "value": "a?b"}}]
+    after = agree_ids(agg(c, AGREE_SURROGATE, steps))
+    check("updating a surrogate-valued document leaves an unrelated document indexed",
+          after == ["plain"], f"got {after!r}")
+
+
 def agreement_suite(c):
     section("Index / scan agreement: an index-backed answer must equal the full-scan answer")
     setup_agreement(c)
@@ -1058,6 +1097,7 @@ def agreement_suite(c):
     probe_a_scalar_membership_operand_is_refused(c)
     probe_membership_uses_the_same_equality_as_equals(c)
     probe_mixed_number_boxes_group_the_same_either_way(c)
+    probe_lone_surrogate_values_index_the_same_as_they_scan(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -1109,6 +1149,20 @@ def probe_non_ascii_indexed_values(c):
               got == expected, detail=f"expected {expected}, got {got}")
     check("re-pointed document no longer answers under its old non-ASCII value",
           "u3" not in reg_filter(c, REG_UNICODE, "city", "plain"))
+
+    # A rebuild from the documents must leave multi-byte sequences and paired surrogates exactly as
+    # they were: only an *unpaired* surrogate is escaped, and escaping an emoji would churn the file.
+    check_status("REINDEX the non-ASCII collection",
+                 c.send({"type": "REINDEX", "databaseName": DB, "collectionName": REG_UNICODE}), "OK")
+    wait_for_background()
+    for city, expected in (("café", ["u1", "u5"]), ("日本語", ["u2", "u3"]), ("a😀b", ["u4"])):
+        got = reg_filter(c, REG_UNICODE, "city", city)
+        scanned = sorted(d.get("_id") for d in (agg(c, REG_UNICODE, [
+            {"type": "SKIP", "skip": 0},
+            {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "city", "value": city}},
+        ]).get("results") or []))
+        check(f"non-ASCII indexed value {city!r} survives a REINDEX and agrees with the scan",
+              got == expected and scanned == expected, detail=f"expected {expected}, index={got}, scan={scanned}")
 
 
 def probe_index_values_containing_delimiters(c):

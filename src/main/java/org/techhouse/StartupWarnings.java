@@ -5,6 +5,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.simplejs.host.HostAllowlist;
 
 public final class StartupWarnings {
@@ -70,6 +71,14 @@ public final class StartupWarnings {
         final var interpreters = (long) config.getMaxConcurrentScripts() + config.getTriggerThreads()
                 + config.getScheduleThreads();
         return interpreters * config.getScriptMaxMemoryBytes();
+    }
+
+    public static void warnIfNamesShareAnOnDiskKey() {
+        for (final var group : OnDiskNameRegistry.groupedByOnDiskKey()) {
+            logger.warning("These names share one on-disk path and collide on a case-insensitive filesystem: "
+                    + String.join(", ", group)
+                    + ". Only one of them has storage; the others read and write that one's files.");
+        }
     }
 
     public static void warnIfXmxExceedsMaxMemory() {

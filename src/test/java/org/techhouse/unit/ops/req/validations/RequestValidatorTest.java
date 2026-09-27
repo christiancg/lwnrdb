@@ -10,8 +10,12 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CloseConnectionRequest;
+import org.techhouse.ops.req.CreateDatabaseRequest;
+import org.techhouse.ops.req.CreateIndexRequest;
 import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.DropIndexRequest;
 import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
@@ -312,5 +316,68 @@ public class RequestValidatorTest {
     public void validate_dropIndex_acceptsAnOrdinaryField() {
         final var request = new org.techhouse.ops.req.DropIndexRequest("testDb", "testColl", "score");
         assertTrue(RequestValidator.validate(request).isValid());
+    }
+
+    private static boolean createIndexValid(String fieldName) {
+        return RequestValidator.validate(new CreateIndexRequest("myDb", "myCollection", fieldName)).isValid();
+    }
+
+    @Test
+    public void test_index_field_name_charset_is_enforced() {
+        assertFalse(createIndexValid("a b"));
+        assertFalse(createIndexValid("a/b"));
+        assertFalse(createIndexValid("a|b"));
+        assertFalse(createIndexValid("a\ud800b"));
+        assertFalse(createIndexValid("café"));
+        assertFalse(createIndexValid("x".repeat(65)));
+    }
+
+    @Test
+    public void test_nested_path_field_name_is_accepted() {
+        assertTrue(createIndexValid("address.city"));
+    }
+
+    @Test
+    public void test_hyphenated_field_name_is_accepted() {
+        assertTrue(createIndexValid("first-name"));
+        assertTrue(createIndexValid("plain"));
+        assertTrue(createIndexValid("a_b"));
+    }
+
+    @Test
+    public void test_index_field_charset_applies_to_drop_and_reindex() {
+        assertFalse(RequestValidator.validate(new DropIndexRequest("myDb", "myCollection", "a b")).isValid());
+        assertFalse(RequestValidator.validate(new ReindexRequest("myDb", "myCollection", List.of("a b"))).isValid());
+        assertTrue(RequestValidator.validate(new ReindexRequest("myDb", "myCollection", List.of("address.city")))
+                .isValid());
+    }
+
+    @Test
+    public void test_admin_database_name_is_reserved_case_insensitively() {
+        assertFalse(RequestValidator.validate(new CreateDatabaseRequest("Admin")).isValid());
+        assertFalse(RequestValidator.validate(new CreateDatabaseRequest("ADMIN")).isValid());
+        assertFalse(RequestValidator.validate(new CreateDatabaseRequest("admin")).isValid());
+    }
+
+    @Test
+    public void test_admin_pages_name_is_reserved_case_insensitively() {
+        assertFalse(RequestValidator.validate(new CreateDatabaseRequest("Admin_Pages")).isValid());
+        assertFalse(RequestValidator.validate(new CreateDatabaseRequest("admin_pages")).isValid());
+    }
+
+    @Test
+    public void test_script_runs_collection_is_reserved_case_insensitively() {
+        final var request = new SaveRequest("myDb", "Script_Runs");
+        final var object = new JsonObject();
+        object.add("_id", new JsonString("a1"));
+        request.setObject(object);
+        request.set_id("a1");
+        assertFalse(RequestValidator.validate(request).isValid());
+    }
+
+    @Test
+    public void test_ordinary_names_are_still_accepted() {
+        assertTrue(RequestValidator.validate(new CreateDatabaseRequest("myDb")).isValid());
+        assertTrue(RequestValidator.validate(new CreateDatabaseRequest("administrators")).isValid());
     }
 }
