@@ -1635,6 +1635,25 @@ MID_COMMIT_FILLER_OPS = 2000
 MID_COMMIT_FILLER_SIZE = 2
 
 
+def pad_the_commit(conn, coll, prefix):
+    """Buffer MID_COMMIT_FILLER_OPS throwaway ops into `coll` on an open transaction.
+
+    The padding is what holds the commit's apply window open, so a silently refused filler op narrows
+    the very gap the kill has to land in -- which reads downstream as the commit outrunning the
+    harness and skips the case under test rather than reporting that the setup never took. The first
+    refusal is reported with the check: the reason is the whole diagnosis, and the count alone is not.
+    """
+    refused = []
+    for filler in range(MID_COMMIT_FILLER_OPS):
+        response = conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
+                              "objects": [{"_id": f"{prefix}{filler}_{n}", "v": filler}
+                                          for n in range(MID_COMMIT_FILLER_SIZE)]})
+        if response.get("status") != "OK":
+            refused.append(response)
+    check("the commit's padding was buffered", not refused,
+          f"{len(refused)} of {MID_COMMIT_FILLER_OPS} filler ops were refused, first={refused[0] if refused else None}")
+
+
 def _commit_and_kill_mid_apply(victim, coll, ids):
     """Commit a deliberately slow transaction on `victim` and kill it while its local-commit marker
     is still on disk. Answers the transaction id, or None when the commit outran the harness."""
@@ -1648,16 +1667,7 @@ def _commit_and_kill_mid_apply(victim, coll, ids):
         check_status("the ids the replay must skip were buffered", conn.send({
             "type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
             "objects": [{"_id": doc_id, "v": 2} for doc_id in ids]}), "OK")
-        refused = 0
-        for filler in range(MID_COMMIT_FILLER_OPS):
-            if conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll,
-                          "objects": [{"_id": f"filler{filler}_{n}", "v": filler}
-                                      for n in range(MID_COMMIT_FILLER_SIZE)]}).get("status") != "OK":
-                refused += 1
-        # Same reason as the sibling helper: the padding is what widens the window the kill lands in,
-        # so a silently refused filler op reads downstream as the commit outrunning the harness.
-        check("the commit's padding was buffered", refused == 0,
-              f"{refused} of {MID_COMMIT_FILLER_OPS} filler ops were refused")
+        pad_the_commit(conn, coll, "filler")
         pending = BackgroundOp(conn, {"type": "COMMIT_TRANSACTION"})
         caught = wait_until(lambda: holds_tx_record(victim, tx_id, "localcommit"),
                             timeout_s=60.0, interval_s=0.02)
@@ -1941,18 +1951,7 @@ def prepare_then_kill_behind_a_slow_commit(edge, victim, buffered, padding, time
         if tx_id is None:
             return None
         buffered(conn)
-        refused = 0
-        for filler in range(MID_COMMIT_FILLER_OPS):
-            if conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": padding,
-                          "objects": [{"_id": f"pad{filler}_{n}", "v": filler}
-                                      for n in range(MID_COMMIT_FILLER_SIZE)]}).get("status") != "OK":
-                refused += 1
-        # The padding is what holds the window open, so a refused filler op narrows the very gap the
-        # kill has to land in. Unchecked, that turns into "no participant marker was ever observed"
-        # further down - which reads as the commit outrunning the harness and skips the whole case
-        # under test, rather than reporting that the setup never took.
-        check("the commit's padding was buffered", refused == 0,
-              f"{refused} of {MID_COMMIT_FILLER_OPS} filler ops were refused")
+        pad_the_commit(conn, padding, "pad")
         pending = BackgroundOp(conn, {"type": "COMMIT_TRANSACTION"})
         prepared = wait_until(lambda: holds_tx_record(victim, tx_id, "part"),
                               timeout_s=timeout_s, interval_s=0.02)

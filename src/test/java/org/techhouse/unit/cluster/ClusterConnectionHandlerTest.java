@@ -168,6 +168,40 @@ public class ClusterConnectionHandlerTest {
         assertEquals(ClusterMessageType.ADMIN_SNAPSHOT_ACK, snapshot.getType());
     }
 
+    @Test
+    public void test_a_digest_blocked_on_a_collection_lock_does_not_hold_up_the_connection() throws Exception {
+        markAdminSyncCompleted(true);
+        final var address = cluster.serverAddress();
+        final var digestDone = new CountDownLatch(1);
+        final Thread digest;
+
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            digest = Thread.ofVirtual().start(() -> {
+                try {
+                    pool.request(address, antiEntropyRequest(ClusterMessageType.DIGEST, 0L), ACK_TIMEOUT_MS);
+                } catch (Exception e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    digestDone.countDown();
+                }
+            });
+            assertFalse(digestDone.await(1, TimeUnit.SECONDS), "the digest should still be waiting on the lock");
+
+            final var ack = pool.request(address, envelope(ClusterMessageType.ADMIN_SNAPSHOT), 5000L);
+
+            assertNotNull(ack);
+            assertEquals(ClusterMessageType.ADMIN_SNAPSHOT_ACK, ack.getType());
+            assertEquals(1L, digestDone.getCount(), "the digest must still be blocked, or this proved nothing");
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+            markAdminSyncCompleted(false);
+        }
+
+        assertTrue(digestDone.await(30, TimeUnit.SECONDS), "the digest must finish once the lock is released");
+        digest.join();
+    }
+
     private void markAdminSyncCompleted(boolean completed) throws Exception {
         TestUtils.getPrivateField(IocContainer.get(AdminAntiEntropyService.class), "adminSyncCompleted",
                 AtomicBoolean.class).set(completed);

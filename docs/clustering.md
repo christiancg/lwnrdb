@@ -649,6 +649,17 @@ The node-to-node channel reuses the client transport: line-delimited EJson over 
 whose `correlationId` lets one pooled connection multiplex many in-flight requests, and
 inbound messages whose `secret` does not match `clusterSecret` are rejected.
 
+Every peer shares **one** connection, so what a node does with an inbound frame decides what the
+rest of that peer's traffic waits for. `ClusterConnectionHandler` answers replication, admin and 2PC
+messages on a single ordered executor — `REPLICATE_ADMIN` replicates DDL by re-execution and depends
+on that order — and answers `GOSSIP`, `FORWARD_REQUEST`, `DIGEST` and `PULL` concurrently beside it.
+The last two are there because they wait out a whole `replicationAckTimeoutMs` on a busy collection
+lock: on the ordered lane that wait was the peer's entire inbound channel, so an ordinary long write
+holding a collection lock made the *requester's* next forwarded transaction op time out and the
+client's write be refused. They mutate nothing, and anti-entropy's two sides already snapshot at
+different instants, so nothing depends on where they sit in the stream. Replies may come back out of
+order; the peer dispatches them on `correlationId`.
+
 | Message (+ ack) | Carries | Purpose |
 |---|---|---|
 | `JOIN_REQUEST` / `JOIN_RESPONSE` | `sender`, `members` | discovery |

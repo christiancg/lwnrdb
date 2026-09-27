@@ -85,7 +85,10 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private static boolean mayOvertake(ClusterMessageType type) {
-        return type == ClusterMessageType.GOSSIP || type == ClusterMessageType.FORWARD_REQUEST;
+        return switch (type) {
+            case GOSSIP, FORWARD_REQUEST, DIGEST, PULL -> true;
+            default -> false;
+        };
     }
 
     private void respond(BufferedWriter writer, ReentrantLock writerLock, ClusterMessage request) throws IOException {
