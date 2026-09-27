@@ -907,7 +907,21 @@ def test_name_case_collisions(c):
                  create_index(c, "MyColl", "address.city", db="CaseDb"), "OK")
     check_status("CREATE_INDEX on a hyphenated field is accepted",
                  create_index(c, "MyColl", "first-name", db="CaseDb"), "OK")
-    drop_db(c, "CaseDb")
+
+    check_status("SAVE into MyColl before the case-variant drops",
+                 save(c, "MyColl", {"_id": "keepme", "v": 1}, db="CaseDb"), "OK")
+    check_status("DROP_COLLECTION mycoll is refused", drop_coll(c, "mycoll", db="CaseDb"), "ERROR")
+    check_status("DROP_DATABASE casedb is refused", drop_db(c, "casedb"), "ERROR")
+    check_status("MyColl still answers after both refusals",
+                 find_by_id(c, "MyColl", "keepme", db="CaseDb"), "OK")
+    check_status("DROP_COLLECTION of an unregistered name is refused",
+                 drop_coll(c, "neverCreated", db="CaseDb"), "ERROR")
+    check_status("DROP_COLLECTION MyColl still works", drop_coll(c, "MyColl", db="CaseDb"), "OK")
+    check_status("DROP_COLLECTION MyColl twice is refused",
+                 drop_coll(c, "MyColl", db="CaseDb"), "ERROR")
+
+    check_status("DROP_DATABASE CaseDb still works", drop_db(c, "CaseDb"), "OK")
+    check_status("DROP_DATABASE CaseDb twice is refused", drop_db(c, "CaseDb"), "ERROR")
 
 
 def main():

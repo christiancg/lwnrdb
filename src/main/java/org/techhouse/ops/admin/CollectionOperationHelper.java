@@ -74,12 +74,19 @@ public final class CollectionOperationHelper {
                 });
     }
 
+    private static boolean isNotRegistered(String dbName, String collName) {
+        return cache.getAdminCollectionEntry(dbName, collName) == null;
+    }
+
     public static OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
         final var dbName = dropCollectionRequest.getDatabaseName();
         final var collName = dropCollectionRequest.getCollectionName();
         boolean dropSucceeded = false;
         try {
             locks.lock(dbName, collName);
+            if (isNotRegistered(dbName, collName)) {
+                return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
+            }
             final var result = fs.deleteCollectionFiles(dbName, collName);
             if (result) {
                 cache.evictCollection(dbName, collName);

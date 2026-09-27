@@ -86,7 +86,10 @@ public final class DatabaseOperationHelper {
         // Lock every collection in a stable order (deadlock avoidance with other multi-collection
         // acquisitions) so nothing races the file deletion and cache eviction below.
         final var dbEntry = cache.getAdminDbEntry(dbName);
-        final var collNames = dbEntry != null ? new ArrayList<>(dbEntry.getCollections()) : new ArrayList<String>();
+        if (dbEntry == null) {
+            return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+        }
+        final var collNames = new ArrayList<>(dbEntry.getCollections());
         Collections.sort(collNames);
         final var lockedColls = new ArrayList<String>();
         try {
