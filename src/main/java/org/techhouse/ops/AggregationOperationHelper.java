@@ -2,6 +2,7 @@ package org.techhouse.ops;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -16,6 +17,7 @@ import org.techhouse.data.Transaction;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
@@ -189,13 +191,22 @@ public final class AggregationOperationHelper {
         return grouped.entrySet().stream().map(jsonElementListEntry -> {
             final var groupedEntry = new JsonObject();
             groupedEntry.add(fieldName, jsonElementListEntry.getKey());
-            final var values = new JsonArray();
-            for (final var groupedDocument : jsonElementListEntry.getValue()) {
-                values.add(groupedDocument);
-            }
-            groupedEntry.add(GROUP_FIELD_NAME, values);
+            groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(jsonElementListEntry.getValue()));
             return groupedEntry;
         });
+    }
+
+    private static String documentId(JsonObject document) {
+        final var id = document.get(Globals.PK_FIELD);
+        return id instanceof JsonString jsonString ? jsonString.getValue() : "";
+    }
+
+    private static JsonArray inIdOrder(List<JsonObject> documents) {
+        final var ordered = new ArrayList<>(documents);
+        ordered.sort(Comparator.comparing(AggregationOperationHelper::documentId));
+        final var array = new JsonArray();
+        ordered.forEach(array::add);
+        return array;
     }
 
     private static Stream<JsonObject> groupByViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
@@ -210,19 +221,19 @@ public final class AggregationOperationHelper {
         }
         final var grouped = new ArrayList<JsonObject>();
         for (var indexEntry : indexEntries) {
-            final var values = new JsonArray();
+            final var groupDocuments = new ArrayList<JsonObject>();
             for (var id : indexEntry.getIds()) {
                 final var doc = docById.get(id);
                 if (doc != null) {
-                    values.add(doc);
+                    groupDocuments.add(doc);
                 }
             }
-            if (values.isEmpty()) {
+            if (groupDocuments.isEmpty()) {
                 continue;
             }
             final var groupedEntry = new JsonObject();
             groupedEntry.add(fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
-            groupedEntry.add(GROUP_FIELD_NAME, values);
+            groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(groupDocuments));
             grouped.add(groupedEntry);
         }
         return grouped.stream();
@@ -275,14 +286,16 @@ public final class AggregationOperationHelper {
             return groupByRemoteField(joinCollectionMap.values().stream().map(DbEntry::getData), remoteField);
         }
         final var matchedDocs = cache.getEntriesByIds(dbName, joinCollectionName, matchingIds);
-        final var lookup = new HashMap<JsonBaseElement, JsonArray>();
+        final var matchedByKey = new HashMap<JsonBaseElement, List<JsonObject>>();
         for (var dbEntry : matchedDocs) {
             final var data = dbEntry.getData();
             final var key = JsonUtils.resolvePath(data, remoteField);
             if (key != null) {
-                lookup.computeIfAbsent(key, _ -> new JsonArray()).add(data);
+                matchedByKey.computeIfAbsent(key, _ -> new ArrayList<>()).add(data);
             }
         }
+        final var lookup = new HashMap<JsonBaseElement, JsonArray>();
+        matchedByKey.forEach((key, documents) -> lookup.put(key, inIdOrder(documents)));
         return lookup;
     }
 
@@ -291,11 +304,8 @@ public final class AggregationOperationHelper {
         try (var remoteDocuments = documents) {
             return remoteDocuments.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, remoteField))
                     .collect(Collectors.groupingBy(jsonObject -> JsonUtils.getFromPath(jsonObject, remoteField),
-                            HashMap::new, Collectors.collectingAndThen(Collectors.toList(), jsonObjects -> {
-                                final var jsonArray = new JsonArray();
-                                jsonObjects.forEach(jsonArray::add);
-                                return jsonArray;
-                            })));
+                            HashMap::new,
+                            Collectors.collectingAndThen(Collectors.toList(), AggregationOperationHelper::inIdOrder)));
         }
     }
 

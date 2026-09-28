@@ -17,6 +17,7 @@ import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
+import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
@@ -66,6 +67,7 @@ public class ClusterAdminHelperTest {
         TestUtils.setPrivateField(adminAntiEntropyService, "started", false);
         TestUtils.setPrivateField(adminAntiEntropyService, "adminSyncCompleted", new AtomicBoolean(false));
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
+        TestUtils.setPrivateField(adminEpoch, "confirmed", true);
     }
 
     private void armAdminSync(boolean completed) throws Exception {
@@ -78,6 +80,55 @@ public class ClusterAdminHelperTest {
         TestUtils.setPrivateField(config, "clusterExpectedSize", expectedSize);
         ownership.setSelfNodeId("self");
         ownership.onMembershipChanged(new MembershipView(List.of(node())));
+    }
+
+    private void afterAdminOpWith(ReplicationOutcome outcome) throws Exception {
+        final var replicator = org.mockito.Mockito.mock(org.techhouse.cluster.Replicator.class);
+        final var coordinator = IocContainer.get(org.techhouse.cluster.ClusterCoordinator.class);
+        final var original = TestUtils.getPrivateField(coordinator, "replicator",
+                org.techhouse.cluster.Replicator.class);
+        org.mockito.Mockito
+                .when(replicator.broadcastAdmin(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(outcome);
+        TestUtils.setPrivateField(coordinator, "replicator", replicator);
+        try {
+            ClusterAdminHelper.afterAdminOp(adminOp(), "alice",
+                    new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok"));
+        } finally {
+            TestUtils.setPrivateField(coordinator, "replicator", original);
+        }
+    }
+
+    @Test
+    public void test_a_replication_timeout_leaves_the_epoch_unconfirmed() throws Exception {
+        enable(1);
+        armAdminSync(true);
+
+        afterAdminOpWith(ReplicationOutcome.TIMEOUT);
+
+        assertEquals(1L, adminEpoch.current());
+        assertFalse(adminEpoch.isConfirmed(),
+                "an epoch no peer acknowledged must not win an equal-epoch tie by node id against one a"
+                        + " majority really did commit");
+    }
+
+    @Test
+    public void test_a_quorum_met_replication_confirms_the_epoch() throws Exception {
+        enable(1);
+        armAdminSync(true);
+
+        afterAdminOpWith(ReplicationOutcome.QUORUM_MET);
+
+        assertEquals(1L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed());
+    }
+
+    @Test
+    public void test_a_standalone_node_neither_bumps_nor_unconfirms() throws Exception {
+        afterAdminOpWith(ReplicationOutcome.NOT_CLUSTERED);
+
+        assertEquals(0L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed(), "an unclustered node has nothing to reach and nothing to lose");
     }
 
     @Test

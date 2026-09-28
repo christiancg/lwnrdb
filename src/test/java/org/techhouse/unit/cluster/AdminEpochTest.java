@@ -24,12 +24,14 @@ public class AdminEpochTest {
     public void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
+        TestUtils.setPrivateField(adminEpoch, "confirmed", true);
         TestUtils.setPrivateField(adminEpoch, "unreadable", false);
     }
 
     @AfterEach
     public void tearDown() throws Exception {
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
+        TestUtils.setPrivateField(adminEpoch, "confirmed", true);
         TestUtils.setPrivateField(adminEpoch, "unreadable", false);
         TestUtils.standardTearDown();
     }
@@ -40,7 +42,7 @@ public class AdminEpochTest {
         assertEquals(2L, adminEpoch.bump());
         assertEquals(2L, adminEpoch.current());
         final var persisted = Files.readString(epochPath(), StandardCharsets.UTF_8).trim();
-        assertEquals("2", persisted);
+        assertEquals("2|false", persisted);
     }
 
     @Test
@@ -111,7 +113,70 @@ public class AdminEpochTest {
         adminEpoch.bump();
 
         assertFalse(adminEpoch.isUnreadable(), "once it writes a good value the node has authority again");
-        assertEquals("1", Files.readString(epochPath(), StandardCharsets.UTF_8).trim());
+        assertEquals("1|false", Files.readString(epochPath(), StandardCharsets.UTF_8).trim());
+    }
+
+    @Test
+    public void test_a_bare_number_file_loads_as_confirmed() throws Exception {
+        Files.createDirectories(Objects.requireNonNull(epochPath().getParent()));
+        Files.writeString(epochPath(), "42", StandardCharsets.UTF_8);
+
+        adminEpoch.load();
+
+        assertEquals(42L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed(),
+                "an epoch file written before the flag existed must keep the behaviour it had, or every"
+                        + " upgraded node would silently lose an epoch tie it used to win");
+    }
+
+    @Test
+    public void test_the_confirmed_flag_round_trips_through_persist_and_load() throws Exception {
+        adminEpoch.bump();
+        assertFalse(adminEpoch.isConfirmed(), "a bump has not reached quorum until the replication says so");
+        adminEpoch.confirm();
+        assertEquals("1|true", Files.readString(epochPath(), StandardCharsets.UTF_8).trim());
+
+        adminEpoch.load();
+
+        assertEquals(1L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed());
+    }
+
+    @Test
+    public void test_mark_unconfirmed_persists_the_cleared_flag() throws Exception {
+        adminEpoch.bump();
+        adminEpoch.confirm();
+
+        adminEpoch.markUnconfirmed();
+
+        assertFalse(adminEpoch.isConfirmed());
+        assertEquals("1|false", Files.readString(epochPath(), StandardCharsets.UTF_8).trim());
+    }
+
+    @Test
+    public void test_an_unrecognised_confirmation_flag_is_unreadable() throws Exception {
+        Files.createDirectories(Objects.requireNonNull(epochPath().getParent()));
+        Files.writeString(epochPath(), "7|maybe", StandardCharsets.UTF_8);
+
+        adminEpoch.load();
+
+        assertEquals(0L, adminEpoch.current());
+        assertTrue(adminEpoch.isUnreadable(),
+                "a flag that is neither true nor false is a torn file, not a node that lost its quorum");
+    }
+
+    @Test
+    public void test_adopt_takes_the_confirmation_of_the_epoch_it_follows() {
+        adminEpoch.adopt(5L, false);
+        assertEquals(5L, adminEpoch.current());
+        assertFalse(adminEpoch.isConfirmed(),
+                "conforming to an unconfirmed snapshot must not launder it into a confirmed one");
+
+        adminEpoch.adopt(6L, true);
+        assertTrue(adminEpoch.isConfirmed());
+
+        adminEpoch.adopt(4L, false);
+        assertTrue(adminEpoch.isConfirmed(), "a lower candidate changes nothing at all");
     }
 
     @Test

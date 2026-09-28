@@ -384,6 +384,27 @@ def test_auto_rollback_on_disconnect():
         c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "disc2"})
 
 
+def test_a_committed_transaction_survives_the_disconnect():
+    section("Disconnecting after a commit leaves the committed writes in place")
+
+    victim = authed_conn()
+    check_status("START_TRANSACTION", start_txn(victim), "OK")
+    check_status("SAVE buffered", save(victim, {"_id": "disc3", "v": 3}), "OK")
+    check_status("COMMIT_TRANSACTION", commit_txn(victim), "OK")
+    victim.s.shutdown(socket.SHUT_RDWR)
+    victim.f.close()
+    victim.s.close()
+
+    time.sleep(0.5)
+
+    with authed_conn() as (c):
+        check_status("the committed write survives the disconnect", find_by_id(c, "disc3"), "OK")
+        check_status("the collection is writable again (lock was released)",
+                     save(c, {"_id": "disc4", "v": 4}), "OK")
+        for stale in ("disc3", "disc4"):
+            c.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": stale})
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
@@ -506,6 +527,7 @@ def main():
     with authed_conn() as (c):
         test_entry_size_is_checked_after_the_id_is_assigned(c)
     test_auto_rollback_on_disconnect()
+    test_a_committed_transaction_survives_the_disconnect()
 
     with authed_conn() as (c):
         teardown_fixtures(c)

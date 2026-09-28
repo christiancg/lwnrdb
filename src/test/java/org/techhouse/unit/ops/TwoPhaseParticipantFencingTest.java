@@ -3,8 +3,14 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mockStatic;
 
+import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -20,7 +26,9 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TwoPhaseParticipant;
+import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.tx.TransactionRecovery;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -81,6 +89,80 @@ public class TwoPhaseParticipantFencingTest {
                 "the transaction stays registered so recovery can still name its locks");
         assertFalse(transaction.getHeldLocks().isEmpty(), "the collections stay fenced until recovery finishes");
 
+        TestUtils.releaseAllLocks();
+        clientTracker.clearActiveTransaction(clientId);
+        clientTracker.clearTransactionState(clientId);
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void test_a_disconnect_does_not_delete_a_fenced_2pc_slice() throws Exception {
+        final var clientId = participantWithAnUnapplicableOp();
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var bufferedOpIds = List.copyOf(transaction.getBufferedOpIds());
+        assertTrue(TwoPhaseParticipant.prepare(clientId, "127.0.0.1:9999", List.of("127.0.0.1:9999")),
+                "the participant must reach PREPARED for the fence to be recorded");
+
+        final var response = TwoPhaseParticipant.commitPrepared(clientId);
+        assertEquals(ErrorCode.TRANSACTION_HALF_APPLIED.getCode(), response.getErrorCode());
+        clientTracker.clearTransactionState(clientId);
+
+        TransactionOperationHelper.cleanupOnDisconnect(clientId);
+
+        assertEquals(bufferedOpIds.size(), AdminOperationHelper.readTransactionOps(bufferedOpIds).size(),
+                "the slice the retained 2PC marker points at must survive the disconnect, or recovery replays"
+                        + " nothing and records the transaction as committed");
+        assertNotNull(clientTracker.getActiveTransaction(clientId),
+                "a fenced transaction stays registered so its locks can still be named");
+
+        Tx2pcLog.deleteParticipantMarker(transaction.getTransactionId().toString());
+        AdminOperationHelper.deleteTransactionOps(bufferedOpIds);
+        TestUtils.releaseAllLocks();
+        clientTracker.clearActiveTransaction(clientId);
+        clientTracker.clearTransactionState(clientId);
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void test_a_disconnect_still_cleans_up_an_unfenced_transaction() throws Exception {
+        final var clientId = clientTracker.registerForwardedClient("participant");
+        TransactionOperationHelper.start(clientId);
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(document("unfenced"));
+        request.set_id("unfenced");
+        TransactionOperationHelper.bufferSave(request, transaction);
+        final var bufferedOpIds = List.copyOf(transaction.getBufferedOpIds());
+
+        TransactionOperationHelper.cleanupOnDisconnect(clientId);
+
+        assertTrue(AdminOperationHelper.readTransactionOps(bufferedOpIds).isEmpty(),
+                "an ordinary open transaction is still rolled back on disconnect");
+        assertNull(clientTracker.getActiveTransaction(clientId));
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void test_an_error_during_commit_prepared_keeps_the_fence() throws Exception {
+        final var clientId = clientTracker.registerForwardedClient("participant");
+        TransactionOperationHelper.start(clientId);
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(document("erroring"));
+        request.set_id("erroring");
+        TransactionOperationHelper.bufferSave(request, transaction);
+
+        try (var recovery = mockStatic(TransactionRecovery.class)) {
+            recovery.when(() -> TransactionRecovery.applyAllWithRetry(anyList(), anyString()))
+                    .thenThrow(new StackOverflowError("the apply blew the stack"));
+            assertThrows(StackOverflowError.class, () -> TwoPhaseParticipant.commitPrepared(clientId));
+        }
+
+        assertNotNull(clientTracker.getActiveTransaction(clientId),
+                "an Error past the commit point is still a half-applied commit, so the fence must hold");
+        assertFalse(transaction.getHeldLocks().isEmpty(), "the collections stay fenced until recovery finishes");
+
+        AdminOperationHelper.deleteTransactionOps(List.copyOf(transaction.getBufferedOpIds()));
         TestUtils.releaseAllLocks();
         clientTracker.clearActiveTransaction(clientId);
         clientTracker.clearTransactionState(clientId);

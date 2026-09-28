@@ -3,16 +3,23 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.IOException;
+import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.PipelineScriptContext;
 import org.techhouse.ops.ReduceOperatorHelper;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.test.TestGlobals;
@@ -48,6 +55,63 @@ public class ReduceOperatorHelperTest {
             assertEquals(1, results.size());
             return results.getFirst();
         }
+    }
+
+    private static void saveDoc(String id) {
+        final var object = new JsonObject();
+        object.add(Globals.PK_FIELD, new JsonString(id));
+        object.add("payload", new JsonString(id));
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id(id);
+        request.setObject(object);
+        IocContainer.get(OperationProcessor.class).processMessage(request);
+        IocContainer.get(PendingIndexWrites.class).clear(TestGlobals.DB, TestGlobals.COLL, id);
+    }
+
+    private static ReduceAggregationStep idFold() {
+        return new ReduceAggregationStep("export default (acc, doc) => acc + '|' + doc._id;", new JsonString(""),
+                "folded");
+    }
+
+    private static String foldOverTheCollection() throws IOException {
+        try (var context = new PipelineScriptContext()) {
+            final var results = ReduceOperatorHelper
+                    .processReduceStep(idFold(), null, TestGlobals.DB, TestGlobals.COLL, context).toList();
+            assertEquals(1, results.size());
+            return results.getFirst().get("folded").asJsonString().getValue();
+        }
+    }
+
+    @Test
+    public void test_a_non_commutative_fold_answers_the_same_warm_and_cold() throws Exception {
+        for (final var id : List.of("delta", "alpha", "charlie", "bravo", "echo", "foxtrot")) {
+            saveDoc(id);
+        }
+
+        final var warm = foldOverTheCollection();
+        IocContainer.get(Cache.class).userCache().evictCollectionDocuments(TestGlobals.DB, TestGlobals.COLL);
+        final var cold = foldOverTheCollection();
+
+        assertEquals("|alpha|bravo|charlie|delta|echo|foxtrot", warm,
+                "a fold whose value depends on the order needs a defined one, and the cached map enumerates"
+                        + " by hash bucket rather than by anything the disk path can reproduce");
+        assertEquals(warm, cold, "the same fold must survive an eviction unchanged");
+    }
+
+    @Test
+    public void test_a_preceding_step_still_decides_the_fold_order() throws IOException {
+        final var ordered = Stream.of(document("3", 25), document("1", 5), document("2", 15));
+        final var step = new ReduceAggregationStep("export default (acc, doc) => acc + '|' + doc._id;",
+                new JsonString(""), "folded");
+
+        final var folded = fold(step, ordered).get("folded").asJsonString().getValue();
+
+        assertEquals("|3|1|2", folded, "a stream handed in by an earlier step is folded exactly as it arrives");
+    }
+
+    @Test
+    public void test_a_collection_with_no_documents_still_folds() throws IOException {
+        assertEquals("", foldOverTheCollection());
     }
 
     @Test

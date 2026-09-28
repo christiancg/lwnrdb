@@ -123,6 +123,38 @@ public class MapOperatorHelperTest {
     }
 
     @Test
+    public void test_a_null_inside_an_array_operand_spells_null_like_a_top_level_one() {
+        final var nested = new JsonArray();
+        nested.add(new JsonString("x"));
+        nested.add(JsonNull.INSTANCE);
+        nested.add(new JsonString("y"));
+
+        assertEquals(concatOf(new JsonObject(), new JsonString("-x"), JsonNull.INSTANCE, new JsonString("-y")),
+                concatOf(new JsonObject(), nested),
+                "a null spelled inside an array operand must read the same as one spelled beside it");
+    }
+
+    @Test
+    public void test_an_array_operand_of_only_nulls_spells_them_all() {
+        final var nested = new JsonArray();
+        nested.add(JsonNull.INSTANCE);
+        nested.add(JsonNull.INSTANCE);
+
+        assertEquals("nullnull", concatOf(new JsonObject(), nested));
+    }
+
+    @Test
+    public void test_a_string_inside_an_array_stays_a_literal() {
+        final var document = new JsonObject();
+        document.addProperty("field1", "resolved");
+        final var nested = new JsonArray();
+        nested.add(new JsonString("field1"));
+
+        assertEquals("field1", concatOf(document, nested),
+                "only a top-level string operand is a field path; an array operand is a list of literals");
+    }
+
+    @Test
     public void test_average_calculation_valid_steps() {
         JsonObject jsonObject = new JsonObject();
         jsonObject.addProperty("value1", 10);

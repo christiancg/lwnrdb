@@ -564,6 +564,14 @@ def test_map_arithmetic(c):
           "@" not in (concat_literal_null or "") and "org.techhouse" not in (concat_literal_null or ""),
           detail=f"got {concat_literal_null!r}")
 
+    concat_nested_null = map_math(c, "CONCAT", [["x", None, "y"]])
+    check("CONCAT spells a null inside an array operand like one beside it",
+          concat_nested_null == concat_literal_null == "xnully",
+          detail=f"nested={concat_nested_null!r} top_level={concat_literal_null!r}")
+    check("CONCAT keeps an array element a literal rather than a field path",
+          map_math(c, "CONCAT", [["a"]]) == "a",
+          detail=f"got {map_math(c, 'CONCAT', [['a']])!r}")
+
     save(c, COLL_MATH, {"_id": "m2", "a": 10, "b": 2, "z": 0, "big": 3000000000, "nullField": None})
     save(c, COLL_MATH, {"_id": "m3", "b": 2, "z": 0, "big": 3000000000, "nullField": None})
     derive_avg = {"type": "MAP", "operators": [
@@ -645,6 +653,20 @@ def test_aggregation_steps(c):
     check("JOIN populates asField for l1",
                (by_id.get("l1", {}).get("joined") or [{}])[0].get("label") == "first",
                detail=f"l1.joined={by_id.get('l1', {}).get('joined')}")
+
+    ordered_ids = ["doc-06", "doc-01", "doc-05", "doc-02", "doc-04", "doc-03"]
+    bulk_save(c, COLL_JOIN_RIGHT, [{"_id": i, "key": "kOrder", "label": i} for i in ordered_ids])
+    save(c, COLL_JOIN_LEFT, {"_id": "lOrder", "key": "kOrder"})
+    r = aggregate(c, COLL_JOIN_LEFT, [filter_step("_id", "EQUALS", "lOrder"),
+                                      {"type": "JOIN", "joinCollection": COLL_JOIN_RIGHT,
+                                       "localField": "key", "remoteField": "key", "asField": "joined"}])
+    joined_ids = [d.get("_id") for d in ((r.get("results") or [{}])[0].get("joined") or [])]
+    check("a joined array is in _id order", joined_ids == sorted(ordered_ids), detail=f"got {joined_ids}")
+
+    grouped = aggregate(c, COLL_JOIN_RIGHT, [{"type": "GROUP_BY", "fieldName": "key"}])
+    order_group = next((g for g in (grouped.get("results") or []) if g.get("key") == "kOrder"), {})
+    group_ids = [d.get("_id") for d in (order_group.get("group") or [])]
+    check("a GROUP_BY group is in _id order", group_ids == sorted(ordered_ids), detail=f"got {group_ids}")
 
     r = aggregate(c, COLL_AGG, [{"type": "COUNT"}])
     check_field("COUNT whole collection", r, "results.0.count", 4)

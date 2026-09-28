@@ -26,6 +26,21 @@ public final class AdminPageHelper {
     private AdminPageHelper() {
     }
 
+    private record PageDelta(AdminPageEntry live, AdminPageEntry pending) {
+        void publish() {
+            live.setEntryCount(pending.getEntryCount());
+            live.setPageSize(pending.getPageSize());
+        }
+    }
+
+    private static AdminPageEntry pendingCopy(String dbName, String collName, AdminPageEntry live, int deltaCount,
+            long deltaBytes) {
+        final var pending = new AdminPageEntry(dbName, collName, live.getPage());
+        pending.setEntryCount(live.getEntryCount() + deltaCount);
+        pending.setPageSize(live.getPageSize() + deltaBytes);
+        return pending;
+    }
+
     private static void lockAdminPageCollection(String dbName, String collName) throws InterruptedException {
         locks.lock(Globals.ADMIN_PAGES_DB_NAME,
                 String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName));
@@ -74,7 +89,7 @@ public final class AdminPageHelper {
             final var workingPageEntries = existingPageEntries != null
                     ? new ArrayList<>(existingPageEntries)
                     : new ArrayList<AdminPageEntry>();
-            final var touchedPages = new ArrayList<AdminPageEntry>();
+            final var deltas = new ArrayList<PageDelta>();
             final var newPages = new ArrayList<AdminPageEntry>();
             for (var groupedEntry : grouped.entrySet()) {
                 final var page = groupedEntry.getKey();
@@ -92,12 +107,11 @@ public final class AdminPageHelper {
                 };
                 final var existing = workingPageEntries.stream().filter(p -> p.getPage() == page).findFirst();
                 if (existing.isPresent()) {
-                    final var pageEntry = existing.get();
-                    if (!deltaAlreadyAppliedOnWritePath) {
-                        pageEntry.setEntryCount(pageEntry.getEntryCount() + deltaCount);
-                        pageEntry.setPageSize(pageEntry.getPageSize() + deltaBytes);
-                    }
-                    touchedPages.add(pageEntry);
+                    final var live = existing.get();
+                    final var pending = deltaAlreadyAppliedOnWritePath
+                            ? pendingCopy(dbName, collName, live, 0, 0L)
+                            : pendingCopy(dbName, collName, live, deltaCount, deltaBytes);
+                    deltas.add(new PageDelta(live, pending));
                 } else if (type == EventType.CREATED) {
                     final var newEntry = new AdminPageEntry(dbName, collName, page);
                     newEntry.setEntryCount(groupEntries.size());
@@ -106,13 +120,15 @@ public final class AdminPageHelper {
                     newPages.add(newEntry);
                 }
             }
-            cache.addAdminPageEntries(dbName, collName, newPages);
             if (!newPages.isEmpty()) {
                 insertAdminPages(pagesPerCollectionName, newPages);
             }
-            if (!touchedPages.isEmpty()) {
-                updateTouchedPagesInFileSystem(pagesPerCollectionName, touchedPages);
+            if (!deltas.isEmpty()) {
+                updateTouchedPagesInFileSystem(pagesPerCollectionName,
+                        deltas.stream().map(PageDelta::pending).toList());
             }
+            cache.addAdminPageEntries(dbName, collName, newPages);
+            deltas.forEach(PageDelta::publish);
         } finally {
             releaseAdminPageCollection(dbName, collName);
         }

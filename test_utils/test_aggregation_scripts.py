@@ -226,6 +226,12 @@ def test_reduce(conn: Conn):
           results(total)[0].get("total") == sum(i * 10 * i for i in range(1, DOCUMENT_COUNT + 1)),
           f"got {results(total)}")
 
+    folded = conn.aggregate([reduce_step("export default (acc, doc) => acc + '|' + doc._id;", "", "folded")])
+    expected_order = "".join(f"|{doc_id}" for doc_id in sorted(f"o{i}" for i in range(1, DOCUMENT_COUNT + 1)))
+    check("a non-commutative fold enumerates in a defined order",
+          results(folded)[0].get("folded") == expected_order,
+          f"got {results(folded)[0].get('folded')!r}, expected {expected_order!r}")
+
     defaulted = conn.aggregate([reduce_step("export default (acc, doc) => (acc ?? 0) + 1;")])
     check("default result field is 'value'", results(defaulted)[0].get("value") == DOCUMENT_COUNT,
           f"got {results(defaulted)}")

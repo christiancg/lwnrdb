@@ -1,9 +1,12 @@
 package org.techhouse.unit.ops;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.util.List;
 import org.junit.jupiter.api.AfterEach;
@@ -133,6 +136,85 @@ public class AdminPagePersistenceTest {
     private long sizeOfPage(long page) {
         return cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream().filter(e -> e.getPage() == page)
                 .mapToLong(AdminPageEntry::getPageSize).findFirst().orElse(0L);
+    }
+
+    private File storagePageZero() {
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, TestGlobals.DB,
+                TestGlobals.COLL);
+        return new File(pagesFolder(), pagesCollName + Globals.FILE_PAGE_SEPARATOR + 0 + Globals.DB_FILE_EXTENSION);
+    }
+
+    private void withAnUnwritableStoragePage(ThrowingBody body) throws Exception {
+        final var page = storagePageZero();
+        assertTrue(page.isFile(), "the admin page collection must already have a page 0 to sabotage");
+        assertTrue(page.delete());
+        assertTrue(page.mkdir());
+        try {
+            body.run();
+        } finally {
+            assertTrue(page.delete());
+            assertTrue(page.createNewFile());
+        }
+    }
+
+    private interface ThrowingBody {
+        void run() throws Exception;
+    }
+
+    @Test
+    public void test_a_failed_page_insert_leaves_the_cache_untouched() throws Exception {
+        final var seed = entryOnPage("seed", 0L);
+        AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(seed), false);
+        final var newPage = entryOnPage("newPage", 7L);
+
+        withAnUnwritableStoragePage(() -> assertThrows(IOException.class, () -> AdminPageHelper
+                .baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(newPage), false)));
+
+        assertTrue(
+                cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream().noneMatch(e -> e.getPage() == 7L),
+                "a page row that never reached disk must not be published: a restart reloads from disk and"
+                        + " the occupancy of that page is then under-counted for the life of the collection");
+    }
+
+    @Test
+    public void test_a_failed_touched_page_update_leaves_the_counters_untouched() throws Exception {
+        final var entry = entryOnPage("tracked", 2L);
+        AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(entry),
+                false);
+        final var sizeBefore = sizeOfPage(2L);
+        final var countBefore = countOfPage(2L);
+
+        withAnUnwritableStoragePage(() -> assertThrows(IOException.class, () -> AdminPageHelper
+                .baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.DELETED, List.of(entry), false)));
+
+        assertEquals(sizeBefore, sizeOfPage(2L), "the delta must not be published before its write lands");
+        assertEquals(countBefore, countOfPage(2L), "the delta must not be published before its write lands");
+    }
+
+    @Test
+    public void test_a_successful_batch_publishes_both_new_and_touched_pages() throws Exception {
+        final var tracked = entryOnPage("tracked", 4L);
+        cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 4L, tracked.byteSize());
+        AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED, List.of(tracked),
+                true);
+        final var sizeBefore = sizeOfPage(4L);
+        final var countBefore = countOfPage(4L);
+
+        final var alsoOnFour = entryOnPage("second", 4L);
+        final var onFive = entryOnPage("third", 5L);
+        AdminPageHelper.baseUpdateEntryCount(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                List.of(alsoOnFour, onFive), false);
+
+        assertEquals(sizeBefore + alsoOnFour.byteSize(), sizeOfPage(4L),
+                "the touched page's delta is published once its write landed");
+        assertEquals(countBefore + 1, countOfPage(4L), "and so is its entry count");
+        assertTrue(sizeOfPage(5L) > 0, "the new page is published once its write landed");
+        assertEquals(1, countOfPage(5L), "the new page is published with the count its write carried");
+    }
+
+    private long countOfPage(long page) {
+        return cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream().filter(e -> e.getPage() == page)
+                .mapToLong(AdminPageEntry::getEntryCount).findFirst().orElse(0L);
     }
 
     @Test

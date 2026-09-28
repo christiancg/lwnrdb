@@ -127,6 +127,34 @@ public class AggregationGroupingStepTest {
         assertEquals(1, groupB.get("group").asJsonArray().size());
     }
 
+    private static List<String> idsOfTheOnlyGroup(List<JsonObject> groups) {
+        assertEquals(1, groups.size());
+        final var ids = new java.util.ArrayList<String>();
+        for (final var document : groups.getFirst().get("group").asJsonArray()) {
+            ids.add(document.asJsonObject().get(Globals.PK_FIELD).asJsonString().getValue());
+        }
+        return ids;
+    }
+
+    @Test
+    public void test_a_group_lists_its_documents_in_id_order_on_both_paths() throws IOException, InterruptedException {
+        final var cache = IocContainer.get(Cache.class);
+        for (final var id : List.of("doc-06", "doc-01", "doc-05", "doc-02", "doc-04", "doc-03")) {
+            addDoc(cache, id, "type", new JsonString("A"));
+        }
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new GroupByAggregationStep("type")));
+
+        final var scanned = idsOfTheOnlyGroup(AggregationOperationHelper.processAggregation(req));
+        enableIndex(cache, "type");
+        final var indexed = idsOfTheOnlyGroup(AggregationOperationHelper.processAggregation(req));
+
+        assertEquals(List.of("doc-01", "doc-02", "doc-03", "doc-04", "doc-05", "doc-06"), scanned,
+                "a group needs a defined order: the scan enumerates by hash bucket warm and by page cold");
+        assertEquals(scanned, indexed,
+                "the index path lists a group from the index entry's id set, which is a third order again");
+    }
+
     @Test
     public void test_group_by_with_upstream_filter_does_not_use_index() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);

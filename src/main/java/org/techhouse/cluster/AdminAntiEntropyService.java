@@ -86,6 +86,7 @@ public class AdminAntiEntropyService implements MembershipListener {
             AdminSnapshotPayload best = null;
             final var self = membershipService.getSelf();
             var bestEpoch = adminEpoch.current();
+            var bestConfirmed = adminEpoch.isConfirmed();
             var bestNodeId = self != null ? self.getNodeId() : null;
             final var peers = membershipService.membershipView().peers(self);
             answered = peers.isEmpty();
@@ -96,8 +97,11 @@ public class AdminAntiEntropyService implements MembershipListener {
                 }
                 answered = true;
                 final var snapshotNodeId = snapshot.getNodeId() != null ? snapshot.getNodeId() : member.getNodeId();
-                if (outranks(snapshot.getEpoch(), snapshotNodeId, bestEpoch, bestNodeId)) {
+                final var snapshotConfirmed = snapshot.isEpochConfirmed();
+                if (outranks(snapshot.getEpoch(), snapshotConfirmed, snapshotNodeId, bestEpoch, bestConfirmed,
+                        bestNodeId)) {
                     bestEpoch = snapshot.getEpoch();
+                    bestConfirmed = snapshotConfirmed;
                     bestNodeId = snapshotNodeId;
                     best = snapshot;
                 }
@@ -108,7 +112,7 @@ public class AdminAntiEntropyService implements MembershipListener {
                         + " of them and delete every user");
             } else if (best != null) {
                 conformer.conform(best);
-                adminEpoch.adopt(best.getEpoch());
+                adminEpoch.adopt(best.getEpoch(), best.isEpochConfirmed());
                 antiEntropyService.reconcileNow();
             }
             if (answered) {
@@ -124,9 +128,13 @@ public class AdminAntiEntropyService implements MembershipListener {
         return (offered == null || offered.isEmpty()) && !cache.getAllAdminDbEntries().isEmpty();
     }
 
-    private static boolean outranks(long epoch, String nodeId, long bestEpoch, String bestNodeId) {
+    private static boolean outranks(long epoch, boolean confirmed, String nodeId, long bestEpoch, boolean bestConfirmed,
+            String bestNodeId) {
         if (epoch != bestEpoch) {
             return epoch > bestEpoch;
+        }
+        if (confirmed != bestConfirmed) {
+            return confirmed;
         }
         if (nodeId == null || bestNodeId == null) {
             return false;
@@ -194,6 +202,7 @@ public class AdminAntiEntropyService implements MembershipListener {
         }
         final var payload = new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas,
                 procedures, triggers, schedules);
+        payload.setEpochConfirmed(adminEpoch.isConfirmed());
         final var self = membershipService.getSelf();
         payload.setNodeId(self != null ? self.getNodeId() : null);
         return payload;

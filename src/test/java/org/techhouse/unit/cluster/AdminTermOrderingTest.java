@@ -8,11 +8,30 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.AdminAntiEntropyService;
 
 public class AdminTermOrderingTest {
-    private static boolean outranks(long epoch, String nodeId, long bestEpoch, String bestNodeId) throws Exception {
-        final Method method = AdminAntiEntropyService.class.getDeclaredMethod("outranks", long.class, String.class,
-                long.class, String.class);
+    private static boolean outranks(long epoch, boolean confirmed, String nodeId, long bestEpoch, boolean bestConfirmed,
+            String bestNodeId) throws Exception {
+        final Method method = AdminAntiEntropyService.class.getDeclaredMethod("outranks", long.class, boolean.class,
+                String.class, long.class, boolean.class, String.class);
         method.setAccessible(true);
-        return (boolean) method.invoke(null, epoch, nodeId, bestEpoch, bestNodeId);
+        return (boolean) method.invoke(null, epoch, confirmed, nodeId, bestEpoch, bestConfirmed, bestNodeId);
+    }
+
+    private static boolean outranks(long epoch, String nodeId, long bestEpoch, String bestNodeId) throws Exception {
+        return outranks(epoch, true, nodeId, bestEpoch, true, bestNodeId);
+    }
+
+    @Test
+    public void test_a_confirmed_epoch_beats_an_equal_unconfirmed_one() throws Exception {
+        assertTrue(outranks(5L, true, "a", 5L, false, "z"),
+                "an epoch a majority acknowledged outranks one only its own coordinator ever saw, whatever"
+                        + " the node ids say");
+        assertFalse(outranks(5L, false, "z", 5L, true, "a"));
+    }
+
+    @Test
+    public void test_the_confirmation_only_breaks_an_equal_epoch() throws Exception {
+        assertTrue(outranks(6L, false, "a", 5L, true, "z"), "a higher epoch still wins outright");
+        assertFalse(outranks(4L, true, "z", 5L, false, "a"));
     }
 
     @Test

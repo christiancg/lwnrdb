@@ -80,6 +80,9 @@ public final class TwoPhaseParticipant {
             logger.error(OperationType.COMMIT_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(), e);
             fenced = true;
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
+        } catch (Throwable t) {
+            fenced = true;
+            throw t;
         } finally {
             if (!fenced) {
                 TransactionOperationHelper.releaseHeldLocks(transaction);

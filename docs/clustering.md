@@ -519,6 +519,19 @@ the digest request. A node that is partitioned — or alone — keeps them: coll
 while a peer still holds the document live is what lets the next rejoin resurrect a committed
 delete.
 
+A reachable, correctly-answering node can reach the same state without any partition. `reserveDelete`
+appends the tombstone **before** the document is removed — deliberately, so a crash between the two
+leaves the delete recorded rather than lost — and nothing removes it if `executeDelete` then throws.
+The node is left holding a live document and a newer tombstone for the same id. That self-heals on the
+next sweep, because `reconcile` folds this node's own tombstones into its winner map before contacting
+any peer and its delete branch fires on `localLive.containsKey(id)` regardless of where the winner came
+from: the node applies its own orphaned tombstone. Until that sweep runs the node still serves a
+document its peers have already dropped, the client was told the delete failed, and the eventual delete
+goes through the replicated-apply path so the `DELETED` trigger never fires. If the local delete fails
+*persistently* — a damaged page file, say — the self-heal fails every round too, and once the tombstone
+ages past `tombstoneRetentionMs` it is collected while the document is still on disk, which is the
+resurrection case above reached without a partition.
+
 A **delete**
 records a versioned **tombstone** (`{coll}-tombstones.idx`), needed because a plain delete
 cannot converge — a lagging replica still holding the document would resurrect it.
@@ -593,7 +606,7 @@ state: the coordinator bumps it on each committed admin op and ships it on
 behind.
 
 On a membership change and on the same periodic sweep, `cluster/AdminAntiEntropyService`
-pulls each live peer's `ADMIN_SNAPSHOT` (`{epoch, databases, collections, users, schemas,
+pulls each live peer's `ADMIN_SNAPSHOT` (`{epoch, epochUnconfirmed, databases, collections, users, schemas,
 procedures, triggers, schedules}`, built from disk) and keeps the winner under the
 `(epoch, nodeId)` order — a higher epoch wins, and at an **equal** epoch the higher node id
 does, so two nodes at the same epoch converge instead of conforming to each other forever.
@@ -615,6 +628,22 @@ that: a snapshot listing no databases is never adopted by a node that holds some
 whose `cluster/admin.epoch` exists but cannot be parsed refuses to conform at all rather than
 bidding 0 with real data on disk. The epoch file is written atomically, so a crash mid-write
 leaves the previous value rather than a truncated one that parses as a lower epoch.
+
+The epoch also records **whether the op that produced it reached a quorum**. `afterAdminOp`
+bumps and persists before replicating, so a coordinator that lost quorum between its write
+guard and the broadcast still advances to E, keeps its locally committed DDL on disk, and
+answers `REPLICATION_TIMEOUT` with no peer holding E. The majority side elects a new
+coordinator that reaches E on its own next op, and on heal the `(epoch, nodeId)` order would
+decide a genuine content disagreement on a node-id coin flip — permanently, since every node
+then sits at E and `adopt` is a no-op at equality. The epoch file therefore holds
+`<epoch>|<confirmed>`: a bump clears the flag, the replication outcome sets it (`confirm()`
+on a met quorum or an unclustered node, `markUnconfirmed()` on a timeout or a lost
+coordinator/owner role), and the order is `(epoch, confirmed, nodeId)`. Only one partition
+half can hold quorum, so at most one side ever reaches a *confirmed* E and the tie is
+decided rather than flipped. Two compatibility rules: an epoch file holding a bare number
+loads as **confirmed**, so an existing deployment behaves exactly as before, and the
+snapshot field is `epochUnconfirmed` (default `false`) rather than an `epochConfirmed` one,
+so a pre-upgrade peer that omits the field reads as confirmed instead of always losing.
 
 To close the window where a stale node becomes the admin coordinator before it has caught
 up, a coordinator rejects coordinated admin ops with a retryable `503-5 ADMIN_SYNCING`

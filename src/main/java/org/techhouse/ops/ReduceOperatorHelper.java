@@ -7,6 +7,7 @@ import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
@@ -26,7 +27,9 @@ public final class ReduceOperatorHelper {
             String dbName, String collName, PipelineScriptContext context) throws IOException {
         final var callable = context.callableFor(step.getScript());
         var accumulator = step.getInitialValue() == null ? JsonNull.INSTANCE : step.getInitialValue();
-        try (var stream = cache.initializeStreamIfNecessary(resultStream, dbName, collName)) {
+        try (var stream = resultStream != null
+                ? resultStream
+                : cache.streamCollectionInScanOrder(dbName, collName).map(DbEntry::getData)) {
             for (final var document : (Iterable<JsonObject>) stream::iterator) {
                 final var analyze = AnalyzeContext.current();
                 final var start = analyze == null ? 0 : System.nanoTime();

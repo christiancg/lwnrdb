@@ -106,6 +106,40 @@ public class AggregationJoinStepTest {
         TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.JOIN_COLL, e);
     }
 
+    private static List<String> joinedIdsOf(List<JsonObject> rows) {
+        assertEquals(1, rows.size());
+        final var ids = new java.util.ArrayList<String>();
+        for (final var document : rows.getFirst().get("joined").asJsonArray()) {
+            ids.add(document.asJsonObject().get(Globals.PK_FIELD).asJsonString().getValue());
+        }
+        return ids;
+    }
+
+    @Test
+    public void test_a_joined_array_is_in_id_order_on_both_paths() throws IOException, InterruptedException {
+        final var cache = IocContainer.get(Cache.class);
+        final var main = new JsonObject();
+        main.add(Globals.PK_FIELD, new JsonString("m1"));
+        main.addProperty("ref", 42);
+        final var mainEntry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, main);
+        mainEntry.set_id("m1");
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, mainEntry);
+        for (final var id : List.of("doc-06", "doc-01", "doc-05", "doc-02", "doc-04", "doc-03")) {
+            addJoinDoc(cache, id, 42, "label-" + id);
+        }
+        final var req = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        req.setAggregationSteps(List.of(new JoinAggregationStep(TestGlobals.JOIN_COLL, "ref", "refKey", "joined")));
+
+        final var scanned = joinedIdsOf(AggregationOperationHelper.processAggregation(req));
+        IndexHelper.createIndex(TestGlobals.DB, TestGlobals.JOIN_COLL, "refKey");
+        cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.JOIN_COLL).setIndexes(Set.of("refKey"));
+        final var indexed = joinedIdsOf(AggregationOperationHelper.processAggregation(req));
+
+        assertEquals(List.of("doc-01", "doc-02", "doc-03", "doc-04", "doc-05", "doc-06"), scanned,
+                "an attached array needs a defined order for the same reason a GROUP_BY group does");
+        assertEquals(scanned, indexed, "the index path attaches the matches in a different order otherwise");
+    }
+
     @Test
     public void test_join_uses_remote_index_returns_only_matching() throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);

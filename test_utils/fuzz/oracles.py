@@ -22,6 +22,9 @@ PRIMARY_KEY_FIELD = "_id"
 FILTER_QUERY = "FILTER"
 SORT_QUERY = "SORT"
 RESHAPING_QUERY = "RESHAPING"
+REDUCE_QUERY = "REDUCE"
+
+NON_COMMUTATIVE_REDUCE_SCRIPT = "export default (acc, doc) => acc + '|' + doc._id;"
 
 Query = namedtuple("Query", "label steps ordered kind")
 
@@ -107,6 +110,13 @@ def aggregate(executor, db: str, coll: str, steps: list) -> dict:
                              "collectionName": coll, "aggregationSteps": steps})
 
 
+def fold_order_query() -> Query:
+    return Query("REDUCE fold of _id",
+                 [{"type": "REDUCE", "script": NON_COMMUTATIVE_REDUCE_SCRIPT,
+                   "initialValue": "", "resultField": "folded"}],
+                 True, REDUCE_QUERY)
+
+
 def queries_for(rng, fields: list, operands_per_operator: int = 2) -> list:
     queries = []
     for field in fields:
@@ -132,6 +142,7 @@ def queries_for(rng, fields: list, operands_per_operator: int = 2) -> list:
         queries.append(Query(f"GROUP_BY {field}",
                              [{"type": "GROUP_BY", "fieldName": field}],
                              False, RESHAPING_QUERY))
+    queries.append(fold_order_query())
     return queries
 
 
@@ -152,6 +163,8 @@ def index_vs_scan(executor, matrices: dict, stats: Stats) -> list:
     for (db, coll), queries in sorted(matrices.items()):
         stats.bump("indexed_collections")
         for query in queries:
+            if query.kind == REDUCE_QUERY:
+                continue
             stats.bump("index_vs_scan_queries")
             indexed = answer_of(aggregate(executor, db, coll, query.steps), query.ordered)
             scanned = answer_of(aggregate(executor, db, coll, forced_scan(query.steps)),

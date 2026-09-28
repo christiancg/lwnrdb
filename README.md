@@ -195,6 +195,8 @@ Also accepts an optional top-level `"analyze": true` (default `false`); see [Exp
 | `SORT` | `fieldName`, `ascending` | |
 | `REDUCE` | `script` | Folds the whole stream into one document; optional `initialValue` (default JSON null) and `resultField` (default `value`) |
 
+**Result order.** A pipeline that ends in `SORT` — or whose last order-determining step is a `SORT` — is fully ordered. Otherwise the order in which documents are enumerated is unspecified, so a `LIMIT` or `SKIP` used as the pipeline's source returns an unspecified subset, exactly as a SQL `LIMIT` without an `ORDER BY` does. `REDUCE` is the exception, because its *value* and not just its row order depends on the enumeration: when `REDUCE` is the pipeline's source it folds in a defined order (by page, then by `_id`), so a non-commutative fold answers the same before and after a restart or an eviction. Put a `SORT` in front of `REDUCE` to choose a different order — any other preceding step hands it the unspecified one. The arrays a step builds are ordered too: a `GROUP_BY` group and a `JOIN`'s `asField` list their documents by `_id`, so the same query answers identically whether it was resolved through an index or a full scan.
+
 `GROUP_BY`, `JOIN`, `SORT`, and `DISTINCT` use a single-field index when one exists on the step's field and the step is the first step in the pipeline; otherwise they fall back to a full scan. These steps use only the scalar/custom/null indexes, so documents whose indexed field holds a JSON object or array are not represented in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results (see [Memory management → Streaming reads](#memory-management)). 
 Object- and array-valued fields are instead indexed for **element-match** (whole-value equality): a `FILTER` with `EQUALS`, `NOT_EQUALS`, `IN`, or `NOT_IN` hashes the object/array and resolves it through a dedicated per-kind hash index (`…-Object.idx` / `…-Array.idx`).
 
@@ -218,6 +220,10 @@ A `MAP` `ADD_FIELD` may carry a `CAST` mid-operator (`fieldName`, `toType`, plus
 - `BOOLEAN` accepts `true` and `false` case-insensitively; every other string answers `null`. A number casts to `value != 0`.
 - `STRING` renders a number with the same formatter that writes documents, and a custom type as its data value.
 - `JSON_CUSTOM` answers `null` when the source string is not a valid value of the named type.
+
+#### The `CONCAT` mid-operator
+
+`CONCAT` joins its operands into one string. A top-level string operand is a **field path** unless it carries the string-literal prefix `-`; a string inside an array operand is always a literal. A `null` operand contributes the text `null`, and so does a top-level field path the document does not hold — in both operand positions, and whether the null was written literally or read from a null-valued field.
 
 #### Script operators (SimpleJS in the pipeline)
 

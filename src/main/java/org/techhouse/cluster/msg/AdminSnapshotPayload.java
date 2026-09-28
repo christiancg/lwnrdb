@@ -5,6 +5,7 @@ import org.techhouse.ejson.elements.JsonObject;
 
 public class AdminSnapshotPayload {
     private long epoch;
+    private boolean epochUnconfirmed;
     private String nodeId;
     private List<JsonObject> databases = List.of();
     private List<JsonObject> collections = List.of();
@@ -55,6 +56,14 @@ public class AdminSnapshotPayload {
 
     public void setEpoch(long epoch) {
         this.epoch = epoch;
+    }
+
+    public boolean isEpochConfirmed() {
+        return !epochUnconfirmed;
+    }
+
+    public void setEpochConfirmed(boolean epochConfirmed) {
+        this.epochUnconfirmed = !epochConfirmed;
     }
 
     public List<JsonObject> getDatabases() {
