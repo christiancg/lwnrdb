@@ -1026,6 +1026,87 @@ def test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn: Conn,
           "REINDEX is the remedy the startup warning names, so the warning must not outlive it")
 
 
+def conjunction_ids(conn: Conn, coll: str, kind: str, leaves: list) -> list:
+    return aggregate_ids(conn, coll, [{"type": "FILTER",
+                                       "operator": {"conjunctionType": kind, "operators": leaves}}])
+
+
+def test_a_conjunction_counts_exactly_the_rows_it_returns(conn: Conn):
+    section("An index-backed conjunction and the rows it claims to count")
+
+    coll = "conj_consistency"
+    check_status("create the conjunction collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    docs = [{"_id": f"c{i}", "n": i, "tag": "even" if i % 2 == 0 else "odd"} for i in range(20)]
+    check_status("load the conjunction corpus",
+                 conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": coll, "objects": docs}), "OK")
+    for field in ("n", "tag"):
+        check_status(f"index {field}",
+                     conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
+                                "fieldName": field}), "OK")
+
+    leaves = [{"fieldOperatorType": "GREATER_THAN", "field": "n", "value": 5},
+              {"fieldOperatorType": "EQUALS", "field": "tag", "value": "even"}]
+    for kind in ("AND", "OR", "XOR", "NOR", "NAND"):
+        indexed = conjunction_ids(conn, coll, kind, leaves)
+        scanned = aggregate_ids(conn, coll, [{"type": "SKIP", "skip": 0},
+                                             {"type": "FILTER",
+                                              "operator": {"conjunctionType": kind, "operators": leaves}}])
+        check(f"{kind} answers the same rows through the index and a scan", indexed == scanned,
+              f"index={indexed}, scan={scanned}")
+        counted = aggregate_count(conn, coll, [{"type": "FILTER",
+                                                "operator": {"conjunctionType": kind, "operators": leaves}}])
+        check(f"{kind} counts exactly the rows it returns", counted == len(indexed),
+              f"count={counted}, rows={len(indexed)}")
+
+    repeated = [leaves[0], dict(leaves[0])]
+    for kind in ("AND", "XOR"):
+        indexed = conjunction_ids(conn, coll, kind, repeated)
+        scanned = aggregate_ids(conn, coll, [{"type": "SKIP", "skip": 0},
+                                             {"type": "FILTER",
+                                              "operator": {"conjunctionType": kind, "operators": repeated}}])
+        check(f"{kind} over a duplicated child agrees between the index and a scan", indexed == scanned,
+              f"index={indexed}, scan={scanned}")
+
+
+def test_a_buffered_write_to_a_missing_collection_is_refused_at_buffer_time(conn: Conn):
+    section("A transactional write names a collection that was never created")
+
+    check_status("start the transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    refusal = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": "never_created_coll",
+                         "object": {"_id": "nope"}})
+    check("the buffered save is refused where the standalone save would be",
+          refusal.get("errorCode") in ("404-11", "503-10"),
+          f"got {refusal.get('errorCode')!r}, expected the collection-readiness refusal rather than a commit failure")
+    rollback = conn.send({"type": "ROLLBACK_TRANSACTION"})
+    check("the transaction rolls back cleanly afterwards", rollback.get("status") == "OK",
+          f"got {rollback.get('status')!r}")
+
+
+def test_a_script_predicate_returning_infinity_keeps_its_document(conn: Conn):
+    section("A FILTER script predicate is decided by JS truthiness")
+
+    coll = "script_truthiness"
+    check_status("create the script collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    check_status("load one document",
+                 conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                            "object": {"_id": "s1", "n": 1}}), "OK")
+
+    for source, expected, why in (
+            ("export default () => 1 / 0;", ["s1"], "Infinity is truthy in JavaScript"),
+            ("export default () => -1 / 0;", ["s1"], "-Infinity is truthy in JavaScript"),
+            ("export default () => 0 / 0;", [], "NaN is falsy in JavaScript"),
+            ("export default () => 0;", [], "zero is falsy"),
+            ("export default () => 'x';", ["s1"], "a non-empty string is truthy")):
+        steps = [{"type": "FILTER", "operator": {"script": source}}]
+        got = aggregate_ids(conn, coll, steps)
+        check(f"a predicate returning {source.split('=> ')[1][:-1]} selects {expected}", got == expected, why)
+        scanned = aggregate_ids(conn, coll, [{"type": "SKIP", "skip": 0}] + steps)
+        check("the same predicate answers identically down the scan path", got == scanned,
+              f"index={got}, scan={scanned}")
+
+
 def test_a_self_heal_never_erases_a_committed_write(conn: Conn, work_dir: str, log_path: str):
     section("A PK-index self-heal racing committed writes")
 
@@ -1191,6 +1272,9 @@ def main():
             test_drop_database_does_not_strand_a_collection_lock(conn)
             test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
             test_writes_to_an_unknown_collection_are_refused_cleanly(conn)
+            test_a_conjunction_counts_exactly_the_rows_it_returns(conn)
+            test_a_buffered_write_to_a_missing_collection_is_refused_at_buffer_time(conn)
+            test_a_script_predicate_returning_infinity_keeps_its_document(conn)
             test_a_committed_transaction_survives_a_restart_whole(conn)
             test_an_unreadable_schema_refuses_the_write(conn, work_dir)
             test_index_operations_cannot_destroy_the_pk_index(conn, work_dir)

@@ -16,6 +16,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.MapOperatorHelper;
+import org.techhouse.ops.PipelineScriptContext;
 import org.techhouse.ops.req.agg.BaseOperator;
 import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -23,6 +24,7 @@ import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
 import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.RemoveFieldMapOperator;
 import org.techhouse.test.TestUtils;
@@ -380,5 +382,35 @@ public class MapOperatorHelperTest {
 
         assertTrue(result.has("existingField"));
         assertEquals("value", result.get("existingField").asJsonString().getValue());
+    }
+    @Test
+    public void test_a_map_condition_returning_infinity_applies_the_field_change() {
+        JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("existingField", 5);
+
+        try (var context = new PipelineScriptContext()) {
+            ScriptOperator condition = new ScriptOperator("export default (doc) => 1 / 0;");
+            RemoveFieldMapOperator operator = new RemoveFieldMapOperator("existingField", condition);
+
+            JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject, context);
+
+            assertFalse(result.has("existingField"),
+                    "Infinity is truthy in JavaScript, so the condition holds and the field is removed");
+        }
+    }
+
+    @Test
+    public void test_a_map_condition_returning_nan_leaves_the_document_alone() {
+        JsonObject jsonObject = new JsonObject();
+        jsonObject.addProperty("existingField", 5);
+
+        try (var context = new PipelineScriptContext()) {
+            ScriptOperator condition = new ScriptOperator("export default (doc) => 0 / 0;");
+            RemoveFieldMapOperator operator = new RemoveFieldMapOperator("existingField", condition);
+
+            JsonObject result = MapOperatorHelper.processOperator(operator, jsonObject, context);
+
+            assertTrue(result.has("existingField"), "NaN is falsy in JavaScript");
+        }
     }
 }

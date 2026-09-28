@@ -208,6 +208,11 @@ public final class SimpleJs {
         }
 
         @Override
+        public boolean test(JsonObject document) {
+            return JsCoercion.toBoolean(call(List.of(EJsonInterop.fromEjson(document)), document));
+        }
+
+        @Override
         public JsonBaseElement apply(JsonBaseElement accumulator, JsonObject document) {
             return invoke(List.of(EJsonInterop.fromEjson(accumulator), EJsonInterop.fromEjson(document)), document,
                     accumulator, NonFiniteResult.NULLED);
@@ -221,14 +226,26 @@ public final class SimpleJs {
 
         private JsonBaseElement invoke(List<JsValue> args, JsonObject document, JsonBaseElement accumulator,
                 NonFiniteResult nonFinite) {
+            final var returned = call(args, document, accumulator);
+            try {
+                return nonFinite == NonFiniteResult.NULLED && isNonFinite(returned)
+                        ? JsonNull.INSTANCE
+                        : EJsonInterop.toHostEjson(returned);
+            } catch (RuntimeException failure) {
+                throw asCallableException(failure);
+            }
+        }
+
+        private JsValue call(List<JsValue> args, JsonObject document) {
+            return call(args, document, null);
+        }
+
+        private JsValue call(List<JsValue> args, JsonObject document, JsonBaseElement accumulator) {
             final var charged = EJsonInterop.estimatedBytes(document)
                     + (accumulator == null ? 0 : EJsonInterop.estimatedBytes(accumulator));
             session.charge(charged);
             try {
-                final var returned = settled(session.call(function, args));
-                return nonFinite == NonFiniteResult.NULLED && isNonFinite(returned)
-                        ? JsonNull.INSTANCE
-                        : EJsonInterop.toHostEjson(returned);
+                return settled(session.call(function, args));
             } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
                 throw asCallableException(failure);
             } finally {

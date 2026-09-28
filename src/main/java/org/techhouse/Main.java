@@ -185,8 +185,8 @@ public class Main {
     private static void cleanupOrphanedTransactions() {
         try {
             TransactionOperationHelper.cleanupOrphansAtStartup();
-        } catch (Exception e) {
-            logger.error("Failed to clean up orphaned transactions at startup", e);
+        } catch (Throwable failure) {
+            logger.error("Failed to clean up orphaned transactions at startup", failure);
         }
     }
 

@@ -63,6 +63,20 @@ public class PendingIndexWrites {
         }
     }
 
+    public void clearCollection(String dbName, String collName) {
+        final var byId = pending.get(Cache.getCollectionIdentifier(dbName, collName));
+        if (byId == null) {
+            return;
+        }
+        final var markerLock = markerLockFor(dbName, collName);
+        markerLock.lock();
+        try {
+            byId.clear();
+        } finally {
+            markerLock.unlock();
+        }
+    }
+
     private java.util.concurrent.locks.ReentrantLock markerLockFor(String dbName, String collName) {
         return markerLocks.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
                 _ -> new java.util.concurrent.locks.ReentrantLock());

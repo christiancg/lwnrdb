@@ -10,6 +10,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.TransactionOperationHelper;
@@ -76,8 +77,15 @@ public class Tx2pcRecovery implements MembershipListener {
             TriggerRunRecovery.garbageCollect();
             reapAbandonedSessions();
             warnLongInDoubt();
-        } catch (Exception e) {
-            logger.warning("Transaction recovery sweep failed: " + e.getMessage());
+        } catch (Throwable failure) {
+            restoreInterruptFrom(failure);
+            logger.warning("Transaction recovery sweep failed: " + failure.getMessage());
+        }
+    }
+
+    private static void restoreInterruptFrom(Throwable failure) {
+        if (failure instanceof InterruptedException) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -102,8 +110,12 @@ public class Tx2pcRecovery implements MembershipListener {
                     case ABORT -> TwoPhaseParticipant.abortFromDurable(dtxId);
                     default -> logger.info("Transaction " + dtxId + " still in-doubt; will retry");
                 }
-            } catch (Exception e) {
-                logger.warning("Failed to recover prepared transaction " + dtxId + ": " + e.getMessage());
+            } catch (CollectionBusyException busy) {
+                logger.warning(
+                        "Skipped recovering prepared transaction " + dtxId + " this round: " + busy.getMessage());
+            } catch (Throwable failure) {
+                restoreInterruptFrom(failure);
+                logger.warning("Failed to recover prepared transaction " + dtxId + ": " + failure.getMessage());
             }
         }
     }
@@ -122,14 +134,18 @@ public class Tx2pcRecovery implements MembershipListener {
                 if (allResolved) {
                     Tx2pcLog.deleteCoordinatorMarker(dtxId);
                 }
-            } catch (Exception e) {
-                logger.warning("Failed to re-drive committed transaction " + dtxId + ": " + e.getMessage());
+            } catch (CollectionBusyException busy) {
+                logger.warning(
+                        "Skipped re-driving committed transaction " + dtxId + " this round: " + busy.getMessage());
+            } catch (Throwable failure) {
+                restoreInterruptFrom(failure);
+                logger.warning("Failed to re-drive committed transaction " + dtxId + ": " + failure.getMessage());
             }
         }
     }
 
     private void resolveLocalCommitted(String dtxId) throws Exception {
-        TwoPhaseParticipant.resolveFromDurable(dtxId, true);
+        TwoPhaseParticipant.resolveFromDurable(dtxId, true, clusterConfig.replicationAckTimeoutMs());
     }
 
     private Decision resolve(String coordinatorAddress, java.util.List<String> participants, String dtxId) {
@@ -218,7 +234,7 @@ public class Tx2pcRecovery implements MembershipListener {
             return;
         }
         final var dtxId = transaction.getTransactionId().toString();
-        if (Tx2pcLog.isPrepared(dtxId)) {
+        if (TransactionOperationHelper.isFenced(dtxId)) {
             return;
         }
         final var edge = session.edgeNodeId() != null ? view.find(session.edgeNodeId()) : null;

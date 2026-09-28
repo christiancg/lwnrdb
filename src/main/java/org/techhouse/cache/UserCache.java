@@ -147,19 +147,16 @@ public class UserCache {
     private <T> List<FieldIndexEntry<T>> loadIndex(String dbName, String collName, String indexIdentifier,
             IndexLoader<T> loader) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        var index = fieldIndexMap.get(collectionIdentifier);
+        final var index = fieldIndexMap.get(collectionIdentifier);
         if (index == null || !index.containsKey(indexIdentifier)) {
             final var indexEntries = loader.load();
             if (indexEntries == null) {
                 return null;
             }
-            if (index == null) {
-                index = new ConcurrentHashMap<>();
-            }
             if (rl.holdsCollectionLock(dbName, collName)
                     && shouldCache(dbName, CacheSizeEstimator.estimateFieldIndexSize(new ArrayList<>(indexEntries)))) {
-                index.put(indexIdentifier, new ArrayList<>(indexEntries));
-                fieldIndexMap.put(collectionIdentifier, index);
+                fieldIndexMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>()).put(indexIdentifier,
+                        new ArrayList<>(indexEntries));
             }
             return indexEntries;
         }

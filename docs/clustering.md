@@ -645,6 +645,16 @@ loads as **confirmed**, so an existing deployment behaves exactly as before, and
 snapshot field is `epochUnconfirmed` (default `false`) rather than an `epochConfirmed` one,
 so a pre-upgrade peer that omits the field reads as confirmed instead of always losing.
 
+Only the coordinator that counted the acks may set `confirmed`. A node that merely *received*
+a `REPLICATE_ADMIN`/`REPLICATE_USER` has no quorum evidence — the coordinator itself does not
+have it yet at broadcast time — so it adopts the epoch **unconfirmed**. Without that, a replica
+reached by a broadcast whose quorum later timed out reported `confirmed` at E while the
+coordinator that minted E reported unconfirmed, and a genuinely conflicting E from the majority
+side lost the tie to a node-id comparison again. A node is promoted to `confirmed` at an
+**equal** epoch only by conforming to a confirmed snapshot in `reconcile`, which is sound
+because it has just taken that snapshot's content; `adopt` never demotes a confirmed epoch and
+never moves the epoch number on equality.
+
 To close the window where a stale node becomes the admin coordinator before it has caught
 up, a coordinator rejects coordinated admin ops with a retryable `503-5 ADMIN_SYNCING`
 until it has completed one admin reconciliation since starting.

@@ -247,13 +247,15 @@ public class EventProcessorHelperTest {
     }
 
     @Test
-    public void test_a_failing_group_still_clears_its_pending_ids() throws Exception {
+    public void test_a_failing_group_keeps_its_pending_ids() throws Exception {
         final var pending = IocContainer.get(PendingIndexWrites.class);
         pending.mark(TestGlobals.DB, TestGlobals.COLL, List.of("a1", "a2"));
 
         runBatchWithAFailingFirstGroup();
 
-        Assertions.assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).isEmpty(),
-                "a group that failed must still clear its overlay entries, or the overlay grows without bound");
+        Assertions.assertEquals(Set.of("a1", "a2"), pending.idsFor(TestGlobals.DB, TestGlobals.COLL),
+                "the rebuild never ran, so the overlay is what keeps index-backed reads exact for those ids;"
+                        + " REINDEX is what retires them");
+        pending.clearCollection(TestGlobals.DB, TestGlobals.COLL);
     }
 }

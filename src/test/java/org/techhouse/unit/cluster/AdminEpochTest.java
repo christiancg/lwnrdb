@@ -47,13 +47,13 @@ public class AdminEpochTest {
 
     @Test
     public void test_adopt_only_advances_on_higher_value() {
-        adminEpoch.adopt(5L);
+        adminEpoch.adopt(5L, true);
         assertEquals(5L, adminEpoch.current());
-        adminEpoch.adopt(3L);
+        adminEpoch.adopt(3L, true);
         assertEquals(5L, adminEpoch.current());
-        adminEpoch.adopt(5L);
+        adminEpoch.adopt(5L, true);
         assertEquals(5L, adminEpoch.current());
-        adminEpoch.adopt(7L);
+        adminEpoch.adopt(7L, true);
         assertEquals(7L, adminEpoch.current());
     }
 
@@ -205,5 +205,59 @@ public class AdminEpochTest {
     private static java.nio.file.Path epochPath() {
         return Paths.get(Configuration.getInstance().getFilePath(), Globals.CLUSTER_FOLDER,
                 Globals.CLUSTER_ADMIN_EPOCH_FILE);
+    }
+    @Test
+    public void test_an_equal_epoch_promotes_an_unconfirmed_node_to_confirmed() {
+        adminEpoch.bump();
+        assertFalse(adminEpoch.isConfirmed());
+
+        adminEpoch.adopt(1L, true);
+
+        assertEquals(1L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed(),
+                "a node that conformed to a confirmed snapshot at its own epoch has that snapshot's content");
+    }
+
+    @Test
+    public void test_an_equal_epoch_never_demotes_a_confirmed_node() {
+        adminEpoch.bump();
+        adminEpoch.confirm();
+
+        adminEpoch.adopt(1L, false);
+
+        assertTrue(adminEpoch.isConfirmed(), "a coordinator that counted a majority does not lose that evidence");
+    }
+
+    @Test
+    public void test_an_equal_unconfirmed_epoch_changes_nothing() {
+        adminEpoch.bump();
+
+        adminEpoch.adopt(1L, false);
+
+        assertEquals(1L, adminEpoch.current());
+        assertFalse(adminEpoch.isConfirmed());
+    }
+
+    @Test
+    public void test_a_higher_epoch_adopts_its_own_confirmation_either_way() {
+        adminEpoch.adopt(5L, false);
+        assertEquals(5L, adminEpoch.current());
+        assertFalse(adminEpoch.isConfirmed());
+
+        adminEpoch.adopt(6L, true);
+
+        assertEquals(6L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed());
+    }
+
+    @Test
+    public void test_a_bare_number_on_disk_still_loads_as_confirmed() throws Exception {
+        Files.createDirectories(Objects.requireNonNull(epochPath().getParent()));
+        Files.writeString(epochPath(), "9", StandardCharsets.UTF_8);
+
+        adminEpoch.load();
+
+        assertEquals(9L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed(), "an existing deployment must behave exactly as it did before");
     }
 }

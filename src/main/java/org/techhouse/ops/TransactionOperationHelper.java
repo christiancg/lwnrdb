@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -90,7 +91,10 @@ public final class TransactionOperationHelper {
     }
 
     private static boolean isFenced(Transaction transaction) {
-        final var txId = transaction.getTransactionId().toString();
+        return isFenced(transaction.getTransactionId().toString());
+    }
+
+    public static boolean isFenced(String txId) {
         return TxCommitLog.isLocallyCommitted(txId) || Tx2pcLog.isPrepared(txId);
     }
 
@@ -335,7 +339,7 @@ public final class TransactionOperationHelper {
                 continue;
             }
             final var transaction = clientTracker.getActiveTransaction(session.clientId());
-            if (transaction != null && Tx2pcLog.isPrepared(transaction.getTransactionId().toString())) {
+            if (transaction != null && isFenced(transaction)) {
                 continue;
             }
             abandonSession(entry.getKey());
@@ -347,15 +351,35 @@ public final class TransactionOperationHelper {
         if (session == null) {
             return;
         }
+        final var rollbackResult = rollbackOnSessionThread(session);
+        if (rollbackResult.isPresent() && releasedItsLocks(rollbackResult.get())) {
+            clientTracker.removeTxSession(sessionId);
+            return;
+        }
+        warnAboutRetainedSession(session);
+    }
+
+    private static Optional<OperationResponse> rollbackOnSessionThread(TxSession session) {
         try {
-            session.submit(() -> rollback(session.clientId())).get(Configuration.getInstance().getShutdownTimeoutMs(),
-                    TimeUnit.MILLISECONDS);
+            return Optional.of(session.submit(() -> rollback(session.clientId()))
+                    .get(Configuration.getInstance().getShutdownTimeoutMs(), TimeUnit.MILLISECONDS));
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         } catch (Exception ex) {
             logger.warning("Failed to reap forwarded transaction: " + ex.getMessage());
         }
-        clientTracker.removeTxSession(sessionId);
+        return Optional.empty();
+    }
+
+    private static void warnAboutRetainedSession(TxSession session) {
+        final var transaction = clientTracker.getActiveTransaction(session.clientId());
+        final var held = transaction == null ? List.<String>of() : new ArrayList<>(transaction.getHeldLocks());
+        logger.warning("Kept transaction session " + session.clientId() + " registered; it still holds " + held.size()
+                + " write lock(s) " + held + " that only recovery or its own thread can release");
+    }
+
+    public static boolean releasedItsLocks(OperationResponse response) {
+        return response == null || !ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(response.getErrorCode());
     }
 
     public static void bufferTriggerRunConsume(Transaction transaction, String runId) throws Exception {

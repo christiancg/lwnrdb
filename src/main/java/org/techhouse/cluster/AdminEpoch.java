@@ -88,14 +88,15 @@ public class AdminEpoch {
         persist();
     }
 
-    public synchronized void adopt(long candidate) {
-        adopt(candidate, true);
-    }
-
     public synchronized void adopt(long candidate, boolean candidateConfirmed) {
         if (candidate > epoch) {
             epoch = candidate;
             confirmed = candidateConfirmed;
+            persist();
+            return;
+        }
+        if (candidate == epoch && candidateConfirmed && !confirmed) {
+            confirmed = true;
             persist();
         }
     }

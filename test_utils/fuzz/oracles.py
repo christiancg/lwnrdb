@@ -19,10 +19,17 @@ EMPTY_RESULT_CODE = "404-3"
 
 PRIMARY_KEY_FIELD = "_id"
 
+CONJUNCTION_TYPES = ["AND", "OR", "XOR", "NOR", "NAND"]
+
 FILTER_QUERY = "FILTER"
 SORT_QUERY = "SORT"
 RESHAPING_QUERY = "RESHAPING"
 REDUCE_QUERY = "REDUCE"
+
+GEO_TARGET = "#geo(0,0)"
+GEO_POLYGON = ["#geo(-10,-10)", "#geo(-10,10)", "#geo(10,10)", "#geo(10,-10)"]
+GEO_DATELINE_POLYGON = ["#geo(-10,179)", "#geo(-10,-179)", "#geo(10,-179)", "#geo(10,179)"]
+VECTOR_TARGET = "#vector(1.0,0.0,0.0)"
 
 NON_COMMUTATIVE_REDUCE_SCRIPT = "export default (acc, doc) => acc + '|' + doc._id;"
 
@@ -117,6 +124,101 @@ def fold_order_query() -> Query:
                  True, REDUCE_QUERY)
 
 
+def leaf_operator(rng, field: str) -> dict:
+    operator = rng.choice(SCALAR_OPERATORS)
+    return {"fieldOperatorType": operator, "field": field, "value": values.operand(rng)}
+
+
+def conjunction_step(kind: str, leaves: list) -> dict:
+    return {"type": "FILTER", "operator": {"conjunctionType": kind, "operators": leaves}}
+
+
+def label_of(leaves: list) -> str:
+    return ", ".join(f"{leaf['field']} {leaf['fieldOperatorType']} "
+                     f"{values.to_json_text(leaf['value'])}" for leaf in leaves)
+
+
+# The index resolves a conjunction with set algebra and the scan with per-document grouping, so the two
+# are independent implementations of one answer. Duplicate children separate them the hardest.
+def conjunction_queries(rng, fields: list) -> list:
+    queries = []
+    for kind in CONJUNCTION_TYPES:
+        for width in (2, 3):
+            leaves = [leaf_operator(rng, rng.choice(fields)) for _ in range(width)]
+            queries.append(Query(f"FILTER {kind}({label_of(leaves)})",
+                                 [conjunction_step(kind, leaves)], False, FILTER_QUERY))
+        repeated = leaf_operator(rng, rng.choice(fields))
+        queries.append(Query(f"FILTER {kind}(twice: {label_of([repeated])})",
+                             [conjunction_step(kind, [repeated, dict(repeated)])], False, FILTER_QUERY))
+        nested = [leaf_operator(rng, rng.choice(fields)) for _ in range(2)]
+        outer = leaf_operator(rng, rng.choice(fields))
+        queries.append(Query(f"FILTER {kind}(nested OR({label_of(nested)}), {label_of([outer])})",
+                             [conjunction_step(kind, [{"conjunctionType": "OR", "operators": nested}, outer])],
+                             False, FILTER_QUERY))
+    return queries
+
+
+def map_queries(rng, fields: list) -> list:
+    queries = []
+    for field in fields:
+        condition = leaf_operator(rng, field)
+        queries.append(Query(f"MAP condition on {field}",
+                             [{"type": "MAP", "operators": [{"fieldName": "mapped", "condition": condition}]}],
+                             False, RESHAPING_QUERY))
+        queries.append(Query(f"MAP cast {field} to STRING",
+                             [{"type": "MAP", "operators": [
+                                 {"fieldName": "asText",
+                                  "operator": {"type": "CAST", "fieldName": field, "toType": "STRING"}}]}],
+                             False, RESHAPING_QUERY))
+    for kind in CONJUNCTION_TYPES:
+        leaves = [leaf_operator(rng, rng.choice(fields)) for _ in range(2)]
+        queries.append(Query(f"MAP {kind} condition",
+                             [{"type": "MAP", "operators": [
+                                 {"fieldName": "mapped",
+                                  "condition": {"conjunctionType": kind, "operators": leaves}}]}],
+                             False, RESHAPING_QUERY))
+    return queries
+
+
+def join_queries(fields: list, partners: list) -> list:
+    queries = []
+    for db, coll in partners:
+        for field in fields:
+            queries.append(Query(f"JOIN {db}|{coll} on {field}",
+                                 [{"type": "JOIN", "joinCollection": coll, "localField": field,
+                                   "remoteField": field, "asField": "joined"}],
+                                 False, RESHAPING_QUERY))
+    return queries
+
+
+# nearest is an approximate neighbourhood search unless exact is set, so only the exact form may be
+# compared against a full scan.
+def custom_operator_queries(fields: list) -> list:
+    queries = []
+    for field in fields:
+        if field == PRIMARY_KEY_FIELD:
+            continue
+        for comparator, distance in (("SMALLER_THAN", 5000000.0), ("GREATER_THAN", 1000.0)):
+            queries.append(Query(f"FILTER {field} distance {comparator} {distance}",
+                                 [{"type": "FILTER", "operator": {
+                                     "customOperatorName": "distance", "field": field,
+                                     "value": GEO_TARGET, "comparator": comparator,
+                                     "distance": distance}}],
+                                 False, FILTER_QUERY))
+        for name, polygon in (("box", GEO_POLYGON), ("dateline", GEO_DATELINE_POLYGON)):
+            queries.append(Query(f"FILTER {field} within {name}",
+                                 [{"type": "FILTER", "operator": {
+                                     "customOperatorName": "within", "field": field,
+                                     "polygon": polygon}}],
+                                 False, FILTER_QUERY))
+        queries.append(Query(f"FILTER {field} nearest exact",
+                             [{"type": "FILTER", "operator": {
+                                 "customOperatorName": "nearest", "field": field,
+                                 "value": VECTOR_TARGET, "k": 5, "exact": True}}],
+                             False, FILTER_QUERY))
+    return queries
+
+
 def queries_for(rng, fields: list, operands_per_operator: int = 2) -> list:
     queries = []
     for field in fields:
@@ -143,6 +245,9 @@ def queries_for(rng, fields: list, operands_per_operator: int = 2) -> list:
                              [{"type": "GROUP_BY", "fieldName": field}],
                              False, RESHAPING_QUERY))
     queries.append(fold_order_query())
+    queries.extend(conjunction_queries(rng, fields))
+    queries.extend(map_queries(rng, fields))
+    queries.extend(custom_operator_queries(fields))
     return queries
 
 
@@ -152,9 +257,12 @@ def queryable_fields(indexed: list) -> list:
 
 def build_matrices(outcome, rng, operands_per_operator: int = 2) -> dict:
     matrices = {}
-    for db, coll in outcome.live():
+    live = outcome.live()
+    for db, coll in live:
         fields = queryable_fields(outcome.indexed_fields(db, coll))
-        matrices[(db, coll)] = queries_for(rng, fields, operands_per_operator)
+        partners = [other for other in live if other != (db, coll) and other[0] == db]
+        matrices[(db, coll)] = (queries_for(rng, fields, operands_per_operator)
+                                + join_queries(fields, partners))
     return matrices
 
 

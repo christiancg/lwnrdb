@@ -200,7 +200,7 @@ public class ClusterConnectionHandler implements Runnable {
                 response -> {
                     final var result = executeForwarded(request, true);
                     if (result.getStatus() == OperationStatus.OK) {
-                        adminEpoch.adopt(request.getAdminEpoch());
+                        adminEpoch.adopt(request.getAdminEpoch(), false);
                     } else {
                         response.setType(ClusterMessageType.ERROR);
                         response.setErrorMessage("Replicated admin op failed: " + result.getMessage());
@@ -231,7 +231,7 @@ public class ClusterConnectionHandler implements Runnable {
     private ClusterMessage handleReplicateUser(ClusterMessage request) {
         final var response = new ClusterMessage();
         if (ReplicatedUserApplyHelper.apply(request.getReplication())) {
-            adminEpoch.adopt(request.getAdminEpoch());
+            adminEpoch.adopt(request.getAdminEpoch(), false);
             response.setType(ClusterMessageType.REPLICATE_USER_ACK);
         } else {
             response.setType(ClusterMessageType.ERROR);

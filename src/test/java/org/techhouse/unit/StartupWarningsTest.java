@@ -42,7 +42,7 @@ public class StartupWarningsTest {
 
     @Test
     public void test_the_shipped_admin_password_is_warned_about() throws Exception {
-        TestUtils.setPrivateField(config, "defaultAdminPassword", Globals.DEFAULT_ADMIN_PASSWORD);
+        TestUtils.setPrivateField(config, "defaultAdminPassword", "administrator");
         try (var logWriter = mockStatic(LogWriter.class)) {
             StartupWarnings.warnIfDefaultAdminPassword();
             assertLogged(logWriter, "defaultAdminPassword is still set to the well-known default");

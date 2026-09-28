@@ -12,6 +12,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
@@ -23,6 +24,7 @@ public final class ReplicatedApplyHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
+    private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final Logger logger = Logger.logFor(ReplicatedApplyHelper.class);
 
     private ReplicatedApplyHelper() {
@@ -62,12 +64,16 @@ public final class ReplicatedApplyHelper {
         }
     }
 
-    // The caller must already hold the collection write lock.
     static boolean applyLocked(ReplicationPayload payload) throws Exception {
-        return switch (payload.getOp()) {
-            case UPSERT -> applyUpsert(payload);
-            case DELETE -> applyDelete(payload);
-        };
+        listenManager.deferNotifications();
+        try {
+            return switch (payload.getOp()) {
+                case UPSERT -> applyUpsert(payload);
+                case DELETE -> applyDelete(payload);
+            };
+        } finally {
+            listenManager.flushDeferredNotifications();
+        }
     }
 
     private static boolean applyUpsert(ReplicationPayload payload) throws Exception {

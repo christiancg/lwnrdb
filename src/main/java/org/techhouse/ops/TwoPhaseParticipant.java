@@ -114,14 +114,10 @@ public final class TwoPhaseParticipant {
         final var result = session.submit(() -> commit
                 ? commitPrepared(session.clientId())
                 : TransactionOperationHelper.abort(session.clientId())).get();
-        if (releasedItsLocks(result)) {
+        if (TransactionOperationHelper.releasedItsLocks(result)) {
             clientTracker.removeTxSession(entry.getKey());
         }
         return true;
-    }
-
-    private static boolean releasedItsLocks(OperationResponse response) {
-        return response == null || !ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(response.getErrorCode());
     }
 
     public static void commitPreparedFromDurable(String dtxId, List<String> collections) throws Exception {
@@ -144,12 +140,16 @@ public final class TwoPhaseParticipant {
     }
 
     public static void resolveFromDurable(String dtxId, boolean commit) throws Exception {
+        resolveFromDurable(dtxId, commit, 0L);
+    }
+
+    public static void resolveFromDurable(String dtxId, boolean commit, long timeoutMillis) throws Exception {
         if (!Tx2pcLog.isPrepared(dtxId)) {
             return;
         }
         if (resolvedThroughLiveSession(dtxId, commit)) {
             return;
         }
-        TransactionRecovery.resolveFromDurable(dtxId, commit);
+        TransactionRecovery.resolveFromDurable(dtxId, commit, timeoutMillis);
     }
 }

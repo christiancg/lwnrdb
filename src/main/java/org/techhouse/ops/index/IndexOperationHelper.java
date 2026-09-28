@@ -3,6 +3,7 @@ package org.techhouse.ops.index;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -23,6 +24,7 @@ import org.techhouse.ops.resp.ReindexResponse;
 public final class IndexOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
     private IndexOperationHelper() {
     }
@@ -102,6 +104,7 @@ public final class IndexOperationHelper {
     private static void clearDirtyMarkerIfFullyRebuilt(String dbName, String collName, List<String> rebuiltFields,
             Set<String> registeredIndexes) {
         if (Set.copyOf(rebuiltFields).containsAll(registeredIndexes)) {
+            pendingIndexWrites.clearCollection(dbName, collName);
             fs.clearIndexesDirty(dbName, collName);
         }
     }

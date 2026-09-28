@@ -42,10 +42,6 @@ public final class TransactionRecovery {
     private TransactionRecovery() {
     }
 
-    public static void commitPreparedFromDurable(String dtxId, List<String> collections) throws Exception {
-        commitPreparedFromDurable(dtxId, collections, 0L);
-    }
-
     public static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
             throws Exception {
         final var marker = Tx2pcLog.readParticipantMarker(dtxId);
@@ -115,13 +111,13 @@ public final class TransactionRecovery {
         resolveMarkers(dtxId, false);
     }
 
-    public static void resolveFromDurable(String dtxId, boolean commit) throws Exception {
+    public static void resolveFromDurable(String dtxId, boolean commit, long timeoutMillis) throws Exception {
         if (!Tx2pcLog.isPrepared(dtxId)) {
             return;
         }
         if (commit) {
             final var marker = Tx2pcLog.readParticipantMarker(dtxId);
-            commitPreparedFromDurable(dtxId, marker != null ? marker.collections() : List.of());
+            commitPreparedFromDurable(dtxId, marker != null ? marker.collections() : List.of(), timeoutMillis);
         } else {
             abortFromDurable(dtxId);
         }
@@ -250,8 +246,8 @@ public final class TransactionRecovery {
                 replayDurableSlice(txId, marker == null ? List.of() : marker.collections(),
                         marker == null ? 0L : marker.writeVersion(), () -> TxCommitLog.clearLocalCommit(txId));
                 logger.info("Finished transaction " + txId + " that was interrupted mid-commit at startup");
-            } catch (Exception e) {
-                logger.error("Failed to finish interrupted transaction " + txId + " at startup", e);
+            } catch (Throwable failure) {
+                logger.error("Failed to finish interrupted transaction " + txId + " at startup", failure);
             }
         }
     }

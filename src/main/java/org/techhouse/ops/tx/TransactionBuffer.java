@@ -50,6 +50,10 @@ public final class TransactionBuffer {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
+            final var lockResult = ensureLock(transaction, OperationType.SAVE, dbName, collName, onLockTimeout);
+            if (lockResult != null) {
+                return lockResult;
+            }
             final var readinessError = CollectionReadinessGuard.check(OperationType.SAVE, dbName, collName);
             if (readinessError != null) {
                 return readinessError;
@@ -60,10 +64,6 @@ public final class TransactionBuffer {
             final var entrySizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
             if (entrySizeError != null) {
                 return entrySizeError;
-            }
-            final var lockResult = ensureLock(transaction, OperationType.SAVE, dbName, collName, onLockTimeout);
-            if (lockResult != null) {
-                return lockResult;
             }
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
             final var insert = !TransactionWrites.isVisible(transaction, collId,
@@ -95,6 +95,10 @@ public final class TransactionBuffer {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_TRANSACTION, () -> {
+            final var lockResult = ensureLock(transaction, OperationType.BULK_SAVE, dbName, collName, onLockTimeout);
+            if (lockResult != null) {
+                return lockResult;
+            }
             final var readinessError = CollectionReadinessGuard.check(OperationType.BULK_SAVE, dbName, collName);
             if (readinessError != null) {
                 return readinessError;
@@ -102,10 +106,6 @@ public final class TransactionBuffer {
             final var validationError = validateBulkObjects(request, dbName, collName);
             if (validationError != null) {
                 return validationError;
-            }
-            final var lockResult = ensureLock(transaction, OperationType.BULK_SAVE, dbName, collName, onLockTimeout);
-            if (lockResult != null) {
-                return lockResult;
             }
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
@@ -153,13 +153,13 @@ public final class TransactionBuffer {
         final var collName = request.getCollectionName();
         final var id = request.get_id();
         return OperationResponse.respondOrError(OperationType.DELETE, ErrorCode.ERROR_TRANSACTION, () -> {
-            final var readinessError = CollectionReadinessGuard.check(OperationType.DELETE, dbName, collName);
-            if (readinessError != null) {
-                return readinessError;
-            }
             final var lockResult = ensureLock(transaction, OperationType.DELETE, dbName, collName, onLockTimeout);
             if (lockResult != null) {
                 return lockResult;
+            }
+            final var readinessError = CollectionReadinessGuard.check(OperationType.DELETE, dbName, collName);
+            if (readinessError != null) {
+                return readinessError;
             }
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
             final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);

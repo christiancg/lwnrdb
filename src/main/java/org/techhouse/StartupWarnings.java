@@ -1,7 +1,7 @@
 package org.techhouse;
 
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -24,7 +24,7 @@ public final class StartupWarnings {
     }
 
     public static void warnIfDefaultAdminPassword() {
-        if (Globals.DEFAULT_ADMIN_PASSWORD.equals(config.getDefaultAdminPassword())) {
+        if (ConfigKey.DEFAULT_ADMIN_PASSWORD.defaultValue().equals(config.getDefaultAdminPassword())) {
             logger.warning("SECURITY WARNING: defaultAdminPassword is still set to the well-known default value. "
                     + "Change it in lwnrdb.cfg and update the admin user's password immediately to avoid "
                     + "unauthorized access.");

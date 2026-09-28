@@ -87,14 +87,21 @@ public class FilterOperatorHelperScriptTest {
     }
 
     @Test
-    public void test_a_non_finite_predicate_result_is_falsy_rather_than_a_refusal() throws IOException {
-        for (final var value : List.of("NaN", "1/0", "-1/0")) {
+    public void test_a_non_finite_predicate_result_is_decided_by_js_truthiness_not_a_refusal() throws IOException {
+        for (final var value : List.of("1/0", "-1/0")) {
             try (var context = new PipelineScriptContext()) {
                 final var operator = new ScriptOperator("export default (doc) => " + value + ";");
-                assertEquals(0, FilterOperatorHelper
+                assertEquals(3, FilterOperatorHelper
                         .processOperator(operator, documents(), TestGlobals.DB, TestGlobals.COLL, context).count(),
-                        value + " must be falsy, not a script error: FILTER never stores the value it tests");
+                        value + " is truthy in JavaScript, and FILTER never stores the value it tests");
             }
+        }
+        try (var context = new PipelineScriptContext()) {
+            final var operator = new ScriptOperator("export default (doc) => NaN;");
+            assertEquals(0,
+                    FilterOperatorHelper
+                            .processOperator(operator, documents(), TestGlobals.DB, TestGlobals.COLL, context).count(),
+                    "NaN is falsy in JavaScript");
         }
     }
 

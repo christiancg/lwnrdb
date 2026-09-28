@@ -22,6 +22,7 @@ public class ListenManager {
     private final LinkedBlockingQueue<UUID> dirtyQueue = new LinkedBlockingQueue<>();
     private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
     private final ThreadLocal<Set<String>> deferred = new ThreadLocal<>();
+    private final ThreadLocal<Integer> deferralDepth = ThreadLocal.withInitial(() -> 0);
     private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public UUID register(UUID clientId, AggregateRequest dirtyRequest, String initialHash) {
@@ -95,10 +96,22 @@ public class ListenManager {
     }
 
     public void deferNotifications() {
-        deferred.set(new LinkedHashSet<>());
+        if (deferralDepth.get() == 0) {
+            deferred.set(new LinkedHashSet<>());
+        }
+        deferralDepth.set(deferralDepth.get() + 1);
     }
 
     public void flushDeferredNotifications() {
+        final var depth = deferralDepth.get();
+        if (depth == 0) {
+            return;
+        }
+        if (depth > 1) {
+            deferralDepth.set(depth - 1);
+            return;
+        }
+        deferralDepth.remove();
         final var pending = deferred.get();
         deferred.remove();
         if (pending != null) {

@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.PriorityQueue;
 import java.util.Set;
 import java.util.function.BiPredicate;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
@@ -34,6 +35,7 @@ import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.operators.ScriptOperator;
+import org.techhouse.simplejs.ScriptCallable;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.utils.JsonUtils;
 
@@ -143,33 +145,25 @@ public class FilterOperatorHelper {
 
     // JS truthiness, not a strict boolean: 0/""/null/undefined exclude a document.
     static boolean testScript(ScriptOperator operator, JsonObject document, PipelineScriptContext context) {
-        return isTruthy(callScript(operator.getSource(), document, context));
-    }
-
-    private static boolean isTruthy(JsonBaseElement value) {
-        if (value == null || value.isJsonNull()) {
-            return false;
-        }
-        if (value.isJsonBoolean()) {
-            return value.asJsonBoolean().getValue();
-        }
-        if (value.isJsonNumber()) {
-            final var number = value.asJsonNumber().getValue().doubleValue();
-            return number != 0 && !Double.isNaN(number);
-        }
-        if (value.isJsonString()) {
-            return !value.asJsonString().getValue().isEmpty();
-        }
-        return true;
+        return callPredicate(operator.getSource(), document, context);
     }
 
     static JsonBaseElement callScript(String source, JsonObject document, PipelineScriptContext context) {
+        return invokeScript(source, context, callable -> callable.apply(document));
+    }
+
+    private static boolean callPredicate(String source, JsonObject document, PipelineScriptContext context) {
+        return invokeScript(source, context, callable -> callable.test(document));
+    }
+
+    private static <T> T invokeScript(String source, PipelineScriptContext context,
+            Function<ScriptCallable, T> invocation) {
         if (context == null) {
             throw new ScriptCallableException("InternalError", "No script context available for this pipeline");
         }
         final var analyze = AnalyzeContext.current();
         final var start = analyze == null ? 0 : System.nanoTime();
-        final var value = context.callableFor(source).apply(document);
+        final var value = invocation.apply(context.callableFor(source));
         if (analyze != null) {
             analyze.recordScriptInvocation(System.nanoTime() - start);
         }

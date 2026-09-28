@@ -435,6 +435,14 @@ the wrong index family, though, and one `REINDEX` of the collection moves it int
   and `NaN` fail the conversion with a `TypeError`, because the engine's own reader cannot parse
   the token `NumberFormatter` spells for them. `JSON.stringify` keeps its own ECMAScript-mandated
   answer of `null` for the same values.
+
+  The pipeline's three script surfaces differ, and the rule is whether the result is **stored** or
+  only **tested**. A `MAP` value operator and a `REDUCE` accumulator are stored, so a non-finite
+  result becomes `null`, matching what the arithmetic operators already answer. A before-write hook
+  refuses with a `TypeError`. A `FILTER` script predicate and a `MAP` script condition are only
+  tested, so the result never becomes an EJson value at all: truthiness is decided inside the
+  interpreter under ordinary JavaScript rules, which means `Infinity` and `-Infinity` **keep** a
+  document while `NaN`, `0`, `-0`, `''`, `null` and `undefined` drop it.
 - **Console output** is captured on **every** exit path — value, throw, syntax error, abort — as
   a ring buffer keeping the newest `maxLogLines` (a longer line is clipped at
   `maxLogLineChars`, both setting a `logsTruncated` flag), and teed to the host sink when one

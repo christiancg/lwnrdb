@@ -41,14 +41,14 @@ public class EventProcessorHelper {
                 others.add(event);
             }
         }
-        for (final var group : entityGroups.values()) {
+        for (final var group : entityGroups.entrySet()) {
             try {
-                processEntityGroup(group);
+                processEntityGroup(group.getValue());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
             } catch (Exception e) {
-                logger.warning("Failed to process a background entity group: " + e.getMessage());
+                logger.warning(abandonedWork(group.getKey(), e));
             }
         }
         for (final var event : others) {
@@ -58,9 +58,25 @@ public class EventProcessorHelper {
                 Thread.currentThread().interrupt();
                 return;
             } catch (Exception e) {
-                logger.warning("Failed to process a background event: " + e.getMessage());
+                logger.warning(abandonedWork(collectionOf(event), e));
             }
         }
+    }
+
+    private static String abandonedWork(String collectionIdentifier, Exception cause) {
+        final var target = collectionIdentifier == null ? "" : " on " + collectionIdentifier;
+        return "Failed to process a background event" + target + ": " + cause.getMessage()
+                + ". Its field indexes may be stale - run REINDEX on that collection.";
+    }
+
+    private static String collectionOf(Event event) {
+        return switch (event) {
+            case EntityEvent entityEvent ->
+                entityEvent.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR + entityEvent.getCollName();
+            case BulkEntityEvent bulkEvent ->
+                bulkEvent.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR + bulkEvent.getCollName();
+            default -> null;
+        };
     }
 
     private static void processEntityGroup(List<EntityEvent> group) throws IOException, InterruptedException {
@@ -70,21 +86,19 @@ public class EventProcessorHelper {
         }
         final var dbName = group.getFirst().getDbName();
         final var collName = group.getFirst().getCollName();
-        try {
-            if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
-                return;
-            }
-            final var ids = new LinkedHashSet<String>();
-            for (final var event : group) {
-                ids.add(event.getDbEntry().get_id());
-            }
-            IndexHelper.bulkUpdateIndexes(dbName, collName, new ArrayList<>(ids));
-            for (final var event : group) {
-                AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getDbEntry());
-            }
-        } finally {
+        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
             clearPendingEvents(group);
+            return;
         }
+        final var ids = new LinkedHashSet<String>();
+        for (final var event : group) {
+            ids.add(event.getDbEntry().get_id());
+        }
+        IndexHelper.bulkUpdateIndexes(dbName, collName, new ArrayList<>(ids));
+        for (final var event : group) {
+            AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getDbEntry());
+        }
+        clearPendingEvents(group);
     }
 
     private static void clearPendingEvents(List<EntityEvent> group) {
@@ -113,15 +127,11 @@ public class EventProcessorHelper {
             clearPending(dbName, collName, event.getUpdatedEntries());
             return;
         }
-        try {
-            IndexHelper.bulkUpdateIndexes(dbName, collName,
-                    idsOf(event.getInsertedEntries(), event.getUpdatedEntries()));
-            AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.CREATED, event.getInsertedEntries());
-            AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdatedEntries());
-        } finally {
-            clearPending(dbName, collName, event.getInsertedEntries());
-            clearPending(dbName, collName, event.getUpdatedEntries());
-        }
+        IndexHelper.bulkUpdateIndexes(dbName, collName, idsOf(event.getInsertedEntries(), event.getUpdatedEntries()));
+        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.CREATED, event.getInsertedEntries());
+        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdatedEntries());
+        clearPending(dbName, collName, event.getInsertedEntries());
+        clearPending(dbName, collName, event.getUpdatedEntries());
     }
 
     private static void clearPending(String dbName, String collName, List<DbEntry> entries) {
@@ -150,14 +160,11 @@ public class EventProcessorHelper {
             pendingIndexWrites.clear(dbName, collName, dbEntry.get_id());
             return;
         }
-        try {
-            // Index maintenance re-reads the current document by id, so events may run out of order;
-            // the event snapshot stays authoritative only for the admin entry-count delta.
-            IndexHelper.updateIndexes(dbName, collName, dbEntry.get_id());
-            AdminOperationHelper.updateEntryCount(dbName, collName, type, dbEntry);
-        } finally {
-            pendingIndexWrites.clear(dbName, collName, dbEntry.get_id());
-        }
+        // Index maintenance re-reads the current document by id, so events may run out of order;
+        // the event snapshot stays authoritative only for the admin entry-count delta.
+        IndexHelper.updateIndexes(dbName, collName, dbEntry.get_id());
+        AdminOperationHelper.updateEntryCount(dbName, collName, type, dbEntry);
+        pendingIndexWrites.clear(dbName, collName, dbEntry.get_id());
     }
 
 }
