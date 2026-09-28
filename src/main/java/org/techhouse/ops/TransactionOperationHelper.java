@@ -8,7 +8,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.MembershipView;
@@ -19,9 +18,7 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
-import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -30,6 +27,7 @@ import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
+import org.techhouse.ops.tx.CommittedOpTriggers;
 import org.techhouse.ops.tx.TransactionBuffer;
 import org.techhouse.ops.tx.TransactionRecovery;
 
@@ -45,9 +43,6 @@ public final class TransactionOperationHelper {
             .get(org.techhouse.listen.ListenManager.class);
     private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
     private static final Logger logger = Logger.logFor(TransactionOperationHelper.class);
-
-    private static final String OBJECTS_FIELD = "objects";
-    private static final String DELETED_DOCUMENT_FIELD = "deletedDocument";
 
     // START_TRANSACTION is allowed through so start() reports the "already active" conflict, not a generic one.
     public static boolean isAllowedDuringTransaction(OperationType type) {
@@ -178,7 +173,7 @@ public final class TransactionOperationHelper {
             pastCommitPoint = false;
             // After the durable commit, so a trigger never observes a transaction that later rolled back. The
             // transaction's own depth is used, not zero, or allowCascade=true would cascade forever.
-            fireTriggersForCommittedOps(ops, clientTracker.getAuthenticatedUsername(clientId),
+            CommittedOpTriggers.fireForCommittedOps(ops, clientTracker.getAuthenticatedUsername(clientId),
                     transaction.getTriggerDepth(), transaction);
             // The local commit stands even on a replication timeout; anti-entropy reconciles the replicas.
             if (coordinator.replicateTransaction(transaction, reservedTombstones) == ReplicationOutcome.TIMEOUT) {
@@ -405,55 +400,6 @@ public final class TransactionOperationHelper {
             }
         }
         return result.stream();
-    }
-
-    public static void fireTriggersForCommittedOps(java.util.List<AdminTransactionEntry> ops, String actingUser,
-            int triggerDepth, Transaction transaction) {
-        for (final var op : ops) {
-            final var dbName = op.getTargetDb();
-            final var collName = op.getTargetColl();
-            // Which ids the op created rather than updated was decided when the write was buffered; by now all
-            // documents exist, so an insert can no longer be told apart from an update here.
-            final var inserted = transaction.insertedIdsFor(op.getSeq());
-            switch (op.getOpType()) {
-                case AdminTransactionEntry.OP_TYPE_SAVE -> {
-                    final var id = op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue();
-                    TriggerHelper.afterWriteIds(dbName, collName,
-                            inserted.contains(id) ? EventType.CREATED : EventType.UPDATED, List.of(id), actingUser,
-                            triggerDepth);
-                }
-                case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
-                    final var createdIds = new ArrayList<String>();
-                    final var updatedIds = new ArrayList<String>();
-                    for (final var element : op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList()) {
-                        final var object = element.asJsonObject();
-                        if (object.has(Globals.PK_FIELD)) {
-                            final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
-                            (inserted.contains(id) ? createdIds : updatedIds).add(id);
-                        }
-                    }
-                    TriggerHelper.afterWriteIds(dbName, collName, EventType.CREATED, createdIds, actingUser,
-                            triggerDepth);
-                    TriggerHelper.afterWriteIds(dbName, collName, EventType.UPDATED, updatedIds, actingUser,
-                            triggerDepth);
-                }
-                // The deleted document was captured when the delete was buffered; re-reading it by id here
-                // would find nothing. Absent when no DELETED trigger existed at buffer time.
-                case AdminTransactionEntry.OP_TYPE_DELETE -> {
-                    final var payload = op.getPayload();
-                    if (payload.has(DELETED_DOCUMENT_FIELD)) {
-                        TriggerHelper
-                                .afterWrite(dbName, collName, EventType.DELETED,
-                                        DbEntry.fromJsonObject(dbName, collName,
-                                                payload.get(DELETED_DOCUMENT_FIELD).asJsonObject()),
-                                        actingUser, triggerDepth);
-                    }
-                }
-                default -> {
-                    // Markers and the trigger-run consume op are not writes and fire nothing.
-                }
-            }
-        }
     }
 
     private static boolean ownershipMoved(UUID clientId, Transaction transaction) {

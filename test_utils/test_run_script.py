@@ -855,6 +855,35 @@ def test_db_module_arity(conn: Conn):
                         "400-9", "at least one object")
 
 
+def test_db_save_rejects_a_non_string_id(conn: Conn):
+    section("Host interface - db.save with an _id that is not a string")
+    # The wire path leaves a non-string _id unset and lets DataRequestValidator answer "_id must be a
+    # string". db.save used to read it with an unchecked cast before dispatching, so the identical
+    # document died on a ClassCastException reported as an InternalError and logged as an engine fault.
+    for label, literal in (("a number", "123"), ("a boolean", "true"), ("an object", "{ a: 1 }"),
+                           ("an array", "[1]"), ("null", "null")):
+        check_failed_script(f"{label} _id is a validation error, not an InternalError",
+                            conn.run('import db from "db";\n'
+                                     f'db.save(db.name, "{COLL}", {{ _id: {literal}, v: 1 }});'),
+                            "400-9", "_id must be a string")
+        check_status(f"the connection still answers after {label} was refused",
+                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                                "_id": "non-string-id"}), "NOT_FOUND")
+
+    check_result("the refusal is catchable inside the script", conn.run(
+        'import db from "db";\n'
+        f'try {{ db.save(db.name, "{COLL}", {{ _id: 123, v: 1 }}); return "saved"; }}\n'
+        "catch (e) { return e.message.indexOf(\"_id must be a string\") >= 0 ? \"refused\" : e.message; }"),
+        "refused")
+    check_result("a valid string _id still saves", conn.run(
+        'import db from "db";\n'
+        f'return db.save(db.name, "{COLL}", {{ _id: "string-id-ok", v: 1 }})._id;'), "string-id-ok")
+    check_failed_script("a string _id that breaks the charset is still refused",
+                        conn.run('import db from "db";\n'
+                                 f'db.save(db.name, "{COLL}", {{ _id: "not valid!", v: 1 }});'),
+                        "400-9", "")
+
+
 def test_capabilities(conn: Conn):
     section("Host interface — capabilities and environment")
     check_result("crypto.randomUUID", conn.run("return crypto.randomUUID().length;"), 36)
@@ -1481,6 +1510,7 @@ def main():
             test_custom_types(conn)
             test_value_guards(conn)
             test_db_module_arity(conn)
+            test_db_save_rejects_a_non_string_id(conn)
             test_capabilities(conn)
             test_procedure_imports(conn)
             test_language_surface(conn)

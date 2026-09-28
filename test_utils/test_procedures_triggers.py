@@ -67,6 +67,7 @@ OTHER_DB = "proc_other_db"
 COLL = "orders"
 AUDIT = "audit"
 UNREADABLE_COLL = "broken_triggers"
+CORRUPT_COLL = "corrupt_triggers"
 RECOVERED_COLL = "tx_recovered"
 FENCED_COLL = "tx_fenced"
 RETRY_COLL = "retry_shutdown"
@@ -452,6 +453,17 @@ def install_the_trigger_whose_file_will_break(conn: Conn):
     check_status("write a document", conn.save_doc({"_id": "ur-seed", "n": 1}, coll=UNREADABLE_COLL), "OK")
     check("the trigger really fires while its file is intact",
           await_doc(conn, "CREATED-ur-seed").get("status") == "OK",
+          "the fixture never fired, so what phase 2 asserts about it would prove nothing")
+
+    # A second collection, because the unreadable case above ends with its trigger list warm in cache -
+    # corrupting that file again would never be read from disk.
+    check_status("create the collection whose trigger file phase 2 corrupts", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": CORRUPT_COLL}), "OK")
+    check_status("install a trigger on it",
+                 conn.save_trigger("audit_corrupt", ["CREATED", "UPDATED"], "auditor", coll=CORRUPT_COLL), "OK")
+    check_status("write a document", conn.save_doc({"_id": "co-seed", "n": 1}, coll=CORRUPT_COLL), "OK")
+    check("the trigger really fires while its file is intact",
+          await_doc(conn, "CREATED-co-seed").get("status") == "OK",
           "the fixture never fired, so what phase 2 asserts about it would prove nothing")
 
 
@@ -1283,6 +1295,44 @@ def test_an_unreadable_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: st
     check("the audit row is back", await_doc(conn, "CREATED-ur2").get("status") == "OK")
 
 
+def test_a_corrupt_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: str):
+    section("A trigger file that cannot be parsed is not 'no triggers' either")
+    # The sibling above breaks the file by making it unreadable; this one leaves it perfectly readable and
+    # makes it fail to parse, which is what an unclean stop actually leaves behind - writes are not synced
+    # to the device, so a torn definition file is an ordinary crash artefact.
+    trigger_file = os.path.join(work_dir, "db", DB, CORRUPT_COLL, f"{CORRUPT_COLL}-triggers.json")
+    check("the trigger file survived the restart", os.path.isfile(trigger_file), trigger_file)
+    with open(trigger_file, "rb") as fp:
+        original = fp.read()
+    check("and still names the trigger installed before it", b"audit_corrupt" in original, f"got {original!r}")
+
+    with open(trigger_file, "wb") as fp:
+        fp.write(b'{"triggers":[{"name":"audit_corrupt","events":["NOT_AN_EVENT"]}]}')
+    try:
+        refused = conn.save_doc({"_id": "co1", "n": 1}, coll=CORRUPT_COLL)
+        check_code("a write is refused rather than quietly firing no triggers", refused, "ERROR", "500-7")
+        check("and nothing was written", conn.find("co1", coll=CORRUPT_COLL).get("status") != "OK")
+        check_code("saving a trigger is refused",
+                   conn.save_trigger("audit_second", ["CREATED"], "auditor", coll=CORRUPT_COLL), "ERROR", "500-29")
+        check_code("deleting one is refused", conn.send(
+            {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": CORRUPT_COLL,
+             "name": "audit_corrupt"}), "ERROR", "500-30")
+        with open(trigger_file, "rb") as fp:
+            while_corrupt = fp.read()
+        check("neither DDL call erased the definitions it could not parse",
+              b"NOT_AN_EVENT" in while_corrupt,
+              f"the file was rewritten from a list that could not be read: {while_corrupt!r}")
+    finally:
+        with open(trigger_file, "wb") as fp:
+            fp.write(original)
+
+    listed = conn.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": CORRUPT_COLL})
+    check("the trigger is still installed once the file parses again",
+          any(t.get("name") == "audit_corrupt" for t in (listed.get("triggers") or [])), f"got {listed}")
+    check_status("and a write fires it again", conn.save_doc({"_id": "co2", "n": 2}, coll=CORRUPT_COLL), "OK")
+    check("the audit row is back", await_doc(conn, "CREATED-co2").get("status") == "OK")
+
+
 def test_a_deleted_definition_stops_being_served(conn: Conn):
     section("A deleted procedure or schema stops applying immediately")
     # The definition caches load from disk outside any lock while the DDL that removes them holds the
@@ -1719,6 +1769,7 @@ def main():
         with admin_conn() as conn:
             test_a_recovered_commit_fires_its_triggers(conn)
             test_an_unreadable_trigger_file_is_not_an_empty_one(conn, work_dir)
+            test_a_corrupt_trigger_file_is_not_an_empty_one(conn, work_dir)
             test_a_deleted_definition_stops_being_served(conn)
             test_retry_and_dead_letters(conn)
             test_a_replayed_dead_letter_gets_a_full_budget(conn)

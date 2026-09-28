@@ -10,6 +10,7 @@ import org.techhouse.conn.TxSession;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.resp.OperationResponse;
+import org.techhouse.ops.tx.CommittedOpTriggers;
 import org.techhouse.ops.tx.TransactionRecovery;
 
 public final class TwoPhaseParticipant {
@@ -69,8 +70,8 @@ public final class TwoPhaseParticipant {
             }
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             // After the durable commit, so a trigger never observes a transaction that later rolled back.
-            TransactionOperationHelper.fireTriggersForCommittedOps(ops,
-                    clientTracker.getAuthenticatedUsername(clientId), transaction.getTriggerDepth(), transaction);
+            CommittedOpTriggers.fireForCommittedOps(ops, clientTracker.getAuthenticatedUsername(clientId),
+                    transaction.getTriggerDepth(), transaction);
             TransactionRecovery.resolveMarkers(transaction.getTransactionId().toString(), true);
             // A replication timeout does not fail the commit; anti-entropy reconciles the lagging replicas.
             coordinator.replicateTransaction(transaction, reservedTombstones);

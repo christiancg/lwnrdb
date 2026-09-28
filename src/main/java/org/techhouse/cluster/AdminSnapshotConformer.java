@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
@@ -221,18 +222,29 @@ final class AdminSnapshotConformer {
         }
     }
 
+    private List<TriggerDefinition> localTriggers(String dbName, String collName) {
+        try {
+            return cache.loadTriggersUncached(dbName, collName);
+        } catch (MetadataReadException e) {
+            return null;
+        }
+    }
+
     // Runs under the collection lock the caller already holds.
     private void conformTriggers(String dbName, String collName, JsonObject snapshotTriggers) throws Exception {
         final var key = Cache.getCollectionIdentifier(dbName, collName);
         final var desired = snapshotTriggers.has(key) && snapshotTriggers.get(key).isJsonArray()
                 ? TriggerDefinition.fromJsonArray(snapshotTriggers.get(key).asJsonArray())
                 : new ArrayList<TriggerDefinition>();
-        if (desired.equals(cache.loadTriggersUncached(dbName, collName))) {
+        final var current = localTriggers(dbName, collName);
+        if (desired.equals(current)) {
             return;
         }
         if (desired.isEmpty()) {
-            fs.deleteTriggers(dbName, collName);
-            cache.removeTriggers(dbName, collName);
+            if (current != null) {
+                fs.deleteTriggers(dbName, collName);
+                cache.removeTriggers(dbName, collName);
+            }
             return;
         }
         fs.writeTriggers(dbName, collName, eJson.toJson(TriggerDefinition.toFileJson(desired)));

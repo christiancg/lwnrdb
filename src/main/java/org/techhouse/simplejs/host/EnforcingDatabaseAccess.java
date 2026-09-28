@@ -128,8 +128,8 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     public JsonObject save(String db, String coll, JsonObject document) {
         final var request = new SaveRequest(db, coll);
         request.setObject(document);
-        if (document.has(Globals.PK_FIELD)) {
-            request.set_id(document.get(Globals.PK_FIELD).asJsonString().getValue());
+        if (document.get(Globals.PK_FIELD) instanceof JsonString objectId) {
+            request.set_id(objectId.getValue());
         }
         final var response = dispatch(request);
         if (response instanceof SaveResponse saveResponse) {

@@ -377,24 +377,17 @@ public class AdminCache {
     }
 
     public List<TriggerDefinition> loadTriggersUncached(String dbName, String collName) {
-        final String raw;
         try {
-            raw = fs.readTriggers(dbName, collName);
+            final var raw = fs.readTriggers(dbName, collName);
+            if (raw == null || raw.isBlank()) {
+                return List.of();
+            }
+            return List.copyOf(TriggerDefinition.fromFileJson(eJson.fromJson(raw, JsonObject.class)));
         } catch (Exception e) {
-            logger.warning("Failed to read triggers for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
+            logger.warning("Failed to load triggers for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
                     + e.getMessage());
             throw new MetadataReadException(
                     "Failed to read the triggers for " + Cache.getCollectionIdentifier(dbName, collName), e);
-        }
-        if (raw == null || raw.isBlank()) {
-            return List.of();
-        }
-        try {
-            return List.copyOf(TriggerDefinition.fromFileJson(eJson.fromJson(raw, JsonObject.class)));
-        } catch (Exception e) {
-            logger.warning("Failed to parse triggers for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
-                    + e.getMessage());
-            return List.of();
         }
     }
 

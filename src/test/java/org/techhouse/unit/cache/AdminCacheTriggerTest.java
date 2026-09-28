@@ -85,9 +85,49 @@ public class AdminCacheTriggerTest {
     }
 
     @Test
-    public void test_malformed_trigger_file_reads_as_no_triggers() throws Exception {
+    public void test_a_trigger_file_that_cannot_be_parsed_is_not_an_empty_one() throws Exception {
         fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, "definitely not json");
-        assertTrue(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).isEmpty());
+        assertThrows(org.techhouse.ex.MetadataReadException.class,
+                () -> cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL),
+                "a file that exists but cannot be turned into definitions is a read failure, not an absence:"
+                        + " answering with an empty list silently skips every before-write hook and lets the"
+                        + " next SAVE_TRIGGER rewrite the file from what it could not read");
+    }
+
+    @Test
+    public void test_one_unparseable_trigger_does_not_hide_the_others() throws Exception {
+        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL,
+                "{\"triggers\":[{\"name\":\"good\",\"events\":[\"CREATED\"],\"procedureName\":\"p\"},"
+                        + "{\"name\":\"bad\",\"events\":[\"BOGUS\"],\"procedureName\":\"p\"}]}");
+        assertThrows(org.techhouse.ex.MetadataReadException.class,
+                () -> cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL),
+                "fromFileJson is all-or-nothing, so one bad element empties the whole list - reporting that as"
+                        + " 'no triggers' would disable the definitions that parsed perfectly well");
+    }
+
+    @Test
+    public void test_an_absent_trigger_file_is_still_an_absence() {
+        assertTrue(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).isEmpty(),
+                "a collection that simply has no triggers must not be refused");
+    }
+
+    @Test
+    public void test_a_blank_trigger_file_is_still_an_absence() throws Exception {
+        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, "   ");
+        assertTrue(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).isEmpty(),
+                "an empty file is what an interrupted delete leaves behind, and it names no triggers to skip");
+    }
+
+    @Test
+    public void test_a_parse_failure_is_not_published_into_the_cache() throws Exception {
+        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, "definitely not json");
+        assertThrows(org.techhouse.ex.MetadataReadException.class,
+                () -> cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL));
+
+        writeTriggers(definition("repaired"));
+        assertEquals(1, cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).size(),
+                "the failure must not be remembered as an empty list, or repairing the file on disk leaves the"
+                        + " collection firing nothing until eviction or restart");
     }
 
     private static java.io.File triggersFile() {

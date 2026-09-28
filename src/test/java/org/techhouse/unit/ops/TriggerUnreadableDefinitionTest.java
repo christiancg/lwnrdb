@@ -96,6 +96,21 @@ public class TriggerUnreadableDefinitionTest {
     }
 
     @Test
+    public void test_a_corrupt_trigger_file_also_keeps_the_pending_run() throws Exception {
+        writeTriggers(definition());
+        final var runId = recordRun();
+        org.junit.jupiter.api.Assumptions.assumeTrue(runId != null, "the run log must be enabled for this case");
+        fs.writeTriggers(TestGlobals.DB, TestGlobals.COLL, "definitely not json");
+        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+
+        TriggerDispatcher.dispatch(eventFor(runId));
+
+        assertFalse(TriggerRunLog.recordIdsFor(runId).isEmpty(),
+                "a torn definition file is what an unclean stop leaves behind, and reading it as 'no such"
+                        + " trigger' consumes the only record that would have replayed the run");
+    }
+
+    @Test
     public void test_a_genuinely_deleted_trigger_still_consumes_the_run() {
         fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);

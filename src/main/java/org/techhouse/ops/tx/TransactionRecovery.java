@@ -85,8 +85,8 @@ public final class TransactionRecovery {
             // Fired after the durable commit is cleared, exactly as the online commit does. At startup the
             // executor is not running yet, so the submit is a no-op and the durable run record that
             // TriggerRunLog writes first is what TriggerRunRecovery replays once it is.
-            org.techhouse.ops.TransactionOperationHelper.fireTriggersForCommittedOps(ops, actingUserOf(ops),
-                    reconstructed.getTriggerDepth(), reconstructed);
+            CommittedOpTriggers.fireForCommittedOps(ops, actingUserOf(ops), reconstructed.getTriggerDepth(),
+                    reconstructed, fencedIds);
             coordinator.replicateTransaction(reconstructed, reservedTombstones);
             return null;
         };
@@ -155,7 +155,7 @@ public final class TransactionRecovery {
         return fenced;
     }
 
-    private static String fenceKey(String dbName, String collName, String id) {
+    static String fenceKey(String dbName, String collName, String id) {
         return Cache.getCollectionIdentifier(dbName, collName) + Globals.COLL_IDENTIFIER_SEPARATOR + id;
     }
 
