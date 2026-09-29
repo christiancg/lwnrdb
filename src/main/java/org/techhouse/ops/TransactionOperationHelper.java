@@ -39,7 +39,8 @@ public final class TransactionOperationHelper {
 
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
-    private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
+    @SuppressWarnings("FieldMayBeFinal")
+    private static ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private static final org.techhouse.listen.ListenManager listenManager = IocContainer
             .get(org.techhouse.listen.ListenManager.class);
     private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
@@ -149,7 +150,7 @@ public final class TransactionOperationHelper {
                 AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_QUORUM);
             }
-            if (ownershipMoved(clientId, transaction)) {
+            if (ownershipMoved(transaction)) {
                 AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NOT_COLLECTION_OWNER);
             }
@@ -428,12 +429,7 @@ public final class TransactionOperationHelper {
         return result.stream();
     }
 
-    private static boolean ownershipMoved(UUID clientId, Transaction transaction) {
-        for (final var session : clientTracker.txSessionsSnapshot().values()) {
-            if (session.clientId().equals(clientId)) {
-                return false;
-            }
-        }
+    private static boolean ownershipMoved(Transaction transaction) {
         for (final var collId : transaction.getHeldLocks()) {
             final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
             if (parts.length == 2 && !coordinator.stillOwns(parts[0], parts[1])) {

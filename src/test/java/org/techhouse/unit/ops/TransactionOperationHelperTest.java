@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
@@ -31,6 +32,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -336,5 +338,71 @@ public class TransactionOperationHelperTest {
         }
         processor.processMessage(new RollbackTransactionRequest(), clientId);
         deleteAllBufferedOps();
+    }
+
+    private static ClusterCoordinator swapCoordinator(ClusterCoordinator replacement) throws Exception {
+        final var field = TransactionOperationHelper.class.getDeclaredField("coordinator");
+        field.setAccessible(true);
+        final var original = (ClusterCoordinator) field.get(null);
+        field.set(null, replacement);
+        return original;
+    }
+
+    @Test
+    public void test_commit_rechecks_ownership_for_a_forwarded_tx_session_client() throws Exception {
+        final var sessionId = "session-" + UUID.randomUUID();
+        final var session = clientTracker.registerTxSession(sessionId, "alice", "nodeB");
+        final var clientId = session.clientId();
+        try {
+            TransactionOperationHelper.start(clientId);
+            TransactionOperationHelper.bufferSave(saveRequest("txn-ownership-moved"),
+                    clientTracker.getActiveTransaction(clientId));
+
+            final var mockCoordinator = mock(ClusterCoordinator.class);
+            when(mockCoordinator.stillOwns(TestGlobals.DB, TestGlobals.COLL)).thenReturn(false);
+            final var original = swapCoordinator(mockCoordinator);
+            try {
+                final var response = TransactionOperationHelper.commit(clientId);
+                assertEquals("421-1", response.getErrorCode());
+            } finally {
+                swapCoordinator(original);
+            }
+
+            assertNull(clientTracker.getActiveTransaction(clientId));
+            assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL));
+            locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
+            deleteAllBufferedOps();
+        } finally {
+            clientTracker.removeTxSession(sessionId);
+        }
+    }
+
+    @Test
+    public void test_commit_still_applies_when_ownership_is_retained() throws Exception {
+        final var sessionId = "session-" + UUID.randomUUID();
+        final var session = clientTracker.registerTxSession(sessionId, "alice", "nodeB");
+        final var clientId = session.clientId();
+        try {
+            TransactionOperationHelper.start(clientId);
+            TransactionOperationHelper.bufferSave(saveRequest("txn-ownership-retained"),
+                    clientTracker.getActiveTransaction(clientId));
+
+            final var mockCoordinator = mock(ClusterCoordinator.class);
+            when(mockCoordinator.stillOwns(TestGlobals.DB, TestGlobals.COLL)).thenReturn(true);
+            final var original = swapCoordinator(mockCoordinator);
+            try {
+                final var response = TransactionOperationHelper.commit(clientId);
+                assertEquals(OperationStatus.OK, response.getStatus(),
+                        "commit must still succeed when ownership was retained");
+            } finally {
+                swapCoordinator(original);
+            }
+
+            assertNull(clientTracker.getActiveTransaction(clientId));
+            assertTrue(locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL));
+            locks.releaseWrite(TestGlobals.DB, TestGlobals.COLL);
+        } finally {
+            clientTracker.removeTxSession(sessionId);
+        }
     }
 }

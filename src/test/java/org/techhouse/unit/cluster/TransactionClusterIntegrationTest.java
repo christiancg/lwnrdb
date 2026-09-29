@@ -309,7 +309,8 @@ public class TransactionClusterIntegrationTest {
     }
 
     @Test
-    public void test_single_remote_commit_uses_fast_path() throws Exception {
+    public void test_single_remote_commit_refuses_when_the_receiving_node_does_not_own_the_collection()
+            throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
@@ -320,10 +321,10 @@ public class TransactionClusterIntegrationTest {
         final var commit = new CommitTransactionRequest();
         final var relayed = router.forward(commit, eJson.toJson(commit), true, "admin", clientId);
         assertNotNull(relayed);
-        assertTrue(relayed.contains("committed"), "expected committed response, got: " + relayed);
+        assertTrue(relayed.contains("421-1"), "expected NOT_COLLECTION_OWNER, got: " + relayed);
         final var find = new FindByIdRequest(TestGlobals.DB, coll);
         find.set_id("fastpath");
-        assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus());
+        assertEquals(OperationStatus.NOT_FOUND, processor.processMessage(find).getStatus());
         assertNull(clientTracker.getActiveTransaction(clientId));
     }
 

@@ -133,13 +133,15 @@ public final class FieldPredicateFactory {
             FieldOperatorType operation, boolean exactStrings) {
         if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {
             if (toTestElement == null || !toTestElement.isJsonArray()) {
-                return false;
+                return operation == FieldOperatorType.NOT_EQUALS;
             }
             final var equal = operatorElement.asJsonArray().equals(toTestElement.asJsonArray());
             return (operation == FieldOperatorType.EQUALS) == equal;
         }
-        if ((operation == FieldOperatorType.IN || operation == FieldOperatorType.NOT_IN) && toTestElement != null
-                && !toTestElement.isJsonNull()) {
+        if (operation == FieldOperatorType.IN || operation == FieldOperatorType.NOT_IN) {
+            if (toTestElement == null || toTestElement.isJsonNull()) {
+                return operation == FieldOperatorType.NOT_IN;
+            }
             return (operation == FieldOperatorType.IN) == containsEquivalent(operatorElement.asJsonArray(),
                     toTestElement, exactStrings);
         }
@@ -161,8 +163,10 @@ public final class FieldPredicateFactory {
 
     private static boolean objectOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
             FieldOperatorType operation) {
-        if ((operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS)
-                && toTestElement != null && toTestElement.isJsonObject()) {
+        if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {
+            if (toTestElement == null || !toTestElement.isJsonObject()) {
+                return operation == FieldOperatorType.NOT_EQUALS;
+            }
             final var equal = operatorElement.asJsonObject().equals(toTestElement.asJsonObject());
             return (operation == FieldOperatorType.EQUALS) == equal;
         }

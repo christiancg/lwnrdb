@@ -161,9 +161,11 @@ public class ResourceLocking {
         }
         final var sorted = identifiers.stream().distinct().sorted().toList();
         final var acquired = new ArrayList<String>();
+        final var deadline = System.currentTimeMillis() + timeoutMillis;
         try {
             for (var identifier : sorted) {
-                if (!lockFor(identifier).readLock().tryLock(timeoutMillis,
+                final var remaining = deadline - System.currentTimeMillis();
+                if (remaining <= 0 || !lockFor(identifier).readLock().tryLock(remaining,
                         java.util.concurrent.TimeUnit.MILLISECONDS)) {
                     releaseReadLocks(acquired);
                     return null;

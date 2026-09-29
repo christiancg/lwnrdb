@@ -294,6 +294,71 @@ public class ResourceLockingTest {
     }
 
     @Test
+    public void test_timed_acquireReadLocks_budgets_total_timeout_across_multiple_locks() throws Exception {
+        final var rl = new ResourceLocking();
+        final var firstHeld = new CountDownLatch(1);
+        final var secondHeld = new CountDownLatch(1);
+        final var mayRelease = new CountDownLatch(1);
+        final var holder = new Thread(() -> {
+            try {
+                rl.lockWrite("first");
+                firstHeld.countDown();
+                rl.lockWrite("second");
+                secondHeld.countDown();
+                mayRelease.await();
+                rl.releaseWrite("second");
+                rl.releaseWrite("first");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        holder.start();
+        assertTrue(firstHeld.await(5, TimeUnit.SECONDS));
+        assertTrue(secondHeld.await(5, TimeUnit.SECONDS));
+
+        final var start = System.nanoTime();
+        final var acquired = rl.acquireReadLocks(false, List.of("first", "second"), 200L);
+        final var elapsedMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - start);
+
+        assertNull(acquired, "both locks are held, so the timed acquisition must give up");
+        assertTrue(elapsedMillis < 350,
+                "the whole acquisition must be bounded by one timeout budget, not one per lock; took " + elapsedMillis
+                        + "ms");
+
+        mayRelease.countDown();
+        holder.join(5000);
+    }
+
+    @Test
+    public void test_timed_acquireReadLocks_returns_null_on_timeout_and_releases_partial_acquisitions()
+            throws Exception {
+        final var rl = new ResourceLocking();
+        final var secondHeld = new CountDownLatch(1);
+        final var mayRelease = new CountDownLatch(1);
+        final var holder = new Thread(() -> {
+            try {
+                rl.lockWrite("second");
+                secondHeld.countDown();
+                mayRelease.await();
+                rl.releaseWrite("second");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        holder.start();
+        assertTrue(secondHeld.await(5, TimeUnit.SECONDS));
+
+        final var acquired = rl.acquireReadLocks(false, List.of("first", "second"), 200L);
+
+        assertNull(acquired, "the second lock is held, so the acquisition must give up");
+        assertEquals(0, locks(rl).get("first").getReadLockCount(),
+                "the already-acquired first lock must be released when a later one times out");
+
+        mayRelease.countDown();
+        holder.join(5000);
+    }
+
+    @Test
     public void test_lock_with_empty_database_name() {
         final var rl = new ResourceLocking();
         assertDoesNotThrow(() -> {

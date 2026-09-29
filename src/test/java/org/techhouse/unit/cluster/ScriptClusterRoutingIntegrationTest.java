@@ -13,12 +13,15 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.host.EnforcingDatabaseAccess;
+import org.techhouse.simplejs.internal.JsCoercion;
+import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
     @Test
-    public void test_cross_owner_transaction_commits_via_two_phase_commit() throws Exception {
+    public void test_single_remote_commit_refuses_when_the_receiving_node_does_not_own_the_collection()
+            throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var remote = collectionOwnedByOther();
         createCollection(remote);
@@ -26,9 +29,11 @@ public class ScriptClusterRoutingIntegrationTest extends ScriptClusterTestBase {
         db.beginTransaction();
         db.save(TestGlobals.DB, TestGlobals.COLL, doc("local-part"));
         db.save(TestGlobals.DB, remote, doc("remote-part"));
-        db.commitTransaction();
-        assertEquals(OperationStatus.OK, findStatus(TestGlobals.COLL, "local-part"));
-        assertEquals(OperationStatus.OK, findStatus(remote, "remote-part"));
+        final var error = assertThrows(JsThrowException.class, db::commitTransaction);
+        final var message = ((JsObject) error.getValue()).get("message");
+        assertTrue(JsCoercion.toStr(message).contains("not the owner"),
+                "expected a NOT_COLLECTION_OWNER message, got: " + JsCoercion.toStr(message));
+        assertEquals(OperationStatus.NOT_FOUND, findStatus(remote, "remote-part"));
     }
 
     @Test
