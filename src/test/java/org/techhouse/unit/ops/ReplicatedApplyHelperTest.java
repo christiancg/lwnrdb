@@ -105,11 +105,12 @@ public class ReplicatedApplyHelperTest {
     @Test
     public void test_a_multi_id_replicated_delete_defers_every_mark_until_the_batch_ends() throws Exception {
         final var listenId = registerListener();
+        final var baseline = dirtyQueueSize();
         final var queuedDuringApply = new ArrayList<Integer>();
         try (var mocked = mockStatic(DeleteOperationHelper.class)) {
             mocked.when(() -> DeleteOperationHelper.executeDelete(any())).thenAnswer(ignored -> {
                 listenManager.markDirty(TestGlobals.DB, TestGlobals.COLL);
-                queuedDuringApply.add(dirtyQueueSize());
+                queuedDuringApply.add(dirtyQueueSize() - baseline);
                 return null;
             });
             assertTrue(ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL,
@@ -119,7 +120,7 @@ public class ReplicatedApplyHelperTest {
         }
         assertEquals(List.of(0, 0, 0), queuedDuringApply,
                 "a listener must not be woken while the payload is only part applied");
-        assertEquals(1, dirtyQueueSize());
+        assertEquals(1, dirtyQueueSize() - baseline);
     }
 
     @Test

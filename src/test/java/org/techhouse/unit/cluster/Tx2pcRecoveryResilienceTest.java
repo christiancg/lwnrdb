@@ -50,6 +50,7 @@ public class Tx2pcRecoveryResilienceTest {
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private volatile boolean origEnabled;
+    private volatile long origAckTimeoutMs;
 
     private static NodeInfo node() {
         return new NodeInfo("self", "127.0.0.1", 5000, NodeState.ALIVE, 1L, 1L);
@@ -60,6 +61,7 @@ public class Tx2pcRecoveryResilienceTest {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
         origEnabled = config.isClusterEnabled();
+        origAckTimeoutMs = config.getReplicationAckTimeoutMs();
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "clusterExpectedSize", 1);
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 200L);
@@ -73,6 +75,7 @@ public class Tx2pcRecoveryResilienceTest {
     @AfterEach
     public void tearDown() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origAckTimeoutMs);
         ownership.setSelfNodeId(null);
         ownership.onMembershipChanged(new MembershipView(List.of()));
         TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
