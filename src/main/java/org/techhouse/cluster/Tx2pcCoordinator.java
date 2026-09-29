@@ -89,7 +89,7 @@ public class Tx2pcCoordinator {
             if (commit && !Tx2pcLog.isCommitted(dtxId)) {
                 Tx2pcLog.recordCoordinatorCommit(dtxId, peers);
             }
-            TwoPhaseParticipant.resolveFromDurable(dtxId, commit);
+            TwoPhaseParticipant.resolveFromDurable(dtxId, commit, clusterConfig.replicationAckTimeoutMs());
         } catch (Exception e) {
             logger.error("Failed to force-resolve transaction " + dtxId, e);
             return new OperationResponse(OperationType.RESOLVE_TRANSACTION, ErrorCode.ERROR_TRANSACTION);

@@ -15,6 +15,8 @@ import java.net.Socket;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +29,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.elements.JsonObject;
@@ -49,8 +52,10 @@ public class Tx2pcCoordinatorTest {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
-    private boolean origEnabled;
-    private int origExpected;
+    private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private volatile boolean origEnabled;
+    private volatile int origExpected;
+    private volatile long origAckTimeoutMs;
     private PeerConnectionPool origPool;
 
     private static NodeInfo node() {
@@ -64,6 +69,7 @@ public class Tx2pcCoordinatorTest {
         TestUtils.resetClients();
         origEnabled = config.isClusterEnabled();
         origExpected = config.getClusterExpectedSize();
+        origAckTimeoutMs = config.getReplicationAckTimeoutMs();
         origPool = TestUtils.getPrivateField(coordinator, "pool", PeerConnectionPool.class);
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "clusterExpectedSize", 1);
@@ -80,6 +86,7 @@ public class Tx2pcCoordinatorTest {
         TestUtils.setPrivateField(coordinator, "pool", origPool);
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origAckTimeoutMs);
         ownership.setSelfNodeId(null);
         ownership.onMembershipChanged(new MembershipView(List.of()));
         TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
@@ -230,6 +237,40 @@ public class Tx2pcCoordinatorTest {
         final var dtxId = seedDurablePrepared("force-abort");
         assertEquals(OperationStatus.OK, coordinator.forceResolve(dtxId, false).getStatus());
         assertEquals(OperationStatus.NOT_FOUND, findStatus("force-abort"));
+    }
+
+    @Test
+    public void test_force_resolve_gives_up_on_a_busy_collection_lock_instead_of_blocking() throws Exception {
+        final var dtxId = seedDurablePrepared("force-busy");
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 500L);
+        final var holding = new CountDownLatch(1);
+        final var release = new CountDownLatch(1);
+        final var releasedOnSignal = new java.util.concurrent.atomic.AtomicBoolean();
+        final var holder = new Thread(() -> {
+            try {
+                locks.lock(TestGlobals.DB, TestGlobals.COLL);
+                holding.countDown();
+                releasedOnSignal.set(release.await(5, TimeUnit.SECONDS));
+                locks.release(TestGlobals.DB, TestGlobals.COLL);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        holder.start();
+        assertTrue(holding.await(5, TimeUnit.SECONDS));
+
+        final var started = System.currentTimeMillis();
+        final var response = coordinator.forceResolve(dtxId, true);
+        final var elapsed = System.currentTimeMillis() - started;
+
+        release.countDown();
+        holder.join(5000);
+
+        assertTrue(releasedOnSignal.get(), "the lock holder released on the signal, not on its own timeout");
+        assertTrue(elapsed < 5000, "the coordinator must give up on its own budget instead of parking on the lock");
+        assertEquals(OperationType.RESOLVE_TRANSACTION, response.getType());
+        assertEquals("500-24", response.getErrorCode(),
+                "a busy collection lock must be reported as a failure, not resolved by an eventual retry");
     }
 
     @Test

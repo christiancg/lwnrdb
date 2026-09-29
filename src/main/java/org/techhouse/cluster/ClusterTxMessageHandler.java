@@ -142,7 +142,8 @@ final class ClusterTxMessageHandler {
                     return response;
                 }
             } else {
-                TwoPhaseParticipant.resolveFromDurable(request.getTxId(), commit);
+                TwoPhaseParticipant.resolveFromDurable(request.getTxId(), commit,
+                        clusterConfig.replicationAckTimeoutMs());
             }
             response.setType(ackType);
         } catch (InterruptedException e) {
