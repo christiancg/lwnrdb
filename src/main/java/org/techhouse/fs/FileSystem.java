@@ -21,6 +21,7 @@ import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
+import org.techhouse.ex.PartialBulkUpdateException;
 
 public class FileSystem {
     private final FilePaths paths = new FilePaths();
@@ -364,7 +365,12 @@ public class FileSystem {
         for (int i = 0; i < entries.size(); i++) {
             final var entry = entries.get(i);
             final var target = working.get(i);
-            final var result = updateFromCollection(entry.toDbEntry(), target);
+            final UpdateResult result;
+            try {
+                result = updateFromCollection(entry.toDbEntry(), target);
+            } catch (IOException e) {
+                throw new PartialBulkUpdateException(new BulkUpdateResult(updated, compactions), e);
+            }
             final var updatedIndexEntry = new IndexedDbEntry();
             updatedIndexEntry.setIndex(result.indexEntry());
             updatedIndexEntry.set_id(entry.get_id());

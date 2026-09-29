@@ -1,5 +1,7 @@
 package org.techhouse.utils;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -108,16 +110,34 @@ public final class GeoUtils {
 
     public static BoundingBox boundingBoxOf(List<GeoPoint> points) {
         var minLat = Double.POSITIVE_INFINITY;
-        var minLng = Double.POSITIVE_INFINITY;
         var maxLat = Double.NEGATIVE_INFINITY;
-        var maxLng = Double.NEGATIVE_INFINITY;
+        final var lngs = new ArrayList<Double>(points.size());
         for (var point : points) {
             minLat = Math.min(minLat, point.lat());
-            minLng = Math.min(minLng, point.lng());
             maxLat = Math.max(maxLat, point.lat());
-            maxLng = Math.max(maxLng, point.lng());
+            lngs.add(point.lng());
         }
-        return new BoundingBox(minLat, minLng, maxLat, maxLng);
+        if (crossesAntimeridian(lngs)) {
+            return new BoundingBox(minLat, -180, maxLat, 180);
+        }
+        return new BoundingBox(minLat, Collections.min(lngs), maxLat, Collections.max(lngs));
+    }
+
+    private static boolean crossesAntimeridian(List<Double> lngs) {
+        if (lngs.size() < 2) {
+            return false;
+        }
+        final var sorted = lngs.stream().sorted().toList();
+        var widestGap = 360 - (sorted.getLast() - sorted.getFirst());
+        var widestGapCrossesTheDateline = false;
+        for (int i = 1; i < sorted.size(); i++) {
+            final var gap = sorted.get(i) - sorted.get(i - 1);
+            if (gap > widestGap) {
+                widestGap = gap;
+                widestGapCrossesTheDateline = true;
+            }
+        }
+        return widestGapCrossesTheDateline;
     }
 
     public static Set<String> coveringGeohashPrefixes(BoundingBox bbox) {

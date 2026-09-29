@@ -668,6 +668,43 @@ def test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn: Conn):
           f"index-only COUNT={counted_rows} scan={len(scan_ids)}")
 
 
+def test_a_bulk_update_of_many_entries_leaves_every_document_consistent(conn: Conn):
+    """A bulk update's per-entry loop had no rollback of its own publish step: a mid-batch failure
+    left the entries updated before it durable on disk but never reflected in the cache or the field
+    index. This is the ordinary-path regression guard around that same code, run across many entries
+    so a multi-page batch is exercised the way the real failure mode requires."""
+    section("bulk update of many entries: scan, FIND_BY_ID and the field index all agree")
+    objects = [{"_id": f"bulk_{i:04d}", "pad": "updated-" + PAD} for i in range(60)]
+    check_status("bulk update across several pages",
+                 conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": BULK_COLL,
+                            "objects": objects}), "OK")
+
+    scanned = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BULK_COLL,
+                         "aggregationSteps": []})
+    scan_by_id = {d.get("_id"): d.get("pad") for d in (scanned.get("results") or [])}
+    check("every entry the scan returns reflects the bulk update",
+          len(scan_by_id) == len(objects) and all(v == "updated-" + PAD for v in scan_by_id.values()),
+          f"scanned={len(scan_by_id)} expected={len(objects)}"
+          f" stale={[k for k, v in scan_by_id.items() if v != 'updated-' + PAD][:5]}")
+
+    stale_by_find = [i for i in scan_by_id
+                     if (conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": BULK_COLL,
+                                    "_id": i}).get("object") or {}).get("pad") != "updated-" + PAD]
+    check("FIND_BY_ID answers the same updated value the scan does, for every entry",
+          not stale_by_find, f"stale under FIND_BY_ID: {stale_by_find[:5]}")
+
+    check_status("CREATE_INDEX on the updated field",
+                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": BULK_COLL,
+                            "fieldName": "pad"}), "OK")
+    indexed = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BULK_COLL,
+                         "aggregationSteps": [{"type": "FILTER", "operator": {
+                             "fieldOperatorType": "EQUALS", "field": "pad", "value": "updated-" + PAD}}]})
+    indexed_ids = sorted(d.get("_id") for d in (indexed.get("results") or []))
+    check("an index-backed FILTER on the updated field finds every updated entry",
+          indexed_ids == sorted(scan_by_id.keys()),
+          f"indexed={len(indexed_ids)} scanned={len(scan_by_id)}")
+
+
 def test_a_committed_transaction_survives_a_restart_whole(conn: Conn):
     """A commit that cannot finish applying keeps its locks and its marker so recovery can finish
     the slice. Teardown used to delete the ops the marker pointed at, after which startup recovery
@@ -1307,6 +1344,7 @@ def main():
             test_non_finite_numbers_stay_refused_after_a_restart(conn)
             test_the_committed_transaction_is_all_there_after_the_restart(conn)
             test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)
+            test_a_bulk_update_of_many_entries_leaves_every_document_consistent(conn)
             test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn, work_dir)
             test_a_self_heal_never_erases_a_committed_write(conn, work_dir, log_path)
     finally:

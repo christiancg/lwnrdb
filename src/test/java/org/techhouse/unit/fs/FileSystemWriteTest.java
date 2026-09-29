@@ -16,6 +16,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.DirectoryNotFoundException;
+import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -324,6 +325,30 @@ public class FileSystemWriteTest {
         assertTrue(errors.isEmpty(), "no errors expected under concurrent insert/read: " + errors);
         final var page = fileSystem.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 0);
         assertEquals(writers * perWriter, page.size());
+    }
+
+    @Test
+    public void test_bulk_update_mid_batch_failure_throws_partial_bulk_update_exception() throws Exception {
+        FileSystem fs = FileSystemPages.freshFs();
+        final var idxA = FileSystemPages.insertOnPage(fs, "a", 0);
+        final var idxB = FileSystemPages.insertOnPage(fs, "b", 1);
+        final var updates = List.of(FileSystemPages.updateEntry(idxA, "a", "updated-value-for-a"),
+                FileSystemPages.updateEntry(idxB, "b", "updated-value-for-b"));
+
+        final var pageBFile = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB
+                + Globals.FILE_SEPARATOR + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL
+                + Globals.FILE_PAGE_SEPARATOR + "1" + Globals.DB_FILE_EXTENSION);
+        assertTrue(pageBFile.delete());
+        assertTrue(pageBFile.mkdir(), "page b's path must be unwritable for this test to inject a failure");
+
+        final var thrown = assertThrows(PartialBulkUpdateException.class,
+                () -> fs.bulkUpdateFromCollection(TestGlobals.DB, TestGlobals.COLL, updates));
+
+        final var partial = thrown.getPartialResult();
+        assertEquals(1, partial.updated().size(), "only the entry before the failing one committed");
+        assertEquals("a", partial.updated().getFirst().get_id());
+        assertEquals("updated-value-for-a", FileSystemPages.readValueFromDisk(fs, "a"),
+                "the entry before the failing one must be durably readable back from disk");
     }
 
     @Test

@@ -146,6 +146,20 @@ public class AggregationOperatorValidatorTest {
     }
 
     @Test
+    public void validate_customOperator_nearestRejectsKAboveTheMaximum_returnsFail() {
+        new org.techhouse.ejson.EJson();
+        final var op = nearestOperator(Integer.MAX_VALUE, null);
+        assertFalse(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
+    public void validate_customOperator_nearestAcceptsKAtTheMaximumBoundary_returnsOk() {
+        new org.techhouse.ejson.EJson();
+        final var op = nearestOperator(Integer.MAX_VALUE / 10, null);
+        assertTrue(AggregationStepValidator.validate(new FilterAggregationStep(op)).isValid());
+    }
+
+    @Test
     public void validate_mapStep_conditionWithRankingOperator_returnsInvalid() {
         new org.techhouse.ejson.EJson();
         final var mapOp = new AddFieldMapOperator("result", nearestOperator(5, null),

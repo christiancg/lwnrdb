@@ -29,6 +29,7 @@ import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
@@ -357,5 +358,88 @@ public class ClusterConnectionHandlerTest {
         assertEquals(ClusterMessageType.COMMIT_TX_ACK, response.getType());
         assertEquals(OperationStatus.OK, findById("committx-uncontended").getStatus());
         assertFalse(Tx2pcLog.isPrepared(dtxId));
+    }
+
+    private void occupySessionsSingleThread(String sessionId, CountDownLatch releaseWork) {
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        final var session = clientTracker.registerTxSession(sessionId, "test-user", null);
+        session.submit(() -> releaseWork.await(10, TimeUnit.SECONDS));
+    }
+
+    @Test
+    public void test_handle_forward_tx_times_out_when_the_session_is_slow() throws Exception {
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", SHORT_ACK_TIMEOUT_MS);
+        final var sessionId = UUID.randomUUID().toString();
+        final var releaseWork = new CountDownLatch(1);
+        occupySessionsSingleThread(sessionId, releaseWork);
+        try {
+            final var message = envelope(ClusterMessageType.FORWARD_TX_REQUEST);
+            message.setTxSessionId(sessionId);
+            message.setTxId(UUID.randomUUID().toString());
+            message.setForwardBody(ForwardBody.encode(rawSaveRequest()));
+
+            final var started = System.currentTimeMillis();
+            final var response = pool.request(cluster.serverAddress(), message, SHORT_ACK_TIMEOUT_MS + 5000L);
+            final var elapsed = System.currentTimeMillis() - started;
+
+            assertEquals(ClusterMessageType.ERROR, response.getType(),
+                    "a session whose executor is still busy must not block the handler forever");
+            assertTrue(elapsed < SHORT_ACK_TIMEOUT_MS + 3000L, "the handler must give up within its own ack budget");
+        } finally {
+            releaseWork.countDown();
+            IocContainer.get(ClientTracker.class).removeTxSession(sessionId);
+        }
+    }
+
+    @Test
+    public void test_handle_prepare_tx_times_out_and_votes_no() throws Exception {
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", SHORT_ACK_TIMEOUT_MS);
+        final var sessionId = UUID.randomUUID().toString();
+        final var releaseWork = new CountDownLatch(1);
+        occupySessionsSingleThread(sessionId, releaseWork);
+        try {
+            final var message = envelope(ClusterMessageType.PREPARE_TX);
+            message.setTxSessionId(sessionId);
+            message.setTxParticipants(List.of("127.0.0.1:5000"));
+
+            final var started = System.currentTimeMillis();
+            final var response = pool.request(cluster.serverAddress(), message, SHORT_ACK_TIMEOUT_MS + 5000L);
+            final var elapsed = System.currentTimeMillis() - started;
+
+            assertEquals(ClusterMessageType.ERROR, response.getType(),
+                    "a participant whose session cannot answer in time must vote no rather than block the lane");
+            assertTrue(elapsed < SHORT_ACK_TIMEOUT_MS + 3000L, "the handler must give up within its own ack budget");
+        } finally {
+            releaseWork.countDown();
+            IocContainer.get(ClientTracker.class).removeTxSession(sessionId);
+        }
+    }
+
+    @Test
+    public void test_resolve_tx_times_out_when_the_session_is_slow() throws Exception {
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", SHORT_ACK_TIMEOUT_MS);
+        final var sessionId = UUID.randomUUID().toString();
+        final var releaseWork = new CountDownLatch(1);
+        occupySessionsSingleThread(sessionId, releaseWork);
+        try {
+            final var message = txResolutionRequest(ClusterMessageType.COMMIT_TX, UUID.randomUUID().toString());
+            message.setTxSessionId(sessionId);
+
+            final var started = System.currentTimeMillis();
+            final var response = pool.request(cluster.serverAddress(), message, SHORT_ACK_TIMEOUT_MS + 5000L);
+            final var elapsed = System.currentTimeMillis() - started;
+
+            assertEquals(ClusterMessageType.ERROR, response.getType(),
+                    "a session whose executor cannot resolve the transaction in time must not block the lane");
+            assertTrue(elapsed < SHORT_ACK_TIMEOUT_MS + 3000L, "the handler must give up within its own ack budget");
+        } finally {
+            releaseWork.countDown();
+            IocContainer.get(ClientTracker.class).removeTxSession(sessionId);
+        }
+    }
+
+    private String rawSaveRequest() {
+        return "{\"type\":\"SAVE\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\"" + TestGlobals.COLL
+                + "\",\"object\":{\"_id\":\"forwardtx-slow\",\"v\":1}}";
     }
 }

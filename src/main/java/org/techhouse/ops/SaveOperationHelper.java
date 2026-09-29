@@ -19,6 +19,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.BulkUpdateResult;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -186,6 +187,12 @@ public final class SaveOperationHelper {
             final BulkUpdateResult bulkResult;
             try {
                 bulkResult = fs.bulkUpdateFromCollection(dbName, collName, indexedDbEntriesToUpdate);
+            } catch (PartialBulkUpdateException e) {
+                final var partial = e.getPartialResult();
+                partial.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
+                publishCommittedWrites(dbName, collName, toDbEntries(partial.updated()), List.of());
+                cache.userCache().evictPkIndex(dbName, collName);
+                throw e;
             } catch (Exception e) {
                 cache.userCache().evictPkIndex(dbName, collName);
                 throw e;

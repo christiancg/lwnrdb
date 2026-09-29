@@ -1,5 +1,7 @@
 package org.techhouse.cluster;
 
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
@@ -54,13 +56,16 @@ final class ClusterTxMessageHandler {
                             parsed.getTriggerDepth());
                 }
                 return operationProcessor.processMessage(parsed, clientId);
-            }).get();
+            }).get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
             clientTracker.updateLastCommandTime(clientId);
             if (finishesSession(type) && TransactionOperationHelper.releasedItsLocks(result)) {
                 clientTracker.removeTxSession(sessionId);
             }
             response.setType(ClusterMessageType.FORWARD_RESPONSE);
             response.setForwardBody(ForwardBody.encode(eJson.toJson(result)));
+        } catch (TimeoutException e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Forwarded transaction op did not resolve within the ack timeout");
         } catch (Exception e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to execute forwarded transaction op: " + e.getMessage());
@@ -100,9 +105,11 @@ final class ClusterTxMessageHandler {
             try {
                 vote = session
                         .submit(() -> TwoPhaseParticipant.prepare(session.clientId(), coordinatorAddress, participants))
-                        .get();
+                        .get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+            } catch (TimeoutException e) {
+                logger.warning("Forwarded transaction prepare did not resolve within the ack timeout");
             } catch (Exception e) {
                 logger.warning("Failed to prepare forwarded transaction: " + e.getMessage());
             }
@@ -130,9 +137,11 @@ final class ClusterTxMessageHandler {
         final var session = clientTracker.txSession(sessionId);
         try {
             if (session != null) {
-                final var result = session.submit(() -> commit
-                        ? TwoPhaseParticipant.commitPrepared(session.clientId())
-                        : TransactionOperationHelper.abort(session.clientId())).get();
+                final var result = session
+                        .submit(() -> commit
+                                ? TwoPhaseParticipant.commitPrepared(session.clientId())
+                                : TransactionOperationHelper.abort(session.clientId()))
+                        .get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
                 if (TransactionOperationHelper.releasedItsLocks(result)) {
                     clientTracker.removeTxSession(sessionId);
                 }
@@ -150,6 +159,9 @@ final class ClusterTxMessageHandler {
             Thread.currentThread().interrupt();
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Interrupted resolving transaction");
+        } catch (TimeoutException e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Participant did not resolve the transaction within the ack timeout");
         } catch (Exception e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to resolve transaction: " + e.getMessage());

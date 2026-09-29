@@ -496,6 +496,12 @@ def test_map_conditions_and_number_casts(c):
           still_ranks.get("errorCode") != "400-1",
           detail=f"got {still_ranks.get('status')!r} {still_ranks.get('message')!r}")
 
+    oversized_k_condition = {"customOperatorName": "nearest", "field": "embedding",
+                             "value": "#vector(1.0,0.0)", "k": 2147483647}
+    oversized_k_refused = aggregate(c, COLL_AGG, [{"type": "FILTER", "operator": oversized_k_condition}])
+    check_status("nearest with a k past the candidate-budget overflow ceiling is refused",
+                 oversized_k_refused, "ERROR")
+
 
 def raw_send(c, payload) -> str:
     """The response line before json.loads sees it.

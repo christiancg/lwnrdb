@@ -12,8 +12,11 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.PkCompaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -208,20 +211,30 @@ public final class AdminPageHelper {
             indexedEntriesToUpdate.add(indexedEntry);
         }
         if (!indexedEntriesToUpdate.isEmpty()) {
-            final var bulkResult = fs.bulkUpdateFromCollection(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName,
-                    indexedEntriesToUpdate);
-            final var updated = bulkResult.updated();
-            // Fix the in-memory positions of non-updated admin-page survivors shifted by the batch.
-            bulkResult.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
-            for (var ie : updated) {
-                pkIdxList.removeIf(pk -> pk.getValue().equals(ie.get_id()));
-                pkIdxList.add(ie.getIndex());
+            try {
+                final var bulkResult = fs.bulkUpdateFromCollection(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName,
+                        indexedEntriesToUpdate);
+                applyBulkUpdateResult(pagesPerCollectionName, pkIdxList, bulkResult.updated(),
+                        bulkResult.compactions());
+            } catch (PartialBulkUpdateException e) {
+                final var partial = e.getPartialResult();
+                applyBulkUpdateResult(pagesPerCollectionName, pkIdxList, partial.updated(), partial.compactions());
+                throw e;
             }
-            trackInMemoryAdminPagesForUpdate(pagesPerCollectionName, updated);
         }
         if (!firstTouchPages.isEmpty()) {
             insertAdminPages(pagesPerCollectionName, firstTouchPages);
         }
+    }
+
+    private static void applyBulkUpdateResult(String pagesPerCollectionName, List<PkIndexEntry> pkIdxList,
+            List<IndexedDbEntry> updated, List<PkCompaction> compactions) {
+        compactions.forEach(cache::shiftPkPositionsAfterCompaction);
+        for (var ie : updated) {
+            pkIdxList.removeIf(pk -> pk.getValue().equals(ie.get_id()));
+            pkIdxList.add(ie.getIndex());
+        }
+        trackInMemoryAdminPagesForUpdate(pagesPerCollectionName, updated);
     }
 
     public static void createPageCollections(String dbName, String collName) throws IOException {

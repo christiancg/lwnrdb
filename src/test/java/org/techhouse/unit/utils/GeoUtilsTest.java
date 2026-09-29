@@ -64,6 +64,36 @@ public class GeoUtilsTest {
     }
 
     @Test
+    public void test_bounding_box_of_widens_across_the_antimeridian() {
+        final var bbox = GeoUtils.boundingBoxOf(
+                List.of(new GeoPoint(1, 170), new GeoPoint(1, 175), new GeoPoint(1, -175), new GeoPoint(1, -170)));
+
+        assertEquals(-180, bbox.minLng(), 1e-9);
+        assertEquals(180, bbox.maxLng(), 1e-9);
+        assertTrue(bbox.contains(new GeoPoint(1, 178)),
+                "a point just across the antimeridian must fall inside the widened box");
+    }
+
+    @Test
+    public void test_bounding_box_of_does_not_widen_an_ordinary_polygon() {
+        final var bbox = GeoUtils.boundingBoxOf(
+                List.of(new GeoPoint(1, 10), new GeoPoint(1, 12), new GeoPoint(1, 15), new GeoPoint(1, 11)));
+
+        assertEquals(10, bbox.minLng(), 1e-9);
+        assertEquals(15, bbox.maxLng(), 1e-9);
+    }
+
+    @Test
+    public void test_bounding_box_of_single_point() {
+        final var bbox = GeoUtils.boundingBoxOf(List.of(new GeoPoint(3, 178)));
+
+        assertEquals(3, bbox.minLat(), 1e-9);
+        assertEquals(3, bbox.maxLat(), 1e-9);
+        assertEquals(178, bbox.minLng(), 1e-9);
+        assertEquals(178, bbox.maxLng(), 1e-9);
+    }
+
+    @Test
     public void test_bounding_box_for_radius_contains_center() {
         final var center = new GeoPoint(40.0, -74.0);
         final var bbox = GeoUtils.boundingBoxForRadius(center, 1000);

@@ -36,6 +36,7 @@ import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperationType;
 
 public class AggregationStepValidator {
+    private static final long MAX_NEAREST_K = Integer.MAX_VALUE / 10L;
 
     public static ValidationResult validate(BaseAggregationStep step) {
         return switch (step.getType()) {
@@ -300,6 +301,9 @@ public class AggregationStepValidator {
         final var k = args.get("k");
         if (k == null || !k.isJsonNumber() || k.asJsonNumber().getValue().intValue() <= 0) {
             return ValidationResult.fail("nearest operator requires a positive integer k");
+        }
+        if (k.asJsonNumber().getValue().longValue() > MAX_NEAREST_K) {
+            return ValidationResult.fail("nearest operator k exceeds the maximum supported value");
         }
         final var exact = args.get("exact");
         if (exact != null && !exact.isJsonBoolean()) {
