@@ -20,6 +20,7 @@ public final class Tx2pcLog {
     private static final String COORDINATOR_ADDRESS_FIELD = "coordinatorAddress";
     private static final String COLLECTIONS_FIELD = "collections";
     private static final String PARTICIPANTS_FIELD = "participants";
+    private static final String SESSION_ID_FIELD = "sessionId";
     private static final String PREPARED_AT_FIELD = "preparedAt";
     private static final String PREPARED_VERSION_FIELD = "preparedVersion";
     private static final String OUTCOME_FIELD = "outcome";
@@ -98,8 +99,10 @@ public final class Tx2pcLog {
         }
     }
 
-    public static void recordCoordinatorCommit(String dtxId, List<String> participants) throws Exception {
+    public static void recordCoordinatorCommit(String dtxId, String sessionId, List<String> participants)
+            throws Exception {
         final var payload = new JsonObject();
+        payload.addProperty(SESSION_ID_FIELD, sessionId);
         payload.add(PARTICIPANTS_FIELD, stringArray(participants));
         AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId,
                 AdminTransactionEntry.MARKER_COORDINATOR, AdminTransactionEntry.OP_TYPE_COORDINATOR_COMMIT, payload));
@@ -158,6 +161,19 @@ public final class Tx2pcLog {
             return List.of();
         }
         return readStringArray(entries.getFirst().getPayload(), PARTICIPANTS_FIELD);
+    }
+
+    public static String readCoordinatorSessionId(String dtxId) throws Exception {
+        final var entries = AdminOperationHelper
+                .readTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_COORDINATOR)));
+        if (entries.isEmpty()) {
+            return null;
+        }
+        final var payload = entries.getFirst().getPayload();
+        if (!payload.has(SESSION_ID_FIELD) || payload.get(SESSION_ID_FIELD).isJsonNull()) {
+            return null;
+        }
+        return payload.get(SESSION_ID_FIELD).asJsonString().getValue();
     }
 
     // Slice op ids are {dtxId}|{seq}; the numeric-suffix test is what excludes the marker records.

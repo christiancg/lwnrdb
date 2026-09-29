@@ -69,17 +69,26 @@ public class Tx2pcLogTest {
     public void test_coordinator_marker_round_trip() throws Exception {
         final var dtxId = "22222222-2222-2222-2222-222222222222";
         assertFalse(Tx2pcLog.isCommitted(dtxId));
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of("127.0.0.1:9001", "127.0.0.1:9002"));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, "client-session-1", List.of("127.0.0.1:9001", "127.0.0.1:9002"));
         assertTrue(Tx2pcLog.isCommitted(dtxId));
         assertTrue(Tx2pcLog.committedDtxIds().contains(dtxId));
         assertEquals(List.of("127.0.0.1:9001", "127.0.0.1:9002"), Tx2pcLog.readCoordinatorParticipants(dtxId));
+        assertEquals("client-session-1", Tx2pcLog.readCoordinatorSessionId(dtxId));
         Tx2pcLog.deleteCoordinatorMarker(dtxId);
         assertFalse(Tx2pcLog.isCommitted(dtxId));
     }
 
     @Test
+    public void test_coordinator_marker_with_no_session_id_reads_null() throws Exception {
+        final var dtxId = "22222222-3333-3333-3333-222222222222";
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of("127.0.0.1:9001"));
+        assertNull(Tx2pcLog.readCoordinatorSessionId(dtxId));
+    }
+
+    @Test
     public void test_missing_markers_read_empty() throws Exception {
         assertEquals(List.of(), Tx2pcLog.readCoordinatorParticipants("no-such-dtx"));
+        assertNull(Tx2pcLog.readCoordinatorSessionId("no-such-dtx"));
         assertNull(Tx2pcLog.readParticipantMarker("no-such-dtx"));
     }
 }

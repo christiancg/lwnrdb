@@ -10,10 +10,14 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.ops.req.agg.OperatorType;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
+import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 
 public final class ResultHasher {
     private static final EJson eJson = IocContainer.get(EJson.class);
@@ -44,8 +48,9 @@ public final class ResultHasher {
             return false;
         }
         for (var i = steps.size() - 1; i >= 0; i--) {
-            final var type = steps.get(i).getType();
-            if (type == AggregationStepType.SORT) {
+            final var step = steps.get(i);
+            final var type = step.getType();
+            if (type == AggregationStepType.SORT || isRankingFilter(step)) {
                 return true;
             }
             if (!ORDER_PRESERVING.contains(type)) {
@@ -53,6 +58,15 @@ public final class ResultHasher {
             }
         }
         return false;
+    }
+
+    private static boolean isRankingFilter(BaseAggregationStep step) {
+        if (!(step instanceof FilterAggregationStep filterStep)) {
+            return false;
+        }
+        final var operator = filterStep.getOperator();
+        return operator.getType() == OperatorType.CUSTOM
+                && CustomTypeFactory.isRankingOperator(((CustomOperator) operator).getCustomOperatorName());
     }
 
     private static String digestOf(String text) {

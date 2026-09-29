@@ -124,10 +124,11 @@ public class Tx2pcRecovery implements MembershipListener {
         for (final var dtxId : Tx2pcLog.committedDtxIds()) {
             try {
                 var allResolved = true;
+                final var sessionId = Tx2pcLog.readCoordinatorSessionId(dtxId);
                 for (final var address : Tx2pcLog.readCoordinatorParticipants(dtxId)) {
                     if (isSelf(address)) {
                         resolveLocalCommitted(dtxId);
-                    } else if (!sendCommit(address, dtxId)) {
+                    } else if (!sendCommit(address, sessionId, dtxId)) {
                         allResolved = false;
                     }
                 }
@@ -194,9 +195,9 @@ public class Tx2pcRecovery implements MembershipListener {
         }
     }
 
-    private boolean sendCommit(String address, String dtxId) {
+    private boolean sendCommit(String address, String sessionId, String dtxId) {
         final var message = PeerRequest.message(ClusterMessageType.COMMIT_TX);
-        message.setTxSessionId(dtxId);
+        message.setTxSessionId(sessionId != null ? sessionId : dtxId);
         message.setTxId(dtxId);
         try {
             return pool.request(NodeAddress.parse(address), message, clusterConfig.replicationAckTimeoutMs())

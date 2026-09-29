@@ -77,11 +77,56 @@ public class TombstoneStoreTest {
 
     @Test
     public void test_a_file_in_the_old_pipe_grammar_is_skipped() throws Exception {
-        java.nio.file.Files.writeString(tombstoneFile().toPath(),
-                "a|1" + System.lineSeparator() + "b|2" + System.lineSeparator());
+        final var content = "a|1" + System.lineSeparator() + "b|2" + System.lineSeparator();
+        java.nio.file.Files.writeString(tombstoneFile().toPath(), content);
 
         assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).isEmpty(),
                 "a pre-change tombstone file is unparseable, not half-readable");
         assertDoesNotThrow(() -> fs.compactTombstones(TestGlobals.DB, TestGlobals.COLL, 0L));
+    }
+
+    @Test
+    public void test_a_file_where_every_line_is_malformed_is_left_untouched() throws Exception {
+        final var content = "a|1" + System.lineSeparator() + "b|2" + System.lineSeparator();
+        java.nio.file.Files.writeString(tombstoneFile().toPath(), content);
+
+        fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(content, java.nio.file.Files.readString(tombstoneFile().toPath()),
+                "a file where nothing parsed is not the file this loader expects, so it must be left untouched"
+                        + " rather than rewritten as empty");
+    }
+
+    @Test
+    public void test_a_torn_last_line_is_healed_on_read() throws Exception {
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "surviving", 5L);
+        java.nio.file.Files.writeString(tombstoneFile().toPath(),
+                "torn-line-with-no-separator" + System.lineSeparator(), java.nio.file.StandardOpenOption.APPEND);
+
+        final var read = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+
+        assertEquals(1, read.size());
+        assertEquals(5L, read.get("surviving"));
+        final var healed = java.nio.file.Files.readString(tombstoneFile().toPath());
+        assertTrue(healed.contains("surviving") && !healed.contains("torn-line-with-no-separator"),
+                "a torn line must be dropped and the survivors rewritten, matching the pk/field index self-heal");
+    }
+
+    @Test
+    public void test_append_failure_leaves_the_file_unchanged() throws Exception {
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "existing", 1L);
+        final var file = tombstoneFile();
+        final var before = java.nio.file.Files.readAllBytes(file.toPath());
+
+        assertTrue(file.setWritable(false), "the test needs a writable-toggle filesystem to force the append to fail");
+        try {
+            assertThrows(java.io.IOException.class,
+                    () -> fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "blocked", 2L));
+        } finally {
+            assertTrue(file.setWritable(true));
+        }
+
+        assertArrayEquals(before, java.nio.file.Files.readAllBytes(file.toPath()),
+                "a failed append must not leave a torn line behind");
     }
 }

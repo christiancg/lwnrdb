@@ -112,7 +112,7 @@ public class Tx2pcRecoveryTest {
     public void test_committed_transaction_is_replayed() throws Exception {
         final var dtxId = "33333333-3333-3333-3333-333333333333";
         seedPreparedSlice(dtxId, "rec-commit");
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
 
         recovery.recover();
 
@@ -160,7 +160,7 @@ public class Tx2pcRecoveryTest {
                 AdminTransactionEntry.OP_TYPE_DELETE, TestGlobals.DB, TestGlobals.COLL, delPayload));
         Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS),
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
 
         recovery.recover();
 
@@ -183,11 +183,32 @@ public class Tx2pcRecoveryTest {
     @Test
     public void test_coordinator_redrive_to_unreachable_keeps_marker() throws Exception {
         final var dtxId = "99999999-9999-9999-9999-999999999999";
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of("127.0.0.1:1"));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of("127.0.0.1:1"));
 
         recovery.recover();
 
         org.junit.jupiter.api.Assertions.assertTrue(Tx2pcLog.isCommitted(dtxId));
+    }
+
+    @Test
+    public void test_coordinator_redrive_sends_the_recorded_session_id_not_the_dtx_id() throws Exception {
+        final var dtxId = "10101010-1010-1010-1010-101010101010";
+        final var sessionId = "20202020-2020-2020-2020-202020202020";
+        Tx2pcLog.recordCoordinatorCommit(dtxId, sessionId, List.of("127.0.0.1:2"));
+        final var pool = mock(PeerConnectionPool.class);
+        final var captor = org.mockito.ArgumentCaptor.forClass(ClusterMessage.class);
+        when(pool.request(any(), captor.capture(), anyLong())).thenAnswer(_ -> {
+            final var response = new ClusterMessage();
+            response.setType(ClusterMessageType.COMMIT_TX_ACK);
+            return response;
+        });
+        TestUtils.setPrivateField(recovery, "pool", pool);
+
+        recovery.recover();
+
+        assertEquals(sessionId, captor.getValue().getTxSessionId(),
+                "recovery must re-drive to the session the participant registered under, not the transaction id");
+        assertFalse(Tx2pcLog.isCommitted(dtxId));
     }
 
     @Test
@@ -327,7 +348,7 @@ public class Tx2pcRecoveryTest {
     public void test_recovery_does_not_run_on_the_membership_thread() throws Exception {
         final var dtxId = "12121212-1212-1212-1212-121212121212";
         seedPreparedSlice(dtxId, "rec-async");
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
         final var listener = new Tx2pcRecovery();
         final var held = new CountDownLatch(1);
         final var holder = collectionLockHolder(held);
@@ -376,7 +397,7 @@ public class Tx2pcRecoveryTest {
         savePostRestart("clock-warmup");
         seedPreparedSlice(dtxId, "rec-newer");
         savePostRestart("rec-newer");
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
 
         recovery.recover();
 

@@ -446,6 +446,41 @@ def test_push_on_reorder_inside_a_sorted_top_k(writer: Conn, listener: Conn):
         delete_doc(writer, id_)
 
 
+def test_push_on_reorder_inside_an_unsorted_nearest_top_k(writer: Conn, listener: Conn):
+    section("LISTEN: push when a nearest top-K with no trailing SORT is reordered without changing its members")
+
+    save_doc(writer, {"_id": "nearest-topk-a", "embedding": "#vector(0.9,0.1,0.0)"})
+    save_doc(writer, {"_id": "nearest-topk-b", "embedding": "#vector(0.8,0.2,0.0)"})
+    save_doc(writer, {"_id": "nearest-topk-c", "embedding": VEC_FAR})
+    time.sleep(0.5)
+
+    r = listen(listener, vector_nearest_steps(VEC_QUERY, 2))
+    check_status("LISTEN registered for the unsorted nearest top-K", r, "OK")
+    listen_id = r.get("listenId")
+    initial_hash = r.get("resultHash")
+    check("initial nearest top-2 is [nearest-topk-a, nearest-topk-b]",
+          [d.get("_id") for d in (r.get("results") or [])] == ["nearest-topk-a", "nearest-topk-b"],
+          f"got {[d.get('_id') for d in (r.get('results') or [])]!r}")
+
+    save_doc(writer, {"_id": "nearest-topk-b", "embedding": "#vector(0.95,0.05,0.0)"})
+
+    pushed = listener.recv(timeout=5.0)
+    check("push received after the nearest top-K was reordered", pushed is not None,
+          "no push message within 5 s")
+
+    if pushed is not None:
+        check("push resultHash differs from initial",
+              pushed.get("resultHash") != initial_hash,
+              f"hash unchanged: {pushed.get('resultHash')!r}")
+        check("pushed nearest top-2 is [nearest-topk-b, nearest-topk-a]",
+              [d.get("_id") for d in (pushed.get("results") or [])] == ["nearest-topk-b", "nearest-topk-a"],
+              f"got {[d.get('_id') for d in (pushed.get('results') or [])]!r}")
+
+    stop_listen(listener, listen_id)
+    for id_ in ("nearest-topk-a", "nearest-topk-b", "nearest-topk-c"):
+        delete_doc(writer, id_)
+
+
 def test_no_push_when_an_unordered_group_by_result_is_unchanged(writer: Conn, listener: Conn):
     section("LISTEN: no push when a GROUP_BY result set is unchanged")
 
@@ -678,6 +713,7 @@ def main():
                 test_push_on_vector_nearest_closer(writer_conn, listener_conn)
                 test_no_push_on_vector_farther(writer_conn, listener_conn)
                 test_push_on_reorder_inside_a_sorted_top_k(writer_conn, listener_conn)
+                test_push_on_reorder_inside_an_unsorted_nearest_top_k(writer_conn, listener_conn)
                 test_no_push_when_an_unordered_group_by_result_is_unchanged(writer_conn, listener_conn)
                 test_stop_listen(writer_conn, listener_conn)
                 test_stop_listen_from_another_client_is_refused(writer_conn, listener_conn)

@@ -241,7 +241,7 @@ public class TransactionClusterIntegrationTest {
                 2000);
         assertEquals(ClusterMessageType.TX_STATUS_ACK, unknown.getType());
         assertEquals("NO_RECORD", unknown.getTxStatus());
-        org.techhouse.ops.Tx2pcLog.recordCoordinatorCommit(dtxId, List.of("127.0.0.1:1"));
+        org.techhouse.ops.Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of("127.0.0.1:1"));
         final var committed = pool.request(cluster.serverAddress(), control(ClusterMessageType.TX_STATUS, null, dtxId),
                 2000);
         assertEquals(ClusterMessageType.TX_STATUS_ACK, committed.getType());

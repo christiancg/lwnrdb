@@ -53,7 +53,7 @@ public class Tx2pcCoordinator {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_ABORTED);
         }
         try {
-            Tx2pcLog.recordCoordinatorCommit(dtxId, participants);
+            Tx2pcLog.recordCoordinatorCommit(dtxId, sessionId, participants);
         } catch (Exception e) {
             logger.error("Failed to record the 2PC commit decision for " + dtxId, e);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
@@ -87,7 +87,7 @@ public class Tx2pcCoordinator {
                 .map(member -> member.address().toString()).toList();
         try {
             if (commit && !Tx2pcLog.isCommitted(dtxId)) {
-                Tx2pcLog.recordCoordinatorCommit(dtxId, peers);
+                Tx2pcLog.recordCoordinatorCommit(dtxId, null, peers);
             }
             TwoPhaseParticipant.resolveFromDurable(dtxId, commit, clusterConfig.replicationAckTimeoutMs());
         } catch (Exception e) {

@@ -109,7 +109,7 @@ public class Tx2pcRecoveryResilienceTest {
     public void test_an_error_from_a_slice_does_not_escape_the_round() throws Exception {
         final var dtxId = "44444444-4444-4444-4444-444444444444";
         seedPreparedSlice(dtxId, "err-a");
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
 
         try (var mocked = mockStatic(TwoPhaseParticipant.class)) {
             mocked.when(() -> TwoPhaseParticipant.commitPreparedFromDurable(anyString(), any(), anyLong()))
@@ -126,7 +126,7 @@ public class Tx2pcRecoveryResilienceTest {
     public void test_the_sweep_survives_an_error_and_runs_again() throws Exception {
         final var dtxId = "66666666-6666-6666-6666-666666666666";
         seedPreparedSlice(dtxId, "sweep-doc");
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
 
         try (var mocked = mockStatic(TwoPhaseParticipant.class)) {
             mocked.when(() -> TwoPhaseParticipant.resolveFromDurable(anyString(), any(Boolean.class), anyLong()))
@@ -142,7 +142,7 @@ public class Tx2pcRecoveryResilienceTest {
     public void test_coordinator_recovery_skips_a_slice_whose_collection_is_busy() throws Exception {
         final var dtxId = "77777777-7777-7777-7777-777777777777";
         seedPreparedSlice(dtxId, BUSY_DOC);
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
         final var holding = new CountDownLatch(1);
         final var release = new CountDownLatch(1);
         final var releasedOnSignal = new AtomicBoolean();
@@ -175,7 +175,7 @@ public class Tx2pcRecoveryResilienceTest {
     public void test_coordinator_recovery_resolves_when_the_lock_is_free() throws Exception {
         final var dtxId = "88888888-8888-8888-8888-888888888888";
         seedPreparedSlice(dtxId, "free-doc");
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
 
         recovery.recover();
 

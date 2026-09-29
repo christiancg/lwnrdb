@@ -4,10 +4,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
@@ -146,5 +148,34 @@ public class ResultHasherTest {
 
         assertNotEquals(ResultHasher.hash(List.of(a, b), true), ResultHasher.hash(List.of(b, a), true));
         assertEquals(ResultHasher.hash(List.of(a, b), false), ResultHasher.hash(List.of(b, a), false));
+    }
+
+    private static CustomOperator nearest() {
+        final var args = new JsonObject();
+        args.add("k", new JsonNumber(5));
+        return new CustomOperator("nearest", "embedding", null, args);
+    }
+
+    @Test
+    public void test_a_ranking_filter_with_no_trailing_sort_is_order_significant() {
+        final var filter = new FilterAggregationStep(nearest());
+
+        assertTrue(ResultHasher.ordersResults(List.of(filter)));
+    }
+
+    @Test
+    public void test_an_ordinary_filter_with_no_sort_stays_order_insignificant() {
+        final var filter = new FilterAggregationStep(
+                new FieldOperator(FieldOperatorType.EQUALS, "name", new JsonString("x")));
+
+        assertFalse(ResultHasher.ordersResults(List.of(filter)));
+    }
+
+    @Test
+    public void test_a_sort_before_a_ranking_filter_is_still_order_significant() {
+        final var sort = new SortAggregationStep("name", true);
+        final var filter = new FilterAggregationStep(nearest());
+
+        assertTrue(ResultHasher.ordersResults(List.of(sort, filter)));
     }
 }
