@@ -2086,9 +2086,19 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
             "script": "import db from 'db'; import args from 'args';"
                       f" db.save(db.name, '{marks}', {{ _id: crypto.randomUUID(), src: args.id }});"
                       " return 1;"}), "OK")
-        check_status("install the after trigger", conn.send({
-            "type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": watched, "name": "repltimeout",
-            "events": ["CREATED"], "procedureName": "repltimeout_mark"}), "OK")
+        # CREATE_COLLECTION above only waited for quorum (2 of 3), so `host` - possibly the node that
+        # did not ack - may not have `watched` registered yet; retry until it catches up.
+        trigger_result = {}
+
+        def _trigger_installed():
+            nonlocal trigger_result
+            trigger_result = conn.send({
+                "type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": watched, "name": "repltimeout",
+                "events": ["CREATED"], "procedureName": "repltimeout_mark"})
+            return trigger_result.get("status") == "OK"
+
+        wait_until(_trigger_installed, timeout_s=30.0, interval_s=1.0)
+        check_status("install the after trigger", trigger_result, "OK")
     finally:
         conn.close()
 
