@@ -18,6 +18,7 @@ final class PkIndexStore {
     private static final Logger logger = Logger.logFor(PkIndexStore.class);
     private static final String PK_INDEX_ROLLBACK_FAILURE = "Could not roll back a failed pk index append;"
             + " the pk index may list ids whose records are not on any page, and nothing rebuilds it";
+    private static final ParsedPkIndex EMPTY_PARSED = new ParsedPkIndex(List.of(), List.of(), false, false);
 
     private final FilePaths paths;
 
@@ -83,23 +84,14 @@ final class PkIndexStore {
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
         try {
-            final List<String> existingLines = indexFile.exists()
-                    ? FileLocks.decodeLines(Files.readAllBytes(indexFile.toPath()))
-                    : List.of();
-            final var others = new ArrayList<PkIndexEntry>(existingLines.size());
+            final var parsed = indexFile.exists() ? parsePkIndex(dbName, collectionName, indexFile) : EMPTY_PARSED;
+            if (parsed.unrecognised()) {
+                throw new IOException("No line in " + indexFile.getName() + " could be read as a PK index entry, so"
+                        + " it is not the file this write expects; refusing to rewrite it");
+            }
             PkIndexEntry oldEntry = null;
-            for (final var line : existingLines) {
-                if (line.isBlank()) {
-                    continue;
-                }
-                final PkIndexEntry entry;
-                try {
-                    entry = PkIndexEntry.fromIndexFileEntry(dbName, collectionName, line);
-                } catch (Exception e) {
-                    logger.warning(
-                            "Dropping malformed PK index entry in " + indexFile.getName() + ": " + e.getMessage());
-                    continue;
-                }
+            final var others = new ArrayList<PkIndexEntry>(parsed.entries().size());
+            for (final var entry : parsed.entries()) {
                 if (entry.getValue().equals(value)) {
                     oldEntry = entry;
                 } else {

@@ -210,17 +210,19 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (sessionClientId == null) {
             throw jsError("No transaction is active on this script");
         }
-        var fenced = false;
+        final var transaction = clientTracker.getActiveTransaction(sessionClientId);
+        final var txId = transaction != null ? transaction.getTransactionId().toString() : null;
+        final OperationResponse response;
         try {
-            final var response = dispatch(request);
-            fenced = ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(response.getErrorCode());
-            lastCommitFenced = fenced;
-            if (response.getStatus() != OperationStatus.OK
-                    && !ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode())) {
-                throw jsError(response.getMessage());
-            }
+            response = dispatch(request);
         } finally {
+            final var fenced = txId != null && TransactionOperationHelper.isFenced(txId);
+            lastCommitFenced = fenced;
             clearSession(fenced);
+        }
+        if (response.getStatus() != OperationStatus.OK
+                && !ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode())) {
+            throw jsError(response.getMessage());
         }
     }
 

@@ -196,4 +196,58 @@ public class CommittedOpTriggersFenceTest {
                     any(DbEntry.class), eq(ACTING_USER), anyInt()), times(1));
         }
     }
+
+    @Test
+    public void test_two_saves_of_the_same_id_in_one_transaction_fire_updated_once() {
+        final var ops = List.of(saveOp("dup", false), saveOp("dup", false));
+
+        try (var triggers = mockStatic(TriggerHelper.class)) {
+            fire(ops, Set.of());
+
+            triggers.verify(() -> TriggerHelper.afterWriteIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.UPDATED), eq(List.of("dup")), eq(ACTING_USER), anyInt()), times(1));
+            triggers.verify(() -> TriggerHelper.afterWriteIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.CREATED), eq(List.of()), eq(ACTING_USER), anyInt()), times(1));
+        }
+    }
+
+    @Test
+    public void test_an_insert_followed_by_an_update_of_the_same_id_in_one_transaction_fires_created_once() {
+        final var ops = List.of(saveOp("dup-ins", true), saveOp("dup-ins", false));
+
+        try (var triggers = mockStatic(TriggerHelper.class)) {
+            fire(ops, Set.of());
+
+            triggers.verify(() -> TriggerHelper.afterWriteIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.CREATED), eq(List.of("dup-ins")), eq(ACTING_USER), anyInt()), times(1));
+            triggers.verify(() -> TriggerHelper.afterWriteIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.UPDATED), eq(List.of()), eq(ACTING_USER), anyInt()), times(1));
+        }
+    }
+
+    @Test
+    public void test_a_save_then_a_bulk_save_of_the_same_id_collapse_to_one_fire() {
+        final var ops = List.of(saveOp("dup-mixed", true), bulkSaveOpInserting(List.of("dup-mixed", "other")));
+
+        try (var triggers = mockStatic(TriggerHelper.class)) {
+            fire(ops, Set.of());
+
+            triggers.verify(() -> TriggerHelper.afterWriteIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.CREATED), eq(List.of("dup-mixed", "other")), eq(ACTING_USER), anyInt()), times(1));
+        }
+    }
+
+    @Test
+    public void test_two_saves_of_different_ids_still_fire_separately() {
+        final var ops = List.of(saveOp("a", true), saveOp("b", false));
+
+        try (var triggers = mockStatic(TriggerHelper.class)) {
+            fire(ops, Set.of());
+
+            triggers.verify(() -> TriggerHelper.afterWriteIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.CREATED), eq(List.of("a")), eq(ACTING_USER), anyInt()), times(1));
+            triggers.verify(() -> TriggerHelper.afterWriteIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.UPDATED), eq(List.of("b")), eq(ACTING_USER), anyInt()), times(1));
+        }
+    }
 }

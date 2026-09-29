@@ -250,7 +250,7 @@ public class TransactionTriggerTest {
     }
 
     @Test
-    public void test_a_document_inserted_then_saved_again_fires_created_then_updated() {
+    public void test_a_document_inserted_then_saved_again_fires_created_once() {
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
         save("tx-new-2", 1, clientId);
@@ -258,9 +258,9 @@ public class TransactionTriggerTest {
         processor.processMessage(new CommitTransactionRequest(), clientId);
 
         final var events = settle();
-        assertEquals(2, events.size());
+        assertEquals(1, events.size());
         assertEquals(Set.of("tx-new-2"), idsOf(events, EventType.CREATED));
-        assertEquals(Set.of("tx-new-2"), idsOf(events, EventType.UPDATED));
+        assertEquals(Set.of(), idsOf(events, EventType.UPDATED));
     }
 
     @Test

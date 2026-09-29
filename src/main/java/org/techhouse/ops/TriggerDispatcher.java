@@ -231,7 +231,7 @@ public final class TriggerDispatcher {
             database.bufferTriggerRunConsume(runId);
             database.commitTransaction();
             committed.set(true);
-        } catch (RuntimeException e) {
+        } catch (Throwable e) {
             logger.error("Failed to commit the effects of trigger '" + triggerName + "': " + e.getMessage(), e);
             rollbackQuietly(database, triggerName);
         }
