@@ -12,15 +12,19 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.Transaction;
+import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.tx.TransactionRecovery;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -149,6 +153,80 @@ public class TransactionCrashAtomicityTest {
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
 
         assertEquals(1, cache.getEntriesByIds(TestGlobals.DB, TestGlobals.COLL, java.util.Set.of("dup")).size());
+    }
+
+    @Test
+    public void test_a_partially_applied_startup_replay_keeps_its_collection_locked() throws Exception {
+        final var transaction = bufferSlice("stuck-at-startup");
+        final var txId = transaction.getTransactionId().toString();
+        final var corrupt = new AdminTransactionEntry(txId, "client", 99, AdminTransactionEntry.OP_TYPE_SAVE,
+                TestGlobals.DB, "ghost-collection", document("unreachable"));
+        AdminOperationHelper.saveTransactionOp(corrupt);
+        transaction.getBufferedOpIds().add(corrupt.get_id());
+        final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
+        TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(), List.of(collId));
+        TestUtils.releaseAllLocks();
+
+        TransactionOperationHelper.commitLocalFromDurable(txId, List.of(collId));
+
+        final var locks = IocContainer.get(ResourceLocking.class);
+        try {
+            assertTrue(documentExists("stuck-at-startup"), "the op that landed before the corrupt one stays applied");
+            assertTrue(locks.isWriteLockedByCurrentThread(collId),
+                    "a replay that could not finish applying must keep its collection locked, not release it");
+            assertTrue(TxCommitLog.isLocallyCommitted(txId),
+                    "the local-commit marker must survive so a later attempt can retry the slice");
+            assertEquals(2, AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds()).size(),
+                    "the op slice must not be discarded while the replay is stuck");
+        } finally {
+            locks.releaseWrite(collId);
+            TxCommitLog.clearLocalCommit(txId);
+        }
+    }
+
+    @Test
+    public void test_a_partially_applied_2pc_recovery_replay_keeps_its_collection_locked() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
+        final var goodOp = new AdminTransactionEntry(dtxId, "client", 0, AdminTransactionEntry.OP_TYPE_SAVE,
+                TestGlobals.DB, TestGlobals.COLL, document("prepared-doc"));
+        AdminOperationHelper.saveTransactionOp(goodOp);
+        final var corrupt = new AdminTransactionEntry(dtxId, "client", 1, AdminTransactionEntry.OP_TYPE_SAVE,
+                TestGlobals.DB, "ghost-collection", document("unreachable"));
+        AdminOperationHelper.saveTransactionOp(corrupt);
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"), List.of(collId));
+
+        TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 0L);
+
+        final var locks = IocContainer.get(ResourceLocking.class);
+        try {
+            assertTrue(documentExists("prepared-doc"), "the op that landed before the corrupt one stays applied");
+            assertTrue(locks.isWriteLockedByCurrentThread(collId),
+                    "a 2PC recovery replay that could not finish applying must keep its collection locked");
+            assertTrue(Tx2pcLog.isPrepared(dtxId),
+                    "the PREPARED marker must survive so the next recovery round can retry the slice");
+        } finally {
+            locks.releaseWrite(collId);
+            Tx2pcLog.deleteParticipantMarker(dtxId);
+            AdminOperationHelper.deleteTransactionOps(List.of(goodOp.get_id(), corrupt.get_id()));
+        }
+    }
+
+    @Test
+    public void test_a_fully_applied_startup_replay_still_releases_its_lock() throws Exception {
+        final var transaction = bufferSlice("released-at-startup");
+        final var txId = transaction.getTransactionId().toString();
+        final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
+        TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(), List.of(collId));
+        TestUtils.releaseAllLocks();
+
+        TransactionOperationHelper.commitLocalFromDurable(txId, List.of(collId));
+
+        final var locks = IocContainer.get(ResourceLocking.class);
+        assertTrue(documentExists("released-at-startup"));
+        assertFalse(locks.isWriteLockedByCurrentThread(collId),
+                "a replay that finishes applying must still release its lock, not hold it forever");
+        assertFalse(TxCommitLog.isLocallyCommitted(txId));
     }
 
     @Test

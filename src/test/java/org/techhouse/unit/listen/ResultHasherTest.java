@@ -8,7 +8,9 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.listen.ResultHasher;
+import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
@@ -177,5 +179,58 @@ public class ResultHasherTest {
         final var filter = new FilterAggregationStep(nearest());
 
         assertTrue(ResultHasher.ordersResults(List.of(sort, filter)));
+    }
+
+    private static FieldOperator equalsName(String value) {
+        return new FieldOperator(FieldOperatorType.EQUALS, "name", new JsonString(value));
+    }
+
+    @Test
+    public void test_orders_results_when_a_ranking_operator_is_nested_in_an_or_conjunction() {
+        final var conjunction = new ConjunctionOperator(ConjunctionOperatorType.OR,
+                List.of(nearest(), equalsName("x")));
+        final var filter = new FilterAggregationStep(conjunction);
+
+        assertTrue(ResultHasher.ordersResults(List.of(filter)));
+    }
+
+    @Test
+    public void test_orders_results_when_a_ranking_operator_is_nested_in_an_xor_conjunction() {
+        final var conjunction = new ConjunctionOperator(ConjunctionOperatorType.XOR,
+                List.of(nearest(), equalsName("x")));
+        final var filter = new FilterAggregationStep(conjunction);
+
+        assertTrue(ResultHasher.ordersResults(List.of(filter)));
+    }
+
+    @Test
+    public void test_does_not_order_results_when_a_ranking_operator_is_nested_in_an_and_conjunction() {
+        final var conjunction = new ConjunctionOperator(ConjunctionOperatorType.AND,
+                List.of(nearest(), equalsName("x")));
+        final var filter = new FilterAggregationStep(conjunction);
+
+        assertFalse(ResultHasher.ordersResults(List.of(filter)),
+                "AND merges branches through groupingBy, which already scrambles any nested ranking order");
+    }
+
+    @Test
+    public void test_does_not_order_results_when_a_ranking_operator_is_nested_in_a_nor_or_nand_conjunction() {
+        final var nor = new FilterAggregationStep(
+                new ConjunctionOperator(ConjunctionOperatorType.NOR, List.of(nearest(), equalsName("x"))));
+        final var nand = new FilterAggregationStep(
+                new ConjunctionOperator(ConjunctionOperatorType.NAND, List.of(nearest(), equalsName("x"))));
+
+        assertFalse(ResultHasher.ordersResults(List.of(nor)));
+        assertFalse(ResultHasher.ordersResults(List.of(nand)));
+    }
+
+    @Test
+    public void test_orders_results_for_a_nested_conjunction_of_conjunctions() {
+        final var inner = new ConjunctionOperator(ConjunctionOperatorType.OR, List.of(nearest(), equalsName("x")));
+        final var outer = new ConjunctionOperator(ConjunctionOperatorType.OR, List.of(inner, equalsName("y")));
+        final var filter = new FilterAggregationStep(outer);
+
+        assertTrue(ResultHasher.ordersResults(List.of(filter)),
+                "the recursion into a conjunction's operands must not be accidentally shallow");
     }
 }

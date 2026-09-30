@@ -31,15 +31,19 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.DeleteOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.ProcedureOperationHelper;
+import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
+import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -406,5 +410,83 @@ public class TriggerDispatcherTest {
                 TriggerDispatcher.consumeQuietly(run.getRunId(), run.getTriggerName());
             }
         }
+    }
+
+    private static void saveDocument(String id, String value) throws Exception {
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.add("_id", new JsonString(id));
+        object.add("value", new JsonString(value));
+        request.setObject(object);
+        request.set_id(id);
+        SaveOperationHelper.executeSave(request);
+    }
+
+    private static void deleteDocument(String id) throws Exception {
+        final var request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id(id);
+        DeleteOperationHelper.executeDelete(request);
+    }
+
+    private static TriggerEvent invokeRetryOf(TriggerEvent event) throws Exception {
+        final var method = TriggerDispatcher.class.getDeclaredMethod("retryOf", TriggerEvent.class);
+        method.setAccessible(true);
+        return (TriggerEvent) method.invoke(null, event);
+    }
+
+    @Test
+    public void test_a_retried_updated_trigger_sees_the_current_document_not_the_original_snapshot() throws Exception {
+        saveDocument("retry-fresh", "A");
+        final var original = new TriggerEvent(EventType.UPDATED, TestGlobals.DB, TestGlobals.COLL, "audit", "audit",
+                false, List.of(entry("retry-fresh")), OWNER, 0, "retry-fresh-run", 1);
+        saveDocument("retry-fresh", "B");
+
+        final var retried = invokeRetryOf(original);
+
+        assertNotNull(retried, "the document still exists, so the retry must proceed");
+        assertEquals("B", retried.getEntries().getFirst().getData().get("value").asJsonString().getValue(),
+                "a retried UPDATED trigger must see the document's current value, not the value captured at the"
+                        + " original commit");
+    }
+
+    @Test
+    public void test_a_retry_is_skipped_when_the_document_no_longer_exists() throws Exception {
+        saveDocument("retry-gone", "A");
+        final var original = new TriggerEvent(EventType.UPDATED, TestGlobals.DB, TestGlobals.COLL, "audit", "audit",
+                false, List.of(entry("retry-gone")), OWNER, 0, "retry-gone-run", 1);
+        deleteDocument("retry-gone");
+
+        final var retried = invokeRetryOf(original);
+
+        assertNull(retried,
+                "a retry for a document that no longer exists must be skipped, not replayed on stale" + " data");
+    }
+
+    @Test
+    public void test_a_retried_deleted_trigger_still_uses_its_captured_snapshot() throws Exception {
+        final var deletedEntry = entry("retry-deleted");
+        deletedEntry.getData().add("value", new JsonString("captured"));
+        final var original = new TriggerEvent(EventType.DELETED, TestGlobals.DB, TestGlobals.COLL, "audit", "audit",
+                false, List.of(deletedEntry), OWNER, 0, "retry-deleted-run", 1);
+
+        final var retried = invokeRetryOf(original);
+
+        assertNotNull(retried, "a DELETED retry has nothing to re-read and must still proceed from its capture");
+        assertEquals("captured", retried.getEntries().getFirst().getData().get("value").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_a_batch_retry_proceeds_with_the_surviving_subset() throws Exception {
+        saveDocument("retry-batch-a", "A");
+        saveDocument("retry-batch-b", "B");
+        final var original = new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "audit", "audit",
+                true, List.of(entry("retry-batch-a"), entry("retry-batch-b")), OWNER, 0, "retry-batch-run", 1);
+        deleteDocument("retry-batch-a");
+
+        final var retried = invokeRetryOf(original);
+
+        assertNotNull(retried, "one surviving id is still enough for the batch retry to proceed");
+        assertEquals(1, retried.getEntries().size());
+        assertEquals("retry-batch-b", retried.getEntries().getFirst().get_id());
     }
 }

@@ -49,14 +49,18 @@ public final class TransactionRecovery {
                 () -> resolveMarkers(dtxId, true));
     }
 
-    private static void replayDurableSlice(String txId, List<String> collections, long preparedVersion,
+    private static boolean replayDurableSlice(String txId, List<String> collections, long preparedVersion,
             ThrowingRunnable markerCleanup) throws Exception {
-        replayDurableSlice(txId, collections, preparedVersion, 0L, markerCleanup);
+        return replayDurableSlice(txId, collections, preparedVersion, 0L, markerCleanup);
     }
 
-    private static void replayDurableSlice(String txId, List<String> collections, long preparedVersion,
+    private static boolean replayDurableSlice(String txId, List<String> collections, long preparedVersion,
             long timeoutMillis, ThrowingRunnable markerCleanup) throws Exception {
-        final ResourceLocking.LockedAction<Void> replay = () -> {
+        final var acquired = timeoutMillis > 0
+                ? locks.acquireWriteLocks(collections, timeoutMillis)
+                : locks.acquireWriteLocks(collections);
+        var applied = false;
+        try {
             final var opIds = Tx2pcLog.sliceOpIds(txId);
             final var ops = AdminOperationHelper.readTransactionOps(opIds);
             ops.sort(Comparator.comparingLong(AdminTransactionEntry::getSeq));
@@ -70,11 +74,14 @@ public final class TransactionRecovery {
             final var reservedTombstones = coordinator.reserveTransactionTombstones(reconstructed);
             listenManager.deferNotifications();
             try {
-                for (final var op : ops) {
-                    applyBufferedOp(op, fencedIds);
-                }
+                applied = applyAllWithRetry(ops, txId, fencedIds);
             } finally {
                 listenManager.flushDeferredNotifications();
+            }
+            if (!applied) {
+                logger.error("Transaction " + txId
+                        + " could not finish its durable replay; its collections stay locked pending a retry");
+                return false;
             }
             AdminOperationHelper.deleteTransactionOps(opIds);
             markerCleanup.run();
@@ -84,12 +91,16 @@ public final class TransactionRecovery {
             CommittedOpTriggers.fireForCommittedOps(ops, actingUserOf(ops), reconstructed.getTriggerDepth(),
                     reconstructed, fencedIds);
             coordinator.replicateTransaction(reconstructed, reservedTombstones);
-            return null;
-        };
-        if (timeoutMillis > 0) {
-            locks.withWriteLocks(collections, timeoutMillis, replay);
-        } else {
-            locks.withWriteLocks(collections, replay);
+            return true;
+        } catch (Exception e) {
+            applied = false;
+            logger.error("Transaction " + txId
+                    + " could not finish its durable replay; its collections stay locked pending a retry", e);
+            throw e;
+        } finally {
+            if (applied) {
+                locks.releaseWriteLocks(acquired);
+            }
         }
     }
 
@@ -243,9 +254,14 @@ public final class TransactionRecovery {
         for (final var txId : TxCommitLog.localCommitTxIds()) {
             try {
                 final var marker = TxCommitLog.readLocalCommitMarker(txId);
-                replayDurableSlice(txId, marker == null ? List.of() : marker.collections(),
+                final var finished = replayDurableSlice(txId, marker == null ? List.of() : marker.collections(),
                         marker == null ? 0L : marker.writeVersion(), () -> TxCommitLog.clearLocalCommit(txId));
-                logger.info("Finished transaction " + txId + " that was interrupted mid-commit at startup");
+                if (finished) {
+                    logger.info("Finished transaction " + txId + " that was interrupted mid-commit at startup");
+                } else {
+                    logger.warning("Transaction " + txId
+                            + " is still stuck mid-commit after startup recovery; its collections stay locked");
+                }
             } catch (Throwable failure) {
                 logger.error("Failed to finish interrupted transaction " + txId + " at startup", failure);
             }
@@ -271,11 +287,15 @@ public final class TransactionRecovery {
     }
 
     public static boolean applyAllWithRetry(List<AdminTransactionEntry> ops, String txId) {
+        return applyAllWithRetry(ops, txId, Set.of());
+    }
+
+    public static boolean applyAllWithRetry(List<AdminTransactionEntry> ops, String txId, Set<String> fencedIds) {
         var next = 0;
         for (var attempt = 1; attempt <= COMMIT_APPLY_ATTEMPTS; attempt++) {
             try {
                 while (next < ops.size()) {
-                    TransactionRecovery.applyBufferedOp(ops.get(next));
+                    TransactionRecovery.applyBufferedOp(ops.get(next), fencedIds);
                     next++;
                 }
                 return true;
@@ -285,10 +305,6 @@ public final class TransactionRecovery {
             }
         }
         return false;
-    }
-
-    public static void applyBufferedOp(AdminTransactionEntry op) throws Exception {
-        applyBufferedOp(op, Set.of());
     }
 
     public static void applyBufferedOp(AdminTransactionEntry op, Set<String> fencedIds) throws Exception {

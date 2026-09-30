@@ -28,12 +28,14 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ProcedureOperationHelper;
+import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -187,6 +189,10 @@ public class TriggerPostCommitErrorTest {
         ProcedureOperationHelper.executeSave(
                 new SaveProcedureRequest(TestGlobals.DB, "audit", "throw new Error('nothing committed');"), DEFINER);
         installTrigger();
+        final var saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        saveRequest.setObject(entry("uncommitted").getData());
+        saveRequest.set_id("uncommitted");
+        SaveOperationHelper.executeSave(saveRequest);
         final var runId = recordedRunFor("uncommitted");
 
         TriggerDispatcher.dispatch(new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "audit",

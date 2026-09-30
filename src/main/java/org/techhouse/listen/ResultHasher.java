@@ -15,7 +15,10 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.ops.req.agg.BaseOperator;
+import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.OperatorType;
+import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.CustomOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 
@@ -64,9 +67,22 @@ public final class ResultHasher {
         if (!(step instanceof FilterAggregationStep filterStep)) {
             return false;
         }
-        final var operator = filterStep.getOperator();
-        return operator.getType() == OperatorType.CUSTOM
-                && CustomTypeFactory.isRankingOperator(((CustomOperator) operator).getCustomOperatorName());
+        return isRankingOperator(filterStep.getOperator());
+    }
+
+    private static boolean isRankingOperator(BaseOperator operator) {
+        if (operator.getType() == OperatorType.CUSTOM) {
+            return CustomTypeFactory.isRankingOperator(((CustomOperator) operator).getCustomOperatorName());
+        }
+        if (operator.getType() == OperatorType.CONJUNCTION) {
+            final var conjunction = (ConjunctionOperator) operator;
+            final var type = conjunction.getConjunctionType();
+            if (type != ConjunctionOperatorType.OR && type != ConjunctionOperatorType.XOR) {
+                return false;
+            }
+            return conjunction.getOperators().stream().anyMatch(ResultHasher::isRankingOperator);
+        }
+        return false;
     }
 
     private static String digestOf(String text) {

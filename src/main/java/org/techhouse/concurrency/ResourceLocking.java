@@ -78,22 +78,40 @@ public class ResourceLocking {
     // Sorted order, so two callers with overlapping sets cannot deadlock. Write locks are thread-owned:
     // the action must complete on this thread, or releaseWrite silently no-ops and strands the lock.
     public <T> T withWriteLocks(Collection<String> collectionIds, LockedAction<T> action) throws Exception {
+        final var acquired = acquireWriteLocks(collectionIds);
+        try {
+            return action.run();
+        } finally {
+            releaseWriteLocks(acquired);
+        }
+    }
+
+    public <T> T withWriteLocks(Collection<String> collectionIds, long timeoutMillis, LockedAction<T> action)
+            throws Exception {
+        final var acquired = acquireWriteLocks(collectionIds, timeoutMillis);
+        try {
+            return action.run();
+        } finally {
+            releaseWriteLocks(acquired);
+        }
+    }
+
+    public List<String> acquireWriteLocks(Collection<String> collectionIds) throws InterruptedException {
         final var acquired = new ArrayList<String>();
         try {
             for (final var collId : new TreeSet<>(collectionIds)) {
                 lockWrite(collId);
                 acquired.add(collId);
             }
-            return action.run();
-        } finally {
-            for (final var collId : acquired) {
-                releaseWrite(collId);
-            }
+            return acquired;
+        } catch (InterruptedException e) {
+            releaseWriteLocks(acquired);
+            throw e;
         }
     }
 
-    public <T> T withWriteLocks(Collection<String> collectionIds, long timeoutMillis, LockedAction<T> action)
-            throws Exception {
+    public List<String> acquireWriteLocks(Collection<String> collectionIds, long timeoutMillis)
+            throws InterruptedException {
         final var acquired = new ArrayList<String>();
         final var deadline = System.currentTimeMillis() + timeoutMillis;
         try {
@@ -101,15 +119,21 @@ public class ResourceLocking {
                 final var remaining = deadline - System.currentTimeMillis();
                 if (remaining <= 0 || !lockFor(collId).writeLock().tryLock(remaining,
                         java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    releaseWriteLocks(acquired);
                     throw new CollectionBusyException(collId, timeoutMillis);
                 }
                 acquired.add(collId);
             }
-            return action.run();
-        } finally {
-            for (final var collId : acquired) {
-                releaseWrite(collId);
-            }
+            return acquired;
+        } catch (InterruptedException e) {
+            releaseWriteLocks(acquired);
+            throw e;
+        }
+    }
+
+    public void releaseWriteLocks(List<String> acquired) {
+        for (final var collId : acquired) {
+            releaseWrite(collId);
         }
     }
 

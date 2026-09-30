@@ -86,7 +86,7 @@ public class ClusterConnectionHandler implements Runnable {
 
     private static boolean mayOvertake(ClusterMessageType type) {
         return switch (type) {
-            case GOSSIP, FORWARD_REQUEST, DIGEST, PULL -> true;
+            case GOSSIP, FORWARD_REQUEST, DIGEST, PULL, TX_STATUS, LIST_TX -> true;
             default -> false;
         };
     }
