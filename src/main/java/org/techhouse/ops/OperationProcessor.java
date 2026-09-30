@@ -79,11 +79,17 @@ public class OperationProcessor {
                 && !TransactionOperationHelper.isAllowedOnAbortedTransaction(operationRequest.getType())) {
             return new OperationResponse(operationRequest.getType(), ErrorCode.TRANSACTION_NOT_USABLE);
         }
+        final var actingUser = clientTracker.getAuthenticatedUsername(clientId);
+        return ClusterAdminHelper.inAdminLane(operationRequest,
+                () -> processOperation(operationRequest, clientId, activeTransaction, actingUser));
+    }
+
+    private OperationResponse processOperation(OperationRequest operationRequest, UUID clientId,
+            Transaction activeTransaction, String actingUser) {
         final var adminGuard = ClusterAdminHelper.guard(operationRequest);
         if (adminGuard != null) {
             return adminGuard;
         }
-        final var actingUser = clientTracker.getAuthenticatedUsername(clientId);
         final var response = switch (operationRequest.getType()) {
             case BULK_SAVE ->
                 processBulkSaveOperation((BulkSaveRequest) operationRequest, activeTransaction, actingUser);

@@ -2287,6 +2287,35 @@ def test_before_hook_runs_on_the_owner():
         conn.close()
 
 
+def test_admin_ops_replicate_in_commit_order():
+    section("Admin ops — a burst on one record converges on its last write everywhere")
+
+    conn = authed(nodes[0].client_port)
+    try:
+        for i in range(5):
+            check_status(f"SAVE_PROCEDURE burst #{i}", conn.send({
+                "type": "SAVE_PROCEDURE", "databaseName": DB, "name": "burst",
+                "script": f"export default () => {i};"}), "OK")
+    finally:
+        conn.close()
+
+    def _last_write_everywhere():
+        for node in nodes:
+            if not node.alive:
+                continue
+            peer = authed(node.client_port)
+            try:
+                listed = peer.send({"type": "LIST_PROCEDURES", "databaseName": DB, "includeSource": True})
+            finally:
+                peer.close()
+            row = next((p for p in listed.get("procedures", []) if p.get("name") == "burst"), None)
+            if row is None or row.get("version") != 5 or "=> 4;" not in (row.get("source") or ""):
+                return False
+        return True
+
+    check("every node holds the burst's last version and body", wait_until(_last_write_everywhere, timeout_s=30.0))
+
+
 def test_schedule_replication_and_single_firing():
     section("Scheduled procedures — DDL replicates, and a schedule fires on exactly one node")
 
@@ -2613,6 +2642,7 @@ def main():
         test_script_placement_locality_weight_zero_is_load_only()
         test_script_placement_falls_back_when_the_target_dies()
         test_before_hook_runs_on_the_owner()
+        test_admin_ops_replicate_in_commit_order()
         test_schedule_replication_and_single_firing()
         # Failure / rejoin last: they degrade then restore the cluster.
         test_node_failure_quorum_maintained()

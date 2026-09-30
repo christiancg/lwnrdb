@@ -184,6 +184,29 @@ public class BeforeHookContextTest {
     }
 
     @Test
+    public void test_rejects_an_id_sharing_the_original_hash_code() throws Exception {
+        assertEquals("Aa".hashCode(), "BB".hashCode());
+        installHook("v", "collide", "export default function (doc) { return { ...doc, _id: 'BB' }; };",
+                EventType.CREATED);
+        assertTrue(run(document("Aa"), EventType.CREATED).isRejected());
+    }
+
+    @Test
+    public void test_rejects_when_the_replacement_turns_the_id_into_a_number() throws Exception {
+        installHook("v", "numeric", "export default function (doc) { return { ...doc, _id: 5 }; };", EventType.CREATED);
+        assertTrue(run(document("a"), EventType.CREATED).isRejected());
+    }
+
+    @Test
+    public void test_rejects_an_id_added_to_a_document_that_had_none() throws Exception {
+        installHook("v", "addid", "export default function (doc) { return { ...doc, _id: 'new' }; };",
+                EventType.CREATED);
+        final var document = new JsonObject();
+        document.add("qty", new JsonNumber(1));
+        assertTrue(run(document, EventType.CREATED).isRejected());
+    }
+
+    @Test
     public void test_rejects_when_the_replacement_drops_the_id() throws Exception {
         installHook("v", "dropid", "export default function (doc) { return { qty: 1 }; };", EventType.CREATED);
         assertTrue(run(document("a"), EventType.CREATED).isRejected());

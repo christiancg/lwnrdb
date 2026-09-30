@@ -74,6 +74,30 @@ public class TransactionOperationHelperTest {
                 "a release that could not run on this thread must keep the record so the owner can still free it");
     }
 
+    @Test
+    public void test_a_commit_keeps_the_transaction_registered_while_a_lock_is_still_held() {
+        final var clientId = clientTracker.registerForwardedClient("unreleasable");
+        TransactionOperationHelper.start(clientId);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.add("_id", new JsonString("commit-stranded"));
+        request.setObject(object);
+        request.set_id("commit-stranded");
+        TransactionOperationHelper.bufferSave(request, clientTracker.getActiveTransaction(clientId));
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var notHeldHere = TestGlobals.DB + "|never_locked_coll";
+        transaction.getHeldLocks().add(notHeldHere);
+
+        final var response = TransactionOperationHelper.commit(clientId);
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertEquals(transaction, clientTracker.getActiveTransaction(clientId),
+                "clearing the registration would destroy the only record naming the lock");
+        assertEquals(java.util.Set.of(notHeldHere), transaction.getHeldLocks());
+        clientTracker.clearActiveTransaction(clientId);
+        clientTracker.removeById(clientId);
+    }
+
     @BeforeAll
     static void setUpBeforeClass() throws Exception {
         TestUtils.standardInitialSetup();

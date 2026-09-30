@@ -1,11 +1,9 @@
 package org.techhouse.fs;
 
-import java.io.BufferedWriter;
 import java.io.File;
-import java.io.FileWriter;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -29,7 +27,7 @@ final class FieldIndexStore {
             Map<Class<?>, List<FieldIndexEntry<?>>> indexEntryMap) {
         for (var indexTypeList : indexEntryMap.entrySet()) {
             final var type = IndexKind.fileLabel(indexTypeList.getKey());
-            appendEntries(paths.indexFile(dbName, collName, fieldName, type), indexTypeList.getValue());
+            writeEntries(paths.indexFile(dbName, collName, fieldName, type), indexTypeList.getValue());
         }
     }
 
@@ -38,7 +36,7 @@ final class FieldIndexStore {
         if (entries.isEmpty()) {
             return;
         }
-        appendEntries(paths.indexFile(dbName, collName, fieldName, kind.label()), entries);
+        writeEntries(paths.indexFile(dbName, collName, fieldName, kind.label()), entries);
     }
 
     void updateHashIndexFiles(String dbName, String collName, String fieldName, IndexKind kind,
@@ -94,21 +92,21 @@ final class FieldIndexStore {
         return paths.indexFile(dbName, collName, fieldName, IndexKind.fileLabel(entry.getValue().getClass()));
     }
 
-    private void appendEntries(File indexFile, List<? extends FieldIndexEntry<?>> entries) {
+    private void writeEntries(File indexFile, List<? extends FieldIndexEntry<?>> entries) {
         if (indexFile == null) {
             return;
         }
+        final var content = new StringBuilder();
+        for (final var entry : entries) {
+            content.append(entry.toFileEntry()).append(Globals.NEWLINE);
+        }
+        if (entries.isEmpty()) {
+            content.append(Globals.NEWLINE);
+        }
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
-        try (var writer = new BufferedWriter(new FileWriter(indexFile, StandardCharsets.UTF_8, true),
-                Globals.BUFFER_SIZE)) {
-            for (final var entry : entries) {
-                writer.append(entry.toFileEntry());
-                writer.append(Globals.NEWLINE);
-            }
-            if (entries.isEmpty()) {
-                writer.append(Globals.NEWLINE);
-            }
+        try {
+            FileLocks.rewriteFileAtomically(indexFile.toPath(), content.toString().getBytes(StandardCharsets.UTF_8));
         } catch (IOException e) {
             throw new RuntimeException(e);
         } finally {
@@ -123,24 +121,30 @@ final class FieldIndexStore {
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
         try {
-            try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-                final var wholeFile = readFully(writer);
-                final var indexOfExisting = searchIndexValue(wholeFile, value);
-                if (indexOfExisting >= 0) {
-                    shiftOtherEntries(writer, wholeFile, indexOfExisting);
-                    if (!entry.getIds().isEmpty()) {
-                        writeLine(writer, entry.toFileEntry());
-                    }
+            final var wholeFile = readFully(indexFile);
+            final var indexOfExisting = searchIndexValue(wholeFile, value);
+            if (indexOfExisting < 0) {
+                if (wholeFile.length == 0 && indexFile.exists()) {
+                    deleteIndexFile(indexFile);
                 }
+                return;
             }
-            deleteWhenNoEntriesRemain(indexFile);
+            final var withoutExisting = withoutLine(wholeFile, indexOfExisting);
+            final var content = entry.getIds().isEmpty()
+                    ? withoutExisting
+                    : appendLine(withoutExisting, entry.toFileEntry());
+            if (content.length == 0) {
+                deleteIndexFile(indexFile);
+            } else {
+                FileLocks.rewriteFileAtomically(indexFile.toPath(), content);
+            }
         } finally {
             lock.unlock();
         }
     }
 
-    private static void deleteWhenNoEntriesRemain(File indexFile) {
-        if (indexFile.length() == 0 && !indexFile.delete()) {
+    private static void deleteIndexFile(File indexFile) {
+        if (!indexFile.delete()) {
             logger.warning("Could not delete the now-empty index file " + indexFile.getName()
                     + "; while it exists CONTAINS and NOT_IN decline this field's index until a REINDEX");
         }
@@ -152,15 +156,11 @@ final class FieldIndexStore {
         }
         final var lock = FileLocks.lockFor(indexFile).writeLock();
         lock.lock();
-        try (var writer = new RandomAccessFile(indexFile, Globals.RW_PERMISSIONS)) {
-            final var wholeFile = readFully(writer);
+        try {
+            final var wholeFile = readFully(indexFile);
             final var indexOfExisting = searchIndexValue(wholeFile, value);
-            if (indexOfExisting >= 0) {
-                shiftOtherEntries(writer, wholeFile, indexOfExisting);
-            } else {
-                writer.seek(wholeFile.length);
-            }
-            writeLine(writer, entry.toFileEntry());
+            final var base = indexOfExisting >= 0 ? withoutLine(wholeFile, indexOfExisting) : wholeFile;
+            FileLocks.rewriteFileAtomically(indexFile.toPath(), appendLine(base, entry.toFileEntry()));
         } finally {
             lock.unlock();
         }
@@ -243,7 +243,7 @@ final class FieldIndexStore {
         return FieldIndexEntry.fileKeyOf(entry.getValue());
     }
 
-    private void shiftOtherEntries(RandomAccessFile writer, byte[] wholeFile, int indexOfExisting) throws IOException {
+    private static byte[] withoutLine(byte[] wholeFile, int indexOfExisting) {
         var replacementIndex = indexOfExisting;
         if (startsWithNewline(wholeFile, replacementIndex)) {
             replacementIndex += NEWLINE_BYTES.length;
@@ -251,25 +251,22 @@ final class FieldIndexStore {
         final int lineEnd = indexOfNewline(wholeFile, replacementIndex);
         final int tailStart = lineEnd == -1 ? wholeFile.length : lineEnd + NEWLINE_BYTES.length;
         final int tailLength = wholeFile.length - tailStart;
-        writer.seek(replacementIndex);
-        if (tailLength > 0) {
-            writer.write(wholeFile, tailStart, tailLength);
-        }
-        writer.setLength((long) replacementIndex + tailLength);
+        final var content = new byte[replacementIndex + tailLength];
+        System.arraycopy(wholeFile, 0, content, 0, replacementIndex);
+        System.arraycopy(wholeFile, tailStart, content, replacementIndex, tailLength);
+        return content;
     }
 
-    private static void writeLine(RandomAccessFile writer, String line) throws IOException {
+    private static byte[] appendLine(byte[] content, String line) {
         final var lineBytes = line.getBytes(StandardCharsets.UTF_8);
-        final var buffer = new byte[lineBytes.length + NEWLINE_BYTES.length];
-        System.arraycopy(lineBytes, 0, buffer, 0, lineBytes.length);
-        System.arraycopy(NEWLINE_BYTES, 0, buffer, lineBytes.length, NEWLINE_BYTES.length);
-        writer.write(buffer);
+        final var result = new byte[content.length + lineBytes.length + NEWLINE_BYTES.length];
+        System.arraycopy(content, 0, result, 0, content.length);
+        System.arraycopy(lineBytes, 0, result, content.length, lineBytes.length);
+        System.arraycopy(NEWLINE_BYTES, 0, result, content.length + lineBytes.length, NEWLINE_BYTES.length);
+        return result;
     }
 
-    private byte[] readFully(RandomAccessFile writer) throws IOException {
-        final var fileLength = (int) writer.length();
-        byte[] buffer = new byte[fileLength];
-        writer.readFully(buffer, 0, fileLength);
-        return buffer;
+    private static byte[] readFully(File indexFile) throws IOException {
+        return indexFile.exists() ? Files.readAllBytes(indexFile.toPath()) : new byte[0];
     }
 }

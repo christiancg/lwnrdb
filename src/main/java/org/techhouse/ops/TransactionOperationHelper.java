@@ -116,11 +116,7 @@ public final class TransactionOperationHelper {
                     e);
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
-            releaseHeldLocks(transaction);
-            if (transaction.getHeldLocks().isEmpty()) {
-                clientTracker.clearActiveTransaction(clientId);
-                clientTracker.clearTransactionState(clientId);
-            }
+            releaseAndDeregister(transaction, clientId);
         }
     }
 
@@ -202,9 +198,7 @@ public final class TransactionOperationHelper {
             throw t;
         } finally {
             if (!fenced) {
-                releaseHeldLocks(transaction);
-                clientTracker.clearActiveTransaction(clientId);
-                clientTracker.clearTransactionState(clientId);
+                releaseAndDeregister(transaction, clientId);
             }
         }
     }
@@ -240,11 +234,7 @@ public final class TransactionOperationHelper {
                     e);
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
         } finally {
-            releaseHeldLocks(transaction);
-            if (transaction.getHeldLocks().isEmpty()) {
-                clientTracker.clearActiveTransaction(clientId);
-                clientTracker.clearTransactionState(clientId);
-            }
+            releaseAndDeregister(transaction, clientId);
         }
     }
 
@@ -437,6 +427,14 @@ public final class TransactionOperationHelper {
             }
         }
         return false;
+    }
+
+    private static void releaseAndDeregister(Transaction transaction, UUID clientId) {
+        releaseHeldLocks(transaction);
+        if (transaction.getHeldLocks().isEmpty()) {
+            clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionState(clientId);
+        }
     }
 
     static void releaseHeldLocks(Transaction transaction) {

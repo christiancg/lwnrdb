@@ -368,6 +368,19 @@ membership machinery — serializes them:
 3. A node without a write quorum rejects an admin op up front (`503-2`) — the same
    split-brain protection document writes get.
 
+The coordinator runs coordinated admin ops **one at a time**, through an *admin lane*
+(`ClusterAdminHelper.inAdminLane`) that spans the quorum/sync guard, the local execution,
+the epoch bump and the broadcast. Local commit order is therefore send order, and the
+per-peer ordered executor keeps receive order, so two concurrent ops on one record (two
+`SAVE_PROCEDURE`s, a grant then a revoke) land on every replica in the order the
+coordinator committed them. Before the lane, the broadcast ran after the handler had
+released its lock, so the later commit's message could overtake the earlier one and a
+replica, which applies unconditionally, regressed to the older record until the next admin
+conform. An op that cannot enter the lane within `adminLaneTimeoutMs` answers the retryable
+`503-12 ADMIN_LANE_BUSY`. While holding the lane, an op waits for a collection lock only
+for `replicationAckTimeoutMs` (answering `409-5` on a miss), so one idle transaction
+cannot stall every admin op in the cluster.
+
 The acting username travels edge → coordinator → peers and is applied on each node through
 a short-lived synthetic client, so `CREATE_DATABASE` records the creator as owner
 identically everywhere rather than losing that identity when executed away from the

@@ -884,6 +884,23 @@ def test_before_hook_bulk_save(conn: Conn):
     check("not one document from the batch was stored", stored == [], f"stored {stored}")
     drop_hook(conn, "bulk_veto")
 
+    check_status("seed the document a colliding _id would redirect onto",
+                 conn.save_doc({"_id": "BB", "qty": 1, "owner": "untouched"}), "OK")
+    check_status("seed the document the client is updating", conn.save_doc({"_id": "Aa", "qty": 1}), "OK")
+    check_status("install a hook that swaps _id for one sharing its hash code",
+                 install_hook(conn, "bulk_collide", "bulkcollide",
+                              "export default (doc) => ({ ...doc, _id: doc._id === 'Aa' ? 'BB' : doc._id,"
+                              " owner: 'hook' });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_code("a bulk entry whose _id the hook changed is refused", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL, "objects": [{"_id": "Aa", "qty": 2}]}),
+        "ERROR", "400-21")
+    check_code("the same swap is refused on a single save", conn.save_doc({"_id": "Aa", "qty": 3}), "ERROR",
+               "400-21")
+    victim = conn.find("BB").get("object") or {}
+    check("the unrelated document is unchanged", victim.get("owner") == "untouched", f"got {victim}")
+    drop_hook(conn, "bulk_collide")
+
 
 def test_before_hook_chaining(conn: Conn):
     section("Before hooks - chaining in name order")

@@ -74,6 +74,7 @@ public class ConfigReaderTest {
         expectedConfig.put("deadTimeoutMs", "15000");
         expectedConfig.put("deadEvictionMs", "86400000");
         expectedConfig.put("replicationAckTimeoutMs", "5000");
+        expectedConfig.put("adminLaneTimeoutMs", "15000");
         expectedConfig.put("virtualNodesPerNode", "128");
         expectedConfig.put("readFallbackToLocal", "true");
         expectedConfig.put("scriptRoutingEnabled", "true");

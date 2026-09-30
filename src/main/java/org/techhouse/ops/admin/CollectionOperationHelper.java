@@ -34,6 +34,13 @@ public final class CollectionOperationHelper {
 
     public static OperationResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
         final var dbName = createCollectionRequest.getDatabaseName();
+        return OperationLocks.withDatabaseShared(dbName, OperationType.CREATE_COLLECTION,
+                ErrorCode.ERROR_CREATING_COLLECTION, createCollectionRequest.isReplicated(),
+                () -> createUnderDatabaseBarrier(createCollectionRequest));
+    }
+
+    private static OperationResponse createUnderDatabaseBarrier(CreateCollectionRequest createCollectionRequest) {
+        final var dbName = createCollectionRequest.getDatabaseName();
         final var collName = createCollectionRequest.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_COLLECTION,
                 ErrorCode.ERROR_CREATING_COLLECTION, createCollectionRequest.isReplicated(), () -> {
@@ -83,7 +90,10 @@ public final class CollectionOperationHelper {
         final var collName = dropCollectionRequest.getCollectionName();
         boolean dropSucceeded = false;
         try {
-            locks.lock(dbName, collName);
+            if (!locks.tryLockWrite(dbName, collName,
+                    OperationLocks.lockBudgetMillis(dropCollectionRequest.isReplicated()))) {
+                return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+            }
             if (isNotRegistered(dbName, collName)) {
                 return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
             }

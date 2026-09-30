@@ -109,7 +109,8 @@ public enum ErrorCode {
     SCHEMA_UNAVAILABLE("503-11", "The collection's schema could not be read, so the write cannot be validated;"
             + " retry shortly", OperationStatus.ERROR),
     COLLECTION_NOT_READY("503-10", "The collection has not reached this node yet, retry shortly",
-            OperationStatus.ERROR);
+            OperationStatus.ERROR),
+    ADMIN_LANE_BUSY("503-12", "Another admin operation is still in progress; retry", OperationStatus.ERROR);
     // @formatter:on
 
     private final String code;

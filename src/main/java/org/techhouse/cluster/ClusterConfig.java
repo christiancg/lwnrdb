@@ -75,6 +75,10 @@ public class ClusterConfig {
         return configuration.getReplicationAckTimeoutMs();
     }
 
+    public long adminLaneTimeoutMs() {
+        return configuration.getAdminLaneTimeoutMs();
+    }
+
     public int virtualNodesPerNode() {
         return configuration.getVirtualNodesPerNode();
     }

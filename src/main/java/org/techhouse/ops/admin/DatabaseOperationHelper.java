@@ -17,6 +17,7 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OnDiskNameRegistry;
+import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
@@ -83,37 +84,42 @@ public final class DatabaseOperationHelper {
 
     public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
         final var dbName = dropDatabaseRequest.getDatabaseName();
-        // Lock every collection in a stable order (deadlock avoidance with other multi-collection
-        // acquisitions) so nothing races the file deletion and cache eviction below.
-        final var dbEntry = cache.getAdminDbEntry(dbName);
-        if (dbEntry == null) {
-            return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
-        }
-        final var collNames = new ArrayList<>(dbEntry.getCollections());
-        Collections.sort(collNames);
+        final var deadline = System.currentTimeMillis()
+                + OperationLocks.lockBudgetMillis(dropDatabaseRequest.isReplicated());
         final var lockedColls = new ArrayList<String>();
+        var barrierHeld = false;
         try {
+            if (!locks.tryLockDatabaseExclusive(dbName, remainingUntil(deadline))) {
+                return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+            }
+            barrierHeld = true;
+            final var dbEntry = cache.getAdminDbEntry(dbName);
+            if (dbEntry == null) {
+                return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+            }
+            final var collNames = new ArrayList<>(dbEntry.getCollections());
+            Collections.sort(collNames);
             for (final var collName : collNames) {
-                locks.lock(dbName, collName);
+                if (!locks.tryLockWrite(dbName, collName, remainingUntil(deadline))) {
+                    return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+                }
                 lockedColls.add(collName);
             }
             final var result = fs.deleteDatabase(dbName);
             if (result) {
                 cache.evictDatabase(dbName);
-                // Synchronous, mirroring creation: a background delete lets an immediate re-CREATE hit the
-                // duplicate guard and wrongly return DATABASE_ALREADY_EXISTS.
                 AdminOperationHelper.deleteDatabaseEntry(dbName);
-                // A re-created database restarts its procedure versions at 1, so compiled programs go too.
                 compiledProcedures.invalidateDatabase(dbName);
                 scheduleRegistry.removeDatabase(dbName);
                 listenManager.unregisterAllForDatabase(dbName);
                 return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");
             }
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return dropFailed(exception);
         } catch (Exception exception) {
-            logger.error(OperationType.DROP_DATABASE + " failed with " + ErrorCode.ERROR_DROPPING_DATABASE.getCode(),
-                    exception);
-            return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+            return dropFailed(exception);
         } finally {
             for (final var collName : lockedColls) {
                 locks.release(dbName, collName);
@@ -121,7 +127,21 @@ public final class DatabaseOperationHelper {
             for (final var collName : lockedColls) {
                 locks.removeLock(dbName, collName);
             }
+            if (barrierHeld) {
+                locks.releaseDatabaseExclusive(dbName);
+                locks.removeDatabaseLock(dbName);
+            }
         }
+    }
+
+    private static OperationResponse dropFailed(Exception exception) {
+        logger.error(OperationType.DROP_DATABASE + " failed with " + ErrorCode.ERROR_DROPPING_DATABASE.getCode(),
+                exception);
+        return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+    }
+
+    private static long remainingUntil(long deadline) {
+        return Math.max(0, deadline - System.currentTimeMillis());
     }
 
     public static OperationResponse processListDatabasesOperation() {

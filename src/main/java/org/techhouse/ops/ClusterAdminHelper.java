@@ -1,6 +1,9 @@
 package org.techhouse.ops;
 
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterConfig;
@@ -32,7 +35,37 @@ public final class ClusterAdminHelper {
     private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
             .get(AdminAntiEntropyService.class);
 
+    private static final ReentrantLock adminLane = new ReentrantLock(true);
+
     private ClusterAdminHelper() {
+    }
+
+    public static OperationResponse inAdminLane(OperationRequest request, Supplier<OperationResponse> op) {
+        if (!needsAdminLane(request)) {
+            return op.get();
+        }
+        try {
+            if (!adminLane.tryLock(clusterConfig.adminLaneTimeoutMs(), TimeUnit.MILLISECONDS)) {
+                return new OperationResponse(request.getType(), ErrorCode.ADMIN_LANE_BUSY);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new OperationResponse(request.getType(), ErrorCode.ADMIN_LANE_BUSY);
+        }
+        try {
+            return op.get();
+        } finally {
+            adminLane.unlock();
+        }
+    }
+
+    public static boolean holdsAdminLane() {
+        return adminLane.isHeldByCurrentThread();
+    }
+
+    private static boolean needsAdminLane(OperationRequest request) {
+        return isCoordinatedAdminOp(request.getType()) && !request.isReplicated() && clusterConfig.isEnabled()
+                && ownershipManager.isAdminCoordinator();
     }
 
     public static boolean isCoordinatedAdminOp(OperationType type) {

@@ -169,8 +169,8 @@ public final class BeforeHookContext implements AutoCloseable {
     }
 
     private static String checkId(JsonObject document, JsonObject replacement) {
-        final var original = document.has(Globals.PK_FIELD) ? document.get(Globals.PK_FIELD).toString() : null;
-        final var returned = replacement.has(Globals.PK_FIELD) ? replacement.get(Globals.PK_FIELD).toString() : null;
+        final var original = document.get(Globals.PK_FIELD);
+        final var returned = replacement.get(Globals.PK_FIELD);
         if (original == null && returned == null) {
             return null;
         }

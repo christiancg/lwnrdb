@@ -233,6 +233,18 @@ def test_database_and_collection_ops(c):
     check_status("DROP_COLLECTION ddl_db/things", drop_coll(c, "things", db="ddl_db"), "OK")
     check_status("DROP_DATABASE ddl_db", drop_db(c, "ddl_db"), "OK")
 
+    check_status("CREATE_DATABASE ghost_db", create_db(c, "ghost_db"), "OK")
+    check_status("CREATE_COLLECTION ghost_db/items", create_coll(c, "items", db="ghost_db"), "OK")
+    check_status("SAVE a document before the drop", save(c, "items", {"_id": "g1", "v": 1}, db="ghost_db"), "OK")
+    check_status("DROP_DATABASE ghost_db", drop_db(c, "ghost_db"), "OK")
+    check_status("re-CREATE_DATABASE ghost_db", create_db(c, "ghost_db"), "OK")
+    check_status("re-CREATE_COLLECTION ghost_db/items", create_coll(c, "items", db="ghost_db"), "OK")
+    check_code("the re-created collection holds no pre-drop document",
+               find_by_id(c, "items", "g1", db="ghost_db"), "NOT_FOUND", "404-2")
+    check_code("a scan of it finds nothing either",
+               aggregate(c, "items", [], db="ghost_db"), "NOT_FOUND", "404-3")
+    check_status("DROP_DATABASE ghost_db again", drop_db(c, "ghost_db"), "OK")
+
     r = c.send({"type": "GET_DATABASE_STATS"})
     check_status("GET_DATABASE_STATS (admin, OK)", r, "OK")
     check("GET_DATABASE_STATS reports at least one database",

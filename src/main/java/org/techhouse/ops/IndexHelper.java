@@ -68,6 +68,9 @@ public class IndexHelper {
         rl.lockIndex(dbName, collName, fieldName);
         try {
             buildIndex(dbName, collName, fieldName);
+        } catch (RuntimeException e) {
+            fs.dropIndex(dbName, collName, fieldName);
+            throw e;
         } finally {
             cache.evictFieldIndexAllTypes(dbName, collName, fieldName);
             rl.releaseIndex(dbName, collName, fieldName);

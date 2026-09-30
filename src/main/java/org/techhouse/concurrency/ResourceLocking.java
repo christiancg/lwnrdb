@@ -244,6 +244,26 @@ public class ResourceLocking {
         }
     }
 
+    public boolean tryLockDatabaseShared(String dbName, long timeoutMillis) throws InterruptedException {
+        return lockFor(dbName).readLock().tryLock(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    public void releaseDatabaseShared(String dbName) {
+        releaseReadByName(dbName);
+    }
+
+    public boolean tryLockDatabaseExclusive(String dbName, long timeoutMillis) throws InterruptedException {
+        return lockFor(dbName).writeLock().tryLock(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    public void releaseDatabaseExclusive(String dbName) {
+        releaseWrite(dbName);
+    }
+
+    public void removeDatabaseLock(String dbName) {
+        locks.computeIfPresent(dbName, (_, lock) -> isEvictable(lock) ? null : lock);
+    }
+
     private static boolean isEvictable(ReentrantReadWriteLock lock) {
         return !lock.isWriteLocked() && lock.getReadLockCount() == 0 && !lock.hasQueuedThreads();
     }
