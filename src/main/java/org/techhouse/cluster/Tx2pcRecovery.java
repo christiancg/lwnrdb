@@ -5,6 +5,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessageType;
@@ -107,10 +108,10 @@ public class Tx2pcRecovery implements MembershipListener {
                 switch (resolve(marker.coordinatorAddress(), marker.participants(), dtxId)) {
                     case COMMIT -> TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections(),
                             clusterConfig.replicationAckTimeoutMs());
-                    case ABORT -> TwoPhaseParticipant.abortFromDurable(dtxId);
+                    case ABORT -> TwoPhaseParticipant.abortFromDurable(dtxId, clusterConfig.replicationAckTimeoutMs());
                     default -> logger.info("Transaction " + dtxId + " still in-doubt; will retry");
                 }
-            } catch (CollectionBusyException busy) {
+            } catch (CollectionBusyException | TimeoutException busy) {
                 logger.warning(
                         "Skipped recovering prepared transaction " + dtxId + " this round: " + busy.getMessage());
             } catch (Throwable failure) {
@@ -135,7 +136,7 @@ public class Tx2pcRecovery implements MembershipListener {
                 if (allResolved) {
                     Tx2pcLog.deleteCoordinatorMarker(dtxId);
                 }
-            } catch (CollectionBusyException busy) {
+            } catch (CollectionBusyException | TimeoutException busy) {
                 logger.warning(
                         "Skipped re-driving committed transaction " + dtxId + " this round: " + busy.getMessage());
             } catch (Throwable failure) {

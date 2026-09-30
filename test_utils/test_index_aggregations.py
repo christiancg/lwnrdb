@@ -768,13 +768,17 @@ AGREE_NOT_IN_CUSTOM = "idxagg_agree_notin_custom"
 AGREE_CUSTOM_SORT = "idxagg_agree_custom_sort"
 AGREE_CUSTOM_TIES = "idxagg_agree_custom_ties"
 AGREE_SURROGATE = "idxagg_agree_surrogate"
+AGREE_ARRAY_CUSTOM = "idxagg_agree_array_custom"
+AGREE_OBJECT_CUSTOM = "idxagg_agree_object_custom"
+AGREE_CONTAINS_CUSTOM = "idxagg_agree_contains_custom"
 
 AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, AGREE_NOT_IN_ARR,
                      AGREE_JOIN_REMOTE, AGREE_JOIN_LEFT, AGREE_JOIN_NULL_REMOTE, AGREE_JOIN_NULL_LEFT,
                      AGREE_SORT_BOOL, AGREE_SORT_BOOL_DESC, AGREE_SORT_MIXED, AGREE_SORT_TIES,
                      AGREE_SIBLING, AGREE_OBJ_SORT, AGREE_CUSTOM, AGREE_MIXED_BOX, AGREE_GEO,
                      AGREE_IN_CASE, AGREE_NOT_IN_CASE, AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM,
-                     AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES, AGREE_SURROGATE)
+                     AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES, AGREE_SURROGATE, AGREE_ARRAY_CUSTOM,
+                     AGREE_OBJECT_CUSTOM, AGREE_CONTAINS_CUSTOM)
 
 
 def agree_ids(r):
@@ -1021,6 +1025,40 @@ def probe_membership_uses_the_same_equality_as_equals(c):
           AGREE_NOT_IN_CUSTOM, "when", expected=["d2"])
 
 
+def probe_array_equals_uses_the_same_equality_as_scalar_equals(c):
+    """A custom value inside an array or object used to compare by wire text on the scan and hash by
+    wire text in the index, while the same value as a scalar compared by meaning. Both sides now
+    compare by meaning, and a document saved after the index exists must join the same bucket."""
+    long_spelling = "#datetime(2024-01-01T10:00:00)"
+    short_spelling = "#datetime(2024-01-01T10:00)"
+    for coll in (AGREE_ARRAY_CUSTOM, AGREE_CONTAINS_CUSTOM):
+        save_doc(c, coll, {"_id": "d1", "times": [long_spelling]})
+        save_doc(c, coll, {"_id": "d2", "times": ["#datetime(2024-02-02T11:00)"]})
+    save_doc(c, AGREE_OBJECT_CUSTOM, {"_id": "d1", "meta": {"when": long_spelling}})
+    save_doc(c, AGREE_OBJECT_CUSTOM, {"_id": "d2", "meta": {"when": "#datetime(2024-02-02T11:00)"}})
+
+    array_steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "times",
+                                                   "value": [short_spelling]}}]
+    agree(c, "EQUALS with an array holding a custom value spelled differently", AGREE_ARRAY_CUSTOM,
+          array_steps, AGREE_ARRAY_CUSTOM, "times", expected=["d1"])
+    agree(c, "EQUALS with an object holding a custom value spelled differently", AGREE_OBJECT_CUSTOM,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "meta",
+                                           "value": {"when": short_spelling}}}],
+          AGREE_OBJECT_CUSTOM, "meta", expected=["d1"])
+    agree(c, "CONTAINS with a custom operand spelled differently from the array element",
+          AGREE_CONTAINS_CUSTOM,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "CONTAINS", "field": "times",
+                                           "value": short_spelling}}],
+          AGREE_CONTAINS_CUSTOM, "times", expected=["d1"])
+
+    save_doc(c, AGREE_ARRAY_CUSTOM, {"_id": "d3", "times": [short_spelling]})
+    wait_for_indexes(c, [(AGREE_ARRAY_CUSTOM, "times")])
+    indexed = agree_ids(agg(c, AGREE_ARRAY_CUSTOM, array_steps))
+    scanned = agree_ids(agg(c, AGREE_ARRAY_CUSTOM, [{"type": "SKIP", "skip": 0}] + array_steps))
+    check("a document saved after the index exists joins the bucket of its equal spelling",
+          indexed == scanned == ["d1", "d3"], f"index={indexed!r} scan={scanned!r}")
+
+
 def probe_a_scalar_membership_operand_is_refused(c):
     """IN with a non-array operand reached SearchUtils and threw, so the same query answered 500
     with an index and NO_RESULTS without one. It must now be refused before either path."""
@@ -1096,6 +1134,7 @@ def agreement_suite(c):
     probe_custom_sort_keys_order_by_the_type_comparator(c)
     probe_a_scalar_membership_operand_is_refused(c)
     probe_membership_uses_the_same_equality_as_equals(c)
+    probe_array_equals_uses_the_same_equality_as_scalar_equals(c)
     probe_mixed_number_boxes_group_the_same_either_way(c)
     probe_lone_surrogate_values_index_the_same_as_they_scan(c)
 

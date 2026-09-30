@@ -231,7 +231,7 @@ public final class SimpleJs {
                 return nonFinite == NonFiniteResult.NULLED && isNonFinite(returned)
                         ? JsonNull.INSTANCE
                         : EJsonInterop.toHostEjson(returned);
-            } catch (RuntimeException failure) {
+            } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
                 throw asCallableException(failure);
             }
         }

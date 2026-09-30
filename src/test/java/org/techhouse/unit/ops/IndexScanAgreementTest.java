@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -308,6 +309,52 @@ public class IndexScanAgreementTest {
         queries.put("SORT mixed asc", () -> new BaseAggregationStep[]{new SortAggregationStep("mixed", true)});
 
         assertEveryQueryAgrees("mixed", queries);
+    }
+
+    private static final String LONG_SPELLING = "#datetime(2024-01-01T10:00:00)";
+    private static final String SHORT_SPELLING = "#datetime(2024-01-01T10:00)";
+    private static final String OTHER_INSTANT = "#datetime(2024-01-01T11:00)";
+
+    private static JsonObject whenOf(String instant) {
+        final var object = new JsonObject();
+        object.add("when", new JsonDateTime(instant));
+        return object;
+    }
+
+    @Test
+    public void test_custom_values_inside_arrays_agree_across_spellings() throws Exception {
+        insert("a_long", "times", array(new JsonDateTime(LONG_SPELLING)));
+        insert("a_short", "times", array(new JsonDateTime(SHORT_SPELLING)));
+        insert("a_other", "times", array(new JsonDateTime(OTHER_INSTANT)));
+        final var queries = new LinkedHashMap<String, Supplier<BaseAggregationStep[]>>();
+        for (final var type : List.of(FieldOperatorType.EQUALS, FieldOperatorType.NOT_EQUALS)) {
+            queries.put(type + " times [short]",
+                    () -> new BaseAggregationStep[]{filter(type, "times", array(new JsonDateTime(SHORT_SPELLING)))});
+        }
+        queries.put("IN times [[long]]", () -> new BaseAggregationStep[]{
+                filter(FieldOperatorType.IN, "times", array(array(new JsonDateTime(LONG_SPELLING))))});
+        queries.put("CONTAINS times short", () -> new BaseAggregationStep[]{
+                filter(FieldOperatorType.CONTAINS, "times", new JsonDateTime(SHORT_SPELLING))});
+
+        assertEquals(2, run(queries.get("EQUALS times [short]").get()).size(),
+                "both spellings of one instant are equal inside an array");
+        assertEveryQueryAgrees("times", queries);
+    }
+
+    @Test
+    public void test_custom_values_inside_objects_agree_across_spellings() throws Exception {
+        insert("o_long", "meta", whenOf(LONG_SPELLING));
+        insert("o_short", "meta", whenOf(SHORT_SPELLING));
+        insert("o_other", "meta", whenOf(OTHER_INSTANT));
+        final var queries = new LinkedHashMap<String, Supplier<BaseAggregationStep[]>>();
+        for (final var type : List.of(FieldOperatorType.EQUALS, FieldOperatorType.NOT_EQUALS)) {
+            queries.put(type + " meta {when: short}",
+                    () -> new BaseAggregationStep[]{filter(type, "meta", whenOf(SHORT_SPELLING))});
+        }
+
+        assertEquals(2, run(queries.get("EQUALS meta {when: short}").get()).size(),
+                "both spellings of one instant are equal inside an object");
+        assertEveryQueryAgrees("meta", queries);
     }
 
     // Guards the matrix itself: if the field were never registered, every comparison above would be

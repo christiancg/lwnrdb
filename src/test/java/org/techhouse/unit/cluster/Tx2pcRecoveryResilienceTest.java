@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +29,8 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.TxSession;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -34,6 +38,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.FindByIdRequest;
@@ -49,6 +54,7 @@ public class Tx2pcRecoveryResilienceTest {
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private volatile boolean origEnabled;
     private volatile long origAckTimeoutMs;
 
@@ -198,5 +204,67 @@ public class Tx2pcRecoveryResilienceTest {
         request.set_id("startup-doc");
         assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus(),
                 "startup recovery and a peer handler still pass no budget and wait for the lock");
+    }
+
+    private record StuckSession(String sessionId, TxSession session, String dtxId, CountDownLatch release) {
+    }
+
+    private StuckSession openStuckSession(String sessionId) throws Exception {
+        final var session = clientTracker.registerTxSession(sessionId, "tester", "edge-node");
+        session.submit(() -> TransactionOperationHelper.start(session.clientId())).get();
+        final var dtxId = clientTracker.getActiveTransaction(session.clientId()).getTransactionId().toString();
+        final var release = new CountDownLatch(1);
+        session.submit(() -> release.await(10, TimeUnit.SECONDS));
+        return new StuckSession(sessionId, session, dtxId, release);
+    }
+
+    private void unstick(StuckSession stuck) throws Exception {
+        stuck.release().countDown();
+        stuck.session().submit(() -> null).get(10, TimeUnit.SECONDS);
+        clientTracker.removeTxSession(stuck.sessionId());
+    }
+
+    @Test
+    public void test_commit_through_a_stuck_live_session_times_out_rather_than_blocking() throws Exception {
+        final var stuck = openStuckSession("stuck-commit");
+        try {
+            final var started = System.currentTimeMillis();
+            assertThrows(TimeoutException.class, () -> TwoPhaseParticipant.commitPreparedFromDurable(stuck.dtxId(),
+                    List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)), 200L));
+            assertTrue(System.currentTimeMillis() - started < 5000, "the budget bounds the wait on the session");
+        } finally {
+            unstick(stuck);
+        }
+    }
+
+    @Test
+    public void test_abort_through_a_stuck_live_session_honours_an_explicit_timeout() throws Exception {
+        final var stuck = openStuckSession("stuck-abort");
+        try {
+            final var started = System.currentTimeMillis();
+            assertThrows(TimeoutException.class, () -> TwoPhaseParticipant.abortFromDurable(stuck.dtxId(), 200L));
+            assertTrue(System.currentTimeMillis() - started < 5000, "the budget bounds the wait on the session");
+        } finally {
+            unstick(stuck);
+        }
+    }
+
+    @Test
+    public void test_recovery_skips_a_round_when_the_live_session_times_out() throws Exception {
+        final var stuck = openStuckSession("stuck-sweep");
+        try {
+            seedPreparedSlice(stuck.dtxId(), "stuck-doc");
+            Tx2pcLog.recordCoordinatorCommit(stuck.dtxId(), null, List.of(SELF_ADDRESS));
+
+            final var started = System.currentTimeMillis();
+            assertDoesNotThrow(recovery::recover);
+
+            assertTrue(System.currentTimeMillis() - started < 5000,
+                    "a stuck session thread must not wedge the single recovery sweeper");
+            assertTrue(Tx2pcLog.isPrepared(stuck.dtxId()), "a skipped slice is retried next round, not discarded");
+            assertTrue(Tx2pcLog.isCommitted(stuck.dtxId()), "the coordinator marker is kept for the next round");
+        } finally {
+            unstick(stuck);
+        }
     }
 }

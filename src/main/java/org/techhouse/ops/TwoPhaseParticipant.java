@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
@@ -105,15 +106,17 @@ public final class TwoPhaseParticipant {
         return null;
     }
 
-    private static boolean resolvedThroughLiveSession(String dtxId, boolean commit) throws Exception {
+    private static boolean resolvedThroughLiveSession(String dtxId, boolean commit, long timeoutMillis)
+            throws Exception {
         final var entry = liveSessionFor(dtxId);
         if (entry == null) {
             return false;
         }
         final var session = entry.getValue();
-        final var result = session.submit(() -> commit
+        final var future = session.submit(() -> commit
                 ? commitPrepared(session.clientId())
-                : TransactionOperationHelper.abort(session.clientId())).get();
+                : TransactionOperationHelper.abort(session.clientId()));
+        final var result = timeoutMillis > 0 ? future.get(timeoutMillis, TimeUnit.MILLISECONDS) : future.get();
         if (TransactionOperationHelper.releasedItsLocks(result)) {
             clientTracker.removeTxSession(entry.getKey());
         }
@@ -126,14 +129,18 @@ public final class TwoPhaseParticipant {
 
     public static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
             throws Exception {
-        if (resolvedThroughLiveSession(dtxId, true)) {
+        if (resolvedThroughLiveSession(dtxId, true, timeoutMillis)) {
             return;
         }
         TransactionRecovery.commitPreparedFromDurable(dtxId, collections, timeoutMillis);
     }
 
     public static void abortFromDurable(String dtxId) throws Exception {
-        if (resolvedThroughLiveSession(dtxId, false)) {
+        abortFromDurable(dtxId, 0L);
+    }
+
+    public static void abortFromDurable(String dtxId, long timeoutMillis) throws Exception {
+        if (resolvedThroughLiveSession(dtxId, false, timeoutMillis)) {
             return;
         }
         TransactionRecovery.abortFromDurable(dtxId);
@@ -147,7 +154,7 @@ public final class TwoPhaseParticipant {
         if (!Tx2pcLog.isPrepared(dtxId)) {
             return;
         }
-        if (resolvedThroughLiveSession(dtxId, commit)) {
+        if (resolvedThroughLiveSession(dtxId, commit, timeoutMillis)) {
             return;
         }
         TransactionRecovery.resolveFromDurable(dtxId, commit, timeoutMillis);

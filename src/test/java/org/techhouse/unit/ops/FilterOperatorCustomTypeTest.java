@@ -13,7 +13,10 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonTime;
+import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -132,4 +135,62 @@ public class FilterOperatorCustomTypeTest {
         assertFalse(FilterOperatorHelper.getTester(op, FieldOperatorType.EQUALS).test(obj, "t"));
     }
 
+    private static JsonArray arrayOf(JsonBaseElement element) {
+        final var array = new JsonArray();
+        array.add(element);
+        return array;
+    }
+
+    private static JsonDateTime longSpelling() {
+        return new JsonDateTime("#datetime(2024-01-01T10:00:00)");
+    }
+
+    private static JsonDateTime shortSpelling() {
+        return new JsonDateTime("#datetime(2024-01-01T10:00)");
+    }
+
+    private static boolean matches(FieldOperatorType type, String field, JsonBaseElement operand,
+            JsonBaseElement stored) {
+        final var document = new JsonObject();
+        document.add(field, stored);
+        return FilterOperatorHelper.getTester(new FieldOperator(type, field, operand), type).test(document, field);
+    }
+
+    @Test
+    public void test_equals_on_array_of_custom_values_matches_a_semantically_equal_spelling() {
+        assertTrue(matches(FieldOperatorType.EQUALS, "times", arrayOf(shortSpelling()), arrayOf(longSpelling())));
+    }
+
+    @Test
+    public void test_not_equals_on_array_of_custom_values_agrees_with_equals() {
+        assertFalse(matches(FieldOperatorType.NOT_EQUALS, "times", arrayOf(shortSpelling()), arrayOf(longSpelling())));
+        assertTrue(matches(FieldOperatorType.NOT_EQUALS, "times",
+                arrayOf(new JsonDateTime("#datetime(2024-01-01T11:00)")), arrayOf(longSpelling())));
+    }
+
+    @Test
+    public void test_contains_on_array_field_matches_a_semantically_equal_custom_operand() {
+        assertTrue(matches(FieldOperatorType.CONTAINS, "times", shortSpelling(), arrayOf(longSpelling())));
+    }
+
+    @Test
+    public void test_equals_on_object_containing_a_custom_value_matches_a_semantically_equal_spelling() {
+        final var operand = new JsonObject();
+        operand.add("when", shortSpelling());
+        final var stored = new JsonObject();
+        stored.add("when", longSpelling());
+        assertTrue(matches(FieldOperatorType.EQUALS, "meta", operand, stored));
+    }
+
+    @Test
+    public void test_in_over_arrays_matches_a_semantically_equal_custom_spelling() {
+        assertTrue(matches(FieldOperatorType.IN, "times", arrayOf(arrayOf(shortSpelling())), arrayOf(longSpelling())));
+    }
+
+    @Test
+    public void test_nested_strings_stay_case_sensitive_like_the_hash_index() {
+        assertFalse(matches(FieldOperatorType.EQUALS, "tags", arrayOf(new JsonString("ABC")),
+                arrayOf(new JsonString("abc"))));
+        assertFalse(matches(FieldOperatorType.CONTAINS, "tags", new JsonString("ABC"), arrayOf(new JsonString("abc"))));
+    }
 }

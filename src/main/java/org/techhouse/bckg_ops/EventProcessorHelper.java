@@ -97,14 +97,18 @@ public class EventProcessorHelper {
         IndexHelper.bulkUpdateIndexes(dbName, collName, new ArrayList<>(ids));
         for (final var event : group) {
             AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getDbEntry());
+            clearPendingEvent(event);
         }
-        clearPendingEvents(group);
     }
 
     private static void clearPendingEvents(List<EntityEvent> group) {
         for (final var event : group) {
-            pendingIndexWrites.clear(event.getDbName(), event.getCollName(), event.getDbEntry().get_id());
+            clearPendingEvent(event);
         }
+    }
+
+    private static void clearPendingEvent(EntityEvent event) {
+        pendingIndexWrites.clear(event.getDbName(), event.getCollName(), event.getDbEntry().get_id());
     }
 
     public static void processEvent(Event event) throws IOException, InterruptedException {

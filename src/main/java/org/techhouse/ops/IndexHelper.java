@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -118,25 +119,31 @@ public class IndexHelper {
 
     private static void writeHashIndexes(String dbName, String collName, String fieldName,
             Map<JsonBaseElement, List<JsonObject>> grouped) {
-        final var objectEntries = new ArrayList<FieldIndexEntry<String>>();
-        final var arrayEntries = new ArrayList<FieldIndexEntry<String>>();
+        final var objectIds = new LinkedHashMap<String, Set<String>>();
+        final var arrayIds = new LinkedHashMap<String, Set<String>>();
         for (var groupedEntry : grouped.entrySet()) {
             final var key = groupedEntry.getKey();
             if (!key.isJsonObject() && !key.isJsonArray()) {
                 continue;
             }
-            final var ids = groupedEntry.getValue().stream()
-                    .map(jsonObject -> jsonObject.get(Globals.PK_FIELD).asJsonString().getValue())
-                    .collect(Collectors.toSet());
-            final var hashEntry = new FieldIndexEntry<>(dbName, collName, JsonUtils.hashElement(key), ids);
-            if (key.isJsonObject()) {
-                objectEntries.add(hashEntry);
-            } else {
-                arrayEntries.add(hashEntry);
+            final var idsByHash = key.isJsonObject() ? objectIds : arrayIds;
+            final var ids = idsByHash.computeIfAbsent(JsonUtils.hashElement(key), ignored -> new HashSet<>());
+            for (var document : groupedEntry.getValue()) {
+                ids.add(document.get(Globals.PK_FIELD).asJsonString().getValue());
             }
         }
-        fs.writeHashIndexFile(dbName, collName, fieldName, IndexKind.OBJECT, objectEntries);
-        fs.writeHashIndexFile(dbName, collName, fieldName, IndexKind.ARRAY, arrayEntries);
+        fs.writeHashIndexFile(dbName, collName, fieldName, IndexKind.OBJECT,
+                hashEntriesOf(dbName, collName, objectIds));
+        fs.writeHashIndexFile(dbName, collName, fieldName, IndexKind.ARRAY, hashEntriesOf(dbName, collName, arrayIds));
+    }
+
+    private static List<FieldIndexEntry<String>> hashEntriesOf(String dbName, String collName,
+            Map<String, Set<String>> idsByHash) {
+        final var entries = new ArrayList<FieldIndexEntry<String>>();
+        for (var hashIds : idsByHash.entrySet()) {
+            entries.add(new FieldIndexEntry<>(dbName, collName, hashIds.getKey(), hashIds.getValue()));
+        }
+        return entries;
     }
 
     public static boolean dropIndex(String dbName, String collName, String fieldName) throws InterruptedException {

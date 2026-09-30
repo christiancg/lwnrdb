@@ -19,7 +19,7 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
     private String orderHash;
 
     public JsonGeo(GeoPoint customValue) {
-        super("#" + CUSTOM_TYPE_NAME + "(" + customValue.lat() + "," + customValue.lng() + ")");
+        super(wireValueOf(customValue));
     }
 
     public JsonGeo(String strValue) {
@@ -28,6 +28,15 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
 
     public JsonGeo() {
         super();
+    }
+
+    private static String wireValueOf(GeoPoint point) {
+        return "#" + CUSTOM_TYPE_NAME + "(" + point.lat() + "," + point.lng() + ")";
+    }
+
+    @Override
+    public String canonicalSpelling() {
+        return wireValueOf(customValue);
     }
 
     @Override

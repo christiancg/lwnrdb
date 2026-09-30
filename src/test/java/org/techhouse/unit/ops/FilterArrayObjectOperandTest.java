@@ -121,4 +121,34 @@ public class FilterArrayObjectOperandTest {
         insert("m_number", OBJECT_FIELD, new JsonNumber(3));
         assertEquals(List.of(), objectFilter(FieldOperatorType.EQUALS));
     }
+
+    @Test
+    public void test_equals_on_array_still_requires_matching_length_and_order() throws IOException {
+        final var reversed = new JsonArray();
+        reversed.add(new JsonString("b"));
+        reversed.add(new JsonString("a"));
+        final var longer = arrayOperand();
+        longer.add(new JsonString("c"));
+        insert("same", ARRAY_FIELD, arrayOperand());
+        insert("reversed", ARRAY_FIELD, reversed);
+        insert("longer", ARRAY_FIELD, longer);
+        assertEquals(List.of("same"), arrayFilter(FieldOperatorType.EQUALS));
+        assertEquals(List.of("longer", "reversed"), arrayFilter(FieldOperatorType.NOT_EQUALS));
+    }
+
+    @Test
+    public void test_equals_on_object_is_still_key_order_independent() throws IOException {
+        final var reordered = new JsonObject();
+        reordered.add("x", new JsonNumber(1));
+        reordered.add("k", new JsonString("v"));
+        final var operand = new JsonObject();
+        operand.add("k", new JsonString("v"));
+        operand.add("x", new JsonNumber(1));
+        final var subset = new JsonObject();
+        subset.add("k", new JsonString("v"));
+        insert("reordered", OBJECT_FIELD, reordered);
+        insert("subset", OBJECT_FIELD, subset);
+        assertEquals(List.of("reordered"), matchedIds(
+                new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, OBJECT_FIELD, operand))));
+    }
 }

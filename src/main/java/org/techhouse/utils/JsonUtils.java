@@ -128,7 +128,7 @@ public final class JsonUtils {
             case JsonNull ignored -> sb.append("null");
             case JsonObject object -> appendCanonicalObject(object, sb);
             case JsonArray array -> appendCanonicalArray(array, sb);
-            case JsonCustom<?> custom -> sb.append(custom.getValue());
+            case JsonCustom<?> custom -> sb.append(custom.canonicalSpelling());
             case JsonNumber number -> sb.append(normalizeNumber(number.getValue()));
             case JsonBoolean bool -> sb.append(bool.getValue().booleanValue());
             case JsonString string -> appendCanonicalString(string.getValue(), sb);

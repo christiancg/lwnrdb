@@ -6,7 +6,9 @@ import java.util.ArrayList;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.custom_types.JsonDateTime;
+import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.custom_types.JsonTime;
+import org.techhouse.ejson.custom_types.JsonVector;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -443,5 +445,30 @@ public class JsonUtilsTest {
     public void test_values_inside_the_exact_range_still_canonicalize_as_integers() {
         assertEquals("42", JsonUtils.canonicalize(new JsonNumber(42)));
         assertEquals("-7", JsonUtils.canonicalize(new JsonNumber(-7)));
+    }
+
+    private static String hashOfSingleton(JsonBaseElement element) {
+        final var array = new JsonArray();
+        array.add(element);
+        return JsonUtils.hashElement(array);
+    }
+
+    @Test
+    public void test_hash_spells_a_custom_value_by_its_meaning_not_its_wire_text() {
+        assertEquals(hashOfSingleton(new JsonDateTime("#datetime(2024-01-01T10:00:00)")),
+                hashOfSingleton(new JsonDateTime("#datetime(2024-01-01T10:00)")));
+        assertEquals(hashOfSingleton(new JsonGeo("#geo(10,20)")), hashOfSingleton(new JsonGeo("#geo(10.0, 20.0)")));
+        assertEquals(hashOfSingleton(new JsonVector("#vector(1,2)")),
+                hashOfSingleton(new JsonVector("#vector(1.0, 2.0)")));
+        assertEquals(hashOfSingleton(new JsonTime("#time(10:00:00)")), hashOfSingleton(new JsonTime("#time(10:00)")));
+    }
+
+    @Test
+    public void test_hash_still_separates_distinct_custom_values_and_types() {
+        assertNotEquals(hashOfSingleton(new JsonDateTime("#datetime(2024-01-01T10:00)")),
+                hashOfSingleton(new JsonDateTime("#datetime(2024-01-01T10:01)")));
+        assertNotEquals(hashOfSingleton(new JsonDateTime("#datetime(2024-01-01T10:00)")),
+                hashOfSingleton(new JsonString("#datetime(2024-01-01T10:00)")));
+        assertNotEquals(hashOfSingleton(new JsonGeo("#geo(10,20)")), hashOfSingleton(new JsonGeo("#geo(10,21)")));
     }
 }

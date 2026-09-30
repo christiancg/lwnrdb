@@ -2,6 +2,7 @@ package org.techhouse.unit.bckg_ops;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mockStatic;
 
 import java.io.IOException;
@@ -119,6 +120,21 @@ public class EventProcessorHelperPendingWritesTest {
         }
         Assertions.assertTrue(isPending("group-a"));
         Assertions.assertTrue(isPending("group-b"));
+    }
+
+    @Test
+    public void test_earlier_ids_in_a_group_clear_even_when_a_later_entry_count_update_fails() {
+        final var batch = List.of(markedEvent("group-a"), markedEvent("group-b"), markedEvent("group-c"));
+        try (var ignoredIndexes = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
+            admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
+            admin.when(() -> AdminOperationHelper.updateEntryCount(anyString(), anyString(), any(),
+                    argThat(entry -> entry != null && "group-c".equals(entry.get_id()))))
+                    .thenThrow(new IOException("disk full"));
+            Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processBatch(List.copyOf(batch)));
+        }
+        Assertions.assertFalse(isPending("group-a"), "a fully rebuilt and counted id is reconciled");
+        Assertions.assertFalse(isPending("group-b"), "a later failure must not un-reconcile an earlier id");
+        Assertions.assertTrue(isPending("group-c"), "the id whose count update failed stays pending");
     }
 
     @Test

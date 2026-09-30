@@ -392,4 +392,20 @@ public class ScriptCallableTest {
             assertTrue(callable.test(document(2)));
         }
     }
+
+    private static final String DEEPLY_NESTED_RESULT = "let nested = {}; for (let i = 0; i < 200000; i++) { nested = { inner: nested }; } return nested;";
+
+    @Test
+    public void test_before_hook_returning_a_deeply_nested_document_reports_a_script_error() {
+        try (var callable = open("export default (doc, ctx) => { " + DEEPLY_NESTED_RESULT + " };")) {
+            assertThrows(ScriptCallableException.class, () -> callable.applyWithContext(document(1), new JsonObject()));
+        }
+    }
+
+    @Test
+    public void test_map_returning_a_deeply_nested_value_reports_a_script_error() {
+        try (var callable = open("export default (doc) => { " + DEEPLY_NESTED_RESULT + " };")) {
+            assertThrows(ScriptCallableException.class, () -> callable.apply(document(1)));
+        }
+    }
 }
