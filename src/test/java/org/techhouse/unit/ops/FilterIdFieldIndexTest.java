@@ -11,6 +11,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonNumber;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.FilterOperatorHelper;
 import org.techhouse.ops.req.agg.FieldOperatorType;
@@ -125,6 +126,43 @@ public class FilterIdFieldIndexTest extends FilterResolutionSupport {
         final var cache = seedIds("1", "2");
         assertIndexAgreesWithScan(cache,
                 new FieldOperator(FieldOperatorType.EQUALS, Globals.PK_FIELD, new JsonNumber(1)), Set.of());
+    }
+
+    @Test
+    public void test_filter_on_id_not_equals_a_number_operand_matches_nothing() throws IOException {
+        final var cache = seedIds("1", "2");
+        assertIndexAgreesWithScan(cache,
+                new FieldOperator(FieldOperatorType.NOT_EQUALS, Globals.PK_FIELD, new JsonNumber(1)), Set.of());
+    }
+
+    @Test
+    public void test_filter_on_id_not_equals_an_array_operand_matches_nothing() throws IOException {
+        final var cache = seedIds("a", "b", "c");
+        assertIndexAgreesWithScan(cache, new FieldOperator(FieldOperatorType.NOT_EQUALS, Globals.PK_FIELD, arrayOf()),
+                Set.of());
+    }
+
+    @Test
+    public void test_filter_on_id_not_equals_an_object_operand_matches_nothing() throws IOException {
+        final var cache = seedIds("a", "b", "c");
+        assertIndexAgreesWithScan(cache,
+                new FieldOperator(FieldOperatorType.NOT_EQUALS, Globals.PK_FIELD, new JsonObject()), Set.of());
+    }
+
+    @Test
+    public void test_filter_on_an_array_field_not_equals_a_non_array_value_still_matches() throws IOException {
+        final var cache = mixedTypeFixture();
+        addTyped(cache, "s1", "tags", new JsonString("x"));
+        assertIndexAgreesWithScan(cache, new FieldOperator(FieldOperatorType.NOT_EQUALS, "tags", arrayOf()),
+                Set.of("s1"));
+    }
+
+    @Test
+    public void test_filter_on_an_object_field_not_equals_a_non_object_value_still_matches() throws IOException {
+        final var cache = mixedTypeFixture();
+        addTyped(cache, "s1", "meta", new JsonString("x"));
+        assertIndexAgreesWithScan(cache, new FieldOperator(FieldOperatorType.NOT_EQUALS, "meta", new JsonObject()),
+                Set.of("s1"));
     }
 
     @Test
