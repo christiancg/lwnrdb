@@ -29,6 +29,8 @@ jobs:
     name: ${{ matrix.name }}
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -182,6 +184,19 @@ jobs:
       - name: Stop server
         if: ${{ always() && matrix.start_server }}
         run: pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
+      - name: Stop test262 Conformance since ${{ matrix.name }} failed
+        if: ${{ failure() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          job_id=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
+            --jq '.jobs[] | select(.name == "test262 Conformance" and .status != "completed") | .id')
+          if [ -n "$job_id" ]; then
+            echo "Cancelling test262 Conformance (job $job_id)"
+            gh api -X POST "repos/${{ github.repository }}/actions/jobs/$job_id/cancel"
+          else
+            echo "test262 Conformance already finished or not found; nothing to cancel"
+          fi
 
   test262:
     name: test262 Conformance
