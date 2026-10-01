@@ -177,4 +177,89 @@ public class EventProcessorHelperPendingWritesTest {
     public void test_clear_collection_on_an_unmarked_collection_is_a_no_op() {
         Assertions.assertDoesNotThrow(() -> pendingIndexWrites.clearCollection(TestGlobals.DB, "never-marked"));
     }
+
+    @Test
+    public void test_an_index_failure_still_applies_the_page_delta() {
+        final var event = markedEvent("delta-kept");
+        try (var mocked = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
+            admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
+            mocked.when(() -> IndexHelper.updateIndexes(anyString(), anyString(), anyString()))
+                    .thenThrow(new IOException("disk full"));
+
+            Assertions.assertThrows(IOException.class, () -> EventProcessorHelper.processEvent(event));
+
+            admin.verify(
+                    () -> AdminOperationHelper.updateEntryCount(anyString(), anyString(), any(), any(), anyLong()));
+        }
+        Assertions.assertTrue(isPending("delta-kept"), "the index is still stale, so the id stays pending");
+    }
+
+    @Test
+    public void test_a_group_index_failure_still_applies_every_page_delta() {
+        final var batch = List.of(markedEvent("delta-a"), markedEvent("delta-b"));
+        try (var mocked = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
+            admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any()))
+                    .thenThrow(new IOException("disk full"));
+
+            Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processBatch(List.copyOf(batch)));
+
+            admin.verify(() -> AdminOperationHelper.updateEntryCount(anyString(), anyString(), any(), any(), anyLong()),
+                    org.mockito.Mockito.times(2));
+        }
+        Assertions.assertTrue(isPending("delta-a"));
+        Assertions.assertTrue(isPending("delta-b"));
+    }
+
+    @Test
+    public void test_a_bulk_index_failure_still_applies_both_page_deltas() {
+        final var event = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, List.of(entryWithId("bulk-in")),
+                List.of(entryWithId("bulk-up")));
+        try (var mocked = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
+            admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any()))
+                    .thenThrow(new IOException("disk full"));
+
+            Assertions.assertThrows(IOException.class, () -> EventProcessorHelper.processEvent(event));
+
+            admin.verify(
+                    () -> AdminOperationHelper.bulkUpdateEntryCount(anyString(), anyString(), any(), any(), anyLong()),
+                    org.mockito.Mockito.times(2));
+        }
+    }
+
+    @Test
+    public void test_a_busy_collection_defers_its_event_without_applying_it() throws Exception {
+        final var event = markedEvent("busy");
+        try (var mocked = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
+            admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
+            mocked.when(() -> IndexHelper.updateIndexes(anyString(), anyString(), anyString()))
+                    .thenThrow(new org.techhouse.ex.CollectionBusyException("db|coll", 5L));
+
+            final var deferred = EventProcessorHelper.processBatch(List.of(event));
+
+            Assertions.assertEquals(List.of(event), deferred, "a busy collection is retried later, not dropped");
+            admin.verify(() -> AdminOperationHelper.updateEntryCount(anyString(), anyString(), any(), any(), anyLong()),
+                    org.mockito.Mockito.never());
+        }
+        Assertions.assertTrue(isPending("busy"));
+    }
+
+    @Test
+    public void test_a_busy_group_is_deferred_while_other_events_still_run() throws Exception {
+        final var busyA = markedEvent("busy-a");
+        final var busyB = markedEvent("busy-b");
+        pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "bulk-free");
+        final var other = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, List.of(entryWithId("bulk-free")),
+                List.of());
+        try (var mocked = mockStatic(IndexHelper.class)) {
+            mocked.when(() -> IndexHelper.bulkUpdateIndexes(anyString(), anyString(), any()))
+                    .thenThrow(new org.techhouse.ex.CollectionBusyException("db|coll", 5L)).thenCallRealMethod();
+
+            final var deferred = EventProcessorHelper.processBatch(List.of(busyA, busyB, other));
+
+            Assertions.assertEquals(List.of(busyA, busyB), deferred);
+        }
+        Assertions.assertFalse(isPending("bulk-free"), "a group that was not busy is still processed");
+    }
 }

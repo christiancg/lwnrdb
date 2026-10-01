@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -36,6 +37,7 @@ public final class TransactionRecovery {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
+    private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final String OBJECTS_FIELD = "objects";
     private static final String TRIGGER_RUN_ID_FIELD = "triggerRunId";
 
@@ -49,16 +51,22 @@ public final class TransactionRecovery {
                 () -> resolveMarkers(dtxId, true));
     }
 
-    private static boolean replayDurableSlice(String txId, List<String> collections, long preparedVersion,
-            ThrowingRunnable markerCleanup) throws Exception {
-        return replayDurableSlice(txId, collections, preparedVersion, 0L, markerCleanup);
+    private static long startupFenceFor(TxCommitLog.LocalCommitMarker marker) {
+        return marker == null || !clusterConfig.isEnabled() ? 0L : marker.writeVersion();
+    }
+
+    private static void replayUnfenced(String txId, List<String> collections, ThrowingRunnable markerCleanup)
+            throws Exception {
+        replayDurableSlice(txId, collections, 0L, 0L, markerCleanup);
     }
 
     private static boolean replayDurableSlice(String txId, List<String> collections, long preparedVersion,
             long timeoutMillis, ThrowingRunnable markerCleanup) throws Exception {
-        final var acquired = timeoutMillis > 0
-                ? locks.acquireWriteLocks(collections, timeoutMillis)
-                : locks.acquireWriteLocks(collections);
+        if (timeoutMillis > 0) {
+            locks.acquireWriteLocksNotHeld(collections, timeoutMillis);
+        } else {
+            locks.acquireWriteLocksNotHeld(collections);
+        }
         var applied = false;
         try {
             final var opIds = Tx2pcLog.sliceOpIds(txId);
@@ -99,7 +107,7 @@ public final class TransactionRecovery {
             throw e;
         } finally {
             if (applied) {
-                locks.releaseWriteLocks(acquired);
+                locks.releaseWriteLocksHeldByCurrentThread(collections);
             }
         }
     }
@@ -255,7 +263,7 @@ public final class TransactionRecovery {
             try {
                 final var marker = TxCommitLog.readLocalCommitMarker(txId);
                 final var finished = replayDurableSlice(txId, marker == null ? List.of() : marker.collections(),
-                        marker == null ? 0L : marker.writeVersion(), () -> TxCommitLog.clearLocalCommit(txId));
+                        startupFenceFor(marker), 0L, () -> TxCommitLog.clearLocalCommit(txId));
                 if (finished) {
                     logger.info("Finished transaction " + txId + " that was interrupted mid-commit at startup");
                 } else {
@@ -271,7 +279,7 @@ public final class TransactionRecovery {
     // Idempotent: buffered ops carry whole values, so re-applying the prefix a crash already applied
     // converges to the same state rather than compounding.
     public static void commitLocalFromDurable(String txId, List<String> collections) throws Exception {
-        replayDurableSlice(txId, collections, 0L, () -> TxCommitLog.clearLocalCommit(txId));
+        replayUnfenced(txId, collections, () -> TxCommitLog.clearLocalCommit(txId));
     }
 
     private static String dtxIdOf(String recordId) {

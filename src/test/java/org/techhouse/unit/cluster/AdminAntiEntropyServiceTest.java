@@ -26,6 +26,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.AntiEntropyService;
+import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
@@ -297,5 +298,53 @@ public class AdminAntiEntropyServiceTest {
                 "a converged node rewrote every database entry on every sweep, forever");
         assertSame(userPk, cache.getPkIndexAdminUserEntry("l14user"),
                 "a converged node rewrote the whole admin/users collection on every sweep, forever");
+    }
+
+    private Thread holdProceduresLockOfNewdb(java.util.concurrent.CountDownLatch release) throws Exception {
+        final var locks = IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
+        final var taken = new java.util.concurrent.CountDownLatch(1);
+        final var holder = new Thread(() -> {
+            try {
+                locks.lock("newdb", org.techhouse.config.Globals.PROCEDURES_FOLDER);
+                taken.countDown();
+                release.await();
+                locks.release("newdb", org.techhouse.config.Globals.PROCEDURES_FOLDER);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        holder.start();
+        assertTrue(taken.await(5, java.util.concurrent.TimeUnit.SECONDS));
+        return holder;
+    }
+
+    @Test
+    public void test_a_partial_conform_leaves_the_winning_epoch_unadopted() throws Exception {
+        final var conformer = TestUtils.getPrivateField(service, "conformer", Object.class);
+        final var realConformConfig = TestUtils.getPrivateField(conformer, "clusterConfig", ClusterConfig.class);
+        final var shortWait = org.mockito.Mockito.mock(ClusterConfig.class);
+        when(shortWait.replicationAckTimeoutMs()).thenReturn(150L);
+        TestUtils.setPrivateField(conformer, "clusterConfig", shortWait);
+        stubSnapshot(List.of(dbJson(List.of())), List.of(), List.of());
+        final var release = new java.util.concurrent.CountDownLatch(1);
+        final var holder = holdProceduresLockOfNewdb(release);
+        try {
+            service.reconcile();
+
+            assertNotNull(cache.getAdminDbEntry("newdb"), "the parts that could be conformed still are");
+            assertEquals(0L, adminEpoch.current(),
+                    "adopting the epoch after a skip makes the peer stop outranking this node, so the skipped"
+                            + " work would never be retried");
+
+            release.countDown();
+            holder.join(5000);
+            service.reconcile();
+
+            assertEquals(5L, adminEpoch.current(), "a complete conform adopts the winning epoch");
+        } finally {
+            release.countDown();
+            holder.join(5000);
+            TestUtils.setPrivateField(conformer, "clusterConfig", realConformConfig);
+        }
     }
 }

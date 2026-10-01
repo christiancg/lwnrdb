@@ -111,8 +111,9 @@ public class AdminAntiEntropyService implements MembershipListener {
                         + ": it lists no databases while this node holds some, which would unregister every one"
                         + " of them and delete every user");
             } else if (best != null) {
-                conformer.conform(best);
-                adminEpoch.adopt(best.getEpoch(), best.isEpochConfirmed());
+                if (conformer.conform(best)) {
+                    adminEpoch.adopt(best.getEpoch(), best.isEpochConfirmed());
+                }
                 antiEntropyService.reconcileNow();
             }
             if (answered) {

@@ -419,7 +419,7 @@ public final class TransactionOperationHelper {
         return result.stream();
     }
 
-    private static boolean ownershipMoved(Transaction transaction) {
+    static boolean ownershipMoved(Transaction transaction) {
         for (final var collId : transaction.getHeldLocks()) {
             final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
             if (parts.length == 2 && !coordinator.stillOwns(parts[0], parts[1])) {

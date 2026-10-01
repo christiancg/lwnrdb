@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.UUID;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -29,6 +30,10 @@ public final class BeforeHookHelper {
                 && !BeforeHookContext.hasHooksFor(dbName, collName, EventType.UPDATED)) {
             return null;
         }
+        if (hasConflictingIds(request)) {
+            return null;
+        }
+        request.set_id(assignedId(request.getObject(), request.get_id()));
         return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
             final var event = isInsert(dbName, collName, request.get_id()) ? EventType.CREATED : EventType.UPDATED;
             if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
@@ -67,7 +72,7 @@ public final class BeforeHookHelper {
                 final var objects = new ArrayList<>(request.getObjects());
                 for (var i = 0; i < objects.size(); i++) {
                     final var object = objects.get(i);
-                    final var id = idOf(object);
+                    final var id = assignedId(object, null);
                     final var isInsert = id == null || !existingIds.contains(id);
                     final var outcome = (isInsert ? creates : updates).apply(object, id, OperationType.BULK_SAVE);
                     if (outcome.isRejected()) {
@@ -102,6 +107,26 @@ public final class BeforeHookHelper {
             final var outcome = hooks.apply(document, request.get_id(), OperationType.DELETE);
             return outcome.isRejected() ? outcome.rejection() : null;
         }
+    }
+
+    private static String assignedId(JsonObject object, String requestId) {
+        if (requestId != null) {
+            if (!object.has(Globals.PK_FIELD)) {
+                object.addProperty(Globals.PK_FIELD, requestId);
+            }
+            return requestId;
+        }
+        if (object.has(Globals.PK_FIELD)) {
+            return idOf(object);
+        }
+        final var generated = UUID.randomUUID().toString();
+        object.addProperty(Globals.PK_FIELD, generated);
+        return generated;
+    }
+
+    private static boolean hasConflictingIds(SaveRequest request) {
+        final var objectId = idOf(request.getObject());
+        return request.get_id() != null && objectId != null && !request.get_id().equals(objectId);
     }
 
     private static String idOf(JsonObject object) {

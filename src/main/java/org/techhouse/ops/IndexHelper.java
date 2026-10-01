@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.FieldIndexEntry;
@@ -24,6 +25,7 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.index.IndexEntryReader;
@@ -159,13 +161,20 @@ public class IndexHelper {
         }
     }
 
+    private static void lockCollectionForMaintenance(String dbName, String collName) throws InterruptedException {
+        final var budget = Configuration.getInstance().getTransactionLockTimeoutMs();
+        if (!rl.tryLockRead(dbName, collName, budget)) {
+            throw new CollectionBusyException(Cache.getCollectionIdentifier(dbName, collName), budget);
+        }
+    }
+
     public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids)
             throws IOException, InterruptedException {
         final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
         if (existingIndexes.isEmpty() || ids.isEmpty()) {
             return;
         }
-        rl.lockRead(dbName, collName);
+        lockCollectionForMaintenance(dbName, collName);
         try {
             final var byId = new HashMap<String, DbEntry>();
             for (var doc : cache.getEntriesByIds(dbName, collName, new HashSet<>(ids))) {
@@ -195,7 +204,7 @@ public class IndexHelper {
         if (existingIndexes.isEmpty()) {
             return;
         }
-        rl.lockRead(dbName, collName);
+        lockCollectionForMaintenance(dbName, collName);
         try {
             final var current = cache.getEntriesByIds(dbName, collName, Set.of(id));
             final var doc = current.isEmpty() ? null : current.getFirst();

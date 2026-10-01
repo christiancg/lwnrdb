@@ -478,6 +478,11 @@ public class FileSystem {
         return documentPageStore.pageFileLengths(dbName, collName);
     }
 
+    public void healTornPageTails(String dbName, String collName) throws IOException {
+        TornPageTail.healAll(paths, dbName, collName, pageFileLengths(dbName, collName).keySet(),
+                () -> readWholePkIndexFile(dbName, collName));
+    }
+
     public long pageFileCount(String dbName, String collName) throws IOException {
         return documentPageStore.pageFileCount(dbName, collName);
     }

@@ -99,10 +99,21 @@ public final class EJsonInterop {
         if (!mode.hostMode() || !JsonCustom.isJsonCustom(asString)) {
             return asString;
         }
+        return readableCustom(asString, path);
+    }
+
+    private static JsonBaseElement readableCustom(JsonString customShaped, String path) {
         try {
-            return CustomTypeFactory.getCustomTypeInstance(asString);
+            return CustomTypeFactory.getCustomTypeInstance(customShaped);
         } catch (NonRegisteredCustomTypeException | BadImplementationCustomTypeException refused) {
             throw new TypeErrorException("Cannot serialize" + at(path) + ": " + refused.getMessage());
+        }
+    }
+
+    private static void refuseUnreadableKey(String key, Conversion mode, String path) {
+        final var asString = new JsonString(key);
+        if (mode.hostMode() && JsonCustom.isJsonCustom(asString)) {
+            readableCustom(asString, path);
         }
     }
 
@@ -157,6 +168,7 @@ public final class EJsonInterop {
             if (!object.isEnumerable(key)) {
                 continue;
             }
+            refuseUnreadableKey(key, mode, memberPath(path, key));
             final var converted = convert(ownValue(object, key, mode.ops()), mode, memberPath(path, key));
             if (converted != null) {
                 result.add(key, converted);

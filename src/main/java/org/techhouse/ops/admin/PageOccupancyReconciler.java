@@ -41,6 +41,7 @@ public final class PageOccupancyReconciler {
     }
 
     public static boolean reconcile(String dbName, String collName) throws Exception {
+        fs.healTornPageTails(dbName, collName);
         final var fileLengths = fs.pageFileLengths(dbName, collName);
         final var rows = rowsByPage(cache.getAdminPageEntries(dbName, collName));
         if (agreesWithFiles(rows, fileLengths)) {

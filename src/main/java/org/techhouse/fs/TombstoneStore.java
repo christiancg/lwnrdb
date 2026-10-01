@@ -93,6 +93,11 @@ final class TombstoneStore {
         lock.lock();
         try {
             final var parsed = parseTombstones(file);
+            if (parsed.unrecognised()) {
+                logger.error("No line in " + file.getName() + " could be read as a tombstone entry; leaving it"
+                        + " untouched rather than compacting it to nothing");
+                return;
+            }
             final var kept = new LinkedHashMap<String, Long>();
             for (final var entry : parsed.entries().entrySet()) {
                 if (entry.getValue() >= minVersionToKeep) {

@@ -203,4 +203,39 @@ public class ReduceOperatorHelperTest {
         initial.add("sum", new JsonNumber(0));
         return initial;
     }
+
+    private static String foldInsideTransaction(java.util.UUID client) {
+        final var request = new org.techhouse.ops.req.AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(idFold()));
+        final var response = IocContainer.get(OperationProcessor.class).processMessage(request, client);
+        return ((org.techhouse.ops.resp.AggregateResponse) response).getResults().getFirst().get("folded")
+                .asJsonString().getValue();
+    }
+
+    @Test
+    public void test_a_fold_inside_a_transaction_answers_the_same_warm_and_cold() {
+        for (final var id : List.of("delta", "alpha", "charlie", "bravo", "echo", "foxtrot")) {
+            saveDoc(id);
+        }
+        final var processor = IocContainer.get(OperationProcessor.class);
+        final var client = IocContainer.get(org.techhouse.conn.ClientTracker.class).registerForwardedClient("folder");
+        processor.processMessage(new org.techhouse.ops.req.StartTransactionRequest(), client);
+        final var buffered = new JsonObject();
+        buffered.add(Globals.PK_FIELD, new JsonString("golf"));
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        save.set_id("golf");
+        save.setObject(buffered);
+        processor.processMessage(save, client);
+        try {
+            final var warm = foldInsideTransaction(client);
+            IocContainer.get(Cache.class).userCache().evictCollectionDocuments(TestGlobals.DB, TestGlobals.COLL);
+            final var cold = foldInsideTransaction(client);
+
+            assertEquals("|alpha|bravo|charlie|delta|echo|foxtrot|golf", warm,
+                    "the transaction's overlay must not discard the defined scan order of the committed rows");
+            assertEquals(warm, cold);
+        } finally {
+            processor.processMessage(new org.techhouse.ops.req.RollbackTransactionRequest(), client);
+        }
+    }
 }

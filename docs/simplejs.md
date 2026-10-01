@@ -369,10 +369,12 @@ catchable `TypeError` too — `db.save` needs a document and `db.aggregate`, `db
 a script can read a collection larger than its memory budget. Each batch is an ordinary
 `AGGREGATE` with `SKIP`/`LIMIT` appended to a *copy* of the caller's pipeline, so it is
 authorized, schema-checked and cluster-routed exactly like a hand-written `db.aggregate` and adds
-no cluster surface at all. It is **not** a snapshot (paging over a live collection can show a
-document twice or not at all), **not** self-ordering (without a `SORT` step the paging is
-meaningless, but injecting one would change the results of a pipeline ending in `GROUP_BY`), and
-**not** stateful server-side (abandoning it holds nothing to release).
+no cluster surface at all. A pipeline that does not already end in a defined order is paged with
+a `SORT` on `_id` appended before `SKIP`/`LIMIT`, because an unordered source enumerates differently
+warm and cold and an eviction between batches would otherwise repeat or skip rows; rows with no
+`_id` (`GROUP_BY` output) keep their stream position under SORT's own fallback. It is still **not**
+a snapshot (a write landing between batches can show a document twice or not at all), and **not**
+stateful server-side (abandoning it holds nothing to release).
 
 **`db.transaction(fn)`** runs `fn` in a transaction, committing on return and rolling back on
 throw. The scoped-callback form is what makes it safe: a transaction holds each written

@@ -186,4 +186,48 @@ public class TwoPhaseParticipantFencingTest {
         assertTrue(transaction.getHeldLocks().isEmpty(), "a finished commit releases everything it took");
         clientTracker.removeById(clientId);
     }
+
+    private static org.techhouse.cluster.ClusterCoordinator swapCoordinator(
+            org.techhouse.cluster.ClusterCoordinator replacement) throws Exception {
+        final var field = TransactionOperationHelper.class.getDeclaredField("coordinator");
+        field.setAccessible(true);
+        final var original = (org.techhouse.cluster.ClusterCoordinator) field.get(null);
+        field.set(null, replacement);
+        return original;
+    }
+
+    private boolean prepareWithOwnership(String id, boolean stillOwner) throws Exception {
+        final var clientId = clientTracker.registerForwardedClient("participant");
+        TransactionOperationHelper.start(clientId);
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(document(id));
+        request.set_id(id);
+        TransactionOperationHelper.bufferSave(request, transaction);
+        final var coordinator = org.mockito.Mockito.mock(org.techhouse.cluster.ClusterCoordinator.class);
+        org.mockito.Mockito.when(coordinator.stillOwns(TestGlobals.DB, TestGlobals.COLL)).thenReturn(stillOwner);
+        final var original = swapCoordinator(coordinator);
+        try {
+            return TwoPhaseParticipant.prepare(clientId, "127.0.0.1:5000", List.of("127.0.0.1:5000"));
+        } finally {
+            swapCoordinator(original);
+            TransactionOperationHelper.abort(clientId);
+            clientTracker.removeById(clientId);
+            final var txId = transaction.getTransactionId().toString();
+            if (Tx2pcLog.isPrepared(txId)) {
+                Tx2pcLog.deleteParticipantMarker(txId);
+            }
+        }
+    }
+
+    @Test
+    public void test_prepare_votes_no_when_ownership_moved() throws Exception {
+        assertFalse(prepareWithOwnership("moved", false),
+                "a participant that no longer owns a collection it buffered must not vote to commit it");
+    }
+
+    @Test
+    public void test_prepare_votes_yes_when_still_owner() throws Exception {
+        assertTrue(prepareWithOwnership("kept", true));
+    }
 }

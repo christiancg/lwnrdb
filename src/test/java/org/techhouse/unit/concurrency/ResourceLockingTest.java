@@ -366,4 +366,39 @@ public class ResourceLockingTest {
             rl.release("", "coll");
         });
     }
+
+    @Test
+    public void test_acquire_write_locks_not_held_skips_a_lock_this_thread_already_holds() throws Exception {
+        final var rl = new ResourceLocking();
+        final var held = Cache.getCollectionIdentifier("db", "held");
+        final var free = Cache.getCollectionIdentifier("db", "free");
+        rl.lockWrite(held);
+
+        final var acquired = rl.acquireWriteLocksNotHeld(List.of(held, free), 1000);
+
+        assertEquals(List.of(free), acquired);
+        assertEquals(1, locks(rl).get(held).getWriteHoldCount(), "an already-held lock must not be re-entered");
+        rl.releaseWriteLocksHeldByCurrentThread(List.of(held, free));
+    }
+
+    @Test
+    public void test_release_write_locks_held_by_current_thread_unwinds_every_reentrant_hold() throws Exception {
+        final var rl = new ResourceLocking();
+        final var id = Cache.getCollectionIdentifier("db", "reentrant");
+        rl.lockWrite(id);
+        rl.lockWrite(id);
+        rl.acquireWriteLocksNotHeld(List.of(id));
+
+        rl.releaseWriteLocksHeldByCurrentThread(List.of(id));
+
+        assertFalse(rl.isWriteLockedByCurrentThread(id));
+        final var acquiredElsewhere = new AtomicBoolean(false);
+        final var other = new Thread(() -> {
+            acquiredElsewhere.set(rl.tryLockWrite("db", "reentrant"));
+            rl.releaseWrite("db", "reentrant");
+        });
+        other.start();
+        other.join(5000);
+        assertTrue(acquiredElsewhere.get(), "another thread must be able to take the lock afterwards");
+    }
 }

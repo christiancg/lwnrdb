@@ -6,6 +6,7 @@ import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -19,6 +20,7 @@ import org.techhouse.ops.ScriptOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.FindByIdRequest;
+import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.resp.AggregateAnalyzeResponse;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
@@ -92,9 +94,9 @@ public final class ReadPathHelper {
             }
             final List<org.techhouse.ejson.elements.JsonObject> results;
             if (overlay != null && !overlay.isEmpty()) {
-                // Passing a prepared source stream also disables the index-backed source fast-paths, so
-                // the transaction's overlaid documents are honoured exactly.
-                final var committed = cache.initializeStreamIfNecessary(null, dbName, collName);
+                final var committed = startsWithReduce(aggregateRequest)
+                        ? cache.streamCollectionInScanOrder(dbName, collName).map(DbEntry::getData)
+                        : cache.initializeStreamIfNecessary(null, dbName, collName);
                 final var source = TransactionOperationHelper.applyOverlayToStream(activeTransaction,
                         Cache.getCollectionIdentifier(dbName, collName), committed);
                 results = AggregationOperationHelper.processAggregation(aggregateRequest, source, activeTransaction);
@@ -123,5 +125,10 @@ public final class ReadPathHelper {
                 AnalyzeContext.clear();
             }
         }
+    }
+
+    private static boolean startsWithReduce(AggregateRequest aggregateRequest) {
+        final var steps = aggregateRequest.getAggregationSteps();
+        return steps != null && !steps.isEmpty() && steps.getFirst().getType() == AggregationStepType.REDUCE;
     }
 }

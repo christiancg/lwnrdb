@@ -1,5 +1,6 @@
 package org.techhouse.cluster;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -123,13 +124,13 @@ public class ConformDatabaseBarrierTest {
     public void test_conform_skips_a_collection_while_its_database_is_being_dropped() throws Exception {
         holdTheDatabaseExclusivelyElsewhere();
 
-        conformer.conform(snapshot());
+        assertFalse(conformer.conform(snapshot()), "a round that skipped a collection is not a complete conform");
 
         assertNull(cache.getAdminCollectionEntry(DB, COLL),
                 "a collection registered under a running drop would be deleted with no lock held on it");
 
         releaseHolder();
-        conformer.conform(snapshot());
+        assertTrue(conformer.conform(snapshot()));
 
         assertNotNull(cache.getAdminCollectionEntry(DB, COLL), "the next round must register it");
     }
@@ -154,12 +155,12 @@ public class ConformDatabaseBarrierTest {
         registerTheDatabaseLocally();
         holdTheDatabaseExclusivelyElsewhere();
 
-        conformer.conform(snapshotWithoutTheDatabase());
+        assertFalse(conformer.conform(snapshotWithoutTheDatabase()));
 
         assertStillRegistered("the quarantine must wait for the drop holding the database barrier");
 
         releaseHolder();
-        conformer.conform(snapshotWithoutTheDatabase());
+        assertTrue(conformer.conform(snapshotWithoutTheDatabase()));
 
         assertQuarantined();
     }

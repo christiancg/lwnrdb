@@ -1205,6 +1205,9 @@ REG_NULLFOLD = "idxagg_reg_nullfold"
 REG_CUSTOM_ORDER = "idxagg_reg_customorder"
 REG_COMPLEMENT_KINDS = "idxagg_reg_complkinds"
 REG_COMPLEMENT_NULL = "idxagg_reg_complnull"
+REG_CONJ_ORDER = "idxagg_reg_conjorder"
+REG_NOID_DUP = "idxagg_reg_noiddup"
+REG_NEAREST_TIES = "idxagg_reg_nearestties"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -1681,6 +1684,73 @@ def probe_a_conjunction_after_a_row_reshaping_step(c):
               detail=f"got {[row.get('category') for row in and_rows]}")
 
 
+def probe_a_sorted_conjunction_keeps_its_order(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CONJ_ORDER})
+    rows = (("o1", 9, "admin", "yes"), ("o2", 3, "user", "yes"), ("o3", 7, "admin", "no"),
+            ("o4", 1, "admin", "yes"), ("o5", 5, "user", "no"), ("o6", 8, "user", "yes"))
+    for doc_id, score, role, active in rows:
+        save_doc(c, REG_CONJ_ORDER, {"_id": doc_id, "score": score, "role": role, "active": active})
+    wait_for_background()
+
+    def conjunction(conjunction_type):
+        return {"type": "FILTER", "operator": {"conjunctionType": conjunction_type, "operators": [
+            {"fieldOperatorType": "EQUALS", "field": "role", "value": "admin"},
+            {"fieldOperatorType": "EQUALS", "field": "active", "value": "yes"}]}}
+
+    sort = {"type": "SORT", "fieldName": "score", "ascending": True}
+    limit = {"type": "LIMIT", "limit": 3}
+    for indexed in (False, True):
+        if indexed:
+            for field in ("score", "role"):
+                c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_CONJ_ORDER,
+                        "fieldName": field})
+            wait_for_indexes(c, [(REG_CONJ_ORDER, "score"), (REG_CONJ_ORDER, "role")])
+        label = "indexed" if indexed else "scan"
+        for kind in ("AND", "OR", "XOR", "NOR", "NAND"):
+            sorted_first = agree_ordered_ids(agg(c, REG_CONJ_ORDER, [sort, conjunction(kind), limit]))
+            filtered_first = agree_ordered_ids(agg(c, REG_CONJ_ORDER, [conjunction(kind), sort, limit]))
+            check(f"SORT then {kind} keeps the sort order ({label})", sorted_first == filtered_first,
+                  detail=f"SORT first={sorted_first}  FILTER first={filtered_first}")
+
+
+def probe_a_conjunction_keeps_equal_rows_without_an_id(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NOID_DUP})
+    for doc_id, extra in (("d1", "a"), ("d2", "b"), ("d3", "c")):
+        save_doc(c, REG_NOID_DUP, {"_id": doc_id, "category": "books", "extra": extra})
+    wait_for_background()
+    reshape = {"type": "MAP", "operators": [{"fieldName": "_id"}, {"fieldName": "extra"}]}
+    books = {"fieldOperatorType": "EQUALS", "field": "category", "value": "books"}
+    plain = agg(c, REG_NOID_DUP, [reshape, {"type": "FILTER", "operator": books}, {"type": "COUNT"}])
+    plain_count = ((plain.get("results") or [{}])[0]).get("count")
+    for kind in ("AND", "OR"):
+        conjoined = agg(c, REG_NOID_DUP, [reshape,
+                                          {"type": "FILTER", "operator": {"conjunctionType": kind,
+                                                                          "operators": [books]}},
+                                          {"type": "COUNT"}])
+        count = ((conjoined.get("results") or [{}])[0]).get("count")
+        check(f"a single-operand {kind} counts the same equal rows a plain FILTER does",
+              count == plain_count == 3, detail=f"FILTER={plain_count}  {kind}={count}")
+
+
+def probe_nearest_ties_are_broken_on_id(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NEAREST_TIES})
+    for doc_id, vector in (("t3", "#vector(3.0,0.0)"), ("t1", "#vector(1.0,0.0)"), ("t2", "#vector(2.0,0.0)"),
+                           ("t9", "#vector(0.0,1.0)")):
+        save_doc(c, REG_NEAREST_TIES, {"_id": doc_id, "embedding": vector})
+    wait_for_background()
+
+    def nearest(k):
+        return [{"type": "FILTER", "operator": {"customOperatorName": "nearest", "field": "embedding",
+                                                "value": "#vector(1.0,0.0)", "k": k, "exact": True}}]
+
+    picks = {tuple(agree_ordered_ids(agg(c, REG_NEAREST_TIES, nearest(1)))) for _ in range(5)}
+    check("nearest k=1 over equally-scored documents picks the smallest _id", picks == {("t1",)},
+          detail=f"picks={sorted(picks)}")
+    check("nearest lists equally-scored documents in _id order",
+          agree_ordered_ids(agg(c, REG_NEAREST_TIES, nearest(3))) == ["t1", "t2", "t3"],
+          detail=f"got {agree_ordered_ids(agg(c, REG_NEAREST_TIES, nearest(3)))}")
+
+
 def probe_a_field_operator_without_a_value_is_refused(c):
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_VALUELESS})
     save_doc(c, REG_VALUELESS, {"_id": "v1", "name": "alice"})
@@ -1882,6 +1952,9 @@ def regression_suite(c):
     probe_indexing_a_field_written_as_null_is_consistent(c)
     probe_custom_sort_agrees_with_the_range_filter(c)
     probe_complements_agree_between_index_and_scan(c)
+    probe_a_sorted_conjunction_keeps_its_order(c)
+    probe_a_conjunction_keeps_equal_rows_without_an_id(c)
+    probe_nearest_ties_are_broken_on_id(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════

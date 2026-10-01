@@ -125,6 +125,20 @@ def test_bulk_save_atomic(c):
                find_by_id(c, COLL, "bob").get("status") == "NOT_FOUND")
 
 
+def test_multiple_of_rejects_a_tiny_non_multiple(c):
+    section("multipleOf rejects a nonzero value smaller than its divisor")
+    check_status("save a multipleOf schema",
+                 save_schema(c, COLL, {"type": "object", "properties": {
+                     "big": {"multipleOf": 1000000}, "cents": {"multipleOf": 0.01}}}), "OK")
+    check_code("0.001 is not a multiple of 1000000", save(c, COLL, {"_id": "tiny", "big": 0.001}), "ERROR", "400-7")
+    check("the refused document was not persisted", find_by_id(c, COLL, "tiny").get("status") == "NOT_FOUND")
+    check_status("2000000 is a multiple of 1000000", save(c, COLL, {"_id": "whole", "big": 2000000}), "OK")
+    check_status("0 is a multiple of anything", save(c, COLL, {"_id": "zero", "big": 0}), "OK")
+    check_status("19.99 is a multiple of 0.01", save(c, COLL, {"_id": "price", "cents": 19.99}), "OK")
+    check_code("19.995 is not a multiple of 0.01", save(c, COLL, {"_id": "halfcent", "cents": 19.995}),
+               "ERROR", "400-7")
+
+
 def test_invalid_schema_rejected(c):
     section("Invalid schema rejected")
     check_code("schema with a bad keyword value is rejected",
@@ -228,6 +242,7 @@ def main():
     groups = [
         test_save_and_enforce_schema,
         test_bulk_save_atomic,
+        test_multiple_of_rejects_a_tiny_non_multiple,
         test_invalid_schema_rejected,
         test_cyclic_ref_rejected,
         test_schema_warnings,

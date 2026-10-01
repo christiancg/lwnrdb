@@ -26,7 +26,8 @@ public final class TwoPhaseParticipant {
 
     public static boolean prepare(UUID clientId, String coordinatorAddress, List<String> participants) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
-        if (transaction == null || transaction.isAborted() || coordinator.hasNotTransactionQuorum()) {
+        if (transaction == null || transaction.isAborted() || coordinator.hasNotTransactionQuorum()
+                || TransactionOperationHelper.ownershipMoved(transaction)) {
             return false;
         }
         try {

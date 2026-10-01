@@ -289,4 +289,29 @@ public class SchemaValidatorTest {
         s.add("type", new JsonString("strong"));
         assertFalse(validator.validate(new JsonString("x"), new JsonSchema(s)).isValid());
     }
+
+    @Test
+    public void test_multiple_of_rejects_a_tiny_non_multiple() {
+        assertFalse(ok("{\"multipleOf\":1000000}", "0.001"));
+        assertFalse(ok("{\"multipleOf\":1}", "0.0000000001"));
+    }
+
+    @Test
+    public void test_multiple_of_accepts_a_decimal_multiple() {
+        assertTrue(ok("{\"multipleOf\":0.1}", "0.3"));
+        assertTrue(ok("{\"multipleOf\":0.01}", "19.99"));
+    }
+
+    @Test
+    public void test_multiple_of_accepts_zero_and_negatives() {
+        assertTrue(ok("{\"multipleOf\":7}", "0"));
+        assertTrue(ok("{\"multipleOf\":7}", "-14"));
+        assertFalse(ok("{\"multipleOf\":7}", "-15"));
+    }
+
+    @Test
+    public void test_multiple_of_keeps_precision_for_large_quotients() {
+        assertFalse(ok("{\"multipleOf\":1}", "1000000000000.5"));
+        assertTrue(ok("{\"multipleOf\":3}", "3000000000000"));
+    }
 }

@@ -306,4 +306,47 @@ public class OperationProcessorBeforeHookTest {
         request.setObjects(List.of(object));
         assertEquals(ErrorCode.BEFORE_HOOK_REJECTED.getCode(), processor.processMessage(request).getErrorCode());
     }
+
+    private org.techhouse.ops.resp.OperationResponse saveWithoutAnId() {
+        final var object = new JsonObject();
+        object.add("qty", new JsonNumber(1));
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(object);
+        return processor.processMessage(request);
+    }
+
+    @Test
+    public void test_an_idless_save_hands_the_hook_its_generated_id() throws Exception {
+        installHook("seer", "seer", "export default (d) => ({ ...d, seenId: d._id });", EventType.CREATED);
+
+        final var response = saveWithoutAnId();
+
+        assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
+        final var id = ((org.techhouse.ops.resp.SaveResponse) response).get_id();
+        assertEquals(id, Objects.requireNonNull(find(id)).get("seenId").asJsonString().getValue(),
+                "a hook must see the same _id the document is stored under, as it does inside a transaction");
+    }
+
+    @Test
+    public void test_an_idless_save_whose_hook_drops_the_id_is_refused() throws Exception {
+        installHook("fresh", "fresh", "export default () => ({ fresh: true });", EventType.CREATED);
+
+        assertEquals(ErrorCode.BEFORE_HOOK_REJECTED.getCode(), saveWithoutAnId().getErrorCode(),
+                "the standalone path must refuse what the transactional path refuses");
+    }
+
+    @Test
+    public void test_an_idless_bulk_save_hands_the_hook_its_generated_id() throws Exception {
+        installHook("bulkSeer", "bulkSeer", "export default (d) => ({ ...d, seenId: d._id });", EventType.CREATED);
+        final var object = new JsonObject();
+        object.add("qty", new JsonNumber(1));
+        final var request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObjects(List.of(object));
+
+        final var response = processor.processMessage(request);
+
+        assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
+        final var id = ((org.techhouse.ops.resp.BulkSaveResponse) response).getInserted().getFirst();
+        assertEquals(id, Objects.requireNonNull(find(id)).get("seenId").asJsonString().getValue());
+    }
 }

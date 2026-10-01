@@ -78,12 +78,12 @@ public class FilterConjunctionDedupTest {
     }
 
     @Test
-    public void test_or_falls_back_to_content_dedup_without_an_id() throws IOException {
+    public void test_or_keeps_equal_rows_without_an_id() throws IOException {
         final var source = List.of(doc(null, "admin", "yes"), doc(null, "admin", "yes"), doc(null, "user", "yes"));
 
         final var result = run(source, conjunction(ConjunctionOperatorType.OR));
 
-        assertEquals(2, result.size(), "documents without _id must still deduplicate on content");
+        assertEquals(3, result.size(), "a conjunction filters rows; it must not collapse two equal rows into one");
     }
 
     @Test

@@ -381,7 +381,7 @@ public class FilterConjunctionOperatorTest {
     }
 
     @Test
-    public void test_and_conjunction_collapses_equal_rows_without_an_id_like_or_does() throws IOException {
+    public void test_and_and_or_keep_equal_rows_without_an_id() throws IOException {
         final var first = rowWithoutId("books", 10);
         final var duplicate = rowWithoutId("books", 10);
         final var operators = List.<BaseOperator>of(
@@ -397,7 +397,7 @@ public class FilterConjunctionOperatorTest {
                         Stream.of(first, duplicate), TestGlobals.DB, TestGlobals.COLL)
                 .toList();
 
-        assertEquals(1, and.size());
-        assertEquals(1, or.size());
+        assertEquals(2, and.size());
+        assertEquals(2, or.size());
     }
 }

@@ -367,6 +367,22 @@ def test_value_types(c):
                '"v":42' in raw and '"v":42.0' not in raw, detail=raw.strip())
 
 
+def test_a_malformed_document_is_refused_as_a_client_error(c):
+    section("A request with a missing JSON value is refused as invalid, not answered with a server error")
+    for label, document in (("a doubled comma in an array", '{"_id":"mal1","v":[1,,2]}'),
+                            ("a missing object value", '{"_id":"mal2","v":,"w":1}'),
+                            ("a leading comma in an array", '{"_id":"mal3","v":[,1]}')):
+        line = ('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES
+                + '","object":' + document + '}')
+        refused = c.send_raw(line)
+        check(f"{label} is refused as an invalid command, not a server error",
+              refused.get("status") == "ERROR" and not str(refused.get("errorCode") or "").startswith("500"),
+              detail=f"status={refused.get('status')} code={refused.get('errorCode')} msg={refused.get('message')!r}")
+    for doc_id in ("mal1", "mal2", "mal3"):
+        check(f"nothing was stored for {doc_id}", find_by_id(c, COLL_TYPES, doc_id).get("status") != "OK")
+    check_field("the connection still answers afterwards", find_by_id(c, COLL_TYPES, "t_int"), "object.v", 42)
+
+
 def test_filter_operators(c):
     section("FILTER — every field operator across types (scan path)")
 
@@ -984,6 +1000,7 @@ def main():
         test_crud,
         test_top_level_id,
         test_value_types,
+        test_a_malformed_document_is_refused_as_a_client_error,
         test_filter_operators,
         test_filter_with_indexes,
         test_conjunctions,

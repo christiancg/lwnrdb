@@ -417,8 +417,8 @@ window so no other writer interleaves). A replication timeout returns `503-3` bu
 commit stands.
 
 **Cross-owner two-phase commit.** When a transaction spans multiple owners the edge runs
-2PC: `PREPARE_TX` to every participant (each votes yes only after durably recording a
-PREPARED marker and confirming quorum), then — on a unanimous yes — the coordinator
+2PC: `PREPARE_TX` to every participant (each votes yes only after confirming quorum, confirming
+it still owns every collection it buffered, and durably recording a PREPARED marker), then — on a unanimous yes — the coordinator
 **durably records the commit decision** and drives `COMMIT_TX` to all. Any no vote or
 unreachable participant drives `ABORT_TX` to all and returns `409-7 TRANSACTION_ABORTED`.
 Each participant's commit reuses the same atomic `REPLICATE_TX` batch to its own replicas.
@@ -432,7 +432,9 @@ participant asks the coordinator via `TX_STATUS` what to do, and a coordinator t
 commit re-drives `COMMIT_TX`. The participant does **not** hold its write locks while in doubt —
 clients may write those collections meanwhile — so the replay is version-aware instead: the marker
 records the write-clock version at prepare time, and any document written above that version is
-left alone rather than overwritten with the pre-crash value. Recovery re-runs on every
+left alone rather than overwritten with the pre-crash value. The same fence also skips the
+transaction's own later ops on an id its pre-crash apply already wrote, so a slice that saves one id
+twice can finish with the first value — a known gap (see CLAUDE.md). Recovery re-runs on every
 membership change and on a periodic sweep, which also GCs old outcome markers and logs
 long in-doubt transactions.
 
@@ -627,7 +629,10 @@ When that winner is a peer rather than this node, it **conforms** local state to
 snapshot users then delete absent ones; create missing databases and reconcile owners;
 create missing collections and reconcile their indexes; then drop collections and databases
 absent from the snapshot. Each create/drop takes the target collection's write lock,
-mirroring the DDL handlers. A document reconciliation pass follows, so freshly materialized
+mirroring the DDL handlers, and skips the target for the round if that lock stays busy. The
+winning epoch is adopted only when nothing was skipped: adopting it after a partial conform
+would leave this node equal to the peer, and an equal epoch outranks only on node id, so the
+skipped work might never be retried. A document reconciliation pass follows, so freshly materialized
 collections repopulate. Because authority is the highest epoch, a stale rejoining node
 never overwrites live state — it catches up instead.
 

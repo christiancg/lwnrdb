@@ -263,4 +263,19 @@ public class TransactionBeforeHookTest {
             processor.processMessage(new RollbackTransactionRequest(), client);
         }
     }
+
+    @Test
+    public void test_an_idless_transactional_save_whose_hook_drops_the_id_is_refused() throws Exception {
+        installHook("freshTx", "freshTx", "export default () => ({ fresh: true });", EventType.CREATED);
+        final var client = newClient();
+        processor.processMessage(new StartTransactionRequest(), client);
+        final var object = new JsonObject();
+        object.add("qty", new JsonNumber(1));
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(object);
+
+        assertEquals(ErrorCode.BEFORE_HOOK_REJECTED.getCode(),
+                processor.processMessage(request, client).getErrorCode());
+        processor.processMessage(new org.techhouse.ops.req.RollbackTransactionRequest(), client);
+    }
 }

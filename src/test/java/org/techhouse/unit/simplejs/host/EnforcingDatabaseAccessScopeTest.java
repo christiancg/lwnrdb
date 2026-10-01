@@ -141,4 +141,38 @@ public class EnforcingDatabaseAccessScopeTest {
 
         assertDoesNotThrow(() -> db.findById(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME, "any"));
     }
+
+    private static org.techhouse.ejson.elements.JsonArray pipeline(String... types) {
+        final var steps = new org.techhouse.ejson.elements.JsonArray();
+        for (final var type : types) {
+            final var step = new JsonObject();
+            step.add("type", new JsonString(type));
+            if ("SORT".equals(type)) {
+                step.add("fieldName", new JsonString("_id"));
+                step.add("ascending", new org.techhouse.ejson.elements.JsonBoolean(true));
+            } else {
+                step.add("limit", new org.techhouse.ejson.elements.JsonNumber(5));
+            }
+            steps.add(step);
+        }
+        return steps;
+    }
+
+    @Test
+    public void test_orders_results_reports_a_trailing_sort_as_ordered() {
+        assertTrue(scoped().ordersResults(TestGlobals.DB, TestGlobals.COLL, pipeline("SORT", "LIMIT")));
+    }
+
+    @Test
+    public void test_orders_results_reports_a_bare_limit_as_unordered() {
+        assertFalse(scoped().ordersResults(TestGlobals.DB, TestGlobals.COLL, pipeline("LIMIT")));
+    }
+
+    @Test
+    public void test_orders_results_leaves_an_unparseable_pipeline_to_aggregate() {
+        final var steps = new org.techhouse.ejson.elements.JsonArray();
+        steps.add(new JsonString("not a step"));
+
+        assertTrue(scoped().ordersResults(TestGlobals.DB, TestGlobals.COLL, steps));
+    }
 }

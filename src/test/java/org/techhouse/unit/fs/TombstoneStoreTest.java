@@ -98,6 +98,17 @@ public class TombstoneStoreTest {
     }
 
     @Test
+    public void test_compact_leaves_a_file_where_every_line_is_malformed_untouched() throws Exception {
+        final var content = "a|1" + System.lineSeparator() + "b|2" + System.lineSeparator();
+        java.nio.file.Files.writeString(tombstoneFile().toPath(), content);
+
+        fs.compactTombstones(TestGlobals.DB, TestGlobals.COLL, 0L);
+
+        assertEquals(content, java.nio.file.Files.readString(tombstoneFile().toPath()),
+                "compaction must not rewrite a file it understood none of");
+    }
+
+    @Test
     public void test_a_torn_last_line_is_healed_on_read() throws Exception {
         fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "surviving", 5L);
         java.nio.file.Files.writeString(tombstoneFile().toPath(),

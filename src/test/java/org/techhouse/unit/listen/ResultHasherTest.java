@@ -195,12 +195,13 @@ public class ResultHasherTest {
     }
 
     @Test
-    public void test_orders_results_when_a_ranking_operator_is_nested_in_an_xor_conjunction() {
+    public void test_a_ranking_operator_nested_in_an_xor_conjunction_hashes_unordered() {
         final var conjunction = new ConjunctionOperator(ConjunctionOperatorType.XOR,
                 List.of(nearest(), equalsName("x")));
         final var filter = new FilterAggregationStep(conjunction);
 
-        assertTrue(ResultHasher.ordersResults(List.of(filter)));
+        assertFalse(ResultHasher.ordersResults(List.of(filter)),
+                "a source XOR groups its matches, so it does not keep the ranking's order");
     }
 
     @Test

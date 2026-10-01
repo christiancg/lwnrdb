@@ -33,6 +33,8 @@ public class JsonReader {
             return parseArray(skipOneToken(tokens));
         } else if (firstToken.equals(JsonSyntaxToken.LEFT_BRACE)) {
             return parseObject(skipOneToken(tokens));
+        } else if (firstToken instanceof JsonSyntaxToken) {
+            throw new MalformedJsonException("Expected a value, got " + firstToken.getJsonType());
         } else {
             return new ParseTokenResult(firstToken, 1);
         }

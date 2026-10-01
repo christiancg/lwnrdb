@@ -77,6 +77,9 @@ SCRIPT_COLL = "script_written"
 NON_FINITE_COLL = "non_finite_numbers"
 LOST_ROWS_COLL = "lost_page_rows"
 LOST_ROWS_DOCS = 12
+TORN_COLL = "torn_tail_docs"
+TORN_DOCS = 5
+TORN_BYTES = '{"_id":"torn","pad":"interrupted mid-wri'
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
@@ -333,6 +336,8 @@ def test_a_script_cannot_store_a_value_the_reader_rejects(conn: Conn):
         "not a number": '{ _id: "bad_nan", v: 0/0 }',
         "an unregistered custom type": '{ _id: "bad_type", v: "#nosuch(1)" }',
         "a malformed custom value": '{ _id: "bad_geo", v: "#geo(bad)" }',
+        "a key shaped like an unregistered custom type": '{ _id: "bad_key", "#nosuch(1)": 1 }',
+        "a key shaped like a malformed custom value": '{ _id: "bad_geo_key", nested: { "#geo(bad)": 1 } }',
     }
     for label, literal in refusals.items():
         response = conn.run('import db from "db";\n'
@@ -497,6 +502,40 @@ def test_lost_page_rows_are_rebuilt_at_startup(conn: Conn, work_dir: str):
           f"oversized: {oversized}")
     pk = conn.count_via_pk(coll=LOST_ROWS_COLL)
     check("every grown document is still there", pk == LOST_ROWS_DOCS, f"pk={pk}")
+
+
+def seed_a_collection_whose_page_tail_will_tear(conn: Conn):
+    section("Seed a collection whose last page a crash will tear")
+    check_status("create the collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": TORN_COLL}), "OK")
+    for i in range(TORN_DOCS):
+        check_status(f"save torn{i}", conn.save({"_id": f"torn{i}", "pad": "s"}, coll=TORN_COLL), "OK")
+
+
+def tear_the_page_tail(work_dir: str):
+    folder = os.path.join(work_dir, "db", DB, TORN_COLL)
+    last = sorted(page_files(work_dir, DB, TORN_COLL), key=lambda name: int(name.rsplit("-", 1)[1][:-4]))[-1]
+    with open(os.path.join(folder, last), "ab") as page:
+        page.write(TORN_BYTES.encode("utf-8"))
+
+
+def test_a_torn_page_tail_is_healed_at_startup(conn: Conn, work_dir: str):
+    section("A torn page tail is healed at startup, so the next write is not glued onto it")
+    folder = os.path.join(work_dir, "db", DB, TORN_COLL)
+    unterminated = [name for name in page_files(work_dir, DB, TORN_COLL)
+                    if os.path.getsize(os.path.join(folder, name)) > 0
+                    and open(os.path.join(folder, name), "rb").read()[-1:] != b"\n"]
+    check("every page ends at a record boundary after the restart", not unterminated, f"torn: {unterminated}")
+    check_status("save a document after the restart", conn.save({"_id": "after_tear", "pad": "s"}, coll=TORN_COLL),
+                 "OK")
+    scan = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": TORN_COLL,
+                      "aggregationSteps": [{"type": "SKIP", "skip": 0}]})
+    scanned = sorted(doc["_id"] for doc in (scan.get("results") or []))
+    expected = sorted([f"torn{i}" for i in range(TORN_DOCS)] + ["after_tear"])
+    check("a full scan sees the document written after the tear", scanned == expected,
+          f"expected {expected} got {scanned}")
+    pk = conn.count_via_pk(coll=TORN_COLL)
+    check("the index-only COUNT agrees with the scan", pk == len(expected), f"count={pk} scan={len(scanned)}")
 
 
 EMPTY_IDX_COLL = "emptied_index_docs"
@@ -1371,6 +1410,7 @@ def main():
             test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn)
             test_non_finite_numbers_are_refused(conn)
             seed_a_collection_whose_page_rows_will_be_lost(conn, work_dir)
+            seed_a_collection_whose_page_tail_will_tear(conn)
 
             print("\n  Killing the server without a drain ...")
             check("the unclean stop left an index-dirty marker on disk",
@@ -1382,6 +1422,7 @@ def main():
 
         append_torn_pk_line(work_dir, DB, HEAL_COLL)
         lose_the_page_rows(work_dir)
+        tear_the_page_tail(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
         proc = bu.start_server(work_dir, log_path)
@@ -1389,6 +1430,7 @@ def main():
         with admin_conn() as conn:
             test_non_finite_numbers_stay_refused_after_a_restart(conn)
             test_lost_page_rows_are_rebuilt_at_startup(conn, work_dir)
+            test_a_torn_page_tail_is_healed_at_startup(conn, work_dir)
             test_the_committed_transaction_is_all_there_after_the_restart(conn)
             test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)
             test_a_bulk_update_of_many_entries_leaves_every_document_consistent(conn)

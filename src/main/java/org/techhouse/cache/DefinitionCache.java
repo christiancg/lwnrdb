@@ -1,6 +1,5 @@
 package org.techhouse.cache;
 
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -13,7 +12,7 @@ final class DefinitionCache<T> {
     private final Supplier<BoundedLruCache<Boolean>> misses;
     private final String missPrefix;
     private final BiFunction<String, String, T> loader;
-    private final AtomicLong generation = new AtomicLong();
+    private final GenerationGuard generation = new GenerationGuard();
 
     // Suppliers, not direct references: AdminCache owns these caches and may replace an instance.
     DefinitionCache(Supplier<BoundedLruCache<T>> values, Supplier<BoundedLruCache<Boolean>> misses, String missPrefix,
@@ -33,40 +32,43 @@ final class DefinitionCache<T> {
         if (misses.get().get(missPrefix + id) != null) {
             return null;
         }
-        final var generationAtLoad = generation.get();
+        final var generationAtLoad = generation.current();
         final var loaded = loader.apply(dbName, name);
-        if (generation.get() != generationAtLoad) {
-            return loaded;
-        }
+        generation.publishIfCurrent(generationAtLoad, () -> publishLoad(id, loaded));
+        return loaded;
+    }
+
+    private void publishLoad(String id, T loaded) {
         if (loaded == null) {
             misses.get().put(missPrefix + id, Boolean.TRUE);
         } else {
             values.get().put(id, loaded);
         }
-        return loaded;
     }
 
     void put(String id, T value) {
-        generation.incrementAndGet();
-        misses.get().remove(missPrefix + id);
-        values.get().put(id, value);
+        generation.invalidate(() -> {
+            misses.get().remove(missPrefix + id);
+            values.get().put(id, value);
+        });
     }
 
     void remove(String id) {
-        generation.incrementAndGet();
-        values.get().remove(id);
-        misses.get().remove(missPrefix + id);
+        generation.invalidate(() -> {
+            values.get().remove(id);
+            misses.get().remove(missPrefix + id);
+        });
     }
 
     void removeForDatabase(String dbName) {
-        generation.incrementAndGet();
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        values.get().removeIf(id -> id.startsWith(prefix));
-        misses.get().removeIf(id -> id.startsWith(missPrefix + prefix));
+        generation.invalidate(() -> {
+            values.get().removeIf(id -> id.startsWith(prefix));
+            misses.get().removeIf(id -> id.startsWith(missPrefix + prefix));
+        });
     }
 
     void removeIf(Predicate<String> keyMatches) {
-        generation.incrementAndGet();
-        values.get().removeIf(keyMatches);
+        generation.invalidate(() -> values.get().removeIf(keyMatches));
     }
 }

@@ -27,6 +27,7 @@ public class DbCursorTest {
         private final List<JsonObject> documents = new ArrayList<>();
         private int failFromBatch = Integer.MAX_VALUE;
         private String padding = "";
+        private boolean pipelineIsOrdered = true;
 
         private PagingDatabase(int total) {
             for (var i = 0; i < total; i++) {
@@ -57,6 +58,11 @@ public class DbCursorTest {
                 page.add(document);
             }
             return page;
+        }
+
+        @Override
+        public boolean ordersResults(String db, String coll, JsonArray pipeline) {
+            return pipelineIsOrdered;
         }
 
         private static int value(JsonArray pipeline, int index, String field) {
@@ -269,5 +275,37 @@ public class DbCursorTest {
         final var result = run(database, "import db from \"db\"; db.cursor('d', 'c', 'nope');");
         assertTrue(result.isError());
         assertEquals("TypeError", result.getErrorName());
+    }
+
+    private static String firstStepType(JsonArray pipeline) {
+        return pipeline.get(0).asJsonObject().get("type").asJsonString().getValue();
+    }
+
+    @Test
+    public void test_a_cursor_over_an_unordered_pipeline_pages_in_id_order() {
+        final var database = new PagingDatabase(5);
+        database.pipelineIsOrdered = false;
+
+        assertEquals(List.of("d0", "d1", "d2", "d3", "d4"), ids(run(database, walk("{ batchSize: 2 }"))));
+
+        for (final var pipeline : database.pipelines) {
+            final var sort = pipeline.get(pipeline.size() - 3).asJsonObject();
+            assertEquals("SORT", sort.get("type").asJsonString().getValue(),
+                    "each batch must page over the same order, so a SORT on _id precedes SKIP and LIMIT");
+            assertEquals("_id", sort.get("fieldName").asJsonString().getValue());
+            assertTrue(sort.get("ascending").asJsonBoolean().getValue());
+        }
+    }
+
+    @Test
+    public void test_a_cursor_over_an_ordered_pipeline_adds_no_sort() {
+        final var database = new PagingDatabase(3);
+
+        ids(run(database, walk("{ batchSize: 2 }")));
+
+        for (final var pipeline : database.pipelines) {
+            assertEquals(3, pipeline.size(), "the caller's own SORT plus SKIP and LIMIT, and nothing else");
+            assertEquals("SORT", firstStepType(pipeline));
+        }
     }
 }

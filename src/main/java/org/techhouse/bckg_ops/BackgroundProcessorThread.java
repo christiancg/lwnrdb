@@ -60,7 +60,7 @@ public class BackgroundProcessorThread implements Runnable {
                 batch.add(next);
             }
             try {
-                EventProcessorHelper.processBatch(batch);
+                queue.addAll(EventProcessorHelper.processBatch(batch));
             } catch (Exception e) {
                 logger.error("Error while processing background task: ", e);
             } finally {

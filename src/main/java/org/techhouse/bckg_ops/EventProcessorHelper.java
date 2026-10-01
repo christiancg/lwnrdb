@@ -16,6 +16,7 @@ import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
@@ -28,10 +29,15 @@ public class EventProcessorHelper {
     private static final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
     private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
-    public static void processBatch(List<Event> batch) throws IOException, InterruptedException {
+    public static List<Event> processBatch(List<Event> batch) throws IOException, InterruptedException {
+        final var deferred = new ArrayList<Event>();
         if (batch.size() == 1) {
-            processEvent(batch.getFirst());
-            return;
+            try {
+                processEvent(batch.getFirst());
+            } catch (CollectionBusyException busy) {
+                deferred.add(batch.getFirst());
+            }
+            return deferred;
         }
         final var entityGroups = new LinkedHashMap<String, List<EntityEvent>>();
         final var others = new ArrayList<Event>();
@@ -47,9 +53,11 @@ public class EventProcessorHelper {
         for (final var group : entityGroups.entrySet()) {
             try {
                 processEntityGroup(group.getValue());
+            } catch (CollectionBusyException busy) {
+                deferred.addAll(group.getValue());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return;
+                return deferred;
             } catch (Exception e) {
                 logger.warning(abandonedWork(group.getKey(), e));
             }
@@ -57,12 +65,28 @@ public class EventProcessorHelper {
         for (final var event : others) {
             try {
                 processEvent(event);
+            } catch (CollectionBusyException busy) {
+                deferred.add(event);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                return;
+                return deferred;
             } catch (Exception e) {
                 logger.warning(abandonedWork(collectionOf(event), e));
             }
+        }
+        return deferred;
+    }
+
+    private interface IndexMaintenance {
+        void run() throws IOException, InterruptedException;
+    }
+
+    private static IOException indexFailureOf(IndexMaintenance maintenance) throws InterruptedException {
+        try {
+            maintenance.run();
+            return null;
+        } catch (IOException failure) {
+            return failure;
         }
     }
 
@@ -98,11 +122,17 @@ public class EventProcessorHelper {
         for (final var event : group) {
             ids.add(event.getDbEntry().get_id());
         }
-        IndexHelper.bulkUpdateIndexes(dbName, collName, new ArrayList<>(ids));
+        final var indexFailure = indexFailureOf(
+                () -> IndexHelper.bulkUpdateIndexes(dbName, collName, new ArrayList<>(ids)));
         for (final var event : group) {
             AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getDbEntry(),
                     event.getIncarnation());
-            clearPendingEvent(event);
+            if (indexFailure == null) {
+                clearPendingEvent(event);
+            }
+        }
+        if (indexFailure != null) {
+            throw indexFailure;
         }
     }
 
@@ -136,11 +166,15 @@ public class EventProcessorHelper {
             clearPending(dbName, collName, event.getUpdatedEntries());
             return;
         }
-        IndexHelper.bulkUpdateIndexes(dbName, collName, idsOf(event.getInsertedEntries(), event.getUpdatedEntries()));
+        final var indexFailure = indexFailureOf(() -> IndexHelper.bulkUpdateIndexes(dbName, collName,
+                idsOf(event.getInsertedEntries(), event.getUpdatedEntries())));
         AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.CREATED, event.getInsertedEntries(),
                 event.getIncarnation());
         AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdatedEntries(),
                 event.getIncarnation());
+        if (indexFailure != null) {
+            throw indexFailure;
+        }
         clearPending(dbName, collName, event.getInsertedEntries());
         clearPending(dbName, collName, event.getUpdatedEntries());
     }
@@ -171,10 +205,11 @@ public class EventProcessorHelper {
             pendingIndexWrites.clear(dbName, collName, dbEntry.get_id());
             return;
         }
-        // Index maintenance re-reads the current document by id, so events may run out of order;
-        // the event snapshot stays authoritative only for the admin entry-count delta.
-        IndexHelper.updateIndexes(dbName, collName, dbEntry.get_id());
+        final var indexFailure = indexFailureOf(() -> IndexHelper.updateIndexes(dbName, collName, dbEntry.get_id()));
         AdminOperationHelper.updateEntryCount(dbName, collName, type, dbEntry, event.getIncarnation());
+        if (indexFailure != null) {
+            throw indexFailure;
+        }
         pendingIndexWrites.clear(dbName, collName, dbEntry.get_id());
     }
 

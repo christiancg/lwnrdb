@@ -866,6 +866,32 @@ def test_before_hook_contract(conn: Conn):
     drop_hook(conn, "del_returns")
 
 
+def test_before_hook_sees_the_same_id_in_and_out_of_a_transaction(conn: Conn):
+    section("Before hooks - an id-less write hands the hook its generated _id either way")
+    check_status("install a hook that records the _id it saw",
+                 install_hook(conn, "id_seer", "idseer", "export default (doc) => ({ ...doc, seenId: doc._id });",
+                              ["CREATED"]), "OK")
+    saved = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL, "object": {"qty": 1}})
+    check_status("an id-less save outside a transaction succeeds", saved, "OK")
+    stored = conn.find(saved.get("_id")).get("object") or {}
+    check("the hook saw the _id the document is stored under", stored.get("seenId") == saved.get("_id"),
+          f"saved={saved.get('_id')!r} seen={stored.get('seenId')!r}")
+    drop_hook(conn, "id_seer")
+
+    check_status("install a hook that returns a fresh document with no _id",
+                 install_hook(conn, "id_dropper", "iddropper", "export default () => ({ fresh: true });",
+                              ["CREATED"]), "OK")
+    check_code("outside a transaction the hook's dropped _id is refused",
+               conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL, "object": {"qty": 1}}),
+               "ERROR", "400-21")
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_code("inside a transaction the same hook is refused the same way",
+               conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL, "object": {"qty": 1}}),
+               "ERROR", "400-21")
+    check_status("roll back", conn.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
+    drop_hook(conn, "id_dropper")
+
+
 def test_before_hook_schema_recheck(conn: Conn):
     section("Before hooks - a replacement is re-validated")
     schema = {"type": "object", "properties": {"qty": {"type": "number"}}, "required": ["qty"],
@@ -1787,6 +1813,7 @@ def main():
             test_before_hook_preserves_custom_spelling(conn)
             test_before_hook_veto(conn)
             test_before_hook_contract(conn)
+            test_before_hook_sees_the_same_id_in_and_out_of_a_transaction(conn)
             test_before_hook_schema_recheck(conn)
             test_before_hook_on_delete(conn)
             test_before_hook_bulk_save(conn)

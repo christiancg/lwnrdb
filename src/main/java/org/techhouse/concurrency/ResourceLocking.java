@@ -131,6 +131,27 @@ public class ResourceLocking {
         }
     }
 
+    public List<String> acquireWriteLocksNotHeld(Collection<String> collectionIds) throws InterruptedException {
+        return acquireWriteLocks(notHeldByCurrentThread(collectionIds));
+    }
+
+    public List<String> acquireWriteLocksNotHeld(Collection<String> collectionIds, long timeoutMillis)
+            throws InterruptedException {
+        return acquireWriteLocks(notHeldByCurrentThread(collectionIds), timeoutMillis);
+    }
+
+    private List<String> notHeldByCurrentThread(Collection<String> collectionIds) {
+        return collectionIds.stream().filter(collId -> !isWriteLockedByCurrentThread(collId)).toList();
+    }
+
+    public void releaseWriteLocksHeldByCurrentThread(Collection<String> collectionIds) {
+        for (final var collId : new TreeSet<>(collectionIds)) {
+            while (isWriteLockedByCurrentThread(collId)) {
+                releaseWrite(collId);
+            }
+        }
+    }
+
     public void releaseWriteLocks(List<String> acquired) {
         for (final var collId : acquired) {
             releaseWrite(collId);

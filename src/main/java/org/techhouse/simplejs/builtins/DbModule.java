@@ -8,6 +8,7 @@ import java.util.List;
 import java.util.NoSuchElementException;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -29,6 +30,7 @@ import org.techhouse.simplejs.values.JsValue;
 
 public final class DbModule {
     private static final int PAYLOAD_INDEX = 2;
+    private static final String PK_FIELD = "_id";
 
     private DbModule() {
     }
@@ -142,8 +144,19 @@ public final class DbModule {
             this.ops = ops;
             this.dbName = dbName;
             this.collName = collName;
-            this.steps = steps;
+            this.steps = database.ordersResults(dbName, collName, steps) ? steps : sortedById(steps);
             this.batchSize = batchSize;
+        }
+
+        private static JsonArray sortedById(JsonArray steps) {
+            final var sort = new JsonObject();
+            sort.add("type", new JsonString("SORT"));
+            sort.add("fieldName", new JsonString(PK_FIELD));
+            sort.add("ascending", new JsonBoolean(true));
+            final var ordered = new JsonArray();
+            ordered.addAll(steps);
+            ordered.add(sort);
+            return ordered;
         }
 
         @Override

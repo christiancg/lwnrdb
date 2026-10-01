@@ -77,7 +77,7 @@ public final class ResultHasher {
         if (operator.getType() == OperatorType.CONJUNCTION) {
             final var conjunction = (ConjunctionOperator) operator;
             final var type = conjunction.getConjunctionType();
-            if (type != ConjunctionOperatorType.OR && type != ConjunctionOperatorType.XOR) {
+            if (type != ConjunctionOperatorType.OR) {
                 return false;
             }
             return conjunction.getOperators().stream().anyMatch(ResultHasher::isRankingOperator);

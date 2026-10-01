@@ -15,6 +15,8 @@ import org.techhouse.log.Logger;
 final class FieldIndexStore {
     private static final Logger logger = Logger.logFor(FieldIndexStore.class);
     private static final byte[] NEWLINE_BYTES = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
+    private static final byte LINE_FEED = '\n';
+    private static final byte CARRIAGE_RETURN = '\r';
     private static final byte SEPARATOR_BYTE = (byte) Globals.ID_SEPARATOR.charAt(0);
 
     private final FilePaths paths;
@@ -170,41 +172,33 @@ final class FieldIndexStore {
         final var target = value.getBytes(StandardCharsets.UTF_8);
         int lineStart = 0;
         while (lineStart < wholeFile.length) {
-            final int lineEnd = indexOfNewline(wholeFile, lineStart);
-            final int effectiveEnd = lineEnd == -1 ? wholeFile.length : lineEnd;
-            if (!isBlankRegion(wholeFile, lineStart, effectiveEnd)) {
-                final int separatorIdx = indexOfSeparator(wholeFile, lineStart, effectiveEnd);
+            final int lineFeed = indexOfLineFeed(wholeFile, lineStart);
+            final int contentEnd = contentEndOf(wholeFile, lineStart, lineFeed);
+            if (!isBlankRegion(wholeFile, lineStart, contentEnd)) {
+                final int separatorIdx = indexOfSeparator(wholeFile, lineStart, contentEnd);
                 if (separatorIdx >= 0 && regionEquals(wholeFile, lineStart, separatorIdx, target)) {
-                    return lineStart == 0 ? 0 : lineStart - NEWLINE_BYTES.length;
+                    return lineStart;
                 }
             }
-            if (lineEnd == -1)
+            if (lineFeed == -1)
                 break;
-            lineStart = lineEnd + NEWLINE_BYTES.length;
+            lineStart = lineFeed + 1;
         }
         return -1;
     }
 
-    private static int indexOfNewline(byte[] wholeFile, int from) {
-        final int limit = wholeFile.length - NEWLINE_BYTES.length;
-        for (int i = from; i <= limit; i++) {
-            if (startsWithNewline(wholeFile, i)) {
+    private static int indexOfLineFeed(byte[] wholeFile, int from) {
+        for (int i = from; i < wholeFile.length; i++) {
+            if (wholeFile[i] == LINE_FEED) {
                 return i;
             }
         }
         return -1;
     }
 
-    private static boolean startsWithNewline(byte[] wholeFile, int from) {
-        if (from < 0 || from + NEWLINE_BYTES.length > wholeFile.length) {
-            return false;
-        }
-        for (int i = 0; i < NEWLINE_BYTES.length; i++) {
-            if (wholeFile[from + i] != NEWLINE_BYTES[i]) {
-                return false;
-            }
-        }
-        return true;
+    private static int contentEndOf(byte[] wholeFile, int lineStart, int lineFeed) {
+        final int end = lineFeed == -1 ? wholeFile.length : lineFeed;
+        return end > lineStart && wholeFile[end - 1] == CARRIAGE_RETURN ? end - 1 : end;
     }
 
     private static int indexOfSeparator(byte[] wholeFile, int from, int to) {
@@ -243,26 +237,27 @@ final class FieldIndexStore {
         return FieldIndexEntry.fileKeyOf(entry.getValue());
     }
 
-    private static byte[] withoutLine(byte[] wholeFile, int indexOfExisting) {
-        var replacementIndex = indexOfExisting;
-        if (startsWithNewline(wholeFile, replacementIndex)) {
-            replacementIndex += NEWLINE_BYTES.length;
-        }
-        final int lineEnd = indexOfNewline(wholeFile, replacementIndex);
-        final int tailStart = lineEnd == -1 ? wholeFile.length : lineEnd + NEWLINE_BYTES.length;
+    private static byte[] withoutLine(byte[] wholeFile, int lineStart) {
+        final int lineFeed = indexOfLineFeed(wholeFile, lineStart);
+        final int tailStart = lineFeed == -1 ? wholeFile.length : lineFeed + 1;
         final int tailLength = wholeFile.length - tailStart;
-        final var content = new byte[replacementIndex + tailLength];
-        System.arraycopy(wholeFile, 0, content, 0, replacementIndex);
-        System.arraycopy(wholeFile, tailStart, content, replacementIndex, tailLength);
+        final var content = new byte[lineStart + tailLength];
+        System.arraycopy(wholeFile, 0, content, 0, lineStart);
+        System.arraycopy(wholeFile, tailStart, content, lineStart, tailLength);
         return content;
     }
 
     private static byte[] appendLine(byte[] content, String line) {
+        final var separator = content.length > 0 && content[content.length - 1] != LINE_FEED
+                ? NEWLINE_BYTES
+                : new byte[0];
         final var lineBytes = line.getBytes(StandardCharsets.UTF_8);
-        final var result = new byte[content.length + lineBytes.length + NEWLINE_BYTES.length];
-        System.arraycopy(content, 0, result, 0, content.length);
-        System.arraycopy(lineBytes, 0, result, content.length, lineBytes.length);
-        System.arraycopy(NEWLINE_BYTES, 0, result, content.length + lineBytes.length, NEWLINE_BYTES.length);
+        final var result = new byte[content.length + separator.length + lineBytes.length + NEWLINE_BYTES.length];
+        var offset = 0;
+        for (final var part : List.of(content, separator, lineBytes, NEWLINE_BYTES)) {
+            System.arraycopy(part, 0, result, offset, part.length);
+            offset += part.length;
+        }
         return result;
     }
 

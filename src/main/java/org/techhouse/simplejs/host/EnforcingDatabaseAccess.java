@@ -13,12 +13,14 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.auth.AuthorizationChecker;
+import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.DeleteRequest;
@@ -107,12 +109,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
 
     @Override
     public List<JsonObject> aggregate(String db, String coll, JsonArray pipeline) {
-        final var message = new JsonObject();
-        message.add("type", new JsonString("AGGREGATE"));
-        message.add("databaseName", new JsonString(db));
-        message.add("collectionName", new JsonString(coll));
-        message.add("aggregationSteps", pipeline);
-        final var rawJson = eJson.toJson(message);
+        final var rawJson = aggregateMessage(db, coll, pipeline);
         final OperationRequest request = RequestParser.parseRequest(rawJson);
         final var response = dispatch(request, rawJson);
         if (response instanceof AggregateResponse aggregateResponse) {
@@ -122,6 +119,26 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
             return List.of();
         }
         throw jsError(response.getMessage());
+    }
+
+    @Override
+    public boolean ordersResults(String db, String coll, JsonArray pipeline) {
+        try {
+            return !(RequestParser
+                    .parseRequest(aggregateMessage(db, coll, pipeline)) instanceof AggregateRequest parsed)
+                    || ResultHasher.ordersResults(parsed.getAggregationSteps());
+        } catch (RuntimeException unparseable) {
+            return true;
+        }
+    }
+
+    private String aggregateMessage(String db, String coll, JsonArray pipeline) {
+        final var message = new JsonObject();
+        message.add("type", new JsonString("AGGREGATE"));
+        message.add("databaseName", new JsonString(db));
+        message.add("collectionName", new JsonString(coll));
+        message.add("aggregationSteps", pipeline);
+        return eJson.toJson(message);
     }
 
     @Override

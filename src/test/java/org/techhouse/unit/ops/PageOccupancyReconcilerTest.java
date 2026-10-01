@@ -135,4 +135,27 @@ public class PageOccupancyReconcilerTest {
         assertNotNull(row(0));
         assertEquals(firstPageFileLength(), existingRow(0).getPageSize());
     }
+
+    private File firstUserPage() {
+        return new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-0.dat");
+    }
+
+    @Test
+    public void test_a_torn_page_tail_is_healed_so_the_next_insert_is_visible_to_a_scan() throws Exception {
+        save("before");
+        java.nio.file.Files.writeString(firstUserPage().toPath(), "{\"_id\":\"torn\",\"pay",
+                java.nio.file.StandardOpenOption.APPEND);
+
+        PageOccupancyReconciler.reconcile(TestGlobals.DB, TestGlobals.COLL);
+        cache.evictCollection(TestGlobals.DB, TestGlobals.COLL);
+        save("after");
+        cache.evictCollection(TestGlobals.DB, TestGlobals.COLL);
+
+        final var scanned = cache.getWholeCollection(TestGlobals.DB, TestGlobals.COLL);
+        assertTrue(scanned.containsKey("before"));
+        assertTrue(scanned.containsKey("after"), "an insert after the heal must not share a line with torn bytes");
+        assertFalse(scanned.containsKey("torn"));
+        assertEquals(firstUserPage().length(), existingRow(0).getPageSize());
+    }
 }
