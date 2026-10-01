@@ -1,6 +1,7 @@
 package org.techhouse.unit.bckg_ops;
 
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.mockStatic;
@@ -87,7 +88,7 @@ public class EventProcessorHelperPendingWritesTest {
         final var event = markedEvent("counted");
         try (var ignoredIndexes = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
-            admin.when(() -> AdminOperationHelper.updateEntryCount(anyString(), anyString(), any(), any()))
+            admin.when(() -> AdminOperationHelper.updateEntryCount(anyString(), anyString(), any(), any(), anyLong()))
                     .thenThrow(new IOException("disk full"));
             Assertions.assertThrows(IOException.class, () -> EventProcessorHelper.processEvent(event));
         }
@@ -128,7 +129,7 @@ public class EventProcessorHelperPendingWritesTest {
         try (var ignoredIndexes = mockStatic(IndexHelper.class); var admin = mockStatic(AdminOperationHelper.class)) {
             admin.when(() -> AdminOperationHelper.getCollectionEntry(anyString(), anyString())).thenCallRealMethod();
             admin.when(() -> AdminOperationHelper.updateEntryCount(anyString(), anyString(), any(),
-                    argThat(entry -> entry != null && "group-c".equals(entry.get_id()))))
+                    argThat(entry -> entry != null && "group-c".equals(entry.get_id())), anyLong()))
                     .thenThrow(new IOException("disk full"));
             Assertions.assertDoesNotThrow(() -> EventProcessorHelper.processBatch(List.copyOf(batch)));
         }

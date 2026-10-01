@@ -584,6 +584,10 @@ event is dropped and counted. Cascades carry `triggerDepth + 1` on the request i
 not a `ThreadLocal`, so the bound survives a cluster forward — zeroed for client requests;
 `allowCascade` defaults to false.
 
+A transaction fires each trigger for its **net effect**: several writes to one id fire once, a
+`DELETE` of an id the same transaction created fires nothing (no one outside it could ever see the
+document), and deleting a document that existed before the transaction fires `DELETED` as usual.
+
 **Before-write hooks** are the veto. Returning nothing or `true` accepts the write, a plain
 object replaces the document, anything else or a `throw` refuses it (`400-21`); an abort keeps
 its own code, so an operator can tell a hook that said no from one that never finished. Every

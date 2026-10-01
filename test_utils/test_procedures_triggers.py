@@ -444,6 +444,33 @@ def test_triggers(conn: Conn):
     check_status("re-enable it", conn.save_trigger("audit_writes", ["CREATED", "UPDATED"], "auditor"), "OK")
 
 
+def test_a_transaction_reports_only_its_net_effect(conn: Conn):
+    section("A transaction that creates and deletes the same id")
+    check_status("install a trigger watching creates and deletes",
+                 conn.save_trigger("audit_tx_net", ["CREATED", "DELETED"], "auditor"), "OK")
+
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("create a new document in it", conn.save_doc({"_id": "txnet1", "n": 1}), "OK")
+    check_status("delete it in the same transaction",
+                 conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "txnet1"}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("no DELETED fires for a document nobody outside the transaction saw",
+          await_absent(conn, "DELETED-txnet1").get("status") != "OK")
+    check("and no CREATED either", conn.find("CREATED-txnet1", coll=AUDIT).get("status") != "OK")
+
+    check_status("write a document outside any transaction", conn.save_doc({"_id": "txnet2", "n": 1}), "OK")
+    check("its creation is audited", await_doc(conn, "CREATED-txnet2").get("status") == "OK")
+    check_status("start another transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("update the existing document", conn.save_doc({"_id": "txnet2", "n": 2}), "OK")
+    check_status("then delete it",
+                 conn.send({"type": "DELETE", "databaseName": DB, "collectionName": COLL, "_id": "txnet2"}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("deleting a document that existed before the transaction still fires DELETED",
+          await_doc(conn, "DELETED-txnet2").get("status") == "OK")
+
+    conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "audit_tx_net"})
+
+
 def install_the_trigger_whose_file_will_break(conn: Conn):
     section("The collection whose trigger file phase 2 makes unreadable")
     check_status("create the collection", conn.send(
@@ -1730,6 +1757,7 @@ def main():
         test_permissions()
         with admin_conn() as conn:
             test_triggers(conn)
+            test_a_transaction_reports_only_its_net_effect(conn)
             install_the_trigger_whose_file_will_break(conn)
             test_trigger_validation(conn)
             test_before_hooks(conn)

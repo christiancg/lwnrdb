@@ -474,6 +474,10 @@ public class FileSystem {
         return documentPageStore.streamEntries(dbName, collName);
     }
 
+    public Map<Long, Long> pageFileLengths(String dbName, String collName) throws IOException {
+        return documentPageStore.pageFileLengths(dbName, collName);
+    }
+
     public long pageFileCount(String dbName, String collName) throws IOException {
         return documentPageStore.pageFileCount(dbName, collName);
     }

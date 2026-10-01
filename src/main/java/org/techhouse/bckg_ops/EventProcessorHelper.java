@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import org.techhouse.bckg_ops.events.BulkEntityEvent;
+import org.techhouse.bckg_ops.events.CollectionScopedEvent;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EntityEvent;
 import org.techhouse.bckg_ops.events.Event;
@@ -20,6 +21,7 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.ScriptRunHistory;
+import org.techhouse.ops.admin.CollectionIncarnation;
 
 public class EventProcessorHelper {
     private static final Logger logger = Logger.logFor(EventProcessorHelper.class);
@@ -35,7 +37,8 @@ public class EventProcessorHelper {
         final var others = new ArrayList<Event>();
         for (final var event : batch) {
             if (event instanceof EntityEvent entityEvent) {
-                final var key = entityEvent.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR + entityEvent.getCollName();
+                final var key = entityEvent.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR + entityEvent.getCollName()
+                        + Globals.COLL_IDENTIFIER_SEPARATOR + entityEvent.getIncarnation();
                 entityGroups.computeIfAbsent(key, _ -> new ArrayList<>()).add(entityEvent);
             } else {
                 others.add(event);
@@ -84,9 +87,10 @@ public class EventProcessorHelper {
             processEntityEvent(group.getFirst());
             return;
         }
-        final var dbName = group.getFirst().getDbName();
-        final var collName = group.getFirst().getCollName();
-        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+        final var first = group.getFirst();
+        final var dbName = first.getDbName();
+        final var collName = first.getCollName();
+        if (belongsToAnotherIncarnation(first)) {
             clearPendingEvents(group);
             return;
         }
@@ -96,7 +100,8 @@ public class EventProcessorHelper {
         }
         IndexHelper.bulkUpdateIndexes(dbName, collName, new ArrayList<>(ids));
         for (final var event : group) {
-            AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getDbEntry());
+            AdminOperationHelper.updateEntryCount(dbName, collName, event.getType(), event.getDbEntry(),
+                    event.getIncarnation());
             clearPendingEvent(event);
         }
     }
@@ -126,14 +131,16 @@ public class EventProcessorHelper {
     private static void processBulkEntityEvent(BulkEntityEvent event) throws IOException, InterruptedException {
         final var dbName = event.getDbName();
         final var collName = event.getCollName();
-        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+        if (belongsToAnotherIncarnation(event)) {
             clearPending(dbName, collName, event.getInsertedEntries());
             clearPending(dbName, collName, event.getUpdatedEntries());
             return;
         }
         IndexHelper.bulkUpdateIndexes(dbName, collName, idsOf(event.getInsertedEntries(), event.getUpdatedEntries()));
-        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.CREATED, event.getInsertedEntries());
-        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdatedEntries());
+        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.CREATED, event.getInsertedEntries(),
+                event.getIncarnation());
+        AdminOperationHelper.bulkUpdateEntryCount(dbName, collName, EventType.UPDATED, event.getUpdatedEntries(),
+                event.getIncarnation());
         clearPending(dbName, collName, event.getInsertedEntries());
         clearPending(dbName, collName, event.getUpdatedEntries());
     }
@@ -160,15 +167,20 @@ public class EventProcessorHelper {
         final var collName = event.getCollName();
         final var dbEntry = event.getDbEntry();
         final var type = event.getType();
-        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
+        if (belongsToAnotherIncarnation(event)) {
             pendingIndexWrites.clear(dbName, collName, dbEntry.get_id());
             return;
         }
         // Index maintenance re-reads the current document by id, so events may run out of order;
         // the event snapshot stays authoritative only for the admin entry-count delta.
         IndexHelper.updateIndexes(dbName, collName, dbEntry.get_id());
-        AdminOperationHelper.updateEntryCount(dbName, collName, type, dbEntry);
+        AdminOperationHelper.updateEntryCount(dbName, collName, type, dbEntry, event.getIncarnation());
         pendingIndexWrites.clear(dbName, collName, dbEntry.get_id());
+    }
+
+    private static boolean belongsToAnotherIncarnation(CollectionScopedEvent event) {
+        final var entry = AdminOperationHelper.getCollectionEntry(event.getDbName(), event.getCollName());
+        return entry == null || !CollectionIncarnation.sameLife(event.getIncarnation(), entry.getIncarnation());
     }
 
 }

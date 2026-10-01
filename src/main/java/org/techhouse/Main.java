@@ -39,6 +39,7 @@ import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunRecovery;
+import org.techhouse.ops.admin.PageOccupancyReconciler;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -85,6 +86,7 @@ public class Main {
         fs.createAdminDatabase();
         cache.loadAdminData();
         seedHybridClock();
+        PageOccupancyReconciler.reconcileAll();
         cleanupOrphanedTransactions();
         bootstrapDefaultAdmin();
         final var port = getPort(args);

@@ -1,0 +1,103 @@
+package org.techhouse.ops.admin;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import org.techhouse.cache.Cache;
+import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.fs.FileSystem;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
+
+public final class PageOccupancyReconciler {
+    private static final Cache cache = IocContainer.get(Cache.class);
+    private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    private static final Logger logger = Logger.logFor(PageOccupancyReconciler.class);
+
+    private PageOccupancyReconciler() {
+    }
+
+    public static void reconcileAll() {
+        for (final var dbEntry : List.copyOf(cache.getAllAdminDbEntries())) {
+            for (final var collName : List.copyOf(dbEntry.getCollections())) {
+                reconcileQuietly(dbEntry.get_id(), collName);
+            }
+        }
+    }
+
+    private static void reconcileQuietly(String dbName, String collName) {
+        try {
+            if (reconcile(dbName, collName)) {
+                logger.warning("Rebuilt the page-occupancy metadata of " + dbName + "|" + collName
+                        + " from its page files: it no longer matched them, most likely after an unclean stop");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            logger.warning("Could not reconcile the page-occupancy metadata of " + dbName + "|" + collName + ": "
+                    + e.getMessage());
+        }
+    }
+
+    public static boolean reconcile(String dbName, String collName) throws Exception {
+        final var fileLengths = fs.pageFileLengths(dbName, collName);
+        final var rows = rowsByPage(cache.getAdminPageEntries(dbName, collName));
+        if (agreesWithFiles(rows, fileLengths)) {
+            return false;
+        }
+        final var counts = entryCountsByPage(dbName, collName);
+        final var corrected = new ArrayList<AdminPageEntry>();
+        for (final var file : fileLengths.entrySet()) {
+            corrected.add(row(dbName, collName, file.getKey(), counts.getOrDefault(file.getKey(), 0), file.getValue()));
+        }
+        for (final var page : rows.keySet()) {
+            if (!fileLengths.containsKey(page)) {
+                corrected.add(row(dbName, collName, page, 0, 0L));
+            }
+        }
+        AdminPageHelper.replacePageEntries(dbName, collName, corrected);
+        return true;
+    }
+
+    private static Map<Long, AdminPageEntry> rowsByPage(List<AdminPageEntry> rows) {
+        final var byPage = new HashMap<Long, AdminPageEntry>();
+        if (rows != null) {
+            for (final var row : rows) {
+                byPage.put(row.getPage(), row);
+            }
+        }
+        return byPage;
+    }
+
+    private static boolean agreesWithFiles(Map<Long, AdminPageEntry> rows, Map<Long, Long> fileLengths) {
+        for (final var file : fileLengths.entrySet()) {
+            final var row = rows.get(file.getKey());
+            final var recordedSize = row == null ? 0L : row.getPageSize();
+            if (recordedSize != file.getValue()) {
+                return false;
+            }
+        }
+        for (final var row : rows.values()) {
+            if (!fileLengths.containsKey(row.getPage()) && (row.getPageSize() != 0 || row.getEntryCount() != 0)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static Map<Long, Integer> entryCountsByPage(String dbName, String collName) throws Exception {
+        final var counts = new HashMap<Long, Integer>();
+        for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
+            counts.merge(pkEntry.getPage(), 1, Integer::sum);
+        }
+        return counts;
+    }
+
+    private static AdminPageEntry row(String dbName, String collName, long page, int entryCount, long pageSize) {
+        final var entry = new AdminPageEntry(dbName, collName, page);
+        entry.setEntryCount(entryCount);
+        entry.setPageSize(pageSize);
+        return entry;
+    }
+}

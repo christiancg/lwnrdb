@@ -1,4 +1,5 @@
 import json
+import random
 from collections import Counter, namedtuple
 
 from . import values
@@ -14,6 +15,8 @@ SCALAR_OPERATORS = [
 ]
 
 LIST_OPERATORS = ["IN", "NOT_IN"]
+
+CONTAINER_OPERATORS = ["EQUALS", "NOT_EQUALS"]
 
 EMPTY_RESULT_CODE = "404-3"
 
@@ -219,6 +222,20 @@ def custom_operator_queries(fields: list) -> list:
     return queries
 
 
+def container_queries(rng, fields: list) -> list:
+    queries = []
+    for field in fields:
+        for operator in CONTAINER_OPERATORS:
+            operand = values.container_operand(rng)
+            queries.append(Query(f"FILTER {field} {operator} {values.to_json_text(operand)}",
+                                 [filter_step(field, operator, operand)], False, FILTER_QUERY))
+        for operator in LIST_OPERATORS:
+            operand = values.container_operand_list(rng)
+            queries.append(Query(f"FILTER {field} {operator} {values.to_json_text(operand)}",
+                                 [filter_step(field, operator, operand)], False, FILTER_QUERY))
+    return queries
+
+
 def queries_for(rng, fields: list, operands_per_operator: int = 2) -> list:
     queries = []
     for field in fields:
@@ -244,6 +261,7 @@ def queries_for(rng, fields: list, operands_per_operator: int = 2) -> list:
         queries.append(Query(f"GROUP_BY {field}",
                              [{"type": "GROUP_BY", "fieldName": field}],
                              False, RESHAPING_QUERY))
+    queries.extend(container_queries(random.Random(hash(rng.getstate())), fields))
     queries.append(fold_order_query())
     queries.extend(conjunction_queries(rng, fields))
     queries.extend(map_queries(rng, fields))

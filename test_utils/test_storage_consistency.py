@@ -75,6 +75,8 @@ DIRTY_COLL = "dirty_index_docs"
 HEAL_COLL = "heal_race_docs"
 SCRIPT_COLL = "script_written"
 NON_FINITE_COLL = "non_finite_numbers"
+LOST_ROWS_COLL = "lost_page_rows"
+LOST_ROWS_DOCS = 12
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
@@ -453,6 +455,48 @@ def test_a_transaction_of_in_place_growths_respects_max_page_size(conn: Conn, wo
 
     pk = conn.count_via_pk(coll=GROWTH_COLL)
     check("every grown document is still there", pk == GROWTH_DOCS, f"pk={pk}")
+
+
+def seed_a_collection_whose_page_rows_will_be_lost(conn: Conn, work_dir: str):
+    section("Seed a collection whose page-occupancy rows a crash will lose")
+    check_status("create the collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                            "collectionName": LOST_ROWS_COLL}), "OK")
+    for i in range(LOST_ROWS_DOCS):
+        conn.save({"_id": f"lost{i:02d}", "pad": "s"}, coll=LOST_ROWS_COLL)
+    deadline = time.time() + 15
+    while time.time() < deadline and not recorded_pages(work_dir, DB, LOST_ROWS_COLL):
+        time.sleep(0.2)
+    check("its page rows reached disk", bool(recorded_pages(work_dir, DB, LOST_ROWS_COLL)))
+
+
+def lose_the_page_rows(work_dir: str):
+    folder = os.path.join(work_dir, "db", "admin", "pages", f"{DB}_{LOST_ROWS_COLL}")
+    for name in os.listdir(folder):
+        os.remove(os.path.join(folder, name))
+
+
+def test_lost_page_rows_are_rebuilt_at_startup(conn: Conn, work_dir: str):
+    section("Page-occupancy rows lost to a crash are rebuilt at the next startup")
+    recorded = recorded_pages(work_dir, DB, LOST_ROWS_COLL)
+    actual = actual_pages(work_dir, DB, LOST_ROWS_COLL)
+    drifted = [page for page in actual
+               if page not in recorded
+               or recorded[page]["size"] != actual[page][0]
+               or recorded[page]["entryCount"] != actual[page][1]]
+    check("every page on disk has a row that matches it again", actual and not drifted,
+          f"recorded={recorded} actual={actual}")
+
+    for i in range(LOST_ROWS_DOCS):
+        conn.save({"_id": f"lost{i:02d}", "pad": GROWTH_PAD}, coll=LOST_ROWS_COLL)
+    folder = os.path.join(work_dir, "db", DB, LOST_ROWS_COLL)
+    oversized = {f: os.path.getsize(os.path.join(folder, f))
+                 for f in page_files(work_dir, DB, LOST_ROWS_COLL)
+                 if os.path.getsize(os.path.join(folder, f)) > MAX_PAGE_BYTES}
+    check("growing every document afterwards keeps each page under maxPageSize", not oversized,
+          f"oversized: {oversized}")
+    pk = conn.count_via_pk(coll=LOST_ROWS_COLL)
+    check("every grown document is still there", pk == LOST_ROWS_DOCS, f"pk={pk}")
 
 
 EMPTY_IDX_COLL = "emptied_index_docs"
@@ -1326,6 +1370,7 @@ def main():
             test_a_script_written_custom_value_is_found_by_an_index_backed_filter(conn)
             test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn)
             test_non_finite_numbers_are_refused(conn)
+            seed_a_collection_whose_page_rows_will_be_lost(conn, work_dir)
 
             print("\n  Killing the server without a drain ...")
             check("the unclean stop left an index-dirty marker on disk",
@@ -1336,12 +1381,14 @@ def main():
         proc = None
 
         append_torn_pk_line(work_dir, DB, HEAL_COLL)
+        lose_the_page_rows(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
         proc = bu.start_server(work_dir, log_path)
         test_an_unclean_stop_is_reported_at_the_next_startup(work_dir, log_path, log_offset)
         with admin_conn() as conn:
             test_non_finite_numbers_stay_refused_after_a_restart(conn)
+            test_lost_page_rows_are_rebuilt_at_startup(conn, work_dir)
             test_the_committed_transaction_is_all_there_after_the_restart(conn)
             test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)
             test_a_bulk_update_of_many_entries_leaves_every_document_consistent(conn)

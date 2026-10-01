@@ -25,6 +25,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
@@ -119,7 +120,8 @@ public final class SaveOperationHelper {
         cache.addEntryToCache(dbName, collName, entry);
         // Mark pending before releasing the write lock, so index-backed reads reconcile it until indexed.
         pendingIndexWrites.mark(dbName, collName, entry.get_id());
-        taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry));
+        taskManager.submitBackgroundTask(
+                new EntityEvent(eventType, dbName, collName, entry, CollectionIncarnation.current(dbName, collName)));
         listenManager.markDirty(dbName, collName);
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
         return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue(), eventType == EventType.CREATED);
@@ -242,7 +244,8 @@ public final class SaveOperationHelper {
         cache.addEntriesToCache(dbName, collName, inserted);
         pendingIndexWrites.mark(dbName, collName, idsOf(updated));
         pendingIndexWrites.mark(dbName, collName, idsOf(inserted));
-        taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, inserted, updated));
+        taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, inserted, updated,
+                CollectionIncarnation.current(dbName, collName)));
         listenManager.markDirty(dbName, collName);
     }
 
@@ -274,7 +277,8 @@ public final class SaveOperationHelper {
         primaryKeyIndex.remove(idxEntry);
         cache.evictEntry(dbName, collName, entry.get_id());
         pendingIndexWrites.mark(dbName, collName, entry.get_id());
-        taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, oldEntry));
+        taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, oldEntry,
+                CollectionIncarnation.current(dbName, collName)));
 
         final PkIndexEntry relocatedPkIndexEntry;
         try {
@@ -293,7 +297,8 @@ public final class SaveOperationHelper {
         primaryKeyIndex.add(insertAt, relocatedPkIndexEntry);
         cache.addEntryToCache(dbName, collName, entry);
         pendingIndexWrites.mark(dbName, collName, entry.get_id());
-        taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, entry));
+        taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, entry,
+                CollectionIncarnation.current(dbName, collName)));
         return relocatedPkIndexEntry;
     }
 
@@ -309,7 +314,8 @@ public final class SaveOperationHelper {
             }
             primaryKeyIndex.add(insertAt, restored);
             cache.addEntryToCache(dbName, collName, oldEntry);
-            taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, oldEntry));
+            taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, oldEntry,
+                    CollectionIncarnation.current(dbName, collName)));
         } catch (Exception restoreFailure) {
             logger.error(
                     "Relocation of " + oldEntry.get_id() + " in " + dbName + "|" + collName

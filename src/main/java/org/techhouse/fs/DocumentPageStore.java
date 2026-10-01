@@ -5,11 +5,13 @@ import java.io.RandomAccessFile;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.techhouse.config.Globals;
@@ -116,6 +118,19 @@ final class DocumentPageStore {
 
     Stream<DbEntry> streamEntries(String dbName, String collName) throws IOException {
         return streamPages(dbName, collName).flatMap(map -> map.values().stream());
+    }
+
+    Map<Long, Long> pageFileLengths(String dbName, String collName) throws IOException {
+        final var collectionFolder = paths.collectionFolder(dbName, collName).toPath();
+        final var lengths = new TreeMap<Long, Long>();
+        if (!Files.exists(collectionFolder)) {
+            return lengths;
+        }
+        try (var pathStream = Files.list(collectionFolder)) {
+            pathStream.map(Path::toFile).filter(file -> file.getName().endsWith(Globals.DB_FILE_EXTENSION))
+                    .forEach(file -> lengths.put(pageNumberOf(file.getName()), file.length()));
+        }
+        return lengths;
     }
 
     long pageFileCount(String dbName, String collName) throws IOException {

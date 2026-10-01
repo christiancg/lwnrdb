@@ -28,34 +28,24 @@ public final class CommittedOpTriggers {
             Transaction transaction, Set<String> fencedIds) {
         final var saveWrites = new LinkedHashMap<TargetKey, LinkedHashMap<String, Boolean>>();
         for (final var op : ops) {
-            final var dbName = op.getTargetDb();
-            final var collName = op.getTargetColl();
+            final var target = new TargetKey(op.getTargetDb(), op.getTargetColl());
             final var inserted = transaction.insertedIdsFor(op.getSeq());
             switch (op.getOpType()) {
                 case AdminTransactionEntry.OP_TYPE_SAVE -> {
                     final var id = op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue();
-                    recordSaveWrite(saveWrites, dbName, collName, id, inserted.contains(id));
+                    recordSaveWrite(saveWrites, target, id, inserted.contains(id));
                 }
                 case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
                     for (final var element : op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList()) {
                         final var object = element.asJsonObject();
                         if (object.has(Globals.PK_FIELD)) {
                             final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
-                            recordSaveWrite(saveWrites, dbName, collName, id, inserted.contains(id));
+                            recordSaveWrite(saveWrites, target, id, inserted.contains(id));
                         }
                     }
                 }
-                case AdminTransactionEntry.OP_TYPE_DELETE -> {
-                    final var payload = op.getPayload();
-                    final var id = payload.get(Globals.PK_FIELD).asJsonString().getValue();
-                    if (payload.has(DELETED_DOCUMENT_FIELD) && !deleteDidNotApply(fencedIds, dbName, collName, id)) {
-                        TriggerHelper
-                                .afterWrite(dbName, collName, EventType.DELETED,
-                                        DbEntry.fromJsonObject(dbName, collName,
-                                                payload.get(DELETED_DOCUMENT_FIELD).asJsonObject()),
-                                        actingUser, triggerDepth);
-                    }
-                }
+                case AdminTransactionEntry.OP_TYPE_DELETE ->
+                    fireForDelete(op, target, saveWrites, actingUser, triggerDepth, fencedIds);
                 default -> {
                 }
             }
@@ -72,10 +62,27 @@ public final class CommittedOpTriggers {
         }
     }
 
-    private static void recordSaveWrite(Map<TargetKey, LinkedHashMap<String, Boolean>> saveWrites, String dbName,
-            String collName, String id, boolean wasInserted) {
-        saveWrites.computeIfAbsent(new TargetKey(dbName, collName), _ -> new LinkedHashMap<>()).merge(id, wasInserted,
+    private static void recordSaveWrite(Map<TargetKey, LinkedHashMap<String, Boolean>> saveWrites, TargetKey target,
+            String id, boolean wasInserted) {
+        saveWrites.computeIfAbsent(target, _ -> new LinkedHashMap<>()).merge(id, wasInserted,
                 (existing, now) -> existing || now);
+    }
+
+    private static void fireForDelete(AdminTransactionEntry op, TargetKey target,
+            Map<TargetKey, LinkedHashMap<String, Boolean>> saveWrites, String actingUser, int triggerDepth,
+            Set<String> fencedIds) {
+        final var payload = op.getPayload();
+        final var id = payload.get(Globals.PK_FIELD).asJsonString().getValue();
+        final var writesToTarget = saveWrites.get(target);
+        final var createdInThisTransaction = writesToTarget != null && Boolean.TRUE.equals(writesToTarget.remove(id));
+        if (createdInThisTransaction || !payload.has(DELETED_DOCUMENT_FIELD)
+                || deleteDidNotApply(fencedIds, target.dbName(), target.collName(), id)) {
+            return;
+        }
+        TriggerHelper.afterWrite(
+                target.dbName(), target.collName(), EventType.DELETED, DbEntry.fromJsonObject(target.dbName(),
+                        target.collName(), payload.get(DELETED_DOCUMENT_FIELD).asJsonObject()),
+                actingUser, triggerDepth);
     }
 
     private record TargetKey(String dbName, String collName) {

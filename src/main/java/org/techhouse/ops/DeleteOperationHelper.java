@@ -10,6 +10,7 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
+import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.OperationResponse;
@@ -43,7 +44,8 @@ public final class DeleteOperationHelper {
             // Pending until the async DELETED event clears it: the field index still maps the value to
             // this id, so index-only reads (COUNT, DISTINCT) would otherwise surface the deleted doc.
             pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
-            taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
+            taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted,
+                    CollectionIncarnation.current(dbName, collName)));
             listenManager.markDirty(dbName, collName);
             CollectionAccessHelper.recordCollectionAccess(dbName, collName);
             return new DeleteResponse("Entry with id " + deleteRequest.get_id() + " deleted successfully");

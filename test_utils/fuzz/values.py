@@ -153,3 +153,14 @@ def operand(rng):
 def operand_list(rng):
     size = rng.randint(1, 3)
     return [rng.choice(SCALAR_POOL) for _ in range(size)]
+
+
+def container_operand(rng):
+    size = rng.randint(0, 2)
+    if rng.random() < 0.5:
+        return [scalar(rng) for _ in range(size)]
+    return {f"k{i}": scalar(rng) for i in range(size)}
+
+
+def container_operand_list(rng):
+    return [container_operand(rng) for _ in range(rng.randint(1, 2))]

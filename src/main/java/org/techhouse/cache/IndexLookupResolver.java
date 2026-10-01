@@ -1,6 +1,8 @@
 package org.techhouse.cache;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.data.FieldIndexEntry;
@@ -52,7 +54,7 @@ final class IndexLookupResolver {
                 if (stringIndex == null) {
                     yield null;
                 } else if (operator.getFieldOperatorType() == FieldOperatorType.CONTAINS
-                        && hasAnotherTypeIndex(userCache, dbName, collName, fieldName, String.class)) {
+                        && hasAnotherIndex(userCache, dbName, collName, fieldName, String.class, null)) {
                     yield null;
                 } else {
                     yield SearchUtils.findingByOperator(stringIndex, operator.getFieldOperatorType(), s);
@@ -71,7 +73,10 @@ final class IndexLookupResolver {
             }
             case JsonObject obj -> {
                 final var opType = operator.getFieldOperatorType();
-                if (opType == FieldOperatorType.EQUALS || opType == FieldOperatorType.NOT_EQUALS) {
+                if (opType == FieldOperatorType.NOT_EQUALS
+                        && complementLacksUniverse(userCache, dbName, collName, fieldName, null, IndexKind.OBJECT)) {
+                    yield null;
+                } else if (opType == FieldOperatorType.EQUALS || opType == FieldOperatorType.NOT_EQUALS) {
                     final var hashIndex = userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName,
                             IndexKind.OBJECT);
                     yield hashIndex != null
@@ -85,6 +90,10 @@ final class IndexLookupResolver {
                 final var opType = operator.getFieldOperatorType();
                 yield switch (opType) {
                     case EQUALS, NOT_EQUALS -> {
+                        if (opType == FieldOperatorType.NOT_EQUALS && complementLacksUniverse(userCache, dbName,
+                                collName, fieldName, null, IndexKind.ARRAY)) {
+                            yield null;
+                        }
                         final var hashIndex = userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName,
                                 IndexKind.ARRAY);
                         yield hashIndex != null
@@ -139,11 +148,6 @@ final class IndexLookupResolver {
         return "other";
     }
 
-    private static boolean hasAnotherTypeIndex(UserCache userCache, String dbName, String collName, String fieldName,
-            Class<?> chosen) throws IOException {
-        return hasAnotherIndex(userCache, dbName, collName, fieldName, chosen, null);
-    }
-
     private static boolean hasAnotherIndex(UserCache userCache, String dbName, String collName, String fieldName,
             Class<?> chosenType, IndexKind chosenKind) throws IOException {
         for (final var type : List.of(Number.class, Boolean.class, String.class)) {
@@ -167,9 +171,39 @@ final class IndexLookupResolver {
         return false;
     }
 
+    private static boolean complementLacksUniverse(UserCache userCache, String dbName, String collName,
+            String fieldName, Class<?> chosenType, IndexKind chosenKind) throws IOException {
+        return hasAnotherIndex(userCache, dbName, collName, fieldName, chosenType, chosenKind)
+                || indexedIdCount(userCache, dbName, collName, fieldName) < userCache
+                        .getPkIndexAndLoadIfNecessary(dbName, collName).size();
+    }
+
+    private static int indexedIdCount(UserCache userCache, String dbName, String collName, String fieldName)
+            throws IOException {
+        final var covered = new HashSet<String>();
+        final var types = new ArrayList<Class<?>>(List.of(Number.class, Boolean.class, String.class));
+        types.addAll(CustomTypeFactory.getCustomTypes().values());
+        for (final var type : types) {
+            addIds(covered, userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, type));
+        }
+        for (final var kind : HASH_INDEX_KINDS) {
+            addIds(covered, userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind));
+        }
+        return covered.size();
+    }
+
+    private static <T> void addIds(Set<String> covered, List<FieldIndexEntry<T>> index) {
+        if (index != null) {
+            for (final var entry : index) {
+                covered.addAll(entry.getIds());
+            }
+        }
+    }
+
     private static <T> List<FieldIndexEntry<T>> complementSafeIndex(UserCache userCache, String dbName, String collName,
             String fieldName, FieldOperatorType opType, Class<T> chosen) throws IOException {
-        if (opType == FieldOperatorType.NOT_IN && hasAnotherTypeIndex(userCache, dbName, collName, fieldName, chosen)) {
+        if (opType == FieldOperatorType.NOT_IN
+                && complementLacksUniverse(userCache, dbName, collName, fieldName, chosen, null)) {
             return null;
         }
         return userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, chosen);
@@ -177,7 +211,8 @@ final class IndexLookupResolver {
 
     private static List<FieldIndexEntry<String>> complementSafeHashIndex(UserCache userCache, String dbName,
             String collName, String fieldName, FieldOperatorType opType, IndexKind kind) throws IOException {
-        if (opType == FieldOperatorType.NOT_IN && hasAnotherIndex(userCache, dbName, collName, fieldName, null, kind)) {
+        if (opType == FieldOperatorType.NOT_IN
+                && complementLacksUniverse(userCache, dbName, collName, fieldName, null, kind)) {
             return null;
         }
         return userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);

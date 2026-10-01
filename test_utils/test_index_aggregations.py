@@ -1164,6 +1164,8 @@ REG_VALUELESS = "idxagg_reg_valueless"
 REG_CAST = "idxagg_reg_cast"
 REG_NULLFOLD = "idxagg_reg_nullfold"
 REG_CUSTOM_ORDER = "idxagg_reg_customorder"
+REG_COMPLEMENT_KINDS = "idxagg_reg_complkinds"
+REG_COMPLEMENT_NULL = "idxagg_reg_complnull"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -1769,12 +1771,54 @@ def probe_custom_sort_agrees_with_the_range_filter(c):
           detail=f"sorted={ordered} above the middle point={above}")
 
 
+def _complement_answers(c, coll, field, op, value):
+    rows = _in_filter(c, coll, field, value, op=op)
+    counted = agg(c, coll, [{"type": "FILTER", "operator": {"fieldOperatorType": op, "field": field, "value": value}},
+                            {"type": "COUNT"}])
+    return rows, ((counted.get("results") or [{}])[0]).get("count")
+
+
+def probe_complements_agree_between_index_and_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_COMPLEMENT_KINDS})
+    save_doc(c, REG_COMPLEMENT_KINDS, {"_id": "obj", "x": {"a": 1}})
+    save_doc(c, REG_COMPLEMENT_KINDS, {"_id": "arr", "x": [1, 2, 3]})
+    save_doc(c, REG_COMPLEMENT_KINDS, {"_id": "str", "x": "hello"})
+    save_doc(c, REG_COMPLEMENT_KINDS, {"_id": "nul", "x": None})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_COMPLEMENT_NULL})
+    save_doc(c, REG_COMPLEMENT_NULL, {"_id": "a", "x": "a"})
+    save_doc(c, REG_COMPLEMENT_NULL, {"_id": "b", "x": "b"})
+    save_doc(c, REG_COMPLEMENT_NULL, {"_id": "n", "x": None})
+
+    queries = (
+        (REG_COMPLEMENT_KINDS, "NOT_EQUALS", {"a": 1}),
+        (REG_COMPLEMENT_KINDS, "NOT_EQUALS", [1, 2, 3]),
+        (REG_COMPLEMENT_KINDS, "NOT_IN", [{"a": 1}]),
+        (REG_COMPLEMENT_NULL, "NOT_IN", ["a"]),
+    )
+    scanned = [_complement_answers(c, coll, "x", op, value) for coll, op, value in queries]
+
+    for coll in (REG_COMPLEMENT_KINDS, REG_COMPLEMENT_NULL):
+        c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll, "fieldName": "x"})
+    wait_for_indexes(c, [(REG_COMPLEMENT_KINDS, "x"), (REG_COMPLEMENT_NULL, "x")])
+    wait_for_background()
+
+    check("NOT_EQUALS against an object matches every other kind of value, null included",
+          scanned[0][0] == ["arr", "nul", "str"], detail=f"scan={scanned[0][0]}")
+    check("NOT_IN keeps an explicit null on a single-type field", scanned[3][0] == ["b", "n"],
+          detail=f"scan={scanned[3][0]}")
+    for (coll, op, value), before in zip(queries, scanned):
+        after = _complement_answers(c, coll, "x", op, value)
+        check(f"an indexed {op} {value!r} returns what the scan returns, rows and COUNT alike", after == before,
+              detail=f"scan={before} indexed={after}")
+
+
 def regression_suite(c):
     section("Correctness regressions: non-ASCII index values, index values containing the file's own "
             "delimiters, repeated CREATE_INDEX, single-valued index ranges, low-cardinality numeric "
             "indexes, conjunctions over a filtered stream, custom values across a MAP step, "
             "conjunctions over rows with no _id, valueless field operands, the MAP CAST value boundary, "
-            "one spelling of JSON null across a MAP step and an index build, custom-typed SORT order")
+            "one spelling of JSON null across a MAP step and an index build, custom-typed SORT order, "
+            "complement operators over mixed kinds and explicit nulls")
     probe_non_ascii_indexed_values(c)
     probe_index_values_containing_delimiters(c)
     probe_repeated_create_index_is_idempotent(c)
@@ -1798,6 +1842,7 @@ def regression_suite(c):
     probe_a_map_null_result_is_a_real_json_null(c)
     probe_indexing_a_field_written_as_null_is_consistent(c)
     probe_custom_sort_agrees_with_the_range_filter(c)
+    probe_complements_agree_between_index_and_scan(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════
