@@ -399,11 +399,25 @@ final class AdminSnapshotConformer {
     }
 
     private void dropDatabase(String dbName) throws Exception {
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+        if (!locks.tryLockDatabaseExclusive(dbName, waitMillis)) {
+            logger.warning("Skipping the quarantine of database " + dbName + ": it stayed locked for " + waitMillis
+                    + "ms. The next round retries it.");
+            return;
+        }
+        try {
+            quarantineDatabaseUnderBarrier(dbName, waitMillis);
+        } finally {
+            locks.releaseDatabaseExclusive(dbName);
+            locks.removeDatabaseLock(dbName);
+        }
+    }
+
+    private void quarantineDatabaseUnderBarrier(String dbName, long waitMillis) throws Exception {
         final var dbEntry = cache.getAdminDbEntry(dbName);
         final var collNames = dbEntry != null ? new ArrayList<>(dbEntry.getCollections()) : new ArrayList<String>();
         Collections.sort(collNames);
         final var lockedColls = new ArrayList<String>();
-        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
         try {
             for (final var collName : collNames) {
                 if (!locks.tryLockWrite(dbName, collName, waitMillis)) {

@@ -21,12 +21,15 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.test.TestUtils;
 
 public class ConformDatabaseBarrierTest {
     private static final String DB = "barrierdb";
     private static final String COLL = "barriercoll";
+    private static final String OTHER_DB = "otherbarrierdb";
     private final AdminSnapshotConformer conformer = new AdminSnapshotConformer();
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final Cache cache = IocContainer.get(Cache.class);
@@ -56,21 +59,57 @@ public class ConformDatabaseBarrierTest {
         }
     }
 
-    private void holdTheDatabaseExclusivelyElsewhere() throws Exception {
+    private interface BarrierAcquire {
+        boolean acquire() throws InterruptedException;
+    }
+
+    private void holdTheDatabaseElsewhere(BarrierAcquire acquire, Runnable releaseBarrier) throws Exception {
         final var taken = new CountDownLatch(1);
         release = new CountDownLatch(1);
         holder = new Thread(() -> {
             try {
-                assertTrue(locks.tryLockDatabaseExclusive(DB, 1000));
+                assertTrue(acquire.acquire());
                 taken.countDown();
                 release.await();
-                locks.releaseDatabaseExclusive(DB);
+                releaseBarrier.run();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
-        }, "drop-database-holder");
+        }, "database-barrier-holder");
         holder.start();
         assertTrue(taken.await(5, TimeUnit.SECONDS));
+    }
+
+    private void holdTheDatabaseExclusivelyElsewhere() throws Exception {
+        holdTheDatabaseElsewhere(() -> locks.tryLockDatabaseExclusive(DB, 1000),
+                () -> locks.releaseDatabaseExclusive(DB));
+    }
+
+    private void holdTheDatabaseSharedElsewhere() throws Exception {
+        holdTheDatabaseElsewhere(() -> locks.tryLockDatabaseShared(DB, 1000), () -> locks.releaseDatabaseShared(DB));
+    }
+
+    private static void registerTheDatabaseLocally() throws Exception {
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(DB));
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(DB, COLL));
+        final var fs = IocContainer.get(FileSystem.class);
+        fs.createDatabaseFolder(DB);
+        fs.createCollectionFile(DB, COLL);
+    }
+
+    private static AdminSnapshotPayload snapshotWithoutTheDatabase() {
+        final var other = new AdminDbEntry(OTHER_DB, new ArrayList<>(), new ArrayList<>()).getData();
+        return new AdminSnapshotPayload(5L, List.of(other), List.of(), List.of(), new JsonObject());
+    }
+
+    private void assertStillRegistered(String reason) {
+        assertNotNull(cache.getAdminDbEntry(DB), reason);
+        assertNotNull(cache.getAdminCollectionEntry(DB, COLL), reason);
+    }
+
+    private void assertQuarantined() {
+        assertNull(cache.getAdminDbEntry(DB), "the next round must quarantine the database");
+        assertNull(cache.getAdminCollectionEntry(DB, COLL), "the next round must quarantine its collections");
     }
 
     private static AdminSnapshotPayload snapshot() {
@@ -93,5 +132,58 @@ public class ConformDatabaseBarrierTest {
         conformer.conform(snapshot());
 
         assertNotNull(cache.getAdminCollectionEntry(DB, COLL), "the next round must register it");
+    }
+
+    @Test
+    public void test_quarantine_skips_a_database_while_a_collection_registration_holds_it() throws Exception {
+        registerTheDatabaseLocally();
+        holdTheDatabaseSharedElsewhere();
+
+        conformer.conform(snapshotWithoutTheDatabase());
+
+        assertStillRegistered("a collection registered during the quarantine would be deleted with no lock held on it");
+
+        releaseHolder();
+        conformer.conform(snapshotWithoutTheDatabase());
+
+        assertQuarantined();
+    }
+
+    @Test
+    public void test_quarantine_skips_a_database_another_drop_holds() throws Exception {
+        registerTheDatabaseLocally();
+        holdTheDatabaseExclusivelyElsewhere();
+
+        conformer.conform(snapshotWithoutTheDatabase());
+
+        assertStillRegistered("the quarantine must wait for the drop holding the database barrier");
+
+        releaseHolder();
+        conformer.conform(snapshotWithoutTheDatabase());
+
+        assertQuarantined();
+    }
+
+    @Test
+    public void test_quarantine_releases_the_database_barrier() throws Exception {
+        registerTheDatabaseLocally();
+
+        conformer.conform(snapshotWithoutTheDatabase());
+
+        assertQuarantined();
+        final var acquired = new boolean[1];
+        final var probe = new Thread(() -> {
+            try {
+                acquired[0] = locks.tryLockDatabaseExclusive(DB, 0);
+                if (acquired[0]) {
+                    locks.releaseDatabaseExclusive(DB);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "database-barrier-probe");
+        probe.start();
+        probe.join(5000);
+        assertTrue(acquired[0], "a stranded barrier would block every later collection registration");
     }
 }
