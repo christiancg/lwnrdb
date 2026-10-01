@@ -31,8 +31,8 @@ final class IndexLookupResolver {
             FieldOperator operator, T value) throws IOException {
         return switch (value) {
             case Number n -> {
-                final var numberIndex = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
-                        Number.class);
+                final var numberIndex = complementSafeIndex(userCache, dbName, collName, fieldName,
+                        operator.getFieldOperatorType(), Number.class);
                 if (numberIndex != null) {
                     yield SearchUtils.findingByOperator(numberIndex, operator.getFieldOperatorType(), n);
                 } else {
@@ -40,8 +40,8 @@ final class IndexLookupResolver {
                 }
             }
             case Boolean b -> {
-                final var booleanIndex = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
-                        Boolean.class);
+                final var booleanIndex = complementSafeIndex(userCache, dbName, collName, fieldName,
+                        operator.getFieldOperatorType(), Boolean.class);
                 if (booleanIndex != null) {
                     yield SearchUtils.findingByOperator(booleanIndex, operator.getFieldOperatorType(), b);
                 } else {
@@ -49,8 +49,8 @@ final class IndexLookupResolver {
                 }
             }
             case String s -> {
-                final var stringIndex = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
-                        String.class);
+                final var stringIndex = complementSafeIndex(userCache, dbName, collName, fieldName,
+                        operator.getFieldOperatorType(), String.class);
                 if (stringIndex == null) {
                     yield null;
                 } else if (operator.getFieldOperatorType() == FieldOperatorType.CONTAINS
@@ -63,8 +63,8 @@ final class IndexLookupResolver {
             case JsonCustom<?> c -> {
                 final var customTypes = CustomTypeFactory.getCustomTypes();
                 final var customClass = customTypes.get(c.getCustomTypeName());
-                final var customIndex = userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName,
-                        (Class<T>) customClass);
+                final var customIndex = complementSafeIndex(userCache, dbName, collName, fieldName,
+                        operator.getFieldOperatorType(), (Class<T>) customClass);
                 if (customIndex != null) {
                     yield SearchUtils.findingByOperator(customIndex, operator.getFieldOperatorType(), (T) c);
                 } else {
@@ -73,11 +73,8 @@ final class IndexLookupResolver {
             }
             case JsonObject obj -> {
                 final var opType = operator.getFieldOperatorType();
-                if (opType == FieldOperatorType.NOT_EQUALS
-                        && complementLacksUniverse(userCache, dbName, collName, fieldName, null, IndexKind.OBJECT)) {
-                    yield null;
-                } else if (opType == FieldOperatorType.EQUALS || opType == FieldOperatorType.NOT_EQUALS) {
-                    final var hashIndex = userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                if (opType == FieldOperatorType.EQUALS || opType == FieldOperatorType.NOT_EQUALS) {
+                    final var hashIndex = complementSafeHashIndex(userCache, dbName, collName, fieldName, opType,
                             IndexKind.OBJECT);
                     yield hashIndex != null
                             ? SearchUtils.findingByOperator(hashIndex, opType, JsonUtils.hashElement(obj))
@@ -90,11 +87,7 @@ final class IndexLookupResolver {
                 final var opType = operator.getFieldOperatorType();
                 yield switch (opType) {
                     case EQUALS, NOT_EQUALS -> {
-                        if (opType == FieldOperatorType.NOT_EQUALS && complementLacksUniverse(userCache, dbName,
-                                collName, fieldName, null, IndexKind.ARRAY)) {
-                            yield null;
-                        }
-                        final var hashIndex = userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName,
+                        final var hashIndex = complementSafeHashIndex(userCache, dbName, collName, fieldName, opType,
                                 IndexKind.ARRAY);
                         yield hashIndex != null
                                 ? SearchUtils.findingByOperator(hashIndex, opType, JsonUtils.hashElement(arr))
@@ -200,10 +193,13 @@ final class IndexLookupResolver {
         }
     }
 
+    private static boolean isComplement(FieldOperatorType opType) {
+        return opType == FieldOperatorType.NOT_IN || opType == FieldOperatorType.NOT_EQUALS;
+    }
+
     private static <T> List<FieldIndexEntry<T>> complementSafeIndex(UserCache userCache, String dbName, String collName,
             String fieldName, FieldOperatorType opType, Class<T> chosen) throws IOException {
-        if (opType == FieldOperatorType.NOT_IN
-                && complementLacksUniverse(userCache, dbName, collName, fieldName, chosen, null)) {
+        if (isComplement(opType) && complementLacksUniverse(userCache, dbName, collName, fieldName, chosen, null)) {
             return null;
         }
         return userCache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, chosen);
@@ -211,8 +207,7 @@ final class IndexLookupResolver {
 
     private static List<FieldIndexEntry<String>> complementSafeHashIndex(UserCache userCache, String dbName,
             String collName, String fieldName, FieldOperatorType opType, IndexKind kind) throws IOException {
-        if (opType == FieldOperatorType.NOT_IN
-                && complementLacksUniverse(userCache, dbName, collName, fieldName, null, kind)) {
+        if (isComplement(opType) && complementLacksUniverse(userCache, dbName, collName, fieldName, null, kind)) {
             return null;
         }
         return userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);

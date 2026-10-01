@@ -661,6 +661,27 @@ def test_host_writes(conn: Conn):
                  conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "visible"}), "OK")
 
 
+def test_host_round_trip_keeps_custom_spelling(conn: Conn):
+    section("Host interface — a re-saved document keeps its custom spellings")
+    spellings = {"loc": "#geo(45,-122)", "at": "#datetime(2024-01-01T10:00:00)",
+                 "time": "#time(10:00:00)", "vec": "#vector(1,2)"}
+    check_status("write custom values over the wire",
+                 conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                            "object": {"_id": "spell", **spellings}}), "OK")
+    check_result("re-save the document read back, untouched and as a structured clone",
+                 conn.run('import db from "db";\n'
+                          f'const doc = db.findById(db.name, "{COLL}", "spell");\n'
+                          f'db.save(db.name, "{COLL}", {{ ...doc, touched: true }});\n'
+                          f'db.save(db.name, "{COLL}", {{ ...structuredClone(doc), _id: "spell-clone" }});\n'
+                          'return "saved";'), "saved")
+    for doc_id in ("spell", "spell-clone"):
+        stored = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                            "_id": doc_id}).get("object") or {}
+        for field, spelling in spellings.items():
+            check(f"{doc_id}: {field} is stored exactly as written", stored.get(field) == spelling,
+                  f"expected {spelling!r}, got {stored.get(field)!r}")
+
+
 def test_transactions(conn: Conn):
     section("Host interface — transactions")
     check_result("a transaction commits both collections",
@@ -1503,6 +1524,7 @@ def main():
             test_request_validation(conn)
             test_host_reads(conn)
             test_host_writes(conn)
+            test_host_round_trip_keeps_custom_spelling(conn)
             test_transactions(conn)
             test_scope_and_failures(conn)
             test_schema_interaction(conn)

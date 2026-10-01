@@ -12,11 +12,13 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBoolean;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -104,8 +106,14 @@ public class IndexScanComplementAgreementTest {
     }
 
     private Set<String> idsFromIndex(FieldOperatorType type, JsonBaseElement operand) throws IOException {
+        final Object value = switch (operand) {
+            case JsonNumber number -> number.getValue();
+            case JsonBoolean bool -> bool.getValue();
+            case JsonString string -> string.getValue();
+            default -> operand;
+        };
         return cache.getIdsFromIndex(TestGlobals.DB, TestGlobals.COLL, FIELD, new FieldOperator(type, FIELD, operand),
-                operand);
+                value);
     }
 
     @Test
@@ -195,5 +203,78 @@ public class IndexScanComplementAgreementTest {
         indexTheField();
         assertNull(idsFromIndex(FieldOperatorType.NOT_EQUALS, arrayOf(new JsonNumber(1))));
         assertNotNull(idsFromIndex(FieldOperatorType.EQUALS, arrayOf(new JsonNumber(1))));
+    }
+    private void storeMixedKinds() throws IOException {
+        store("num", new JsonNumber(5));
+        store("str", new JsonString("a"));
+        store("bool", new JsonBoolean(true));
+        store("nul", JsonNull.INSTANCE);
+        store("arr", arrayOf(new JsonNumber(5)));
+        store("obj", objectWithA(5));
+    }
+
+    @Test
+    public void test_scalar_not_equals_matches_every_other_kind_on_a_mixed_field() throws Exception {
+        storeMixedKinds();
+        assertEquals(6, answer(where(FieldOperatorType.NOT_EQUALS, new JsonString("b"))).size());
+        assertEquals(5, answer(where(FieldOperatorType.NOT_EQUALS, new JsonNumber(5))).size());
+        assertEquals(5, answer(where(FieldOperatorType.NOT_EQUALS, new JsonBoolean(true))).size());
+    }
+
+    @Test
+    public void test_scalar_not_equals_agrees_with_the_scan_on_a_mixed_field() throws Exception {
+        storeMixedKinds();
+        assertIndexAgreesWithScan(where(FieldOperatorType.NOT_EQUALS, new JsonString("b")));
+    }
+
+    @Test
+    public void test_scalar_not_equals_count_agrees_with_the_scan_on_a_mixed_field() throws Exception {
+        storeMixedKinds();
+        assertIndexAgreesWithScan(where(FieldOperatorType.NOT_EQUALS, new JsonNumber(5)), new CountAggregationStep());
+    }
+
+    @Test
+    public void test_scalar_not_equals_agrees_with_not_in_on_a_mixed_field() throws Exception {
+        storeMixedKinds();
+        indexTheField();
+        assertEquals(answer(where(FieldOperatorType.NOT_IN, arrayOf(new JsonString("a")))),
+                answer(where(FieldOperatorType.NOT_EQUALS, new JsonString("a"))));
+    }
+
+    @Test
+    public void test_scalar_not_equals_declines_the_index_when_another_type_is_indexed() throws Exception {
+        store("1", new JsonNumber(1));
+        store("2", new JsonString("s"));
+        indexTheField();
+        assertNull(idsFromIndex(FieldOperatorType.NOT_EQUALS, new JsonNumber(1)));
+        assertNull(idsFromIndex(FieldOperatorType.NOT_EQUALS, new JsonString("t")));
+        assertNotNull(idsFromIndex(FieldOperatorType.EQUALS, new JsonNumber(1)));
+    }
+
+    @Test
+    public void test_scalar_not_equals_declines_the_index_when_a_document_is_not_covered() throws Exception {
+        store("1", new JsonNumber(1));
+        store("2", JsonNull.INSTANCE);
+        indexTheField();
+        assertNull(idsFromIndex(FieldOperatorType.NOT_EQUALS, new JsonNumber(1)));
+    }
+
+    @Test
+    public void test_scalar_not_equals_still_uses_the_index_on_a_covered_homogeneous_field() throws Exception {
+        store("1", new JsonNumber(1));
+        store("2", new JsonNumber(2));
+        indexTheField();
+        assertEquals(Set.of("2"), idsFromIndex(FieldOperatorType.NOT_EQUALS, new JsonNumber(1)));
+    }
+
+    @Test
+    public void test_a_pending_write_of_another_kind_is_re_derived_for_scalar_not_equals() throws Exception {
+        store("1", new JsonNumber(1));
+        store("2", new JsonNumber(2));
+        indexTheField();
+        store("2", new JsonString("now a string"));
+        IocContainer.get(PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL, "2");
+        assertEquals(1, answer(where(FieldOperatorType.NOT_EQUALS, new JsonNumber(1))).size());
+        assertEquals(2, answer(where(FieldOperatorType.NOT_EQUALS, new JsonNumber(2))).size());
     }
 }

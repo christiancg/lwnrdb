@@ -320,6 +320,34 @@ def count_vs_rows(executor, matrices: dict, stats: Stats) -> list:
     return divergences
 
 
+def _scalar_not_equals(query):
+    if query.kind != FILTER_QUERY or len(query.steps) != 1:
+        return None
+    operator = query.steps[0].get("operator", {})
+    operand = operator.get("value")
+    if (operator.get("fieldOperatorType") != "NOT_EQUALS" or operator.get("field") == PRIMARY_KEY_FIELD
+            or operand is None or isinstance(operand, (list, dict))):
+        return None
+    return operator
+
+
+def not_equals_vs_not_in(executor, matrices: dict, stats: Stats) -> list:
+    divergences = []
+    for (db, coll), queries in sorted(matrices.items()):
+        for query in queries:
+            operator = _scalar_not_equals(query)
+            if operator is None:
+                continue
+            stats.bump("not_equals_vs_not_in_queries")
+            not_equals = answer_of(aggregate(executor, db, coll, query.steps))
+            not_in = answer_of(aggregate(executor, db, coll, [
+                filter_step(operator["field"], "NOT_IN", [operator["value"]])]))
+            if not_equals != not_in:
+                divergences.append(
+                    Divergence("not-equals-vs-not-in", db, coll, query.label, not_equals, not_in))
+    return divergences
+
+
 def snapshot(executor, matrices: dict) -> dict:
     taken = {}
     for (db, coll), queries in sorted(matrices.items()):

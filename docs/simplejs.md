@@ -407,7 +407,11 @@ future proposals; `toTemporal()` bridges to `Temporal.PlainDateTime`/`PlainTime`
 arithmetic is reachable from a stored field without a second implementation. `EJsonInterop`
 emits real `JsonGeo`/`JsonVector`/… values, so a document saved from a script keeps the type the
 storage and index layers already understand; a custom type registered later with no value type
-here degrades to its wire text rather than silently vanishing.
+here degrades to its wire text rather than silently vanishing. A custom value **read from a
+document is written back with its original spelling**: the value type keeps the `JsonCustom` it
+came from, so `#geo(45,-122)` passing untouched through a before hook or a `db.findById` →
+`db.save` round trip is stored as `#geo(45,-122)`, not re-derived as `#geo(45.0,-122.0)`. Only a
+value the script builds itself (`new Geo(...)`, `Geo.from(...)`) takes the derived spelling.
 
 A **plain string in custom wire format is promoted on the way into a document**, so
 `'#geo(1,2)'` and `Geo.from('#geo(1,2)')` store exactly the same thing and a script-written

@@ -796,6 +796,29 @@ def test_before_hooks(conn: Conn):
     drop_hook(conn, "noop_hook")
 
 
+CUSTOM_SPELLINGS = {"loc": "#geo(45,-122)", "at": "#datetime(2024-01-01T10:00:00)",
+                    "time": "#time(10:00:00)", "vec": "#vector(1,2)"}
+
+
+def test_before_hook_preserves_custom_spelling(conn: Conn):
+    section("Before hooks - a custom value the hook never touched keeps its spelling")
+    check_status("install a hook that rebuilds the document",
+                 install_hook(conn, "spread_hook", "spreader", "export default (doc) => ({ ...doc, touched: true });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_status("write custom values through the hook", conn.save_doc({"_id": "spell1", **CUSTOM_SPELLINGS}), "OK")
+    stored = conn.find("spell1").get("object") or {}
+    check("the hook ran", stored.get("touched") is True, f"got {stored}")
+    for field, spelling in CUSTOM_SPELLINGS.items():
+        check(f"the {field} value is stored exactly as written", stored.get(field) == spelling,
+              f"expected {spelling!r}, got {stored.get(field)!r}")
+    distinct = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL, "aggregationSteps": [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "_id", "value": "spell1"}},
+        {"type": "DISTINCT", "fieldName": "loc"}]})
+    check("DISTINCT yields the written spelling",
+          [row.get("loc") for row in distinct.get("results") or []] == [CUSTOM_SPELLINGS["loc"]], f"got {distinct}")
+    drop_hook(conn, "spread_hook")
+
+
 def test_before_hook_veto(conn: Conn):
     section("Before hooks - veto")
     check_status("install a vetoing hook",
@@ -1761,6 +1784,7 @@ def main():
             install_the_trigger_whose_file_will_break(conn)
             test_trigger_validation(conn)
             test_before_hooks(conn)
+            test_before_hook_preserves_custom_spelling(conn)
             test_before_hook_veto(conn)
             test_before_hook_contract(conn)
             test_before_hook_schema_recheck(conn)

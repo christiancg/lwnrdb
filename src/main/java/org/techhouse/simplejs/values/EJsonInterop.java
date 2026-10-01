@@ -236,10 +236,10 @@ public final class EJsonInterop {
 
     private static JsValue customFromEjson(JsonCustom<?> element) {
         return switch (element.getCustomTypeName()) {
-            case JsonGeo.CUSTOM_TYPE_NAME -> new JsGeo(((JsonGeo) element).point());
-            case JsonVector.CUSTOM_TYPE_NAME -> new JsVector(((JsonVector) element).getCustomValue());
-            case JsonDateTime.CUSTOM_TYPE_NAME -> new JsDbDateTime(((JsonDateTime) element).getCustomValue());
-            case JsonTime.CUSTOM_TYPE_NAME -> new JsDbTime(((JsonTime) element).getCustomValue());
+            case JsonGeo.CUSTOM_TYPE_NAME -> new JsGeo((JsonGeo) element);
+            case JsonVector.CUSTOM_TYPE_NAME -> new JsVector((JsonVector) element);
+            case JsonDateTime.CUSTOM_TYPE_NAME -> new JsDbDateTime((JsonDateTime) element);
+            case JsonTime.CUSTOM_TYPE_NAME -> new JsDbTime((JsonTime) element);
             default -> new JsString(element.getValue());
         };
     }

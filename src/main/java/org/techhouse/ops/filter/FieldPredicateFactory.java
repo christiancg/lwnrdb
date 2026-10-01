@@ -49,9 +49,11 @@ public final class FieldPredicateFactory {
 
     private static boolean primitiveOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,
             FieldOperatorType operation, boolean exactStrings) {
+        if (operation == FieldOperatorType.CONTAINS && toTestElement.isJsonArray()) {
+            return holdsMatchingElement(toTestElement.asJsonArray(), operatorElement);
+        }
         if (!toTestElement.isJsonPrimitive()) {
-            return operation == FieldOperatorType.CONTAINS && toTestElement.isJsonArray()
-                    && holdsMatchingElement(toTestElement.asJsonArray(), operatorElement);
+            return kindMismatchMatches(operation, exactStrings);
         }
         final var operatorPrimitive = operatorElement.asJsonPrimitive();
         final var toTestPrimitive = toTestElement.asJsonPrimitive();
@@ -72,7 +74,11 @@ public final class FieldPredicateFactory {
             return stringMatches(operatorElement.asJsonString().getValue(), toTestElement.asJsonString().getValue(),
                     operation, exactStrings);
         }
-        return operatorPrimitive.isJsonNull() && toTestPrimitive.isJsonNull();
+        return kindMismatchMatches(operation, exactStrings);
+    }
+
+    private static boolean kindMismatchMatches(FieldOperatorType operation, boolean exactStrings) {
+        return !exactStrings && operation == FieldOperatorType.NOT_EQUALS;
     }
 
     private static boolean nullOperandMatches(JsonBaseElement toTestElement, FieldOperatorType operation) {
@@ -134,7 +140,7 @@ public final class FieldPredicateFactory {
             FieldOperatorType operation, boolean exactStrings) {
         if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {
             if (toTestElement == null || !toTestElement.isJsonArray()) {
-                return !exactStrings && operation == FieldOperatorType.NOT_EQUALS;
+                return kindMismatchMatches(operation, exactStrings);
             }
             final var equal = arraysMatch(operatorElement.asJsonArray(), toTestElement.asJsonArray());
             return (operation == FieldOperatorType.EQUALS) == equal;
@@ -208,7 +214,7 @@ public final class FieldPredicateFactory {
             FieldOperatorType operation, boolean exactStrings) {
         if (operation == FieldOperatorType.EQUALS || operation == FieldOperatorType.NOT_EQUALS) {
             if (toTestElement == null || !toTestElement.isJsonObject()) {
-                return !exactStrings && operation == FieldOperatorType.NOT_EQUALS;
+                return kindMismatchMatches(operation, exactStrings);
             }
             final var equal = objectsMatch(operatorElement.asJsonObject(), toTestElement.asJsonObject());
             return (operation == FieldOperatorType.EQUALS) == equal;

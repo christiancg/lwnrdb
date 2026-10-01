@@ -771,6 +771,8 @@ AGREE_SURROGATE = "idxagg_agree_surrogate"
 AGREE_ARRAY_CUSTOM = "idxagg_agree_array_custom"
 AGREE_OBJECT_CUSTOM = "idxagg_agree_object_custom"
 AGREE_CONTAINS_CUSTOM = "idxagg_agree_contains_custom"
+AGREE_NOT_EQUALS_MIXED = "idxagg_agree_ne_mixed"
+AGREE_NOT_EQUALS_HOMOGENEOUS = "idxagg_agree_ne_homogeneous"
 
 AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, AGREE_NOT_IN_ARR,
                      AGREE_JOIN_REMOTE, AGREE_JOIN_LEFT, AGREE_JOIN_NULL_REMOTE, AGREE_JOIN_NULL_LEFT,
@@ -778,7 +780,8 @@ AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, 
                      AGREE_SIBLING, AGREE_OBJ_SORT, AGREE_CUSTOM, AGREE_MIXED_BOX, AGREE_GEO,
                      AGREE_IN_CASE, AGREE_NOT_IN_CASE, AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM,
                      AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES, AGREE_SURROGATE, AGREE_ARRAY_CUSTOM,
-                     AGREE_OBJECT_CUSTOM, AGREE_CONTAINS_CUSTOM)
+                     AGREE_OBJECT_CUSTOM, AGREE_CONTAINS_CUSTOM, AGREE_NOT_EQUALS_MIXED,
+                     AGREE_NOT_EQUALS_HOMOGENEOUS)
 
 
 def agree_ids(r):
@@ -1119,6 +1122,41 @@ def probe_lone_surrogate_values_index_the_same_as_they_scan(c):
           after == ["plain"], f"got {after!r}")
 
 
+def not_equals_filter(value):
+    return [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "x", "value": value}}]
+
+
+def probe_not_equals_matches_every_other_kind(c):
+    mixed = {"num": 5, "str": "a", "bool": True, "nul": None, "arr": [5], "obj": {"k": 5}}
+    for doc_id, value in mixed.items():
+        save_doc(c, AGREE_NOT_EQUALS_MIXED, {"_id": doc_id, "x": value})
+    save_doc(c, AGREE_NOT_EQUALS_MIXED, {"_id": "missing"})
+    every_holder = sorted(mixed)
+    agree(c, "NOT_EQUALS a string on a mixed-kind field", AGREE_NOT_EQUALS_MIXED, not_equals_filter("b"),
+          AGREE_NOT_EQUALS_MIXED, "x", expected=every_holder)
+
+    for operand, excluded in ((5, "num"), (True, "bool"), ("A", "str")):
+        expected = [doc_id for doc_id in every_holder if doc_id != excluded]
+        steps = not_equals_filter(operand)
+        indexed = agree_ids(agg(c, AGREE_NOT_EQUALS_MIXED, steps))
+        scanned = agree_ids(agg(c, AGREE_NOT_EQUALS_MIXED, [{"type": "SKIP", "skip": 0}] + steps))
+        not_in = agree_ids(agg(c, AGREE_NOT_EQUALS_MIXED, [{"type": "FILTER", "operator": {
+            "fieldOperatorType": "NOT_IN", "field": "x", "value": [operand]}}]))
+        counted = agg(c, AGREE_NOT_EQUALS_MIXED, steps + [{"type": "COUNT"}])
+        counted_rows = ((counted.get("results") or [{}])[0]).get("count")
+        check(f"NOT_EQUALS {operand!r} on a mixed-kind field matches every other kind",
+              indexed == scanned == expected, f"index={indexed!r} scan={scanned!r} expected={expected!r}")
+        check(f"NOT_EQUALS {operand!r} agrees with NOT_IN [{operand!r}]", indexed == not_in,
+              f"not_equals={indexed!r} not_in={not_in!r}")
+        check(f"index-only COUNT agrees with the rows for NOT_EQUALS {operand!r}",
+              counted_rows == len(expected), f"count={counted_rows} rows={len(expected)}")
+
+    for doc_id, value in (("n1", 1), ("n2", 2), ("n3", 3)):
+        save_doc(c, AGREE_NOT_EQUALS_HOMOGENEOUS, {"_id": doc_id, "x": value})
+    agree(c, "NOT_EQUALS on a homogeneous, fully covered field", AGREE_NOT_EQUALS_HOMOGENEOUS,
+          not_equals_filter(2), AGREE_NOT_EQUALS_HOMOGENEOUS, "x", expected=["n1", "n3"])
+
+
 def agreement_suite(c):
     section("Index / scan agreement: an index-backed answer must equal the full-scan answer")
     setup_agreement(c)
@@ -1137,6 +1175,7 @@ def agreement_suite(c):
     probe_array_equals_uses_the_same_equality_as_scalar_equals(c)
     probe_mixed_number_boxes_group_the_same_either_way(c)
     probe_lone_surrogate_values_index_the_same_as_they_scan(c)
+    probe_not_equals_matches_every_other_kind(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════
