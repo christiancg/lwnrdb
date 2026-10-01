@@ -50,8 +50,8 @@ public class EventProcessorHelperPendingWritesTest {
     }
 
     private EntityEvent markedEvent(String id) {
-        pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, id);
-        return new EntityEvent(EventType.UPDATED, TestGlobals.DB, TestGlobals.COLL, entryWithId(id));
+        final var generation = pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, id);
+        return new EntityEvent(EventType.UPDATED, TestGlobals.DB, TestGlobals.COLL, entryWithId(id), 0L, generation);
     }
 
     private boolean isPending(String id) {
@@ -261,5 +261,42 @@ public class EventProcessorHelperPendingWritesTest {
             Assertions.assertEquals(List.of(busyA, busyB), deferred);
         }
         Assertions.assertFalse(isPending("bulk-free"), "a group that was not busy is still processed");
+    }
+
+    @Test
+    public void test_an_entity_event_from_before_a_full_rebuild_leaves_a_later_mark_pending() throws Exception {
+        final var staleEvent = markedEvent("rebuilt");
+        pendingIndexWrites.clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "rebuilt");
+
+        EventProcessorHelper.processEvent(staleEvent);
+
+        Assertions.assertTrue(isPending("rebuilt"), "the stale event must not clear the newer write's mark");
+    }
+
+    @Test
+    public void test_a_bulk_event_from_before_a_full_rebuild_leaves_later_marks_pending() throws Exception {
+        final var generation = pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, List.of("bulk-a", "bulk-b"));
+        final var staleEvent = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, List.of(entryWithId("bulk-a")),
+                List.of(entryWithId("bulk-b")), 0L, generation);
+        pendingIndexWrites.clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, List.of("bulk-a", "bulk-b"));
+
+        EventProcessorHelper.processEvent(staleEvent);
+
+        Assertions.assertTrue(isPending("bulk-a"));
+        Assertions.assertTrue(isPending("bulk-b"));
+    }
+
+    @Test
+    public void test_a_current_generation_bulk_event_clears_its_marks() throws Exception {
+        pendingIndexWrites.clearCollection(TestGlobals.DB, TestGlobals.COLL);
+        final var generation = pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, List.of("bulk-c"));
+        final var event = new BulkEntityEvent(TestGlobals.DB, TestGlobals.COLL, List.of(entryWithId("bulk-c")),
+                List.of(), 0L, generation);
+
+        EventProcessorHelper.processEvent(event);
+
+        Assertions.assertFalse(isPending("bulk-c"));
     }
 }

@@ -1,5 +1,7 @@
 package org.techhouse.fs;
 
+import static org.junit.jupiter.api.Assertions.*;
+
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -12,8 +14,6 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.techhouse.data.FieldIndexEntry;
-
-import static org.junit.jupiter.api.Assertions.*;
 
 public class FieldIndexStoreLineEndingTest {
     private static final String DB = "endingsdb";
@@ -59,7 +59,8 @@ public class FieldIndexStoreLineEndingTest {
         final var loaded = fixture.loader().readWholeFieldIndexFiles(DB, COLL, FIELD, String.class);
         assertNotNull(loaded);
         final var byValue = new HashMap<String, Set<String>>();
-        loaded.forEach(e -> assertNull(byValue.put(e.getValue(), Set.copyOf(e.getIds())), "a value must have exactly one line, never a duplicate appended beside it"));
+        loaded.forEach(e -> assertNull(byValue.put(e.getValue(), Set.copyOf(e.getIds())),
+                "a value must have exactly one line, never a duplicate appended beside it"));
         return byValue;
     }
 

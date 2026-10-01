@@ -39,6 +39,9 @@ final class TombstoneStore {
         try {
             try (var writer = new BufferedWriter(new FileWriter(file, StandardCharsets.UTF_8, true),
                     Globals.BUFFER_SIZE)) {
+                if (FileLocks.endsMidLine(file)) {
+                    writer.newLine();
+                }
                 writer.append(FieldIndexEntry.escapeIndexToken(id)).append(Globals.ID_SEPARATOR)
                         .append(String.valueOf(version));
                 writer.newLine();

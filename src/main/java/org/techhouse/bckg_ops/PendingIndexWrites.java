@@ -16,9 +16,10 @@ import org.techhouse.ioc.IocContainer;
 public class PendingIndexWrites {
     private final Map<String, Map<String, Integer>> pending = new ConcurrentHashMap<>();
     private final Map<String, java.util.concurrent.locks.ReentrantLock> markerLocks = new ConcurrentHashMap<>();
+    private final Map<String, Long> generations = new ConcurrentHashMap<>();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
 
-    public void mark(String dbName, String collName, String id) {
+    public long mark(String dbName, String collName, String id) {
         final var byId = pending.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName),
                 _ -> new ConcurrentHashMap<>());
         final var markerLock = markerLockFor(dbName, collName);
@@ -29,18 +30,21 @@ public class PendingIndexWrites {
             if (wasEmpty) {
                 fs.markIndexesDirty(dbName, collName);
             }
+            return currentGeneration(dbName, collName);
         } finally {
             markerLock.unlock();
         }
     }
 
-    public void mark(String dbName, String collName, Iterable<String> ids) {
+    public long mark(String dbName, String collName, Iterable<String> ids) {
+        var generation = currentGeneration(dbName, collName);
         for (var id : ids) {
-            mark(dbName, collName, id);
+            generation = mark(dbName, collName, id);
         }
+        return generation;
     }
 
-    public void clear(String dbName, String collName, String id) {
+    public void clear(String dbName, String collName, String id, long generation) {
         final var byId = pending.get(Cache.getCollectionIdentifier(dbName, collName));
         if (byId == null) {
             return;
@@ -48,6 +52,9 @@ public class PendingIndexWrites {
         final var markerLock = markerLockFor(dbName, collName);
         markerLock.lock();
         try {
+            if (generation < currentGeneration(dbName, collName)) {
+                return;
+            }
             byId.computeIfPresent(id, (_, current) -> current - 1 <= 0 ? null : current - 1);
             if (byId.isEmpty()) {
                 fs.clearIndexesDirty(dbName, collName);
@@ -57,24 +64,28 @@ public class PendingIndexWrites {
         }
     }
 
-    public void clear(String dbName, String collName, Iterable<String> ids) {
+    public void clear(String dbName, String collName, Iterable<String> ids, long generation) {
         for (var id : ids) {
-            clear(dbName, collName, id);
+            clear(dbName, collName, id, generation);
         }
     }
 
     public void clearCollection(String dbName, String collName) {
-        final var byId = pending.get(Cache.getCollectionIdentifier(dbName, collName));
-        if (byId == null) {
-            return;
-        }
         final var markerLock = markerLockFor(dbName, collName);
         markerLock.lock();
         try {
-            byId.clear();
+            generations.merge(Cache.getCollectionIdentifier(dbName, collName), 1L, Long::sum);
+            final var byId = pending.get(Cache.getCollectionIdentifier(dbName, collName));
+            if (byId != null) {
+                byId.clear();
+            }
         } finally {
             markerLock.unlock();
         }
+    }
+
+    private long currentGeneration(String dbName, String collName) {
+        return generations.getOrDefault(Cache.getCollectionIdentifier(dbName, collName), 0L);
     }
 
     private java.util.concurrent.locks.ReentrantLock markerLockFor(String dbName, String collName) {

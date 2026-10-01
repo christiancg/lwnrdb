@@ -140,4 +140,24 @@ public class TombstoneStoreTest {
         assertArrayEquals(before, java.nio.file.Files.readAllBytes(file.toPath()),
                 "a failed append must not leave a torn line behind");
     }
+
+    @Test
+    public void test_an_append_after_an_unterminated_parseable_line_keeps_both_tombstones() throws Exception {
+        java.nio.file.Files.writeString(tombstoneFile().toPath(), "torn" + Globals.ID_SEPARATOR + "17");
+
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "acked", 99L);
+
+        final var read = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(17L, read.get("torn"));
+        assertEquals(99L, read.get("acked"),
+                "an acknowledged tombstone must not be glued onto a torn line the next heal would drop");
+    }
+
+    @Test
+    public void test_an_append_after_a_terminated_line_writes_no_blank_line() throws Exception {
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "first", 1L);
+        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "second", 2L);
+
+        assertEquals(2, java.nio.file.Files.readAllLines(tombstoneFile().toPath()).size());
+    }
 }

@@ -223,7 +223,7 @@ public class AggregationSortViaIndexTest {
                 assertTrue(sorted.get(i - 1) <= sorted.get(i));
             }
         } finally {
-            pending.clear(TestGlobals.DB, TestGlobals.COLL, "d0007");
+            pending.clear(TestGlobals.DB, TestGlobals.COLL, "d0007", 0L);
         }
     }
 
@@ -237,7 +237,7 @@ public class AggregationSortViaIndexTest {
             assertEquals(expected, run(new SortAggregationStep(FIELD, true), new LimitAggregationStep(25)),
                     "the fallback path must produce the same order as the bounded index read");
         } finally {
-            pending.clear(TestGlobals.DB, TestGlobals.COLL, "d0011");
+            pending.clear(TestGlobals.DB, TestGlobals.COLL, "d0011", 0L);
         }
     }
 

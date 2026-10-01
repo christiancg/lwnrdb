@@ -3,6 +3,7 @@ package org.techhouse.fs;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -20,6 +21,7 @@ import org.techhouse.config.Globals;
 // dirty read skips the collection lock but still serializes against each file's physical write.
 final class FileLocks {
     private static final Map<String, ReentrantReadWriteLock> fileLocks = new ConcurrentHashMap<>();
+    private static final byte LINE_FEED = '\n';
 
     private FileLocks() {
     }
@@ -76,6 +78,16 @@ final class FileLocks {
         } catch (IOException e) {
             // ATOMIC_MOVE is not supported across filesystems or on every platform.
             Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    static boolean endsMidLine(File file) throws IOException {
+        if (!file.exists() || file.length() == 0) {
+            return false;
+        }
+        try (var raf = new RandomAccessFile(file, "r")) {
+            raf.seek(raf.length() - 1);
+            return raf.readByte() != LINE_FEED;
         }
     }
 }

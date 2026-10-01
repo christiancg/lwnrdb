@@ -55,7 +55,7 @@ public class PhaseFourLowSeverityTest {
         pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "a");
         pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "b");
 
-        pendingIndexWrites.clear(TestGlobals.DB, TestGlobals.COLL, "a");
+        pendingIndexWrites.clear(TestGlobals.DB, TestGlobals.COLL, "a", 0L);
 
         assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, TestGlobals.COLL).contains("b"),
                 "an id still pending must stay pending");

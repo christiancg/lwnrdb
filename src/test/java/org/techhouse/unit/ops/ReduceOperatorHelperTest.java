@@ -65,7 +65,7 @@ public class ReduceOperatorHelperTest {
         request.set_id(id);
         request.setObject(object);
         IocContainer.get(OperationProcessor.class).processMessage(request);
-        IocContainer.get(PendingIndexWrites.class).clear(TestGlobals.DB, TestGlobals.COLL, id);
+        IocContainer.get(PendingIndexWrites.class).clear(TestGlobals.DB, TestGlobals.COLL, id, 0L);
     }
 
     private static ReduceAggregationStep idFold() {

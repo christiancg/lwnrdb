@@ -277,4 +277,58 @@ public class IndexScanComplementAgreementTest {
         assertEquals(1, answer(where(FieldOperatorType.NOT_EQUALS, new JsonNumber(1))).size());
         assertEquals(2, answer(where(FieldOperatorType.NOT_EQUALS, new JsonNumber(2))).size());
     }
+
+    private void deleteWithIndexMaintenancePending(String id) throws IOException {
+        TestUtils.uncacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, id);
+        IocContainer.get(PendingIndexWrites.class).mark(TestGlobals.DB, TestGlobals.COLL, id);
+    }
+
+    private void storeOneAndNullThenIndex() throws Exception {
+        store("a", new JsonNumber(1));
+        store("n", JsonNull.INSTANCE);
+        indexTheField();
+    }
+
+    @Test
+    public void test_not_equals_keeps_a_committed_null_while_another_delete_is_pending() throws Exception {
+        storeOneAndNullThenIndex();
+        deleteWithIndexMaintenancePending("a");
+
+        final var rows = answer(where(FieldOperatorType.NOT_EQUALS, new JsonNumber(5)));
+
+        assertEquals(1, rows.size(), "the stale id of the deleted document must not stand in for the null one");
+        assertEquals("{\"_id\":\"n\",\"x\":null}", rows.getFirst().replace(" ", ""));
+    }
+
+    @Test
+    public void test_not_in_keeps_a_committed_null_while_another_delete_is_pending() throws Exception {
+        storeOneAndNullThenIndex();
+        deleteWithIndexMaintenancePending("a");
+
+        assertEquals(1, answer(where(FieldOperatorType.NOT_IN, arrayOf(new JsonNumber(5)))).size());
+    }
+
+    @Test
+    public void test_index_only_count_agrees_with_the_scan_while_a_delete_is_pending() throws Exception {
+        storeOneAndNullThenIndex();
+        deleteWithIndexMaintenancePending("a");
+
+        assertNull(idsFromIndex(FieldOperatorType.NOT_EQUALS, new JsonNumber(5)),
+                "an unindexed committed document must make the complement decline the index");
+        assertEquals(List.of("{\"count\":1}"),
+                answer(where(FieldOperatorType.NOT_EQUALS, new JsonNumber(5)), new CountAggregationStep()).stream()
+                        .map(row -> row.replace(" ", "")).toList());
+    }
+
+    @Test
+    public void test_the_complement_still_uses_the_index_when_every_non_pending_id_is_indexed() throws Exception {
+        store("a", new JsonNumber(1));
+        store("b", new JsonNumber(2));
+        store("c", new JsonNumber(3));
+        indexTheField();
+        deleteWithIndexMaintenancePending("c");
+
+        assertNotNull(idsFromIndex(FieldOperatorType.NOT_EQUALS, new JsonNumber(5)),
+                "a pending id is re-derived by the reconciler, so it must not force a scan");
+    }
 }

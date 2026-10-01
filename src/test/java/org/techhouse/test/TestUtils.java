@@ -68,6 +68,7 @@ public class TestUtils {
         clearBoundedCache(adminCache, "metadataMisses");
         PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
         TestUtils.setPrivateField(pendingIndexWrites, "pending", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(pendingIndexWrites, "generations", new ConcurrentHashMap<>());
         // Drop any tracked clients so leaked test connections can't fill the connection limit and make
         // later socket-based tests receive MAX_CONNECTIONS_REACHED instead of processing their request.
         ClientTracker clientTracker = IocContainer.get(ClientTracker.class);

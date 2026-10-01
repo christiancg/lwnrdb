@@ -139,6 +139,24 @@ def test_multiple_of_rejects_a_tiny_non_multiple(c):
                "ERROR", "400-7")
 
 
+def test_pattern_uses_ecma_semantics(c):
+    section("pattern follows ECMA-262, not Java regex")
+    check_status("save a pattern schema",
+                 save_schema(c, COLL, {"type": "object", "properties": {"slug": {"pattern": "^[a-z]+$"}}}), "OK")
+    check_status("a matching value is accepted", save(c, COLL, {"_id": "slug-ok", "slug": "abc"}), "OK")
+    check_code("'$' does not match before a trailing newline",
+               save(c, COLL, {"_id": "slug-nl", "slug": "abc\n"}), "ERROR", "400-7")
+    check("the refused document was not persisted", find_by_id(c, COLL, "slug-nl").get("status") == "NOT_FOUND")
+    check_status("save a non-whitespace pattern schema",
+                 save_schema(c, COLL, {"type": "object", "properties": {"token": {"pattern": "^\\S+$"}}}), "OK")
+    check_code("a no-break space is whitespace in ECMA-262",
+               save(c, COLL, {"_id": "nbsp", "token": "a\u00a0b"}), "ERROR", "400-7")
+    check_code("a Java-only possessive quantifier is refused at save",
+               save_schema(c, COLL, {"type": "object", "properties": {"p": {"pattern": "a++"}}}), "ERROR", "400-8")
+    check_code("a Java-only inline flag is refused in patternProperties",
+               save_schema(c, COLL, {"type": "object", "patternProperties": {"(?i)^a": {}}}), "ERROR", "400-8")
+
+
 def test_invalid_schema_rejected(c):
     section("Invalid schema rejected")
     check_code("schema with a bad keyword value is rejected",
@@ -243,6 +261,7 @@ def main():
         test_save_and_enforce_schema,
         test_bulk_save_atomic,
         test_multiple_of_rejects_a_tiny_non_multiple,
+        test_pattern_uses_ecma_semantics,
         test_invalid_schema_rejected,
         test_cyclic_ref_rejected,
         test_schema_warnings,

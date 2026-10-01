@@ -88,7 +88,7 @@ public class BulkSavePartialFailureTest {
         save.setObject(document(UPDATED_ID, "old"));
         save.set_id(UPDATED_ID);
         assertNotNull(SaveOperationHelper.executeSave(save));
-        pending.clear(TestGlobals.DB, TestGlobals.COLL, UPDATED_ID);
+        pending.clear(TestGlobals.DB, TestGlobals.COLL, UPDATED_ID, 0L);
         taskQueue().clear();
     }
 

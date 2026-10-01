@@ -81,4 +81,17 @@ public class ReindexPendingWritesTest {
                 "the fields it skipped were never re-derived, so the marks still matter");
         assertTrue(markerPresent());
     }
+
+    @Test
+    public void test_an_event_queued_before_a_full_reindex_does_not_consume_a_later_writes_mark() {
+        final var queuedGeneration = pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "doc-1");
+        processor.processMessage(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of()));
+        pendingIndexWrites.mark(TestGlobals.DB, TestGlobals.COLL, "doc-1");
+
+        pendingIndexWrites.clear(TestGlobals.DB, TestGlobals.COLL, "doc-1", queuedGeneration);
+
+        assertTrue(pendingIndexWrites.idsFor(TestGlobals.DB, TestGlobals.COLL).contains("doc-1"),
+                "the newer write's index update has not run yet, so its id must stay reconciled");
+        assertTrue(markerPresent());
+    }
 }

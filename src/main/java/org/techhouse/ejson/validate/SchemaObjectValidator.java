@@ -106,7 +106,7 @@ class SchemaObjectValidator {
             }
             if (patternProperties != null) {
                 for (final var pp : patternProperties.asJsonObject().entrySet()) {
-                    if (SchemaPatterns.compile(pp.getKey()).matcher(key).find()) {
+                    if (SchemaPatterns.matches(pp.getKey(), key)) {
                         covered = true;
                         nodeValidator.validateNode(entry.getValue(), pp.getValue(), schema, childPath, errors);
                     }

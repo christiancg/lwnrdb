@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
@@ -15,6 +16,7 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.utils.JsonUtils;
@@ -22,6 +24,7 @@ import org.techhouse.utils.SearchUtils;
 
 final class IndexLookupResolver {
     private static final List<IndexKind> HASH_INDEX_KINDS = List.of(IndexKind.OBJECT, IndexKind.ARRAY);
+    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
     private IndexLookupResolver() {
     }
@@ -166,12 +169,21 @@ final class IndexLookupResolver {
 
     private static boolean complementLacksUniverse(UserCache userCache, String dbName, String collName,
             String fieldName, Class<?> chosenType, IndexKind chosenKind) throws IOException {
-        return hasAnotherIndex(userCache, dbName, collName, fieldName, chosenType, chosenKind)
-                || indexedIdCount(userCache, dbName, collName, fieldName) < userCache
-                        .getPkIndexAndLoadIfNecessary(dbName, collName).size();
+        if (hasAnotherIndex(userCache, dbName, collName, fieldName, chosenType, chosenKind)) {
+            return true;
+        }
+        final var indexed = indexedIds(userCache, dbName, collName, fieldName);
+        final var pending = pendingIndexWrites.idsFor(dbName, collName);
+        for (final var pkEntry : userCache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
+            final var id = pkEntry.getValue();
+            if (!pending.contains(id) && !indexed.contains(id)) {
+                return true;
+            }
+        }
+        return false;
     }
 
-    private static int indexedIdCount(UserCache userCache, String dbName, String collName, String fieldName)
+    private static Set<String> indexedIds(UserCache userCache, String dbName, String collName, String fieldName)
             throws IOException {
         final var covered = new HashSet<String>();
         final var types = new ArrayList<Class<?>>(List.of(Number.class, Boolean.class, String.class));
@@ -182,7 +194,7 @@ final class IndexLookupResolver {
         for (final var kind : HASH_INDEX_KINDS) {
             addIds(covered, userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind));
         }
-        return covered.size();
+        return covered;
     }
 
     private static <T> void addIds(Set<String> covered, List<FieldIndexEntry<T>> index) {

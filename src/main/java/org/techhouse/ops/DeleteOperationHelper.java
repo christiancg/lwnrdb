@@ -43,9 +43,9 @@ public final class DeleteOperationHelper {
             cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
             // Pending until the async DELETED event clears it: the field index still maps the value to
             // this id, so index-only reads (COUNT, DISTINCT) would otherwise surface the deleted doc.
-            pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
+            final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
             taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted,
-                    CollectionIncarnation.current(dbName, collName)));
+                    CollectionIncarnation.current(dbName, collName), pendingGeneration));
             listenManager.markDirty(dbName, collName);
             CollectionAccessHelper.recordCollectionAccess(dbName, collName);
             return new DeleteResponse("Entry with id " + deleteRequest.get_id() + " deleted successfully");

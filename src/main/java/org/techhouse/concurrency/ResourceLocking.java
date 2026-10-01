@@ -6,6 +6,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -22,8 +24,63 @@ public class ResourceLocking {
         return locks.computeIfAbsent(lockName, _ -> new ReentrantReadWriteLock());
     }
 
+    private enum Mode {
+        READ, WRITE
+    }
+
+    private static Lock side(ReentrantReadWriteLock lock, Mode mode) {
+        return mode == Mode.READ ? lock.readLock() : lock.writeLock();
+    }
+
+    private boolean isStillMapped(String lockName, ReentrantReadWriteLock lock, Mode mode) {
+        if (locks.get(lockName) == lock) {
+            return true;
+        }
+        side(lock, mode).unlock();
+        return false;
+    }
+
+    private void acquire(String lockName, Mode mode) throws InterruptedException {
+        while (true) {
+            final var lock = lockFor(lockName);
+            side(lock, mode).lockInterruptibly();
+            if (isStillMapped(lockName, lock, mode)) {
+                return;
+            }
+        }
+    }
+
+    private boolean tryAcquireWrite(String lockName) {
+        while (true) {
+            final var lock = lockFor(lockName);
+            if (!lock.writeLock().tryLock()) {
+                return false;
+            }
+            if (isStillMapped(lockName, lock, Mode.WRITE)) {
+                return true;
+            }
+        }
+    }
+
+    private boolean tryAcquireBy(String lockName, Mode mode, long deadlineMillis) throws InterruptedException {
+        while (true) {
+            final var lock = lockFor(lockName);
+            final var remaining = Math.max(deadlineMillis - System.currentTimeMillis(), 0);
+            if (!side(lock, mode).tryLock(remaining, TimeUnit.MILLISECONDS)) {
+                return false;
+            }
+            if (isStillMapped(lockName, lock, mode)) {
+                return true;
+            }
+        }
+    }
+
+    private boolean tryAcquireWithin(String lockName, Mode mode, long timeoutMillis) throws InterruptedException {
+        return tryAcquireBy(lockName, mode, System.currentTimeMillis() + timeoutMillis);
+    }
+
     public void lockWrite(String lockName) throws InterruptedException {
-        lockFor(lockName).writeLock().lockInterruptibly();
+        acquire(lockName, Mode.WRITE);
     }
 
     public boolean holdsCollectionLock(String dbName, String collName) {
@@ -41,7 +98,7 @@ public class ResourceLocking {
     }
 
     public void lockReadByName(String lockName) throws InterruptedException {
-        lockFor(lockName).readLock().lockInterruptibly();
+        acquire(lockName, Mode.READ);
     }
 
     public void releaseReadByName(String lockName) {
@@ -68,7 +125,7 @@ public class ResourceLocking {
     }
 
     public boolean tryLockWrite(String dbName, String collName) {
-        return lockFor(Cache.getCollectionIdentifier(dbName, collName)).writeLock().tryLock();
+        return tryAcquireWrite(Cache.getCollectionIdentifier(dbName, collName));
     }
 
     public interface LockedAction<T> {
@@ -117,8 +174,7 @@ public class ResourceLocking {
         try {
             for (final var collId : new TreeSet<>(collectionIds)) {
                 final var remaining = deadline - System.currentTimeMillis();
-                if (remaining <= 0 || !lockFor(collId).writeLock().tryLock(remaining,
-                        java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                if (remaining <= 0 || !tryAcquireBy(collId, Mode.WRITE, deadline)) {
                     releaseWriteLocks(acquired);
                     throw new CollectionBusyException(collId, timeoutMillis);
                 }
@@ -161,8 +217,7 @@ public class ResourceLocking {
     // Transactions hold their write locks until commit/rollback; the timeout is what stops two of
     // them deadlocking, by making the caller abort instead of waiting forever.
     public boolean tryLockWrite(String dbName, String collName, long timeoutMillis) throws InterruptedException {
-        return lockFor(Cache.getCollectionIdentifier(dbName, collName)).writeLock().tryLock(timeoutMillis,
-                java.util.concurrent.TimeUnit.MILLISECONDS);
+        return tryAcquireWithin(Cache.getCollectionIdentifier(dbName, collName), Mode.WRITE, timeoutMillis);
     }
 
     public void lockRead(String dbName, String collName) throws InterruptedException {
@@ -170,8 +225,7 @@ public class ResourceLocking {
     }
 
     public boolean tryLockRead(String dbName, String collName, long timeoutMillis) throws InterruptedException {
-        return lockFor(Cache.getCollectionIdentifier(dbName, collName)).readLock().tryLock(timeoutMillis,
-                java.util.concurrent.TimeUnit.MILLISECONDS);
+        return tryAcquireWithin(Cache.getCollectionIdentifier(dbName, collName), Mode.READ, timeoutMillis);
     }
 
     public void releaseRead(String dbName, String collName) {
@@ -210,8 +264,7 @@ public class ResourceLocking {
         try {
             for (var identifier : sorted) {
                 final var remaining = deadline - System.currentTimeMillis();
-                if (remaining <= 0 || !lockFor(identifier).readLock().tryLock(remaining,
-                        java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                if (remaining <= 0 || !tryAcquireBy(identifier, Mode.READ, deadline)) {
                     releaseReadLocks(acquired);
                     return null;
                 }
@@ -239,7 +292,7 @@ public class ResourceLocking {
     }
 
     public boolean tryLockIndex(String dbName, String collName, String fieldName) {
-        return lockFor(getIndexIdentifier(dbName, collName, fieldName)).writeLock().tryLock();
+        return tryAcquireWrite(getIndexIdentifier(dbName, collName, fieldName));
     }
 
     public void releaseIndex(String dbName, String collName, String fieldName) {
@@ -266,7 +319,7 @@ public class ResourceLocking {
     }
 
     public boolean tryLockDatabaseShared(String dbName, long timeoutMillis) throws InterruptedException {
-        return lockFor(dbName).readLock().tryLock(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
+        return tryAcquireWithin(dbName, Mode.READ, timeoutMillis);
     }
 
     public void releaseDatabaseShared(String dbName) {
@@ -274,7 +327,7 @@ public class ResourceLocking {
     }
 
     public boolean tryLockDatabaseExclusive(String dbName, long timeoutMillis) throws InterruptedException {
-        return lockFor(dbName).writeLock().tryLock(timeoutMillis, java.util.concurrent.TimeUnit.MILLISECONDS);
+        return tryAcquireWithin(dbName, Mode.WRITE, timeoutMillis);
     }
 
     public void releaseDatabaseExclusive(String dbName) {

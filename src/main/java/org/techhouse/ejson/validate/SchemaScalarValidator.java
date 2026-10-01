@@ -22,7 +22,7 @@ class SchemaScalarValidator {
                     + " characters");
         }
         final var pattern = obj.get(SchemaKeywords.PATTERN);
-        if (pattern != null && !SchemaPatterns.compile(pattern.asJsonString().getValue()).matcher(value).find()) {
+        if (pattern != null && !SchemaPatterns.matches(pattern.asJsonString().getValue(), value)) {
             errors.add(SchemaValidator.at(path) + ": string does not match the required pattern");
         }
     }

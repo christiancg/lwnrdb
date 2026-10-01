@@ -46,6 +46,9 @@ final class PkIndexStore {
         try {
             try (var writer = new BufferedWriter(new FileWriter(indexFile, StandardCharsets.UTF_8, true),
                     Globals.BUFFER_SIZE)) {
+                if (FileLocks.endsMidLine(indexFile)) {
+                    writer.newLine();
+                }
                 for (var pkEntry : pkEntries) {
                     writer.append(pkEntry.toFileEntry());
                     writer.newLine();

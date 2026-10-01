@@ -266,8 +266,8 @@ public class IndexConsistencyPipelineTest {
         saveViaProcessor(processor, "stay", "stay");
         enableIndex(TestGlobals.COLL, "status");
         // Simulate the saves' background indexing having completed, to isolate the delete's effect.
-        pending.clear(TestGlobals.DB, TestGlobals.COLL, "gone");
-        pending.clear(TestGlobals.DB, TestGlobals.COLL, "stay");
+        pending.clear(TestGlobals.DB, TestGlobals.COLL, "gone", 0L);
+        pending.clear(TestGlobals.DB, TestGlobals.COLL, "stay", 0L);
 
         final var del = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
         del.set_id("gone");
