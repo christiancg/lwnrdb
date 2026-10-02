@@ -396,6 +396,29 @@ public class ListenProcessorThreadTest {
     }
 
     @Test
+    public void readerWhoWasDeletedAndRecreated_isUnregistered() throws Exception {
+        saveReader(PermissionLevel.READ);
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        final var socket = org.mockito.Mockito.mock(java.net.Socket.class);
+        final var address = org.mockito.Mockito.mock(java.net.InetAddress.class);
+        org.mockito.Mockito.when(socket.getInetAddress()).thenReturn(address);
+        org.mockito.Mockito.when(address.getHostAddress()).thenReturn("127.0.0.1");
+        TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "maxConnections", 0);
+        final var clientId = clientTracker.addClient(socket);
+        clientTracker.setAuthenticatedUser(clientId, READER);
+        try {
+            final var manager = registerUnchanged(clientId);
+            AdminOperationHelper.deleteUserEntry(READER);
+            saveReader(PermissionLevel.READ);
+            assertNull(runOnce(manager).getRegistration(lastListenId),
+                    "a listener must not keep pushing to a user created later under the same name");
+        } finally {
+            saveReader(PermissionLevel.READ);
+            clientTracker.removeById(clientId);
+        }
+    }
+
+    @Test
     public void unauthenticatedClient_isUnregistered() throws Exception {
         assertNull(runOnce(registerUnchanged(UUID.randomUUID())).getRegistration(lastListenId));
     }

@@ -487,6 +487,11 @@ public class FileSystem {
                 () -> readWholePkIndexFile(dbName, collName));
     }
 
+    public List<DbEntry> adoptOrphanedRecords(String dbName, String collName) throws IOException {
+        return OrphanedPageRecords.adoptAll(paths, pkIndexStore, dbName, collName,
+                pageFileLengths(dbName, collName).keySet());
+    }
+
     public long pageFileCount(String dbName, String collName) throws IOException {
         return documentPageStore.pageFileCount(dbName, collName);
     }

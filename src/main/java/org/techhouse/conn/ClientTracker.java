@@ -146,6 +146,15 @@ public class ClientTracker {
         }
     }
 
+    public void deauthenticateUser(String username) {
+        for (final var entry : clients.entrySet()) {
+            if (disconnectSignals.containsKey(entry.getKey())
+                    && username.equals(entry.getValue().getAuthenticatedUsername())) {
+                entry.getValue().setAuthenticatedUsername(null);
+            }
+        }
+    }
+
     public String getAuthenticatedUsername(UUID clientId) {
         if (clientId == null)
             return null;

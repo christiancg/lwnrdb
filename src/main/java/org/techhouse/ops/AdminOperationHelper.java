@@ -10,6 +10,7 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminCollEntry;
@@ -30,6 +31,7 @@ public final class AdminOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
 
     private static final AdminRecordStore<AdminTransactionEntry> TRANSACTION_OPS = new AdminRecordStore<>(
             Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, "transaction op", cache::getPkIndexTransaction,
@@ -126,7 +128,9 @@ public final class AdminOperationHelper {
                     AdminPageHelper.deletePageCollections(dbName, collection);
                 }
                 final var pkAfterCollectionRemoval = cache.getPkIndexAdminDbEntry(dbName);
-                eraseAdminEntry(Globals.ADMIN_DATABASES_COLLECTION_NAME, adminDbEntry, pkAfterCollectionRemoval);
+                final var entryAfterCollectionRemoval = cache.getAdminDbEntry(dbName);
+                eraseAdminEntry(Globals.ADMIN_DATABASES_COLLECTION_NAME, entryAfterCollectionRemoval,
+                        pkAfterCollectionRemoval);
                 cache.removeAdminDbEntry(dbName);
             } finally {
                 releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
@@ -374,6 +378,7 @@ public final class AdminOperationHelper {
             if (adminIndexPkUserEntry != null && userEntry != null) {
                 eraseAdminEntry(Globals.ADMIN_USERS_COLLECTION_NAME, userEntry, adminIndexPkUserEntry);
                 cache.removeAdminUserEntry(username);
+                clientTracker.deauthenticateUser(username);
             }
         } finally {
             releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);

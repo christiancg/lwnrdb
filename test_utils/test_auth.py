@@ -704,6 +704,39 @@ def test_a_deleted_users_name_does_not_inherit_ownership(c):
     delete_user(c, "ghost_owner")
 
 
+def test_a_session_does_not_survive_its_user_being_recreated(c):
+    section("An open connection does not become the user later created under its deleted name")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    delete_user(c, "recycled_name")
+    check_status("CREATE_USER 'recycled_name' with READ on auth_db",
+                 create_user(c, "recycled_name", "recycled_old1234", db_perms={"auth_db": "READ"}), "OK")
+    find_doc1 = {"type": "FIND_BY_ID", "databaseName": "auth_db", "collectionName": "allowed", "_id": "doc1"}
+    with Conn() as old_session:
+        check_status("AUTHENTICATE as 'recycled_name'",
+                     old_session.authenticate("recycled_name", "recycled_old1234"), "OK")
+        check_status("FIND_BY_ID as 'recycled_name'", old_session.send(find_doc1), "OK")
+
+        check_status("DELETE_USER 'recycled_name'", delete_user(c, "recycled_name"), "OK")
+        check_status("CREATE_USER 'recycled_name' again for someone else, with READ_WRITE",
+                     create_user(c, "recycled_name", "recycled_new5678",
+                                 db_perms={"auth_db": "READ_WRITE"}), "OK")
+
+        check_code("the old connection must authenticate again", old_session.send(find_doc1),
+                   "UNAUTHENTICATED", "401-1")
+        check_code("and cannot write with the new user's permissions",
+                   old_session.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
+                                     "object": {"_id": "recycled_write", "value": 1}}),
+                   "UNAUTHENTICATED", "401-1")
+        check_status("the old password no longer authenticates",
+                     old_session.authenticate("recycled_name", "recycled_old1234"), "ERROR")
+        check_status("the new password authenticates the connection again",
+                     old_session.authenticate("recycled_name", "recycled_new5678"), "OK")
+        check_status("FIND_BY_ID after re-authenticating", old_session.send(find_doc1), "OK")
+
+    delete_user(c, "recycled_name")
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
@@ -775,6 +808,9 @@ def main():
 
     with Conn() as c:
         test_a_deleted_users_name_does_not_inherit_ownership(c)
+
+    with Conn() as c:
+        test_a_session_does_not_survive_its_user_being_recreated(c)
 
     # ── cleanup ────────────────────────────────────────────────────────
     with Conn() as c:

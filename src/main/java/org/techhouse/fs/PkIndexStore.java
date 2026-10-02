@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Optional;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.log.Logger;
@@ -137,9 +138,18 @@ final class PkIndexStore {
     }
 
     List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
+        return readHealed(dbName, collectionName).entries();
+    }
+
+    Optional<List<PkIndexEntry>> readRecognisedPkIndex(String dbName, String collectionName) throws IOException {
+        final var parsed = readHealed(dbName, collectionName);
+        return parsed.unrecognised() ? Optional.empty() : Optional.of(parsed.entries());
+    }
+
+    private ParsedPkIndex readHealed(String dbName, String collectionName) throws IOException {
         final var indexFile = paths.pkIndexFile(dbName, collectionName);
         if (!indexFile.exists()) {
-            return new ArrayList<>();
+            return new ParsedPkIndex(new ArrayList<>(), List.of(), false, false);
         }
         final var readLock = FileLocks.lockFor(indexFile).readLock();
         readLock.lock();
@@ -153,10 +163,10 @@ final class PkIndexStore {
             logger.error("No line in " + indexFile.getName() + " could be read as a PK index entry, so it is not"
                     + " the file this loader expects; leaving it untouched. Nothing rebuilds the PK index, so it"
                     + " must never be rewritten from a read that understood none of it.");
-            return parsed.entries();
+            return parsed;
         }
         if (!parsed.dropped()) {
-            return parsed.entries();
+            return parsed;
         }
         final var writeLock = FileLocks.lockFor(indexFile).writeLock();
         writeLock.lock();
@@ -165,7 +175,7 @@ final class PkIndexStore {
             if (reparsed.dropped()) {
                 FileLocks.rewriteFileAtomically(indexFile.toPath(), reparsed.lines());
             }
-            return reparsed.entries();
+            return reparsed;
         } finally {
             writeLock.unlock();
         }

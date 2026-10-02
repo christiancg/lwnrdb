@@ -6,17 +6,23 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.net.InetAddress;
+import java.net.Socket;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ioc.IocContainer;
@@ -111,5 +117,31 @@ public class ReplicatedUserApplyHelperTest {
     public void test_apply_null_or_opless_payload_returns_false() {
         assertFalse(ReplicatedUserApplyHelper.apply(null));
         assertFalse(ReplicatedUserApplyHelper.apply(new ReplicationPayload()));
+    }
+
+    private static UUID connectSocketClient() throws Exception {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxConnections", 0);
+        final var socket = Mockito.mock(Socket.class);
+        final var address = Mockito.mock(InetAddress.class);
+        Mockito.when(socket.getInetAddress()).thenReturn(address);
+        Mockito.when(address.getHostAddress()).thenReturn("127.0.0.1");
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        return clientTracker.addClient(socket);
+    }
+
+    @Test
+    public void test_apply_delete_deauthenticates_the_users_connections() throws Exception {
+        AdminOperationHelper.saveUserEntry(user("grace"));
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        final var clientId = connectSocketClient();
+        clientTracker.setAuthenticatedUser(clientId, "grace");
+        try {
+            assertTrue(ReplicatedUserApplyHelper.apply(delete("grace")));
+            AdminOperationHelper.saveUserEntry(user("grace"));
+
+            assertNull(clientTracker.getAuthenticatedUsername(clientId));
+        } finally {
+            clientTracker.removeById(clientId);
+        }
     }
 }

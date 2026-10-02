@@ -84,6 +84,12 @@ LINE_END_COLL = "lost_line_end_docs"
 LINE_END_DOCS = 4
 HALF_BUILT_COLL = "half_built_index_docs"
 HALF_BUILT_FIELD = "k"
+ORPHAN_COLL = "unindexed_record_docs"
+ORPHAN_DOCS = 4
+ORPHAN_FIELD = "k"
+ORPHAN_ID = "orphan"
+DROPPED_DBS = 6
+DROPPED_DB_COLLECTIONS = 4
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
@@ -602,6 +608,54 @@ def test_a_lost_line_end_is_restored_at_startup(conn: Conn, work_dir: str):
                                                          "collectionName": LINE_END_COLL, "_id": doc_id}), "OK")
 
 
+def seed_a_collection_that_will_hold_an_unindexed_record(conn: Conn):
+    section("Seed an indexed collection whose last page will hold a record its PK index never named")
+    check_status("create the collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": ORPHAN_COLL}), "OK")
+    check_status("index the field the unindexed record will carry",
+                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": ORPHAN_COLL,
+                            "fieldName": ORPHAN_FIELD}), "OK")
+    for i in range(ORPHAN_DOCS):
+        check_status(f"save kept{i}", conn.save({"_id": f"kept{i}", ORPHAN_FIELD: "same"}, coll=ORPHAN_COLL), "OK")
+
+
+def leave_an_unindexed_record(work_dir: str):
+    folder = os.path.join(work_dir, "db", DB, ORPHAN_COLL)
+    last = sorted(page_files(work_dir, DB, ORPHAN_COLL), key=lambda name: int(name.rsplit("-", 1)[1][:-4]))[-1]
+    record = json.dumps({"_id": ORPHAN_ID, ORPHAN_FIELD: "same"}, separators=(",", ":")) + "\n"
+    with open(os.path.join(folder, last), "ab") as page:
+        page.write(record.encode("utf-8"))
+
+
+def index_backed_ids(conn: Conn, coll: str, field: str, value: str) -> list:
+    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
+                          "aggregationSteps": [{"type": "FILTER", "operator": {
+                              "fieldOperatorType": "EQUALS", "field": field, "value": value}}]})
+    return sorted(doc["_id"] for doc in (response.get("results") or []))
+
+
+def test_an_unindexed_record_is_adopted_at_startup(conn: Conn):
+    section("A record a crash left on a page but out of the PK index is adopted at startup")
+    expected = sorted([f"kept{i}" for i in range(ORPHAN_DOCS)] + [ORPHAN_ID])
+    check_status("FIND_BY_ID reaches the adopted record",
+                 conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": ORPHAN_COLL,
+                            "_id": ORPHAN_ID}), "OK")
+    scanned = ids_in_a_full_scan(conn, ORPHAN_COLL)
+    check("a full scan lists every record once", scanned == expected, f"expected {expected} got {scanned}")
+    pk = conn.count_via_pk(coll=ORPHAN_COLL)
+    check("the index-only COUNT agrees with the scan", pk == len(expected), f"count={pk} scan={len(scanned)}")
+    indexed = index_backed_ids(conn, ORPHAN_COLL, ORPHAN_FIELD, "same")
+    check("an index-backed FILTER finds the adopted record", indexed == expected, f"got {indexed}")
+
+    check_status("save the adopted record again, as a client retrying its write would",
+                 conn.save({"_id": ORPHAN_ID, ORPHAN_FIELD: "same", "retried": True}, coll=ORPHAN_COLL), "OK")
+    rescanned = ids_in_a_full_scan(conn, ORPHAN_COLL)
+    check("the retry updates the adopted record instead of adding a second row with its id",
+          rescanned == expected, f"expected {expected} got {rescanned}")
+    pk = conn.count_via_pk(coll=ORPHAN_COLL)
+    check("the index-only COUNT still agrees after the retry", pk == len(expected), f"count={pk}")
+
+
 def filter_ids(conn: Conn, value: str) -> list:
     response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": HALF_BUILT_COLL,
                           "aggregationSteps": [{"type": "FILTER", "operator": {
@@ -767,6 +821,29 @@ def test_page_metadata_follows_an_admin_row_that_grows_on_update(conn: Conn, wor
                or recorded[page]["entryCount"] != actual[page][1]]
     check("the recorded page occupancy still matches the page on disk", not drifted,
           "first-fit is packing rows into a page it believes has room — " + "; ".join(drifted) if drifted else "")
+
+
+def test_page_metadata_follows_dropped_databases(conn: Conn, work_dir: str):
+    section("Page occupancy for admin/databases after dropping databases that hold collections")
+    refused = []
+    for db_index in range(DROPPED_DBS):
+        db_name = f"dropped_db_{db_index:02d}"
+        refused.append(conn.send({"type": "CREATE_DATABASE", "databaseName": db_name}))
+        for coll_index in range(DROPPED_DB_COLLECTIONS):
+            refused.append(conn.send({"type": "CREATE_COLLECTION", "databaseName": db_name,
+                                      "collectionName": f"collection_with_a_long_name_{coll_index:02d}"}))
+        refused.append(conn.send({"type": "DROP_DATABASE", "databaseName": db_name}))
+    refused = [response for response in refused if response.get("status") != "OK"]
+    check(f"{DROPPED_DBS} databases with collections were created and dropped", not refused,
+          f"{len(refused)} requests failed; first: {refused[:1]}")
+
+    recorded = recorded_pages(work_dir, "admin", "databases")
+    actual = actual_pages(work_dir, "admin", "databases")
+    drifted = [f"page {page}: recorded {recorded[page]['size']}B, on disk {actual[page][0]}B"
+               for page in sorted(actual)
+               if page not in recorded or recorded[page]["size"] != actual[page][0]]
+    check("the recorded admin/databases page size still matches the page on disk", not drifted,
+          "; ".join(drifted))
 
 
 def test_drop_database_does_not_strand_a_collection_lock(conn: Conn):
@@ -1647,6 +1724,7 @@ def main():
             test_scan_is_complete_after_the_first_write(conn)
             test_page_cap_is_enforced_after_restart(conn, work_dir)
             test_page_metadata_follows_an_admin_row_that_grows_on_update(conn, work_dir)
+            test_page_metadata_follows_dropped_databases(conn, work_dir)
             test_a_transaction_of_in_place_growths_respects_max_page_size(conn, work_dir)
             test_an_index_with_no_entries_left_is_removed(conn, work_dir)
             test_drop_database_does_not_strand_a_collection_lock(conn)
@@ -1673,6 +1751,7 @@ def main():
             seed_a_collection_whose_page_rows_will_be_lost(conn, work_dir)
             seed_a_collection_whose_page_tail_will_tear(conn)
             seed_collections_for_a_lost_line_end_and_a_half_built_index(conn)
+            seed_a_collection_that_will_hold_an_unindexed_record(conn)
 
             print("\n  Killing the server without a drain ...")
             check("the unclean stop left an index-dirty marker on disk",
@@ -1687,6 +1766,7 @@ def main():
         tear_the_page_tail(work_dir)
         lose_the_last_line_end(work_dir)
         leave_the_index_half_built(work_dir)
+        leave_an_unindexed_record(work_dir)
         tear_an_admin_page_tail(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
@@ -1697,6 +1777,7 @@ def main():
             test_lost_page_rows_are_rebuilt_at_startup(conn, work_dir)
             test_a_torn_page_tail_is_healed_at_startup(conn, work_dir)
             test_a_lost_line_end_is_restored_at_startup(conn, work_dir)
+            test_an_unindexed_record_is_adopted_at_startup(conn)
             test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn, work_dir, log_path, log_offset)
             test_the_committed_transaction_is_all_there_after_the_restart(conn)
             test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)

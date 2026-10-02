@@ -181,4 +181,58 @@ public class ClientTrackerTest {
         clientTracker.clearActiveTransaction(clientId);
         assertFalse(clientTracker.hasActiveTransaction(transactionId.toString()));
     }
+
+    private static UUID connect(ClientTracker clientTracker, String username) {
+        Socket socket = Mockito.mock(Socket.class);
+        InetAddress address = Mockito.mock(InetAddress.class);
+        Mockito.when(socket.getInetAddress()).thenReturn(address);
+        Mockito.when(address.getHostAddress()).thenReturn("127.0.0.1");
+        UUID clientId = clientTracker.addClient(socket);
+        clientTracker.setAuthenticatedUser(clientId, username);
+        return clientId;
+    }
+
+    @Test
+    public void test_deauthenticate_user_clears_every_connection_of_that_name()
+            throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxConnections", 0);
+        ClientTracker clientTracker = new ClientTracker();
+        UUID first = connect(clientTracker, "carol");
+        UUID second = connect(clientTracker, "carol");
+
+        clientTracker.deauthenticateUser("carol");
+
+        assertNull(clientTracker.getAuthenticatedUsername(first));
+        assertNull(clientTracker.getAuthenticatedUsername(second));
+    }
+
+    @Test
+    public void test_deauthenticate_user_leaves_other_names_alone()
+            throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxConnections", 0);
+        ClientTracker clientTracker = new ClientTracker();
+        UUID other = connect(clientTracker, "dave");
+        connect(clientTracker, "carol");
+
+        clientTracker.deauthenticateUser("carol");
+
+        assertEquals("dave", clientTracker.getAuthenticatedUsername(other));
+    }
+
+    @Test
+    public void test_deauthenticate_user_leaves_tx_sessions_and_forwarded_clients_alone() {
+        ClientTracker clientTracker = new ClientTracker();
+        UUID forwarded = clientTracker.registerForwardedClient("carol");
+        var session = clientTracker.registerTxSession("session-1", "carol", "edge");
+        try {
+            clientTracker.deauthenticateUser("carol");
+
+            assertEquals("carol", clientTracker.getAuthenticatedUsername(forwarded),
+                    "a forwarded request acts for an edge connection that is deauthenticated on its own node");
+            assertEquals("carol", clientTracker.getAuthenticatedUsername(session.clientId()),
+                    "a participant slice must keep the identity that owns its thread-held locks");
+        } finally {
+            clientTracker.removeTxSession("session-1");
+        }
+    }
 }

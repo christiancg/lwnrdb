@@ -4,8 +4,13 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import org.techhouse.bckg_ops.BackgroundTaskManager;
+import org.techhouse.bckg_ops.PendingIndexWrites;
+import org.techhouse.bckg_ops.events.EntityEvent;
+import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -14,6 +19,9 @@ import org.techhouse.log.Logger;
 public final class PageOccupancyReconciler {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
+    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
+    @SuppressWarnings("FieldMayBeFinal")
+    private static BackgroundTaskManager taskManager = IocContainer.get(BackgroundTaskManager.class);
     private static final Logger logger = Logger.logFor(PageOccupancyReconciler.class);
 
     private PageOccupancyReconciler() {
@@ -64,9 +72,13 @@ public final class PageOccupancyReconciler {
     public static boolean reconcile(String dbName, String collName) throws Exception {
         fs.healTornPageTails(Globals.ADMIN_PAGES_DB_NAME, pageRowCollectionOf(dbName, collName));
         fs.healTornPageTails(dbName, collName);
+        final var adopted = fs.adoptOrphanedRecords(dbName, collName);
+        if (!adopted.isEmpty()) {
+            scheduleIndexMaintenanceFor(dbName, collName, adopted);
+        }
         final var fileLengths = fs.pageFileLengths(dbName, collName);
         final var rows = rowsByPage(cache.getAdminPageEntries(dbName, collName));
-        if (agreesWithFiles(rows, fileLengths)) {
+        if (adopted.isEmpty() && agreesWithFiles(rows, fileLengths)) {
             return false;
         }
         final var counts = entryCountsByPage(dbName, collName);
@@ -81,6 +93,17 @@ public final class PageOccupancyReconciler {
         }
         AdminPageHelper.replacePageEntries(dbName, collName, corrected);
         return true;
+    }
+
+    private static void scheduleIndexMaintenanceFor(String dbName, String collName, List<DbEntry> adopted) {
+        final var generation = pendingIndexWrites.mark(dbName, collName,
+                adopted.stream().map(DbEntry::get_id).toList());
+        final var incarnation = CollectionIncarnation.current(dbName, collName);
+        for (final var entry : adopted) {
+            entry.setPreviousByteSize(entry.byteSize());
+            taskManager.submitBackgroundTask(
+                    new EntityEvent(EventType.UPDATED, dbName, collName, entry, incarnation, generation));
+        }
     }
 
     private static Map<Long, AdminPageEntry> rowsByPage(List<AdminPageEntry> rows) {
