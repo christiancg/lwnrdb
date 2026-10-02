@@ -47,8 +47,7 @@ public final class ScheduleOperationHelper {
         }
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
-            return new OperationResponse(OperationType.SAVE_SCHEDULE, "Database '" + dbName + "' not found",
-                    ErrorCode.DATABASE_NOT_FOUND);
+            return databaseNotFound(dbName);
         }
         final var timingError = validateTiming(request);
         if (timingError != null) {
@@ -59,6 +58,16 @@ public final class ScheduleOperationHelper {
             return new OperationResponse(OperationType.SAVE_SCHEDULE,
                     "Procedure '" + request.getProcedureName() + "' not found in database '" + dbName + "'",
                     ErrorCode.PROCEDURE_NOT_FOUND);
+        }
+        return OperationLocks.withDatabaseShared(dbName, OperationType.SAVE_SCHEDULE, ErrorCode.ERROR_SAVING_SCHEDULE,
+                request.isReplicated(), () -> saveUnderDatabaseBarrier(request, actingUser));
+    }
+
+    private static OperationResponse saveUnderDatabaseBarrier(SaveScheduleRequest request, String actingUser)
+            throws IOException, InterruptedException {
+        final var dbName = request.getDatabaseName();
+        if (cache.getAdminDbEntry(dbName) == null) {
+            return databaseNotFound(dbName);
         }
         locks.lock(dbName, Globals.SCHEDULES_FOLDER);
         try {
@@ -85,6 +94,11 @@ public final class ScheduleOperationHelper {
         } finally {
             locks.release(dbName, Globals.SCHEDULES_FOLDER);
         }
+    }
+
+    private static OperationResponse databaseNotFound(String dbName) {
+        return new OperationResponse(OperationType.SAVE_SCHEDULE, "Database '" + dbName + "' not found",
+                ErrorCode.DATABASE_NOT_FOUND);
     }
 
     private static OperationResponse validateTiming(SaveScheduleRequest request) {

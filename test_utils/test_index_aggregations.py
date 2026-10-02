@@ -773,6 +773,8 @@ AGREE_OBJECT_CUSTOM = "idxagg_agree_object_custom"
 AGREE_CONTAINS_CUSTOM = "idxagg_agree_contains_custom"
 AGREE_NOT_EQUALS_MIXED = "idxagg_agree_ne_mixed"
 AGREE_NOT_EQUALS_HOMOGENEOUS = "idxagg_agree_ne_homogeneous"
+AGREE_DOTTED_GROUP = "idxagg_agree_dotted_group"
+AGREE_DOTTED_DISTINCT = "idxagg_agree_dotted_distinct"
 
 AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, AGREE_NOT_IN_ARR,
                      AGREE_JOIN_REMOTE, AGREE_JOIN_LEFT, AGREE_JOIN_NULL_REMOTE, AGREE_JOIN_NULL_LEFT,
@@ -781,7 +783,7 @@ AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, 
                      AGREE_IN_CASE, AGREE_NOT_IN_CASE, AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM,
                      AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES, AGREE_SURROGATE, AGREE_ARRAY_CUSTOM,
                      AGREE_OBJECT_CUSTOM, AGREE_CONTAINS_CUSTOM, AGREE_NOT_EQUALS_MIXED,
-                     AGREE_NOT_EQUALS_HOMOGENEOUS)
+                     AGREE_NOT_EQUALS_HOMOGENEOUS, AGREE_DOTTED_GROUP, AGREE_DOTTED_DISTINCT)
 
 
 def agree_ids(r):
@@ -809,6 +811,22 @@ def agree_joined(r):
         attached = d.get("cfg")
         rows.append((d.get("_id"), len(attached) if isinstance(attached, list) else 0))
     return sorted(rows)
+
+
+def agree_nested_keys(field_path):
+    def extract(r):
+        status = r.get("status")
+        if status not in ("OK", "NOT_FOUND"):
+            return f"<{status}/{r.get('errorCode')}>"
+        rows = []
+        for d in (r.get("results") or []):
+            node = d
+            for segment in field_path.split("."):
+                node = node.get(segment) if isinstance(node, dict) else None
+            members = sorted(m.get("_id") for m in (d.get("group") or []))
+            rows.append((node, members, field_path in d))
+        return sorted(rows)
+    return extract
 
 
 def agree(c, label, query_coll, steps, index_coll, index_field, extract=agree_ids, expected=None):
@@ -1157,6 +1175,18 @@ def probe_not_equals_matches_every_other_kind(c):
           not_equals_filter(2), AGREE_NOT_EQUALS_HOMOGENEOUS, "x", expected=["n1", "n3"])
 
 
+def probe_dotted_group_by_and_distinct_agree_with_scan(c):
+    for coll in (AGREE_DOTTED_GROUP, AGREE_DOTTED_DISTINCT):
+        for doc_id, value in (("p1", "x"), ("p2", "y"), ("p3", "x")):
+            save_doc(c, coll, {"_id": doc_id, "a": {"b": value}})
+    agree(c, "GROUP_BY on a dotted field emits nested keys", AGREE_DOTTED_GROUP,
+          [{"type": "GROUP_BY", "fieldName": "a.b"}], AGREE_DOTTED_GROUP, "a.b",
+          extract=agree_nested_keys("a.b"), expected=[("x", ["p1", "p3"], False), ("y", ["p2"], False)])
+    agree(c, "DISTINCT on a dotted field emits nested keys", AGREE_DOTTED_DISTINCT,
+          [{"type": "DISTINCT", "fieldName": "a.b"}], AGREE_DOTTED_DISTINCT, "a.b",
+          extract=agree_nested_keys("a.b"), expected=[("x", [], False), ("y", [], False)])
+
+
 def agreement_suite(c):
     section("Index / scan agreement: an index-backed answer must equal the full-scan answer")
     setup_agreement(c)
@@ -1176,6 +1206,7 @@ def agreement_suite(c):
     probe_mixed_number_boxes_group_the_same_either_way(c)
     probe_lone_surrogate_values_index_the_same_as_they_scan(c)
     probe_not_equals_matches_every_other_kind(c)
+    probe_dotted_group_by_and_distinct_agree_with_scan(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════

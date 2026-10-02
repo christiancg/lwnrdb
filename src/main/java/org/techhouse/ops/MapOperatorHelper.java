@@ -126,20 +126,23 @@ public final class MapOperatorHelper {
         };
     }
 
-    // An undefined result is the script declining to set the field, so the document is left as it was.
     private static JsonObject script(ScriptMidOperator midOperator, String addFieldName, JsonObject toMap,
             PipelineScriptContext context) {
         final var value = FilterOperatorHelper.callScript(midOperator.getSource(), toMap, context);
         if (value != null) {
-            toMap.add(addFieldName, value);
+            JsonUtils.setPath(toMap, addFieldName, value);
         }
         return toMap;
     }
 
     private static JsonObject removeField(RemoveFieldMapOperator operator, JsonObject toMap) {
         final var fieldName = operator.getFieldName();
-        toMap.remove(fieldName);
+        JsonUtils.removePath(toMap, fieldName);
         return toMap;
+    }
+
+    private static JsonBaseElement numberOrNull(Number value) {
+        return value == null ? JsonNull.INSTANCE : new JsonNumber(value);
     }
 
     private record Accumulator(Double value) {
@@ -162,7 +165,7 @@ public final class MapOperatorHelper {
                     ? new Accumulator(operandValue)
                     : new Accumulator(fold.applyAsDouble(accumulator.value(), operandValue));
         }
-        obj.addProperty(addFieldName, finiteOrNull(accumulator.value()));
+        JsonUtils.setPath(obj, addFieldName, numberOrNull(finiteOrNull(accumulator.value())));
         return obj;
     }
 
@@ -221,7 +224,7 @@ public final class MapOperatorHelper {
             }
         }
         final Double average = validSteps == 0 ? null : total / validSteps;
-        obj.addProperty(addFieldName, finiteOrNull(average));
+        JsonUtils.setPath(obj, addFieldName, numberOrNull(finiteOrNull(average)));
         return obj;
     }
 
@@ -241,7 +244,7 @@ public final class MapOperatorHelper {
             final var doubleValue = element.asJsonNumber().getValue().doubleValue();
             absValue = Math.abs(doubleValue);
         }
-        obj.addProperty(addFieldName, absValue);
+        JsonUtils.setPath(obj, addFieldName, numberOrNull(absValue));
         return obj;
     }
 
@@ -256,7 +259,7 @@ public final class MapOperatorHelper {
             final var arrayValue = element.asJsonArray();
             size = arrayValue.size();
         }
-        obj.addProperty(addFieldName, size);
+        JsonUtils.setPath(obj, addFieldName, numberOrNull(size));
         return obj;
     }
 
@@ -286,7 +289,7 @@ public final class MapOperatorHelper {
                 result.append(concatTextOf(concatStep));
             }
         }
-        obj.addProperty(addFieldName, result.toString());
+        JsonUtils.setPath(obj, addFieldName, new JsonString(result.toString()));
         return obj;
     }
 
@@ -397,7 +400,7 @@ public final class MapOperatorHelper {
                 }
             };
         }
-        obj.add(addFieldName, casted);
+        JsonUtils.setPath(obj, addFieldName, casted);
         return obj;
     }
 }

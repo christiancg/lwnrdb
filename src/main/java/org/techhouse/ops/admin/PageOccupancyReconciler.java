@@ -5,6 +5,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -19,10 +20,30 @@ public final class PageOccupancyReconciler {
     }
 
     public static void reconcileAll() {
+        healAdminPageTails();
         for (final var dbEntry : List.copyOf(cache.getAllAdminDbEntries())) {
             for (final var collName : List.copyOf(dbEntry.getCollections())) {
                 reconcileQuietly(dbEntry.get_id(), collName);
             }
+        }
+    }
+
+    private static void healAdminPageTails() {
+        for (final var collName : Globals.ADMIN_COLLECTION_NAMES) {
+            healQuietly(Globals.ADMIN_DB_NAME, collName);
+            healQuietly(Globals.ADMIN_PAGES_DB_NAME, pageRowCollectionOf(Globals.ADMIN_DB_NAME, collName));
+        }
+    }
+
+    private static String pageRowCollectionOf(String dbName, String collName) {
+        return String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+    }
+
+    private static void healQuietly(String dbName, String collName) {
+        try {
+            fs.healTornPageTails(dbName, collName);
+        } catch (Exception e) {
+            logger.warning("Could not heal the page tails of " + dbName + "|" + collName + ": " + e.getMessage());
         }
     }
 
@@ -41,6 +62,7 @@ public final class PageOccupancyReconciler {
     }
 
     public static boolean reconcile(String dbName, String collName) throws Exception {
+        fs.healTornPageTails(Globals.ADMIN_PAGES_DB_NAME, pageRowCollectionOf(dbName, collName));
         fs.healTornPageTails(dbName, collName);
         final var fileLengths = fs.pageFileLengths(dbName, collName);
         final var rows = rowsByPage(cache.getAdminPageEntries(dbName, collName));

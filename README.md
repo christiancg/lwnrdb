@@ -185,15 +185,17 @@ Also accepts an optional top-level `"analyze": true` (default `false`); see [Exp
 | Step | Required fields | Notes |
 |---|---|---|
 | `FILTER` | `operator` | Field or conjunction operator; a field operator needs `field`, `fieldOperatorType` and `value` |
-| `MAP` | `operators` (non-empty) | Each operator needs `fieldName` |
-| `GROUP_BY` | `fieldName` | |
-| `JOIN` | `joinCollection`, `localField`, `remoteField`, `asField` | `joinCollection` must satisfy naming rules; the user must also have `READ` on `joinCollection` |
+| `MAP` | `operators` (non-empty) | Each operator needs `fieldName`; a dotted `fieldName` writes or removes a nested field |
+| `GROUP_BY` | `fieldName` | A dotted `fieldName` emits its key nested: `a.b` → `{"a":{"b":…},"group":[…]}` |
+| `JOIN` | `joinCollection`, `localField`, `remoteField`, `asField` | `joinCollection` must satisfy naming rules; the user must also have `READ` on `joinCollection`; a dotted `asField` nests the joined array |
 | `COUNT` | — | Returns `{"count": N}` |
-| `DISTINCT` | — | `fieldName` is optional; omitting it deduplicates whole documents |
+| `DISTINCT` | — | `fieldName` is optional; omitting it deduplicates whole documents; a dotted `fieldName` emits its value nested |
 | `LIMIT` | `limit` (> 0) | |
 | `SKIP` | `skip` (>= 0) | |
 | `SORT` | `fieldName`, `ascending` | |
-| `REDUCE` | `script` | Folds the whole stream into one document; optional `initialValue` (default JSON null) and `resultField` (default `value`) |
+| `REDUCE` | `script` | Folds the whole stream into one document; optional `initialValue` (default JSON null) and `resultField` (default `value`, nested when dotted) |
+
+A field name a step *writes* follows the same dotted-path rule every step uses to *read* one, so a later `FILTER`, `SORT` or `GROUP_BY` on the same name finds what an earlier step wrote. A non-object value standing where the path needs an object is replaced by one in the step's output (never in the stored document).
 
 **Result order.** A pipeline that ends in `SORT` — or whose last order-determining step is a `SORT` — is fully ordered. Otherwise the order in which documents are enumerated is unspecified, so a `LIMIT` or `SKIP` used as the pipeline's source returns an unspecified subset, exactly as a SQL `LIMIT` without an `ORDER BY` does. `REDUCE` is the exception, because its *value* and not just its row order depends on the enumeration: when `REDUCE` is the pipeline's source it folds in a defined order (by page, then by `_id`), so a non-commutative fold answers the same before and after a restart or an eviction. Put a `SORT` in front of `REDUCE` to choose a different order — any other preceding step hands it the unspecified one. The arrays a step builds are ordered too: a `GROUP_BY` group and a `JOIN`'s `asField` list their documents by `_id`, so the same query answers identically whether it was resolved through an index or a full scan.
 

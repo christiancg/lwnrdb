@@ -49,8 +49,7 @@ public final class ProcedureOperationHelper {
         }
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
-            return new OperationResponse(OperationType.SAVE_PROCEDURE, "Database '" + dbName + "' not found",
-                    ErrorCode.DATABASE_NOT_FOUND);
+            return databaseNotFound(dbName);
         }
         final var source = request.getScript();
         if (source.getBytes(StandardCharsets.UTF_8).length > configuration.getScriptMaxSourceBytes()) {
@@ -71,6 +70,16 @@ public final class ProcedureOperationHelper {
             return new OperationResponse(OperationType.SAVE_PROCEDURE,
                     ErrorCode.PROCEDURE_IMPORT_NOT_FOUND.getDefaultMessage() + ": '" + missingImport + "'",
                     ErrorCode.PROCEDURE_IMPORT_NOT_FOUND);
+        }
+        return OperationLocks.withDatabaseShared(dbName, OperationType.SAVE_PROCEDURE, ErrorCode.ERROR_SAVING_PROCEDURE,
+                request.isReplicated(), () -> saveUnderDatabaseBarrier(request, actingUser));
+    }
+
+    private static OperationResponse saveUnderDatabaseBarrier(SaveProcedureRequest request, String actingUser)
+            throws IOException, InterruptedException {
+        final var dbName = request.getDatabaseName();
+        if (cache.getAdminDbEntry(dbName) == null) {
+            return databaseNotFound(dbName);
         }
         locks.lock(dbName, Globals.PROCEDURES_FOLDER);
         try {
@@ -93,6 +102,11 @@ public final class ProcedureOperationHelper {
         } finally {
             locks.release(dbName, Globals.PROCEDURES_FOLDER);
         }
+    }
+
+    private static OperationResponse databaseNotFound(String dbName) {
+        return new OperationResponse(OperationType.SAVE_PROCEDURE, "Database '" + dbName + "' not found",
+                ErrorCode.DATABASE_NOT_FOUND);
     }
 
     private static String firstUnresolvableImport(SaveProcedureRequest request, String dbName,

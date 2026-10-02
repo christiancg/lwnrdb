@@ -15,6 +15,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.simplejs.values.EJsonInterop;
+import org.techhouse.utils.JsonUtils;
 
 public final class ReduceOperatorHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -55,7 +56,7 @@ public final class ReduceOperatorHelper {
             }
         }
         final var result = new JsonObject();
-        result.add(step.getResultField(), accumulator);
+        JsonUtils.setPath(result, step.getResultField(), accumulator);
         return result;
     }
 }

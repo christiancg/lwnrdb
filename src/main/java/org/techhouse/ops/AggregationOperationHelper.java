@@ -190,7 +190,7 @@ public final class AggregationOperationHelper {
         }
         return grouped.entrySet().stream().map(jsonElementListEntry -> {
             final var groupedEntry = new JsonObject();
-            groupedEntry.add(fieldName, jsonElementListEntry.getKey());
+            JsonUtils.setPath(groupedEntry, fieldName, jsonElementListEntry.getKey());
             groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(jsonElementListEntry.getValue()));
             return groupedEntry;
         });
@@ -232,7 +232,7 @@ public final class AggregationOperationHelper {
                 continue;
             }
             final var groupedEntry = new JsonObject();
-            groupedEntry.add(fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
+            JsonUtils.setPath(groupedEntry, fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
             groupedEntry.add(GROUP_FIELD_NAME, inIdOrder(groupDocuments));
             grouped.add(groupedEntry);
         }
@@ -246,7 +246,6 @@ public final class AggregationOperationHelper {
         final var joinCollectionLocalField = joinStep.getLocalField();
         final var joinCollectionRemoteField = joinStep.getRemoteField();
         final var as = joinStep.getAsField();
-        // Blocking step (documented exception): JOIN groups the remote side in memory before the per-row attach.
         final List<JsonObject> leftEntries;
         try (var documents = cache.initializeStreamIfNecessary(resultStream, dbName, collName)) {
             leftEntries = documents.toList();
@@ -257,7 +256,7 @@ public final class AggregationOperationHelper {
             final var localValue = JsonUtils.resolvePath(jsonObject, joinCollectionLocalField);
             if (localValue != null) {
                 final var copy = jsonObject.deepCopy();
-                copy.add(as, joinedCollection.get(localValue));
+                JsonUtils.setPath(copy, as, joinedCollection.get(localValue));
                 return copy;
             }
             return jsonObject;
@@ -318,7 +317,7 @@ public final class AggregationOperationHelper {
             if (indexEntries != null) {
                 return indexEntries.stream().map(indexEntry -> {
                     final var json = new JsonObject();
-                    json.add(fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
+                    JsonUtils.setPath(json, fieldName, IndexHelper.indexValueToElement(indexEntry.getValue()));
                     return json;
                 }).distinct();
             }
@@ -335,7 +334,7 @@ public final class AggregationOperationHelper {
         } else {
             return resultStream.filter(jsonObject -> JsonUtils.hasInPath(jsonObject, fieldName)).map(jsonObject -> {
                 final var json = new JsonObject();
-                json.add(fieldName, JsonUtils.getFromPath(jsonObject, fieldName));
+                JsonUtils.setPath(json, fieldName, JsonUtils.getFromPath(jsonObject, fieldName));
                 return json;
             }).distinct();
         }

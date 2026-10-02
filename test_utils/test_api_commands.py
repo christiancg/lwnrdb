@@ -752,6 +752,42 @@ def test_aggregation_steps(c):
     check_field("FILTER->SORT->LIMIT yields the youngest active user", r, "results.0._id", "a1")
 
 
+def test_aggregation_steps_write_dotted_fields_nested(c):
+    section("A step writes a dotted field name the way every step reads one")
+    coll = "agg_nested_paths"
+    create_coll(c, coll)
+    bulk_save(c, coll, [{"_id": "n1", "a": {"b": "x", "n": -2}}, {"_id": "n2", "a": {"b": "y", "n": 5}},
+                        {"_id": "n3", "a": {"b": "x", "n": 7}}])
+
+    grouped = aggregate(c, coll, [{"type": "GROUP_BY", "fieldName": "a.b"}]).get("results") or []
+    check("GROUP_BY a.b emits the key nested", sorted((g.get("a") or {}).get("b") for g in grouped) == ["x", "y"]
+          and all("a.b" not in g for g in grouped), detail=f"got {grouped}")
+    r = aggregate(c, coll, [{"type": "GROUP_BY", "fieldName": "a.b"}, filter_step("a.b", "EQUALS", "x")])
+    rows = r.get("results") or []
+    check("a FILTER on the GROUP_BY key finds its group", len(rows) == 1 and len(rows[0].get("group") or []) == 2,
+          detail=f"got {rows}")
+
+    r = aggregate(c, coll, [{"type": "DISTINCT", "fieldName": "a.b"},
+                            {"type": "SORT", "fieldName": "a.b", "ascending": False}])
+    check("DISTINCT then SORT on a.b orders the nested keys",
+          [(d.get("a") or {}).get("b") for d in (r.get("results") or [])] == ["y", "x"], detail=f"got {r}")
+
+    r = aggregate(c, coll, [{"type": "MAP", "operators": [
+        {"fieldName": "a.abs", "operator": {"type": "ABS", "operand": "a.n"}},
+        {"fieldName": "a.b"}]}, filter_step("_id", "EQUALS", "n1")])
+    row = (r.get("results") or [{}])[0]
+    check("MAP ADD_FIELD a.abs writes beside a.n", (row.get("a") or {}).get("abs") == 2, detail=f"got {row}")
+    check("MAP REMOVE_FIELD a.b removes the nested key", "b" not in (row.get("a") or {}) and "a.abs" not in row,
+          detail=f"got {row}")
+
+    r = aggregate(c, coll, [filter_step("_id", "EQUALS", "n1"),
+                            {"type": "JOIN", "joinCollection": coll, "localField": "a.b", "remoteField": "a.b",
+                             "asField": "same.rows"}])
+    row = (r.get("results") or [{}])[0]
+    joined = [d.get("_id") for d in ((row.get("same") or {}).get("rows") or [])]
+    check("JOIN asField same.rows nests the joined array", joined == ["n1", "n3"], detail=f"got {row}")
+
+
 def test_analyze(c):
     section("Explain / Analyze (AGGREGATE analyze=true)")
 
@@ -1005,6 +1041,7 @@ def main():
         test_filter_with_indexes,
         test_conjunctions,
         test_aggregation_steps,
+        test_aggregation_steps_write_dotted_fields_nested,
         test_map_conditions_and_number_casts,
         test_map_arithmetic,
         test_every_aggregate_response_is_strict_json,

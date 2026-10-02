@@ -538,6 +538,40 @@ def test_a_torn_page_tail_is_healed_at_startup(conn: Conn, work_dir: str):
     check("the index-only COUNT agrees with the scan", pk == len(expected), f"count={pk} scan={len(scanned)}")
 
 
+ADMIN_HEAL_DB = "heal_admin_db"
+
+
+def admin_databases_folder(work_dir: str) -> str:
+    return os.path.join(work_dir, "db", "admin", "databases")
+
+
+def tear_an_admin_page_tail(work_dir: str):
+    folder = admin_databases_folder(work_dir)
+    pages = [name for name in os.listdir(folder) if name.endswith(".dat")]
+    last = sorted(pages, key=lambda name: int(name.rsplit("-", 1)[1][:-4]))[-1]
+    with open(os.path.join(folder, last), "ab") as page:
+        page.write(TORN_BYTES.encode("utf-8"))
+
+
+def test_an_admin_write_after_a_torn_admin_tail_lands_on_its_own_line(conn: Conn, work_dir: str):
+    section("A torn admin page tail is healed at startup, so the next admin write is not glued onto it")
+    folder = admin_databases_folder(work_dir)
+    unterminated = [name for name in os.listdir(folder) if name.endswith(".dat")
+                    and os.path.getsize(os.path.join(folder, name)) > 0
+                    and open(os.path.join(folder, name), "rb").read()[-1:] != b"\n"]
+    check("every admin/databases page ends at a record boundary after the restart", not unterminated,
+          f"torn: {unterminated}")
+    check_status("CREATE_DATABASE after the restart",
+                 conn.send({"type": "CREATE_DATABASE", "databaseName": ADMIN_HEAL_DB}), "OK")
+
+
+def test_the_admin_write_after_the_tear_is_still_there(conn: Conn):
+    section("The admin record written after a torn admin tail survives the next restart")
+    databases = conn.send({"type": "LIST_DATABASES"}).get("databases") or []
+    check("LIST_DATABASES still lists the database created after the tear", ADMIN_HEAL_DB in databases,
+          f"databases={databases}")
+
+
 EMPTY_IDX_COLL = "emptied_index_docs"
 
 
@@ -1423,6 +1457,7 @@ def main():
         append_torn_pk_line(work_dir, DB, HEAL_COLL)
         lose_the_page_rows(work_dir)
         tear_the_page_tail(work_dir)
+        tear_an_admin_page_tail(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
         proc = bu.start_server(work_dir, log_path)
@@ -1436,6 +1471,14 @@ def main():
             test_a_bulk_update_of_many_entries_leaves_every_document_consistent(conn)
             test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn, work_dir)
             test_a_self_heal_never_erases_a_committed_write(conn, work_dir, log_path)
+            test_an_admin_write_after_a_torn_admin_tail_lands_on_its_own_line(conn, work_dir)
+        bu.stop_server(proc)
+        proc = None
+
+        print(f"  Restarting server on {HOST}:{PORT} ...")
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_the_admin_write_after_the_tear_is_still_there(conn)
     finally:
         bu.stop_server(proc)
 

@@ -1,6 +1,7 @@
 package org.techhouse.config;
 
 import java.nio.file.FileSystems;
+import java.util.List;
 
 public final class Globals {
     private Globals() {
@@ -46,6 +47,9 @@ public final class Globals {
     public static final String ADMIN_COLLECTION_USAGE_NAME = "collection_usage";
     public static final String ADMIN_TRANSACTIONS_COLLECTION_NAME = "transactions";
     public static final String ADMIN_TRIGGER_RUNS_COLLECTION_NAME = "trigger_runs";
+    public static final List<String> ADMIN_COLLECTION_NAMES = List.of(ADMIN_DATABASES_COLLECTION_NAME,
+            ADMIN_COLLECTIONS_COLLECTION_NAME, ADMIN_USERS_COLLECTION_NAME, ADMIN_COLLECTION_USAGE_NAME,
+            ADMIN_TRANSACTIONS_COLLECTION_NAME, ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
     public static final String SCRIPT_RUNS_COLLECTION_NAME = "script_runs";
     public static final long CACHE_DISABLED = -1L;
     public static final long CACHE_UNLIMITED = 0L;

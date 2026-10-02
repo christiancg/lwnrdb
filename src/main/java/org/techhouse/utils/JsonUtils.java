@@ -5,6 +5,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.function.ToIntBiFunction;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -238,6 +239,55 @@ public final class JsonUtils {
             }
         }
         return result;
+    }
+
+    public static void setPath(JsonObject obj, String path, JsonBaseElement value) {
+        final var segments = pathSegments(path);
+        if (segments.isEmpty()) {
+            return;
+        }
+        var parent = obj;
+        for (final var segment : segments.subList(0, segments.size() - 1)) {
+            final var child = parent.get(segment);
+            if (child != null && child.isJsonObject()) {
+                parent = child.asJsonObject();
+            } else {
+                final var created = new JsonObject();
+                parent.add(segment, created);
+                parent = created;
+            }
+        }
+        parent.add(segments.getLast(), value);
+    }
+
+    public static void removePath(JsonObject obj, String path) {
+        final var segments = pathSegments(path);
+        if (segments.isEmpty()) {
+            return;
+        }
+        var parent = obj;
+        for (final var segment : segments.subList(0, segments.size() - 1)) {
+            final var child = parent.get(segment);
+            if (child == null || !child.isJsonObject()) {
+                return;
+            }
+            parent = child.asJsonObject();
+        }
+        parent.remove(segments.getLast());
+    }
+
+    private static List<String> pathSegments(String path) {
+        if (path.indexOf('.') < 0) {
+            return List.of(path);
+        }
+        var limit = path.length();
+        while (limit > 0 && path.charAt(limit - 1) == '.') {
+            limit--;
+        }
+        if (limit == 0) {
+            return List.of();
+        }
+        return List.of(path.substring(0, limit).split("\\.", -1));
     }
 
     public static boolean hasInPath(JsonObject obj, String path) {

@@ -69,9 +69,7 @@ public class AdminCache {
             () -> metadataMisses, SCHEDULE_MISS_PREFIX, this::loadScheduleUncached);
 
     public void loadAdminData() throws IOException {
-        for (var collName : List.of(Globals.ADMIN_DATABASES_COLLECTION_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
-                Globals.ADMIN_USERS_COLLECTION_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
-                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME)) {
+        for (var collName : Globals.ADMIN_COLLECTION_NAMES) {
             pageCache.loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, collName);
         }
         loadPkIndexInto(Globals.ADMIN_COLLECTION_USAGE_NAME, collectionUsagePkIndex);

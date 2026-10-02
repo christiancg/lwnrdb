@@ -1,5 +1,6 @@
 package org.techhouse.ops.admin;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -40,32 +41,43 @@ public final class DatabaseOperationHelper {
 
     public static OperationResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest,
             UUID clientId) {
+        final var dbName = createDatabaseRequest.getDatabaseName();
         return OperationResponse.respondOrError(OperationType.CREATE_DATABASE, ErrorCode.ERROR_CREATING_DATABASE,
                 () -> {
-                    final var dbName = createDatabaseRequest.getDatabaseName();
-                    // createDatabaseFolder returns true for an already-present folder, so without this guard
-                    // a duplicate CREATE_DATABASE would overwrite the existing admin entry and report success.
-                    if (cache.getAdminDbEntry(dbName) != null) {
-                        return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
+                    if (!locks.tryLockDatabaseExclusive(dbName,
+                            OperationLocks.lockBudgetMillis(createDatabaseRequest.isReplicated()))) {
+                        return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
                     }
-                    final var colliding = createDatabaseRequest.isReplicated()
-                            ? null
-                            : OnDiskNameRegistry.collidingDatabase(dbName);
-                    if (colliding != null) {
-                        return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.NAME_COLLIDES_ON_DISK,
-                                colliding);
+                    try {
+                        return createUnderDatabaseBarrier(createDatabaseRequest, clientId);
+                    } finally {
+                        locks.releaseDatabaseExclusive(dbName);
                     }
-                    final var result = fs.createDatabaseFolder(dbName);
-                    if (result) {
-                        final var username = clientTracker.getAuthenticatedUsername(clientId);
-                        final var owners = username != null ? List.of(username) : List.<String>of();
-                        final var newEntry = new AdminDbEntry(dbName, new java.util.ArrayList<>(),
-                                new java.util.ArrayList<>(owners));
-                        AdminOperationHelper.saveDatabaseEntry(newEntry);
-                        return OperationResponse.ok(OperationType.CREATE_DATABASE, "Database created successfully");
-                    }
-                    return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
                 });
+    }
+
+    private static OperationResponse createUnderDatabaseBarrier(CreateDatabaseRequest createDatabaseRequest,
+            UUID clientId) throws IOException, InterruptedException {
+        final var dbName = createDatabaseRequest.getDatabaseName();
+        if (cache.getAdminDbEntry(dbName) != null) {
+            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
+        }
+        final var colliding = createDatabaseRequest.isReplicated()
+                ? null
+                : OnDiskNameRegistry.collidingDatabase(dbName);
+        if (colliding != null) {
+            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
+        }
+        final var result = fs.createDatabaseFolder(dbName);
+        if (result) {
+            final var username = clientTracker.getAuthenticatedUsername(clientId);
+            final var owners = username != null ? List.of(username) : List.<String>of();
+            final var newEntry = new AdminDbEntry(dbName, new java.util.ArrayList<>(),
+                    new java.util.ArrayList<>(owners));
+            AdminOperationHelper.saveDatabaseEntry(newEntry);
+            return OperationResponse.ok(OperationType.CREATE_DATABASE, "Database created successfully");
+        }
+        return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
     }
 
     public static OperationResponse processSetDatabaseOwners(SetDatabaseOwnersRequest request) {
