@@ -446,6 +446,23 @@ def test_referential_integrity(conn: Conn):
     check_status("restore the procedure", conn.save_procedure("counter", COUNTER_SOURCE), "OK")
 
 
+def test_a_client_cannot_forge_the_stamped_definer():
+    section("A client cannot forge the coordinator's stamp")
+    forged = {"stampedVersion": 7, "stampedDefiner": ADMIN_USERNAME, "stampedUpdatedBy": ADMIN_USERNAME,
+              "stampedUpdatedAt": 1, "stampedCreatedAt": 1}
+    with user_conn(MANAGER) as manager:
+        check_status("a MANAGE user installs a schedule carrying a forged stamp",
+                     manager.save_schedule("forgedStamp", "counter", cron="0 3 * * *", **forged), "OK")
+        with admin_conn() as admin:
+            stored = next((entry for entry in admin.list_schedules().get("schedules", [])
+                           if entry.get("name") == "forgedStamp"), {})
+            check("the definer is the caller, not the forged admin", stored.get("definer") == MANAGER,
+                  f"got {stored}")
+            check("so is updatedBy", stored.get("updatedBy") == MANAGER, f"got {stored}")
+            check("and the version was assigned by the server", stored.get("version") == 1, f"got {stored}")
+        check_status("clean up the schedule", manager.delete_schedule("forgedStamp"), "OK")
+
+
 def test_permissions():
     section("Permissions")
     with user_conn(MANAGER) as manager:
@@ -551,6 +568,7 @@ def main():
             test_run_history(conn)
             test_referential_integrity(conn)
         test_permissions()
+        test_a_client_cannot_forge_the_stamped_definer()
         with admin_conn() as conn:
             test_storage_placement(conn, work_dir)
             test_stats(conn)

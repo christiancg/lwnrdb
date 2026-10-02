@@ -6,14 +6,20 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ShutdownCoordinator;
+import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
@@ -212,5 +218,26 @@ public class ShutdownCoordinatorTest {
         } finally {
             TestUtils.setPrivateField(configuration, "shutdownTimeoutMs", original);
         }
+    }
+
+    @Test
+    public void test_the_schedule_ticker_stops_before_the_triggers_drain() throws Exception {
+        final var schedules = IocContainer.get(ScheduleExecutor.class);
+        schedules.start(_ -> {
+        });
+        final var tickerRunningAtTriggerDrain = new AtomicBoolean(true);
+        final var triggers = mock(TriggerExecutor.class);
+        when(triggers.drain(anyLong())).thenAnswer(_ -> {
+            tickerRunningAtTriggerDrain
+                    .set(TestUtils.getPrivateField(schedules, "scheduler", ScheduledExecutorService.class) != null);
+            return true;
+        });
+        final var coordinator = coordinator();
+        TestUtils.setPrivateField(coordinator, "triggerExecutor", triggers);
+
+        coordinator.shutdown(null, null);
+
+        assertFalse(tickerRunningAtTriggerDrain.get(),
+                "a scheduled run firing during the trigger drain would enqueue into a draining executor");
     }
 }

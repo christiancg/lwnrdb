@@ -956,7 +956,91 @@ def test_a_client_cannot_advance_the_write_clock_through_an_incarnation():
             lambda value=value: save(port, forged_db, "docs", {"_id": "d1", "v": value})), "OK")
     check("the last write wins on every node, so versions kept increasing",
           all_nodes_see(forged_db, "docs", "d1", 3))
+
+    def stored_incarnations():
+        found = []
+        for node in nodes:
+            entry = stored_documents(node, "admin", "collections").get(f"{forged_db}|docs")
+            found.append(None if entry is None else entry.get("incarnation"))
+        return found
+
+    check("every node registered the collection", wait_until(
+        lambda: all(value is not None for value in stored_incarnations()), timeout_s=15.0),
+        f"got {stored_incarnations()}")
+    incarnations = stored_incarnations()
+    check("no node holds the forged incarnation", "9223372036854775805" not in incarnations,
+          f"got {incarnations}")
+    check("the coordinator minted one and every node agrees on it",
+          len(set(incarnations)) == 1 and incarnations[0] not in (None, "0"), f"got {incarnations}")
     op_with_retry(lambda: drop_db(port, forged_db))
+
+
+def test_a_forged_stamp_is_ignored_and_a_real_one_still_replicates():
+    section("A script definition keeps the saving user as definer on every node")
+
+    stamp_db = "cluster_stamp_db"
+    manager = "cluster_stamp_manager"
+    password = "cluster_stamp1234"
+    port = nodes[0].client_port
+    check_status("CREATE_DATABASE", op_with_retry(lambda: create_db(port, stamp_db)), "OK")
+    check_status("CREATE_COLLECTION", op_with_retry(lambda: create_coll(port, stamp_db, "docs")), "OK")
+    op(port, {"type": "DELETE_USER", "username": manager})
+    check_status("CREATE_USER with MANAGE on the database", op(port, {
+        "type": "CREATE_USER", "username": manager, "password": password, "admin": False,
+        "databasePermissions": {stamp_db: "READ_WRITE"}, "scriptPermissions": {stamp_db: "MANAGE"}}), "OK")
+    check_status("SAVE_PROCEDURE", op_with_retry(lambda: op(port, {
+        "type": "SAVE_PROCEDURE", "databaseName": stamp_db, "name": "noop", "script": "return 1;"})), "OK")
+
+    def as_manager(p, payload):
+        c = Conn(port=p)
+        try:
+            a = c.send({"type": "AUTHENTICATE", "username": manager, "password": password})
+            return a if a.get("status") != "OK" else c.send(payload)
+        finally:
+            c.close()
+
+    forged = {"stampedVersion": 7, "stampedDefiner": ADMIN_USERNAME, "stampedUpdatedBy": ADMIN_USERNAME,
+              "stampedUpdatedAt": 1, "stampedCreatedAt": 1}
+    edge = nodes[1].client_port
+    check("the manager can authenticate on the edge node", wait_until(
+        lambda: as_manager(edge, {"type": "LIST_DATABASES"}).get("status") == "OK", timeout_s=15.0))
+    check_status("SAVE_TRIGGER carrying a forged stamp, through a non-coordinator node", as_manager(edge, {
+        "type": "SAVE_TRIGGER", "databaseName": stamp_db, "collectionName": "docs", "name": "stamped",
+        "events": ["CREATED"], "procedureName": "noop", **forged}), "OK")
+    check_status("SAVE_SCHEDULE carrying a forged stamp, through a non-coordinator node", as_manager(edge, {
+        "type": "SAVE_SCHEDULE", "databaseName": stamp_db, "name": "stamped", "procedureName": "noop",
+        "cron": "0 3 * * *", **forged}), "OK")
+
+    def trigger_on(p):
+        listed = op(p, {"type": "LIST_TRIGGERS", "databaseName": stamp_db, "collectionName": "docs"})
+        return next((t for t in (listed.get("triggers") or []) if t.get("name") == "stamped"), None)
+
+    def schedule_on(p):
+        listed = op(p, {"type": "LIST_SCHEDULES", "databaseName": stamp_db})
+        return next((t for t in (listed.get("schedules") or []) if t.get("name") == "stamped"), None)
+
+    check("the trigger reaches every node", wait_until(
+        lambda: all(trigger_on(p) is not None for p in all_ports()), timeout_s=15.0))
+    check("the schedule reaches every node", wait_until(
+        lambda: all(schedule_on(p) is not None for p in all_ports()), timeout_s=15.0))
+    triggers = [trigger_on(p) for p in all_ports()]
+    schedules = [schedule_on(p) for p in all_ports()]
+    check("every node holds the trigger with the saving user as definer",
+          all(t and t.get("definer") == manager and t.get("updatedBy") == manager for t in triggers),
+          f"got {triggers}")
+    check("every node holds the schedule with the saving user as definer",
+          all(t and t.get("definer") == manager and t.get("updatedBy") == manager for t in schedules),
+          f"got {schedules}")
+    check("every node agrees on the trigger version, assigned by the coordinator",
+          len({t.get("version") for t in triggers}) == 1 and triggers[0].get("version") == 1, f"got {triggers}")
+    check("every node agrees on the schedule version, assigned by the coordinator",
+          len({t.get("version") for t in schedules}) == 1 and schedules[0].get("version") == 1,
+          f"got {schedules}")
+    check("and on when each was created", len({t.get("createdAt") for t in triggers}) == 1
+          and len({t.get("createdAt") for t in schedules}) == 1, f"got {triggers} {schedules}")
+
+    op(port, {"type": "DELETE_USER", "username": manager})
+    op_with_retry(lambda: drop_db(port, stamp_db))
 
 
 def test_single_node_transaction():
@@ -2730,6 +2814,7 @@ def main():
         test_grants_are_pruned_on_every_node()
         test_a_deleted_users_ownership_is_pruned_on_every_node()
         test_a_client_cannot_advance_the_write_clock_through_an_incarnation()
+        test_a_forged_stamp_is_ignored_and_a_real_one_still_replicates()
         test_single_node_transaction()
         test_multi_collection_transaction()
         test_a_replica_listener_never_sees_a_partial_transaction()
