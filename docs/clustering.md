@@ -76,6 +76,12 @@ written by an older build is not carried forward.
   `suspectTimeoutMs` is `SUSPECT`, and within `deadTimeoutMs` is `DEAD`. A node whose
   heartbeat advances again is restored to `ALIVE`. Merging prefers the higher
   `incarnation`, then the higher heartbeat, so state converges regardless of gossip order.
+- **Probing**: a `SUSPECT` or `DEAD` peer is not skipped. Every `deadProbeIntervalMs` it is sent an
+  ordinary gossip message, off the round's critical path so an unreachable peer never lengthens a
+  tick. Without this, two nodes that each marked the other `DEAD` during a partition would never
+  contact each other again: neither would send, and a heartbeat only travels in gossip. Whichever
+  probe arrives first carries a fresher heartbeat, so the receiver restores the sender and its reply
+  restores the receiver.
 
 Gossip also carries per-node telemetry — script load, script capacity, and two admin
 catch-up signals — used for script placement. Adopting a peer's new telemetry deliberately
@@ -746,7 +752,7 @@ See the *Clustering* row of the configuration table in the main
 [README](../README.md#configuration). Key settings: `clusterEnabled`, `clusterPort`,
 `clusterBindAddress`, `clusterAdvertisedAddress`, `clusterSeeds`, `nodeId`,
 `clusterExpectedSize`, `gossipIntervalMs`, `suspectTimeoutMs`, `deadTimeoutMs`,
-`replicationAckTimeoutMs`, `virtualNodesPerNode`, `readFallbackToLocal`,
+`deadProbeIntervalMs`, `replicationAckTimeoutMs`, `virtualNodesPerNode`, `readFallbackToLocal`,
 `scriptRoutingEnabled`, `scriptLocalityWeight`, `clusterTlsEnabled`, `clusterSecret`,
 `antiEntropyIntervalMs`, `tombstoneRetentionMs`.
 

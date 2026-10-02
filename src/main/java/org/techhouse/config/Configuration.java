@@ -181,6 +181,10 @@ public final class Configuration {
         return longValue(ConfigKey.DEAD_EVICTION_MS);
     }
 
+    public long getDeadProbeIntervalMs() {
+        return longValue(ConfigKey.DEAD_PROBE_INTERVAL_MS);
+    }
+
     public long getReplicationAckTimeoutMs() {
         return longValue(ConfigKey.REPLICATION_ACK_TIMEOUT_MS);
     }

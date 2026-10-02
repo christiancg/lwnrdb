@@ -107,6 +107,7 @@ public final class ConfigurationValidator {
         validateSeeds(configs.get("clusterSeeds"), errors);
         validateExpectedSize(configs, errors);
         validateDeadEviction(configs, errors);
+        validateDeadProbeInterval(configs, errors);
     }
 
     private static void validateExpectedSize(Map<String, String> configs, List<String> errors) {
@@ -123,6 +124,15 @@ public final class ConfigurationValidator {
         final var eviction = parseLongOrNull(configs.get("deadEvictionMs"));
         if (dead != null && eviction != null && eviction <= dead) {
             errors.add("deadEvictionMs (" + eviction + ") must be greater than deadTimeoutMs (" + dead + ")");
+        }
+    }
+
+    private static void validateDeadProbeInterval(Map<String, String> configs, List<String> errors) {
+        final var gossip = parseLongOrNull(configs.get("gossipIntervalMs"));
+        final var probe = parseLongOrNull(configs.get("deadProbeIntervalMs"));
+        if (gossip != null && probe != null && probe < gossip) {
+            errors.add(
+                    "deadProbeIntervalMs (" + probe + ") must not be smaller than gossipIntervalMs (" + gossip + ")");
         }
     }
 

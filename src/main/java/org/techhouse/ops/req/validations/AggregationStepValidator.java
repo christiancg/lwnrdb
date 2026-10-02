@@ -242,6 +242,9 @@ public class AggregationStepValidator {
             if (fieldOp.getField() == null || fieldOp.getField().isBlank()) {
                 return ValidationResult.fail("Field operator requires a non-blank field name");
             }
+            if (fieldOp.getField().endsWith(".")) {
+                return ValidationResult.fail("Field operator field name must not end with '.'");
+            }
             if (fieldOp.getFieldOperatorType() == null) {
                 return ValidationResult.fail("Field operator requires a fieldOperatorType");
             }

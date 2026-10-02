@@ -107,6 +107,7 @@ public final class CollectionOperationHelper {
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
                 listenManager.unregisterAllForCollection(dbName, collName);
+                GrantPruner.forDroppedCollection(dbName, collName);
                 dropSucceeded = true;
                 return OperationResponse.ok(OperationType.DROP_COLLECTION, "Collection dropped successfully");
             }

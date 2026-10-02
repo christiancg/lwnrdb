@@ -44,6 +44,7 @@ public class MembershipService {
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Map<String, NodeInfo> members = new ConcurrentHashMap<>();
     private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
+    private final Map<String, Long> lastProbe = new ConcurrentHashMap<>();
     private final Map<String, Evicted> evicted = new ConcurrentHashMap<>();
     private final List<MembershipListener> listeners = new CopyOnWriteArrayList<>();
     private final AtomicLong heartbeatCounter = new AtomicLong();
@@ -135,31 +136,27 @@ public class MembershipService {
     }
 
     private void gossipToPeers() {
-        final var targets = new ArrayList<NodeAddress>();
+        final var live = new ArrayList<NodeAddress>();
+        final var probes = new ArrayList<NodeAddress>();
+        final var now = System.currentTimeMillis();
         for (final var member : members.values()) {
-            if (!member.getNodeId().equals(self.getNodeId()) && member.getState() == NodeState.ALIVE) {
-                targets.add(member.address());
+            if (member.getNodeId().equals(self.getNodeId())) {
+                continue;
             }
-        }
-        if (targets.isEmpty()) {
-            return;
+            if (member.getState() == NodeState.ALIVE) {
+                live.add(member.address());
+            } else if (probeIsDue(member.getNodeId(), now)) {
+                probes.add(member.address());
+            }
         }
         final var payload = snapshot();
         final var timeout = clusterConfig.replicationAckTimeoutMs();
-        final var done = new CountDownLatch(targets.size());
-        for (final var address : targets) {
-            Thread.ofVirtual().name("cluster-gossip").start(() -> {
-                try {
-                    final var message = new ClusterMessage(null, ClusterMessageType.GOSSIP, clusterConfig.secret(),
-                            self, payload);
-                    mergeAll(pool.request(address, message, timeout).getMembers());
-                } catch (Exception e) {
-                    logger.warning("Gossip to " + address + " failed: " + e.getMessage());
-                } finally {
-                    done.countDown();
-                }
-            });
+        probes.forEach(address -> gossipTo(address, payload, timeout, null));
+        if (live.isEmpty()) {
+            return;
         }
+        final var done = new CountDownLatch(live.size());
+        live.forEach(address -> gossipTo(address, payload, timeout, done));
         try {
             if (!done.await(timeout, TimeUnit.MILLISECONDS)) {
                 logger.warning("Gossip round did not complete within " + timeout + "ms");
@@ -167,6 +164,31 @@ public class MembershipService {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
+    }
+
+    private boolean probeIsDue(String nodeId, long now) {
+        final var last = lastProbe.get(nodeId);
+        if (last != null && now - last < clusterConfig.deadProbeIntervalMs()) {
+            return false;
+        }
+        lastProbe.put(nodeId, now);
+        return true;
+    }
+
+    private void gossipTo(NodeAddress address, List<NodeInfo> payload, long timeout, CountDownLatch done) {
+        Thread.ofVirtual().name("cluster-gossip").start(() -> {
+            try {
+                final var message = new ClusterMessage(null, ClusterMessageType.GOSSIP, clusterConfig.secret(), self,
+                        payload);
+                mergeAll(pool.request(address, message, timeout).getMembers());
+            } catch (Exception e) {
+                logger.warning("Gossip to " + address + " failed: " + e.getMessage());
+            } finally {
+                if (done != null) {
+                    done.countDown();
+                }
+            }
+        });
     }
 
     public ClusterMessage handleJoin(ClusterMessage request) {
@@ -191,6 +213,7 @@ public class MembershipService {
             if (elapsed > clusterConfig.deadEvictionMs()) {
                 members.remove(member.getNodeId());
                 lastSeen.remove(member.getNodeId());
+                lastProbe.remove(member.getNodeId());
                 evicted.put(member.getNodeId(), new Evicted(nowMillis, member.getIncarnation()));
                 changed.set(true);
                 logger.warning("Evicted node " + member.getNodeId() + " from the membership view after " + elapsed
@@ -249,6 +272,7 @@ public class MembershipService {
                 existing.copyTelemetryFrom(incoming);
                 lastSeen.put(id, System.currentTimeMillis());
                 if (existing.getState() != NodeState.ALIVE) {
+                    lastProbe.remove(id);
                     existing.setState(NodeState.ALIVE);
                     changed.set(true);
                 }

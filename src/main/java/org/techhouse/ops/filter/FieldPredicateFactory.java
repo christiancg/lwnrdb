@@ -1,7 +1,6 @@
 package org.techhouse.ops.filter;
 
 import java.util.function.BiPredicate;
-import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -33,15 +32,15 @@ public final class FieldPredicateFactory {
             }
             if (operatorElement.isJsonPrimitive()) {
                 return primitiveOperandMatches(operatorElement, toTestElement, operation,
-                        Globals.PK_FIELD.equals(fieldName));
+                        JsonUtils.isPrimaryKeyPath(fieldName));
             }
             if (operatorElement.isJsonArray()) {
                 return arrayOperandMatches(operatorElement, toTestElement, operation,
-                        Globals.PK_FIELD.equals(fieldName));
+                        JsonUtils.isPrimaryKeyPath(fieldName));
             }
             if (operatorElement.isJsonObject()) {
                 return objectOperandMatches(operatorElement, toTestElement, operation,
-                        Globals.PK_FIELD.equals(fieldName));
+                        JsonUtils.isPrimaryKeyPath(fieldName));
             }
             return false;
         };

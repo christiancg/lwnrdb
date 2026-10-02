@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.function.ToIntBiFunction;
+import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
@@ -204,6 +205,18 @@ public final class JsonUtils {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
         }
+    }
+
+    public static String stripTrailingDots(String path) {
+        var limit = path.length();
+        while (limit > 0 && path.charAt(limit - 1) == '.') {
+            limit--;
+        }
+        return path.substring(0, limit);
+    }
+
+    public static boolean isPrimaryKeyPath(String path) {
+        return path != null && Globals.PK_FIELD.equals(stripTrailingDots(path));
     }
 
     public static JsonBaseElement resolvePath(JsonObject obj, String path) {

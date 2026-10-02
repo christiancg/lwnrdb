@@ -71,6 +71,10 @@ public class ClusterConfig {
         return configuration.getDeadEvictionMs();
     }
 
+    public long deadProbeIntervalMs() {
+        return configuration.getDeadProbeIntervalMs();
+    }
+
     public long replicationAckTimeoutMs() {
         return configuration.getReplicationAckTimeoutMs();
     }

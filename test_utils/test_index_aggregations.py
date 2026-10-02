@@ -1808,6 +1808,26 @@ def probe_a_field_operator_without_a_value_is_refused(c):
                      "fieldOperatorType": "NOT_EQUALS", "field": "name", "value": None}}]), "OK")
 
 
+def probe_a_trailing_dot_cannot_alias_the_primary_key(c):
+    save_doc(c, REG_VALUELESS, {"_id": "alias-abc", "name": "x"})
+    save_doc(c, REG_VALUELESS, {"_id": "ALIAS-ABC", "name": "y"})
+    wait_for_background()
+
+    def rows(field, operator_type="EQUALS"):
+        return agg(c, REG_VALUELESS, [{"type": "FILTER", "operator": {
+            "fieldOperatorType": operator_type, "field": field, "value": "alias-abc"}}])
+
+    exact = rows("_id")
+    check("an EQUALS on _id is case-sensitive",
+          sorted(row["_id"] for row in (exact.get("results") or [])) == ["alias-abc"])
+    for alias in ("_id.", "_id..", "name."):
+        check_code(f"a FILTER on '{alias}' is a validation error", rows(alias), "ERROR", "400-1")
+    for alias in ("_id.", "_id.."):
+        check_code(f"a CREATE_INDEX on '{alias}' is refused",
+                   c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_VALUELESS,
+                           "fieldName": alias}), "ERROR", "400-1")
+
+
 CAST_NUMBER_STEPS = [{"type": "MAP", "operators": [
     {"fieldName": "n", "operator": {"type": "CAST", "fieldName": "raw", "toType": "NUMBER"}}]}]
 CAST_BOOLEAN_STEPS = [{"type": "MAP", "operators": [
@@ -1977,6 +1997,7 @@ def regression_suite(c):
     probe_a_custom_filter_survives_a_map_step(c)
     probe_a_conjunction_after_a_row_reshaping_step(c)
     probe_a_field_operator_without_a_value_is_refused(c)
+    probe_a_trailing_dot_cannot_alias_the_primary_key(c)
     probe_cast_keeps_the_value_boundary(c)
     probe_cast_to_boolean_answers_null_for_an_unparseable_string(c)
     probe_a_map_null_result_is_a_real_json_null(c)

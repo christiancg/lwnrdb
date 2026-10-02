@@ -36,6 +36,9 @@ public class EventProcessorHelper {
                 processEvent(batch.getFirst());
             } catch (CollectionBusyException busy) {
                 deferred.add(batch.getFirst());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                deferred.add(batch.getFirst());
             }
             return deferred;
         }

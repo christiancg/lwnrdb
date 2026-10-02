@@ -556,6 +556,7 @@ class Node:
             f"gossipIntervalMs={int(GOSSIP_INTERVAL_S * 1000)}\n"
             "suspectTimeoutMs=2000\n"
             "deadTimeoutMs=4000\n"
+            "deadProbeIntervalMs=1000\n"
             "replicationAckTimeoutMs=5000\n"
             "virtualNodesPerNode=128\n"
             "readFallbackToLocal=true\n"
@@ -857,6 +858,48 @@ def test_user_and_permission_replication():
             c.close()
 
     op(nodes[0].client_port, {"type": "DELETE_USER", "username": "cluster_reader"})
+
+
+def test_grants_are_pruned_on_every_node():
+    section("A dropped database takes its permission grants with it on every node")
+
+    grant_db = "cluster_grant_db"
+    port = nodes[0].client_port
+    check_status("CREATE_DATABASE", op_with_retry(lambda: create_db(port, grant_db)), "OK")
+    check_status("CREATE_COLLECTION", op_with_retry(lambda: create_coll(port, grant_db, "docs")), "OK")
+    check_status("SAVE", op_with_retry(lambda: save(port, grant_db, "docs", {"_id": "d1", "v": 1})), "OK")
+    op(port, {"type": "DELETE_USER", "username": "cluster_grantee"})
+    check_status("CREATE_USER with a grant on the database", op(port, {
+        "type": "CREATE_USER", "username": "cluster_grantee", "password": "cluster_grantee1234",
+        "admin": False, "globalPermissions": [], "databasePermissions": {grant_db: "READ"},
+        "collectionPermissions": {}}), "OK")
+
+    def read_as_grantee(p):
+        c = Conn(port=p)
+        try:
+            a = c.send({"type": "AUTHENTICATE", "username": "cluster_grantee", "password": "cluster_grantee1234"})
+            if a.get("status") != "OK":
+                return a
+            return c.send({"type": "FIND_BY_ID", "databaseName": grant_db, "collectionName": "docs", "_id": "d1"})
+        finally:
+            c.close()
+
+    check("the grantee can read on every node before the drop",
+          wait_until(lambda: all(read_as_grantee(p).get("status") == "OK" for p in all_ports()), timeout_s=15.0))
+
+    check_status("DROP_DATABASE via node-0", op_with_retry(lambda: drop_db(port, grant_db)), "OK")
+    check_status("re-CREATE_DATABASE", op_with_retry(lambda: create_db(port, grant_db)), "OK")
+    check_status("re-CREATE_COLLECTION", op_with_retry(lambda: create_coll(port, grant_db, "docs")), "OK")
+    check_status("re-SAVE", op_with_retry(lambda: save(port, grant_db, "docs", {"_id": "d1", "v": 2})), "OK")
+
+    def refused_everywhere():
+        return all(read_as_grantee(p).get("status") == "FORBIDDEN" for p in all_ports())
+
+    check("the old grant is refused on every node after the re-create",
+          wait_until(refused_everywhere, timeout_s=15.0))
+
+    op(port, {"type": "DELETE_USER", "username": "cluster_grantee"})
+    op_with_retry(lambda: drop_db(port, grant_db))
 
 
 def test_single_node_transaction():
@@ -2627,6 +2670,7 @@ def main():
         test_bulk_delete_and_upsert()
         test_index_replication()
         test_user_and_permission_replication()
+        test_grants_are_pruned_on_every_node()
         test_single_node_transaction()
         test_multi_collection_transaction()
         test_a_replica_listener_never_sees_a_partial_transaction()

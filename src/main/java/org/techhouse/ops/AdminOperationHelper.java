@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.function.UnaryOperator;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
@@ -152,33 +153,51 @@ public final class AdminOperationHelper {
     }
 
     public static void saveCollectionEntry(AdminCollEntry dbEntry) throws IOException, InterruptedException {
-        // Also mutates the parent AdminDbEntry in admin/databases, so hold the databases lock too,
-        // acquired before collections to match deleteDatabaseEntry's order (deadlock-safe).
         lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         try {
             lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
+            final var existingCollectionPk = cache.getPkIndexAdminCollEntry(dbEntry.get_id());
             final var pkIndexEntry = writeAdminEntry(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, dbEntry,
-                    cache.getPkIndexAdminCollEntry(dbEntry.get_id()));
+                    existingCollectionPk);
             cache.putAdminCollectionEntry(dbEntry, pkIndexEntry);
-            final var split = dbEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
-            final var adminDbEntry = cache.getAdminDbEntry(split[0]);
-            var adminDbPkIndexEntry = cache.getPkIndexAdminDbEntry(split[0]);
-            final var collections = adminDbEntry.getCollections();
-            if (!collections.contains(split[1])) {
-                collections.add(split[1]);
+            try {
+                listCollectionInItsDatabase(dbEntry);
+            } catch (IOException | InterruptedException | RuntimeException failure) {
+                if (existingCollectionPk == null) {
+                    unregisterNewCollectionRow(dbEntry, failure);
+                }
+                throw failure;
             }
-            adminDbEntry.setCollections(collections);
-            adminDbEntry.setPage(adminDbPkIndexEntry.getPage());
-            final var dbUpdateResult = fs.updateFromCollection(adminDbEntry, adminDbPkIndexEntry);
-            adminDbPkIndexEntry = dbUpdateResult.indexEntry();
-            cache.shiftPkPositionsAfterCompaction(dbUpdateResult.compaction());
-            cache.putPkIndexAdminDbEntry(adminDbPkIndexEntry);
-            AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME,
-                    EventType.UPDATED, List.of(adminDbEntry), false);
         } finally {
             releaseAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         }
+    }
+
+    private static void listCollectionInItsDatabase(AdminCollEntry collEntry) throws IOException, InterruptedException {
+        final var split = collEntry.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
+        final var current = cache.getAdminDbEntry(split[0]);
+        if (current.getCollections().contains(split[1])) {
+            return;
+        }
+        final var collections = new ArrayList<>(current.getCollections());
+        collections.add(split[1]);
+        publishDatabaseEntry(new AdminDbEntry(split[0], collections, new ArrayList<>(current.getOwners())));
+    }
+
+    private static void unregisterNewCollectionRow(AdminCollEntry collEntry, Exception cause) {
+        try {
+            eraseAdminEntry(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, collEntry,
+                    cache.getPkIndexAdminCollEntry(collEntry.get_id()));
+            cache.removeAdminCollEntry(collEntry.get_id());
+        } catch (IOException | RuntimeException | InterruptedException rollbackFailure) {
+            cause.addSuppressed(rollbackFailure);
+        }
+    }
+
+    private static void publishDatabaseEntry(AdminDbEntry updated) throws IOException, InterruptedException {
+        final var pk = cache.getPkIndexAdminDbEntry(updated.get_id());
+        cache.putAdminDbEntry(updated, writeAdminEntry(Globals.ADMIN_DATABASES_COLLECTION_NAME, updated, pk));
     }
 
     public static void deleteCollectionEntry(String dbName, String collName) throws IOException, InterruptedException {
@@ -197,17 +216,10 @@ public final class AdminOperationHelper {
                 cache.removeAdminCollEntry(collIdentifier);
                 AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
                         EventType.DELETED, List.of(adminCollEntry), false);
-                final var adminIndexPkDbEntry = cache.getPkIndexAdminDbEntry(dbName);
                 final var adminDbEntry = cache.getAdminDbEntry(dbName);
-                final var otherCollections = adminDbEntry.getCollections();
-                otherCollections.remove(collName);
-                adminDbEntry.setCollections(otherCollections);
-                adminDbEntry.setPage(adminIndexPkDbEntry.getPage());
-                final var dbUpdateResult = fs.updateFromCollection(adminDbEntry, adminIndexPkDbEntry);
-                cache.shiftPkPositionsAfterCompaction(dbUpdateResult.compaction());
-                cache.putAdminDbEntry(adminDbEntry, dbUpdateResult.indexEntry());
-                AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_DATABASES_COLLECTION_NAME,
-                        EventType.UPDATED, List.of(adminDbEntry), false);
+                final var remaining = new ArrayList<>(adminDbEntry.getCollections());
+                remaining.remove(collName);
+                publishDatabaseEntry(new AdminDbEntry(dbName, remaining, new ArrayList<>(adminDbEntry.getOwners())));
             } finally {
                 releaseAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
                 releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
@@ -284,6 +296,34 @@ public final class AdminOperationHelper {
             cache.putAdminUserEntry(userEntry, adminUserEntry);
         } finally {
             releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
+        }
+    }
+
+    public static void rewriteUsers(UnaryOperator<AdminUserEntry> rewrite) throws IOException, InterruptedException {
+        lockAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
+        try {
+            for (final var user : new ArrayList<>(cache.getAllAdminUserEntries())) {
+                final var rewritten = rewrite.apply(user);
+                if (rewritten != null) {
+                    saveUserEntry(rewritten);
+                }
+            }
+        } finally {
+            releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
+        }
+    }
+
+    public static void rewriteDatabases(UnaryOperator<AdminDbEntry> rewrite) throws IOException, InterruptedException {
+        lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
+        try {
+            for (final var database : new ArrayList<>(cache.getAllAdminDbEntries())) {
+                final var rewritten = rewrite.apply(database);
+                if (rewritten != null) {
+                    publishDatabaseEntry(rewritten);
+                }
+            }
+        } finally {
+            releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         }
     }
 

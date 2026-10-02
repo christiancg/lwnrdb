@@ -348,6 +348,23 @@ public class ConfigurationValidatorTest {
     }
 
     @Test
+    public void test_deadProbeIntervalMs_must_not_be_smaller_than_the_gossip_interval(@TempDir Path tempDir) {
+        final var config = ConfigFixture.clusterEnabled(tempDir);
+        config.put("gossipIntervalMs", "1000");
+        config.put("deadProbeIntervalMs", "999");
+        final var errors = ConfigurationValidator.validate(config);
+        assertTrue(errors.stream().anyMatch(e -> e.contains("deadProbeIntervalMs")), errors.toString());
+    }
+
+    @Test
+    public void test_a_dead_probe_interval_equal_to_the_gossip_interval_is_valid(@TempDir Path tempDir) {
+        final var config = ConfigFixture.clusterEnabled(tempDir);
+        config.put("gossipIntervalMs", "1000");
+        config.put("deadProbeIntervalMs", "1000");
+        assertTrue(ConfigurationValidator.validate(config).isEmpty());
+    }
+
+    @Test
     public void test_zero_script_admission_bounds_are_valid(@TempDir Path tempDir) {
         final var config = baseValid(tempDir);
         config.put("maxConcurrentScripts", "0");

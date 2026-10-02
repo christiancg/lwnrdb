@@ -16,6 +16,7 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.utils.JsonUtils;
 
 public final class DataRequestValidator {
     private static final String NON_FINITE_GEO_MESSAGE = "a #geo value must have finite latitude and longitude";
@@ -145,7 +146,7 @@ public final class DataRequestValidator {
     }
 
     private static ValidationResult validateIndexFieldNotReserved(String operation, String fieldName) {
-        if (Globals.PK_FIELD.equals(fieldName) || Globals.TOMBSTONE_FILE_NAME.equals(fieldName)) {
+        if (JsonUtils.isPrimaryKeyPath(fieldName) || Globals.TOMBSTONE_FILE_NAME.equals(fieldName)) {
             return ValidationResult.fail(operation + " cannot target the reserved field name " + fieldName);
         }
         return ValidationResult.ok();

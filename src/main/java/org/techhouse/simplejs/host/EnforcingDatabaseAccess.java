@@ -229,12 +229,15 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         }
         final var transaction = clientTracker.getActiveTransaction(sessionClientId);
         final var txId = transaction != null ? transaction.getTransactionId().toString() : null;
-        final OperationResponse response;
+        OperationResponse response = null;
         try {
             response = dispatch(request);
         } finally {
             final var fenced = txId != null && TransactionOperationHelper.isFenced(txId);
             lastCommitFenced = fenced;
+            if (response == null && !fenced) {
+                TransactionOperationHelper.rollback(sessionClientId);
+            }
             clearSession(fenced);
         }
         if (response.getStatus() != OperationStatus.OK
@@ -309,15 +312,15 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
                 throw jsError("This script may only access database '" + scopedDatabase + "'");
             }
         }
-        final var user = cache.getAdminUserEntry(username);
-        if (user == null) {
-            throw jsError("User '" + username + "' not found");
-        }
         final var validation = RequestValidator.validate(request);
         if (!validation.isValid()) {
             throw jsError(validation.getErrorMessage());
         }
         if (!isTransactionControl(request)) {
+            final var user = cache.getAdminUserEntry(username);
+            if (user == null) {
+                throw jsError("User '" + username + "' not found");
+            }
             final var authorization = AuthorizationChecker.check(request, user);
             if (!authorization.isAllowed()) {
                 throw jsError(authorization.getReason());

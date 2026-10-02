@@ -618,6 +618,92 @@ def test_owners_of_a_dropped_database(c):
                  c.send({"type": "DROP_DATABASE", "databaseName": "owners_gone_db"}), "OK")
 
 
+def find_doc(c, db, coll, doc_id="doc1"):
+    return c.send({"type": "FIND_BY_ID", "databaseName": db, "collectionName": coll, "_id": doc_id})
+
+
+def test_grants_do_not_survive_a_drop_and_recreate(c):
+    section("Grants die with the database or collection they name")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    for db in ("grant_gone_db", "grant_coll_db"):
+        c.send({"type": "DROP_DATABASE", "databaseName": db})
+        check_status(f"CREATE_DATABASE '{db}'", c.send({"type": "CREATE_DATABASE", "databaseName": db}), "OK")
+        check_status(f"CREATE_COLLECTION in '{db}'",
+                     c.send({"type": "CREATE_COLLECTION", "databaseName": db, "collectionName": "items"}), "OK")
+        check_status(f"SAVE in '{db}'", c.send({"type": "SAVE", "databaseName": db, "collectionName": "items",
+                                                "object": {"_id": "doc1", "value": 1}}), "OK")
+    delete_user(c, "grant_bob")
+    delete_user(c, "grant_carol")
+    check_status("CREATE_USER 'grant_bob' with a database grant",
+                 create_user(c, "grant_bob", "grant_bob1234", db_perms={"grant_gone_db": "READ_WRITE"}), "OK")
+    check_status("CREATE_USER 'grant_carol' with a collection grant",
+                 create_user(c, "grant_carol", "grant_carol1234", coll_perms={"grant_coll_db|items": "READ"}), "OK")
+
+    with Conn() as bob:
+        check_status("AUTHENTICATE as 'grant_bob'", bob.authenticate("grant_bob", "grant_bob1234"), "OK")
+        check_status("grant_bob reads while the database exists", find_doc(bob, "grant_gone_db", "items"), "OK")
+    with Conn() as carol:
+        check_status("AUTHENTICATE as 'grant_carol'", carol.authenticate("grant_carol", "grant_carol1234"), "OK")
+        check_status("grant_carol reads while the collection exists", find_doc(carol, "grant_coll_db", "items"),
+                     "OK")
+
+    check_status("DROP_DATABASE 'grant_gone_db'",
+                 c.send({"type": "DROP_DATABASE", "databaseName": "grant_gone_db"}), "OK")
+    check_status("DROP_COLLECTION 'grant_coll_db|items'",
+                 c.send({"type": "DROP_COLLECTION", "databaseName": "grant_coll_db",
+                         "collectionName": "items"}), "OK")
+    for db, coll in (("grant_gone_db", "items"), ("grant_coll_db", "items")):
+        c.send({"type": "CREATE_DATABASE", "databaseName": db})
+        check_status(f"re-CREATE_COLLECTION '{db}|{coll}'",
+                     c.send({"type": "CREATE_COLLECTION", "databaseName": db, "collectionName": coll}), "OK")
+        check_status(f"re-SAVE in '{db}'", c.send({"type": "SAVE", "databaseName": db, "collectionName": coll,
+                                                   "object": {"_id": "doc1", "value": 2}}), "OK")
+
+    with Conn() as bob:
+        check_status("AUTHENTICATE as 'grant_bob' again", bob.authenticate("grant_bob", "grant_bob1234"), "OK")
+        check_status("grant_bob is refused on the re-created database", find_doc(bob, "grant_gone_db", "items"),
+                     "FORBIDDEN")
+    with Conn() as carol:
+        check_status("AUTHENTICATE as 'grant_carol' again", carol.authenticate("grant_carol", "grant_carol1234"),
+                     "OK")
+        check_status("grant_carol is refused on the re-created collection", find_doc(carol, "grant_coll_db", "items"),
+                     "FORBIDDEN")
+
+    for db in ("grant_gone_db", "grant_coll_db"):
+        c.send({"type": "DROP_DATABASE", "databaseName": db})
+    delete_user(c, "grant_bob")
+    delete_user(c, "grant_carol")
+
+
+def test_a_deleted_users_name_does_not_inherit_ownership(c):
+    section("A user created under a deleted name does not own the old user's databases")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    c.send({"type": "DROP_DATABASE", "databaseName": "ghost_owned_db"})
+    delete_user(c, "ghost_owner")
+    check_status("CREATE_USER 'ghost_owner' with CREATE_DATABASE",
+                 create_user(c, "ghost_owner", "ghost_owner1234", global_perms=["CREATE_DATABASE"]), "OK")
+    with Conn() as owner:
+        check_status("AUTHENTICATE as 'ghost_owner'", owner.authenticate("ghost_owner", "ghost_owner1234"), "OK")
+        check_status("CREATE_DATABASE 'ghost_owned_db' - ghost_owner becomes the owner",
+                     owner.send({"type": "CREATE_DATABASE", "databaseName": "ghost_owned_db"}), "OK")
+
+    check_status("DELETE_USER 'ghost_owner'", delete_user(c, "ghost_owner"), "OK")
+    check_status("CREATE_USER 'ghost_owner' again for someone else",
+                 create_user(c, "ghost_owner", "ghost_owner5678", global_perms=["CREATE_DATABASE"]), "OK")
+    with Conn() as impostor:
+        check_status("AUTHENTICATE as the new 'ghost_owner'",
+                     impostor.authenticate("ghost_owner", "ghost_owner5678"), "OK")
+        check_status("the new 'ghost_owner' cannot drop the old one's database",
+                     impostor.send({"type": "DROP_DATABASE", "databaseName": "ghost_owned_db"}), "FORBIDDEN")
+
+    check_status("the admin can still give the ownerless database an owner",
+                 set_database_owners(c, "ghost_owned_db", ["ghost_owner"]), "OK")
+    c.send({"type": "DROP_DATABASE", "databaseName": "ghost_owned_db"})
+    delete_user(c, "ghost_owner")
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
@@ -683,6 +769,12 @@ def main():
 
     with Conn() as c:
         test_owners_of_a_dropped_database(c)
+
+    with Conn() as c:
+        test_grants_do_not_survive_a_drop_and_recreate(c)
+
+    with Conn() as c:
+        test_a_deleted_users_name_does_not_inherit_ownership(c)
 
     # ── cleanup ────────────────────────────────────────────────────────
     with Conn() as c:

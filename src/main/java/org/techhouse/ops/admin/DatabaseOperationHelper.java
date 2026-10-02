@@ -136,6 +136,7 @@ public final class DatabaseOperationHelper {
                 compiledProcedures.invalidateDatabase(dbName);
                 scheduleRegistry.removeDatabase(dbName);
                 listenManager.unregisterAllForDatabase(dbName);
+                GrantPruner.forDroppedDatabase(dbName);
                 return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");
             }
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);

@@ -61,6 +61,8 @@ public class BackgroundProcessorThread implements Runnable {
             }
             try {
                 queue.addAll(EventProcessorHelper.processBatch(batch));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             } catch (Exception e) {
                 logger.error("Error while processing background task: ", e);
             } finally {

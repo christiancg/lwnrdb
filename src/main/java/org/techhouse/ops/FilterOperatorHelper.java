@@ -352,7 +352,7 @@ public class FilterOperatorHelper {
     }
 
     private static boolean hitsAreUnconfirmedCandidates(FieldOperator operator) {
-        return !Globals.PK_FIELD.equals(operator.getField()) && usesHashIndex(operator);
+        return !JsonUtils.isPrimaryKeyPath(operator.getField()) && usesHashIndex(operator);
     }
 
     // Mirrors the dispatch in UserCache.doGetIdsFromIndex / getIdsFromInList: object operands and array
@@ -378,7 +378,7 @@ public class FilterOperatorHelper {
     // re-added by re-testing the operator against the current document, keeping the result exact.
     private static Set<String> indexMatchingIds(FieldOperator operator, String dbName, String collName)
             throws IOException {
-        if (Globals.PK_FIELD.equals(operator.getField())) {
+        if (JsonUtils.isPrimaryKeyPath(operator.getField())) {
             return PrimaryKeyIndexResolver.resolve(operator, dbName, collName);
         }
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
