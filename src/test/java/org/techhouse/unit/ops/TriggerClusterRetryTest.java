@@ -32,11 +32,13 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ProcedureOperationHelper;
+import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
+import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -132,6 +134,15 @@ public class TriggerClusterRetryTest {
         return dbEntry;
     }
 
+    private static void saveDocument(String id) throws Exception {
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.add("_id", new JsonString(id));
+        request.setObject(object);
+        request.set_id(id);
+        SaveOperationHelper.executeSave(request);
+    }
+
     private static String recordedRunFor(String id) {
         return TriggerRunLog.record(new TriggerRunLog.TriggerRunDescriptor(TestGlobals.DB, TestGlobals.COLL, "audit",
                 "audit", EventType.CREATED, false, DEFINER, 0, System.currentTimeMillis(), List.of(entry(id))));
@@ -153,6 +164,7 @@ public class TriggerClusterRetryTest {
 
     @Test
     public void test_a_write_refused_for_lack_of_quorum_does_not_consume_an_attempt() throws Exception {
+        saveDocument("waiting");
         final var runId = recordedRunFor("waiting");
 
         dispatchLastAttempt("waiting", runId);
@@ -164,6 +176,7 @@ public class TriggerClusterRetryTest {
     @Test
     public void test_the_cluster_wait_is_bounded_by_the_run_retention() throws Exception {
         TestUtils.setPrivateField(configuration, "triggerRunRetentionMs", 0L);
+        saveDocument("stranded");
         final var runId = recordedRunFor("stranded");
 
         dispatchLastAttempt("stranded", runId);
