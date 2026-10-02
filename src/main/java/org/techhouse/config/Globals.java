@@ -33,6 +33,7 @@ public final class Globals {
     public static final String COLL_IDENTIFIER_SEPARATOR_REGEX = "\\|";
     public static final char INDEX_FILE_NAME_SEPARATOR = '-';
     public static final String TOMBSTONE_FILE_NAME = "tombstones";
+    public static final String QUARANTINE_INFIX = ".quarantined-";
     public static final String PK_INDEX_FILE_NAME = "pk";
     public static final String ID_SEPARATOR = "";
     public static final String STRING_LITERAL_PREFIX = "-";

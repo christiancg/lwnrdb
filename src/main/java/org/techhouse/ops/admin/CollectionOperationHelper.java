@@ -59,7 +59,8 @@ public final class CollectionOperationHelper {
                         return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.NAME_COLLIDES_ON_DISK,
                                 colliding);
                     }
-                    final var result = fs.createCollectionFile(dbName, collName);
+                    final var result = LeftoverFolders.moveAsideUnregisteredCollection(dbName, collName)
+                            && fs.createCollectionFile(dbName, collName);
                     if (result) {
                         final var existingEntry = AdminOperationHelper.getCollectionEntry(dbName, collName);
                         if (existingEntry != null) {

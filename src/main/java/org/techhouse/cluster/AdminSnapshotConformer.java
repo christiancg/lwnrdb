@@ -1,7 +1,6 @@
 package org.techhouse.cluster;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -21,10 +20,10 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.IndexHelper;
+import org.techhouse.ops.admin.LeftoverFolders;
 
 // The admin epoch is the ordering, so there is no per-record version, and every step is
 // idempotent so the periodic sweep does not rewrite an already-converged node.
@@ -37,17 +36,17 @@ final class AdminSnapshotConformer {
     private final HybridClock hybridClock = IocContainer.get(HybridClock.class);
     private final EJson eJson = IocContainer.get(EJson.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
-    private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final org.techhouse.ops.CompiledProcedureCache compiledProcedures = IocContainer
             .get(org.techhouse.ops.CompiledProcedureCache.class);
     private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
+    private final AdminQuarantine quarantine = new AdminQuarantine();
 
     boolean conform(AdminSnapshotPayload snapshot) throws Exception {
         final var epochAtStart = adminEpoch.current();
         final var snapshotUsers = conformUsers(snapshot);
         removeAbsentUsers(snapshotUsers);
-        final var snapshotDbs = conformDatabases(snapshot);
         final var outcome = new ConformOutcome();
+        final var snapshotDbs = conformDatabases(snapshot, outcome);
         outcome.record(conformProcedures(snapshot, snapshotDbs));
         outcome.record(conformSchedules(snapshot, snapshotDbs));
         final var snapshotColls = conformCollections(snapshot, snapshotDbs, epochAtStart, outcome);
@@ -56,8 +55,9 @@ final class AdminSnapshotConformer {
                     + " during it. The next round reconciles from the newer local state.");
             return false;
         }
-        outcome.record(dropAbsentCollections(snapshotDbs, snapshotColls));
-        outcome.record(dropAbsentDatabases(snapshotDbs));
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+        outcome.record(quarantine.dropAbsentCollections(snapshotDbs, snapshotColls, waitMillis));
+        outcome.record(quarantine.dropAbsentDatabases(snapshotDbs, waitMillis));
         return outcome.complete;
     }
 
@@ -90,13 +90,19 @@ final class AdminSnapshotConformer {
         }
     }
 
-    private HashMap<String, AdminDbEntry> conformDatabases(AdminSnapshotPayload snapshot) throws Exception {
+    private HashMap<String, AdminDbEntry> conformDatabases(AdminSnapshotPayload snapshot, ConformOutcome outcome)
+            throws Exception {
         final var snapshotDbs = new HashMap<String, AdminDbEntry>();
         for (final var dbJson : snapshot.getDatabases()) {
             final var db = AdminDbEntry.fromJsonObject(dbJson);
             snapshotDbs.put(db.get_id(), db);
         }
-        for (final var db : snapshotDbs.values()) {
+        for (final var db : new ArrayList<>(snapshotDbs.values())) {
+            if (!clearedOfLeftovers(db.get_id())) {
+                snapshotDbs.remove(db.get_id());
+                outcome.record(false);
+                continue;
+            }
             // Outside the entry check on purpose, and idempotent: the folder is what a routed write opens, so
             // a node holding the admin entry without it answers "no such file or directory" instead of a miss.
             fs.createDatabaseFolder(db.get_id());
@@ -108,6 +114,23 @@ final class AdminSnapshotConformer {
             }
         }
         return snapshotDbs;
+    }
+
+    private boolean clearedOfLeftovers(String dbName) throws InterruptedException {
+        if (cache.getAdminDbEntry(dbName) != null) {
+            return true;
+        }
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+        if (!locks.tryLockDatabaseExclusive(dbName, waitMillis)) {
+            logger.warning("Skipping the install of database " + dbName + ": it stayed locked for " + waitMillis
+                    + "ms. The next round retries it.");
+            return false;
+        }
+        try {
+            return LeftoverFolders.moveAsideUnregisteredDatabase(dbName);
+        } finally {
+            locks.releaseDatabaseExclusive(dbName);
+        }
     }
 
     private HashSet<String> conformCollections(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs,
@@ -303,7 +326,10 @@ final class AdminSnapshotConformer {
             if (snapshotIncarnation != 0) {
                 hybridClock.observe(snapshotIncarnation);
             }
-            quarantineStaleIncarnation(dbName, collName, snapshotIncarnation);
+            quarantine.quarantineStaleIncarnation(dbName, collName, snapshotIncarnation);
+            if (!LeftoverFolders.moveAsideUnregisteredCollection(dbName, collName)) {
+                return false;
+            }
             fs.createCollectionFile(dbName, collName);
             final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
             if (localEntry == null) {
@@ -340,24 +366,6 @@ final class AdminSnapshotConformer {
         }
     }
 
-    private void quarantineStaleIncarnation(String dbName, String collName, long snapshotIncarnation) throws Exception {
-        final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
-        if (localEntry == null || snapshotIncarnation == 0 || localEntry.getIncarnation() == 0
-                || localEntry.getIncarnation() >= snapshotIncarnation) {
-            return;
-        }
-        final var stale = localEntry.getIncarnation();
-        cache.evictCollection(dbName, collName);
-        AdminOperationHelper.deleteCollectionEntry(dbName, collName);
-        AdminOperationHelper.deletePageCollections(dbName, collName);
-        listenManager.unregisterAllForCollection(dbName, collName);
-        final var moved = fs.quarantineCollectionFiles(dbName, collName, stale);
-        logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
-                + ": its documents belong to incarnation " + stale + ", which was dropped, and the cluster has since"
-                + " re-created the name as incarnation " + snapshotIncarnation + ". They were "
-                + (moved ? "moved aside on disk" : "left on disk") + " and the collection is now empty here.");
-    }
-
     private JsonObject localSchema(String dbName, String collName) {
         try {
             return cache.loadSchemaUncached(dbName, collName);
@@ -376,104 +384,6 @@ final class AdminSnapshotConformer {
         } else if (current != null) {
             fs.deleteCollectionSchema(dbName, collName);
             cache.removeCollectionSchema(dbName, collName);
-        }
-    }
-
-    // Collections of an entirely-removed database are left to dropDatabase, which deletes the whole
-    // folder in one shot.
-    private boolean dropAbsentCollections(HashMap<String, AdminDbEntry> snapshotDbs, HashSet<String> snapshotColls)
-            throws Exception {
-        var complete = true;
-        for (final var dbName : new ArrayList<>(cache.getUserDatabaseNames())) {
-            if (!snapshotDbs.containsKey(dbName)) {
-                continue;
-            }
-            for (final var collName : new ArrayList<>(cache.getCollectionNamesForDatabase(dbName))) {
-                if (!snapshotColls.contains(Cache.getCollectionIdentifier(dbName, collName))) {
-                    complete &= dropCollection(dbName, collName);
-                }
-            }
-        }
-        return complete;
-    }
-
-    private boolean dropCollection(String dbName, String collName) throws Exception {
-        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
-        if (!locks.tryLockWrite(dbName, collName, waitMillis)) {
-            logger.warning("Skipping the quarantine of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
-                    + ": its write lock stayed held for " + waitMillis + "ms. The next round retries it.");
-            return false;
-        }
-        try {
-            cache.evictCollection(dbName, collName);
-            AdminOperationHelper.deleteCollectionEntry(dbName, collName);
-            AdminOperationHelper.deletePageCollections(dbName, collName);
-            listenManager.unregisterAllForCollection(dbName, collName);
-            logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
-                    + ": it is absent from the winning admin snapshot. Its documents are left on disk and it no"
-                    + " longer serves reads or writes until an operator reinstates or removes it.");
-            return true;
-        } finally {
-            locks.release(dbName, collName);
-            locks.removeLock(dbName, collName);
-        }
-    }
-
-    private boolean dropAbsentDatabases(HashMap<String, AdminDbEntry> snapshotDbs) throws Exception {
-        var complete = true;
-        for (final var dbName : new ArrayList<>(cache.getUserDatabaseNames())) {
-            if (!snapshotDbs.containsKey(dbName)) {
-                complete &= dropDatabase(dbName);
-            }
-        }
-        return complete;
-    }
-
-    private boolean dropDatabase(String dbName) throws Exception {
-        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
-        if (!locks.tryLockDatabaseExclusive(dbName, waitMillis)) {
-            logger.warning("Skipping the quarantine of database " + dbName + ": it stayed locked for " + waitMillis
-                    + "ms. The next round retries it.");
-            return false;
-        }
-        try {
-            return quarantineDatabaseUnderBarrier(dbName, waitMillis);
-        } finally {
-            locks.releaseDatabaseExclusive(dbName);
-            locks.removeDatabaseLock(dbName);
-        }
-    }
-
-    private boolean quarantineDatabaseUnderBarrier(String dbName, long waitMillis) throws Exception {
-        final var dbEntry = cache.getAdminDbEntry(dbName);
-        final var collNames = dbEntry != null ? new ArrayList<>(dbEntry.getCollections()) : new ArrayList<String>();
-        Collections.sort(collNames);
-        final var lockedColls = new ArrayList<String>();
-        try {
-            for (final var collName : collNames) {
-                if (!locks.tryLockWrite(dbName, collName, waitMillis)) {
-                    logger.warning("Skipping the quarantine of database " + dbName + ": the write lock of " + collName
-                            + " stayed held for " + waitMillis + "ms. The next round retries it.");
-                    return false;
-                }
-                lockedColls.add(collName);
-            }
-            cache.evictDatabase(dbName);
-            AdminOperationHelper.deleteDatabaseEntry(dbName);
-            compiledProcedures.invalidateDatabase(dbName);
-            scheduleRegistry.removeDatabase(dbName);
-            listenManager.unregisterAllForDatabase(dbName);
-            logger.warning("Quarantined database " + dbName
-                    + ": it is absent from the winning admin snapshot. Its documents are left on disk and it no"
-                    + " longer serves reads or writes until an operator reinstates or removes it.");
-            return true;
-        } finally {
-            for (final var collName : lockedColls) {
-                locks.release(dbName, collName);
-            }
-            for (final var collName : lockedColls) {
-                locks.removeLock(dbName, collName);
-            }
         }
     }
 }

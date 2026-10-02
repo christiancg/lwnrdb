@@ -27,6 +27,7 @@ public class FileSystem {
     private final FilePaths paths = new FilePaths();
     private final DirtyIndexMarkers dirtyIndexMarkers = new DirtyIndexMarkers(paths);
     private final IndexBuildMarkers indexBuildMarkers = new IndexBuildMarkers(paths);
+    private final FolderQuarantine folderQuarantine = new FolderQuarantine(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
     private final DocumentPageStore documentPageStore = new DocumentPageStore(paths);
@@ -109,17 +110,6 @@ public class FileSystem {
         }
     }
 
-    public boolean quarantineCollectionFiles(String dbName, String collectionName, long incarnation) {
-        final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
-        final var collectionFolder = new File(collectionFile.getParent());
-        if (!collectionFolder.exists()) {
-            return false;
-        }
-        final var target = new File(collectionFolder.getParent(),
-                collectionName + ".quarantined-" + incarnation + "-" + System.currentTimeMillis());
-        return collectionFolder.renameTo(target);
-    }
-
     public boolean deleteCollectionFiles(String dbName, String collectionName) {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
@@ -198,6 +188,10 @@ public class FileSystem {
 
     public IndexBuildMarkers indexBuildMarkers() {
         return indexBuildMarkers;
+    }
+
+    public FolderQuarantine folderQuarantine() {
+        return folderQuarantine;
     }
 
     public void appendTombstone(String dbName, String collName, String id, long version) throws IOException {

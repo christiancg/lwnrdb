@@ -650,7 +650,10 @@ does, so two nodes at the same epoch converge instead of conforming to each othe
 When that winner is a peer rather than this node, it **conforms** local state to it: upsert
 snapshot users then delete absent ones; create missing databases and reconcile owners;
 create missing collections and reconcile their indexes; then drop collections and databases
-absent from the snapshot. Each create/drop takes the target collection's write lock,
+absent from the snapshot. A drop unregisters the name and renames its folder aside
+(`<coll>.quarantined-<incarnation>-<ts>`, `<db>.quarantined-<ts>`) rather than deleting it, and a
+create never adopts an unregistered folder that still holds data — it moves that aside first, so a
+re-created name always starts empty. Each create/drop takes the target collection's write lock,
 mirroring the DDL handlers, and skips the target for the round if that lock stays busy. The
 winning epoch is adopted only when nothing was skipped: adopting it after a partial conform
 would leave this node equal to the peer, and an equal epoch outranks only on node id, so the

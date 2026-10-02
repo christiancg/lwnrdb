@@ -91,12 +91,12 @@ public final class IndexBuildMarkers {
     }
 
     private void loadFrom(File root) {
-        final var databases = root.listFiles(File::isDirectory);
+        final var databases = root.listFiles(FolderQuarantine::isLiveFolder);
         if (databases == null) {
             return;
         }
         for (final var database : databases) {
-            final var collections = database.listFiles(File::isDirectory);
+            final var collections = database.listFiles(FolderQuarantine::isLiveFolder);
             if (collections == null) {
                 continue;
             }

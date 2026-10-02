@@ -428,7 +428,7 @@ public class FileSystemWriteTest {
         entry.set_id("kept");
         fileSystem.insertIntoCollection(entry);
 
-        assertTrue(fileSystem.quarantineCollectionFiles(TestGlobals.DB, TestGlobals.COLL, 42L));
+        assertTrue(fileSystem.folderQuarantine().moveCollectionAside(TestGlobals.DB, TestGlobals.COLL, 42L));
 
         final var dbFolder = new File(TestGlobals.PATH + File.separator + TestGlobals.DB);
         final var moved = dbFolder.listFiles((_, name) -> name.startsWith(TestGlobals.COLL + ".quarantined-42-"));
@@ -445,6 +445,6 @@ public class FileSystemWriteTest {
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
         fileSystem.createDatabaseFolder(TestGlobals.DB);
 
-        assertFalse(fileSystem.quarantineCollectionFiles(TestGlobals.DB, "never_created", 7L));
+        assertFalse(fileSystem.folderQuarantine().moveCollectionAside(TestGlobals.DB, "never_created", 7L));
     }
 }

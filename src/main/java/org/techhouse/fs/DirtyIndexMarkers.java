@@ -39,12 +39,12 @@ final class DirtyIndexMarkers {
 
     List<String> listMarked() {
         final var result = new ArrayList<String>();
-        final var databases = new File(paths.dbPath()).listFiles(File::isDirectory);
+        final var databases = new File(paths.dbPath()).listFiles(FolderQuarantine::isLiveFolder);
         if (databases == null) {
             return result;
         }
         for (final var database : databases) {
-            final var collections = database.listFiles(File::isDirectory);
+            final var collections = database.listFiles(FolderQuarantine::isLiveFolder);
             if (collections == null) {
                 continue;
             }

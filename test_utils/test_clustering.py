@@ -2623,10 +2623,10 @@ def test_drop_and_recreate_does_not_resurrect_documents():
           all_nodes_see(DB, coll, "after", 1, ports=all_ports(), timeout_s=30.0))
 
 
-def assert_no_resurrection(db, coll, live_ids, victim, seconds: float = 25.0):
+def assert_no_resurrection(db, coll, live_ids, victim, seconds: float = 25.0, quarantined=None):
+    quarantined = quarantined or (lambda: _node_log_mentions_quarantine(victim, coll, db))
     check("the rejoined node recognised its documents as a dropped incarnation",
-          wait_until(lambda: _node_log_mentions_quarantine(victim, coll, db), timeout_s=60.0),
-          f"node-{victim.index} logged no quarantine for {db}|{coll}")
+          wait_until(quarantined, timeout_s=60.0), f"node-{victim.index} logged no quarantine for {db}|{coll}")
 
     def _only_live_documents_on_disk():
         for node in nodes:
@@ -2693,6 +2693,81 @@ def test_drop_database_and_recreate_does_not_resurrect_documents():
     victim.start()
 
     assert_no_resurrection(db, coll, {"live0", "live1", "live2"}, victim)
+
+
+def test_drop_then_rejoin_then_recreate_does_not_resurrect_documents():
+    section("DROP_COLLECTION, then the missed node rejoins, then CREATE_COLLECTION")
+    coll = "rejoin_first_coll"
+    check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
+    check("the pre-drop documents all committed",
+          seed_documents(nodes[0].client_port, DB, coll, [{"_id": f"pre{i}", "v": i} for i in range(5)]))
+    check("every node holds the pre-drop documents",
+          wait_until(lambda: all(len(stored_documents(n, DB, coll)) == 5 for n in nodes if n.alive),
+                     timeout_s=30.0))
+
+    victim = nodes[2]
+    print(f"  Killing node-{victim.index} so it misses the drop ...")
+    victim.kill()
+    check("the survivors drop the collection",
+          wait_until(lambda: op(nodes[0].client_port, {"type": "DROP_COLLECTION", "databaseName": DB,
+                                                       "collectionName": coll}).get("status") == "OK",
+                     timeout_s=30.0, interval_s=1.0))
+
+    print(f"  Restarting node-{victim.index} before the re-create ...")
+    victim.start()
+    check("the rejoined node unregisters the dropped collection",
+          wait_until(lambda: _node_log_mentions_quarantine(victim, coll), timeout_s=60.0),
+          f"node-{victim.index} logged no quarantine for {DB}|{coll}")
+    check("the rejoined node holds none of the dropped documents under the live name",
+          not stored_documents(victim, DB, coll), str(sorted(stored_documents(victim, DB, coll))))
+
+    check("the cluster re-creates the same name",
+          wait_until(lambda: create_coll(nodes[0].client_port, DB, coll).get("status") == "OK",
+                     timeout_s=30.0, interval_s=1.0))
+    check("the live incarnation's own documents commit",
+          seed_documents(nodes[0].client_port, DB, coll, [{"_id": f"live{i}", "v": i} for i in range(3)]))
+
+    assert_no_resurrection(DB, coll, {"live0", "live1", "live2"}, victim)
+
+
+def test_drop_database_then_rejoin_then_recreate_does_not_resurrect_documents():
+    section("DROP_DATABASE, then the missed node rejoins, then CREATE_DATABASE")
+    db = "rejoin_first_db"
+    coll = "rejoin_first_dbcoll"
+    check_status("create the database", create_db(nodes[0].client_port, db), "OK")
+    check_status("create the collection", create_coll(nodes[0].client_port, db, coll), "OK")
+    check("the pre-drop documents all committed",
+          seed_documents(nodes[0].client_port, db, coll, [{"_id": f"pre{i}", "v": i} for i in range(5)]))
+    check("every node holds the pre-drop documents",
+          wait_until(lambda: all(len(stored_documents(n, db, coll)) == 5 for n in nodes if n.alive),
+                     timeout_s=30.0))
+
+    victim = nodes[2]
+    print(f"  Killing node-{victim.index} so it misses the drop ...")
+    victim.kill()
+    check("the survivors drop the database",
+          wait_until(lambda: drop_db(nodes[0].client_port, db).get("status") == "OK",
+                     timeout_s=30.0, interval_s=1.0))
+
+    def _database_quarantined():
+        try:
+            return f"Quarantined database {db}" in bu.read_log(victim.log_path)
+        except OSError:
+            return False
+
+    print(f"  Restarting node-{victim.index} before the re-create ...")
+    victim.start()
+    check("the rejoined node unregisters the dropped database", wait_until(_database_quarantined, timeout_s=60.0),
+          f"node-{victim.index} logged no quarantine for database {db}")
+
+    check("the cluster re-creates the same names",
+          wait_until(lambda: (create_db(nodes[0].client_port, db).get("status") == "OK"
+                              and create_coll(nodes[0].client_port, db, coll).get("status") == "OK"),
+                     timeout_s=30.0, interval_s=1.0))
+    check("the live incarnation's own documents commit",
+          seed_documents(nodes[0].client_port, db, coll, [{"_id": f"live{i}", "v": i} for i in range(3)]))
+
+    assert_no_resurrection(db, coll, {"live0", "live1", "live2"}, victim, quarantined=_database_quarantined)
 
 
 def _node_log_mentions_quarantine(node, coll, db: str = DB) -> bool:
@@ -2845,6 +2920,8 @@ def main():
         test_a_trigger_fires_once_despite_a_replication_timeout()
         test_drop_and_recreate_does_not_resurrect_documents()
         test_drop_database_and_recreate_does_not_resurrect_documents()
+        test_drop_then_rejoin_then_recreate_does_not_resurrect_documents()
+        test_drop_database_then_rejoin_then_recreate_does_not_resurrect_documents()
         test_rapid_collection_creates_are_not_quarantined()
         test_recreating_an_existing_collection_keeps_its_documents()
         test_schedule_rejoin_catch_up()
