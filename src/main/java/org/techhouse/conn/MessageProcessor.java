@@ -8,6 +8,7 @@ import java.io.OutputStreamWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.function.BooleanSupplier;
 import javax.net.ssl.SSLException;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterRouter;
@@ -40,9 +41,15 @@ public class MessageProcessor implements Runnable {
     private final Logger logger = Logger.logFor(MessageProcessor.class);
     private final Socket socket;
     private final UUID clientId;
+    private final BooleanSupplier shuttingDown;
 
     public MessageProcessor(Socket socket) {
+        this(socket, () -> false);
+    }
+
+    public MessageProcessor(Socket socket, BooleanSupplier shuttingDown) {
         this.socket = socket;
+        this.shuttingDown = shuttingDown;
         this.clientId = clientTracker.addClient(socket);
     }
 
@@ -64,12 +71,17 @@ public class MessageProcessor implements Runnable {
                     }
                     if (!message.isBlank()) {
                         String response;
+                        OperationType requestType = null;
                         try {
                             final var parsedMessage = RequestParser.parseRequest(message);
+                            requestType = parsedMessage.getType();
                             final var validationResult = RequestValidator.validate(parsedMessage);
                             if (!validationResult.isValid()) {
                                 response = eJson.toJson(new OperationResponse(parsedMessage.getType(),
                                         validationResult.getErrorMessage(), validationResult.getErrorCode()));
+                            } else if (isRefusedDuringShutdown(parsedMessage.getType())) {
+                                response = eJson.toJson(
+                                        new OperationResponse(parsedMessage.getType(), ErrorCode.SERVER_SHUTTING_DOWN));
                             } else {
                                 final var type = parsedMessage.getType();
                                 final var isPublicOperation = type == OperationType.AUTHENTICATE
@@ -111,6 +123,9 @@ public class MessageProcessor implements Runnable {
                         } catch (InvalidCommandException exception) {
                             logger.warning("Refused an unparseable request: " + causeMessageOf(exception));
                             response = exception.getMessage();
+                        } catch (RuntimeException exception) {
+                            logger.error("Request handling failed unexpectedly", exception);
+                            response = eJson.toJson(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
                         }
                         clientTracker.updateLastCommandTime(clientId);
                         writerLock.lock();
@@ -156,6 +171,11 @@ public class MessageProcessor implements Runnable {
     }
 
     private record Handled(String response, boolean close) {
+    }
+
+    private boolean isRefusedDuringShutdown(OperationType type) {
+        return shuttingDown.getAsBoolean() && type != OperationType.ROLLBACK_TRANSACTION
+                && type != OperationType.CLOSE_CONNECTION;
     }
 
     private static String causeMessageOf(InvalidCommandException exception) {

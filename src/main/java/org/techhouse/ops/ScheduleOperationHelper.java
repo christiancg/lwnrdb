@@ -138,7 +138,7 @@ public final class ScheduleOperationHelper {
 
     private static ScheduleDefinition stampedDefinition(SaveScheduleRequest request, ScheduleDefinition existing,
             String actingUser) {
-        final var alreadyStamped = request.getStampedVersion() > 0;
+        final var alreadyStamped = request.carriesCoordinatorStamp();
         final var version = alreadyStamped
                 ? request.getStampedVersion()
                 : (existing == null ? 1L : existing.getVersion() + 1);
@@ -180,6 +180,11 @@ public final class ScheduleOperationHelper {
     }
 
     public static OperationResponse executeList(ListSchedulesRequest request) {
+        return OperationResponse.respondOrError(OperationType.LIST_SCHEDULES, ErrorCode.ERROR_RETRIEVING,
+                () -> listSchedules(request));
+    }
+
+    private static OperationResponse listSchedules(ListSchedulesRequest request) {
         if (!configuration.isSchedulesEnabled()) {
             return new OperationResponse(OperationType.LIST_SCHEDULES, ErrorCode.SCRIPTS_DISABLED);
         }

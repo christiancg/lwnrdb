@@ -115,10 +115,45 @@ public class ScheduleOperationHelperTest {
         request.setStampedUpdatedBy(ACTOR);
         request.setStampedDefiner(ACTOR);
         request.setStampedCreatedAt(1_600_000_000_000L);
+        request.setReplicated(true);
 
         save(request);
 
         assertEquals(1_600_000_000_000L, cache.getSchedule(TestGlobals.DB, "replayed").getCreatedAt());
+    }
+
+    @Test
+    public void test_a_client_cannot_forge_the_stamped_definer() throws Exception {
+        final var request = intervalRequest("forged");
+        request.setStampedVersion(9L);
+        request.setStampedDefiner("admin");
+        request.setStampedUpdatedBy("admin");
+        request.setStampedUpdatedAt(1L);
+        request.setStampedCreatedAt(1L);
+
+        final var response = save(request);
+
+        final var stored = cache.getSchedule(TestGlobals.DB, "forged");
+        assertEquals(ACTOR, stored.getDefiner());
+        assertEquals(ACTOR, stored.getUpdatedBy());
+        assertEquals(1L, response.getVersion());
+        assertTrue(stored.getCreatedAt() > 1L);
+    }
+
+    @Test
+    public void test_a_replicated_save_honours_the_stamped_definer() throws Exception {
+        final var request = intervalRequest("replicated");
+        request.setStampedVersion(9L);
+        request.setStampedDefiner("admin");
+        request.setStampedUpdatedBy("admin");
+        request.setStampedUpdatedAt(5L);
+        request.setReplicated(true);
+
+        save(request);
+
+        final var stored = cache.getSchedule(TestGlobals.DB, "replicated");
+        assertEquals("admin", stored.getDefiner());
+        assertEquals(9L, stored.getVersion());
     }
 
     private SaveScheduleResponse save(SaveScheduleRequest request) throws Exception {
@@ -164,6 +199,7 @@ public class ScheduleOperationHelperTest {
 
         fs.deleteSchedule(TestGlobals.DB, "s");
         cache.removeSchedule(TestGlobals.DB, "s");
+        request.setReplicated(true);
         final var replayed = ScheduleOperationHelper.executeSave(request, "somebody-else");
         assertEquals(1L, ((SaveScheduleResponse) replayed).getVersion());
         assertEquals(ACTOR, cache.getSchedule(TestGlobals.DB, "s").getDefiner());

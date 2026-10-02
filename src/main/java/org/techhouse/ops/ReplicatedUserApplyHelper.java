@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.admin.GrantPruner;
 
 // The record carries the coordinator's already-computed password hash, and a replica never re-broadcasts.
 public final class ReplicatedUserApplyHelper {
@@ -22,11 +23,13 @@ public final class ReplicatedUserApplyHelper {
                         AdminOperationHelper.saveUserEntry(AdminUserEntry.fromJsonObject(document));
                     }
                 }
-                case DELETE -> {
+                case DELETE -> AdminOperationHelper.withUsersLock(() -> {
                     for (final var username : payload.getIds()) {
                         AdminOperationHelper.deleteUserEntry(username);
+                        GrantPruner.forDeletedUser(username);
                     }
-                }
+                    return null;
+                });
                 default -> {
                     return false;
                 }

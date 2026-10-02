@@ -551,6 +551,27 @@ def test_definer_rights():
                   row["object"].get("definer") == ADMIN_USERNAME, f"got {row['object']}")
 
 
+def test_a_client_cannot_forge_a_definer():
+    section("A client cannot forge the coordinator's stamp")
+    forged = {"stampedVersion": 7, "stampedDefiner": ADMIN_USERNAME, "stampedUpdatedBy": ADMIN_USERNAME,
+              "stampedUpdatedAt": 1, "stampedCreatedAt": 1}
+    with user_conn(MANAGER) as manager:
+        check_status("a MANAGE user installs a trigger carrying a forged stamp",
+                     manager.save_trigger("forged_stamp", ["CREATED"], "greet", **forged), "OK")
+        with admin_conn() as admin:
+            listed = admin.send({"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": COLL})
+            stored = next((t for t in (listed.get("triggers") or []) if t.get("name") == "forged_stamp"), {})
+            check("the definer is the caller, not the forged admin", stored.get("definer") == MANAGER,
+                  f"got {stored}")
+            check("so is updatedBy", stored.get("updatedBy") == MANAGER, f"got {stored}")
+            check("and the version was assigned by the server", stored.get("version") == 1, f"got {stored}")
+        check_status("clean up the trigger", manager.send(
+            {"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "forged_stamp"}), "OK")
+        check_code("a forged stamp does not skip the import check",
+                   manager.save_procedure("forged_import", "import { x } from 'procedures/not_there'; return x;",
+                                          stampedVersion=5), "ERROR", "400-18")
+
+
 def test_procedure_imports(conn: Conn):
     section("Shared code between procedures (procedures/<name>)")
 
@@ -1429,6 +1450,8 @@ def test_a_corrupt_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: str):
         refused = conn.save_doc({"_id": "co1", "n": 1}, coll=CORRUPT_COLL)
         check_code("a write is refused rather than quietly firing no triggers", refused, "ERROR", "500-7")
         check("and nothing was written", conn.find("co1", coll=CORRUPT_COLL).get("status") != "OK")
+        check_code("listing the triggers answers an error instead of dropping the connection", conn.send(
+            {"type": "LIST_TRIGGERS", "databaseName": DB, "collectionName": CORRUPT_COLL}), "ERROR", "500-8")
         check_code("saving a trigger is refused",
                    conn.save_trigger("audit_second", ["CREATED"], "auditor", coll=CORRUPT_COLL), "ERROR", "500-29")
         check_code("deleting one is refused", conn.send(
@@ -1448,6 +1471,24 @@ def test_a_corrupt_trigger_file_is_not_an_empty_one(conn: Conn, work_dir: str):
           any(t.get("name") == "audit_corrupt" for t in (listed.get("triggers") or [])), f"got {listed}")
     check_status("and a write fires it again", conn.save_doc({"_id": "co2", "n": 2}, coll=CORRUPT_COLL), "OK")
     check("the audit row is back", await_doc(conn, "CREATED-co2").get("status") == "OK")
+
+
+def test_an_unparseable_definition_is_answered_not_dropped(conn: Conn, work_dir: str):
+    section("An unparseable definition is answered with an error, and the connection survives")
+    procedures = os.path.join(work_dir, "db", DB, ".procedures")
+    torn = os.path.join(procedures, "torn_definition.json")
+    with open(torn, "wb") as fp:
+        fp.write(b'{"name":"torn_definition","source"')
+    try:
+        check_code("LIST_PROCEDURES answers", conn.send({"type": "LIST_PROCEDURES", "databaseName": DB}),
+                   "ERROR", "500-8")
+        check_code("CALL_PROCEDURE answers", conn.call("torn_definition"), "ERROR", "500-8")
+        check_status("and the same connection still serves the next request", conn.send(
+            {"type": "LIST_DATABASES"}), "OK")
+    finally:
+        os.remove(torn)
+    check_status("LIST_PROCEDURES works again once the file is gone", conn.send(
+        {"type": "LIST_PROCEDURES", "databaseName": DB}), "OK")
 
 
 def test_a_deleted_definition_stops_being_served(conn: Conn):
@@ -1850,6 +1891,7 @@ def main():
             test_dry_run(conn)
             test_result_cap(conn)
         test_definer_rights()
+        test_a_client_cannot_forge_a_definer()
         with admin_conn() as conn:
             test_procedure_imports(conn)
             test_trigger_imports(conn)
@@ -1891,6 +1933,7 @@ def main():
             test_a_recovered_commit_fires_its_triggers(conn)
             test_an_unreadable_trigger_file_is_not_an_empty_one(conn, work_dir)
             test_a_corrupt_trigger_file_is_not_an_empty_one(conn, work_dir)
+            test_an_unparseable_definition_is_answered_not_dropped(conn, work_dir)
             test_a_deleted_definition_stops_being_served(conn)
             test_retry_and_dead_letters(conn)
             test_a_replayed_dead_letter_gets_a_full_budget(conn)

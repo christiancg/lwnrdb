@@ -538,6 +538,10 @@ admin, owner or `MANAGE` user can install one. Two consequences: a definer who n
 falling back to an admin would let *deleting* a user widen a trigger's authority), and a definer
 whose permissions are later reduced silently narrows it.
 
+The definer is always the saving user for a client request. The `stamped*` fields on
+`SAVE_TRIGGER`, `SAVE_SCHEDULE` and `SAVE_PROCEDURE` are coordinator-internal and are honoured only
+when the request is a replicated apply, so a client cannot install a trigger that runs as someone else.
+
 **An after trigger runs exactly once, not at least once.** Before an event is queued,
 `TriggerRunLog` persists a pending-run record in `admin/trigger_runs`; `TriggerDispatcher` then
 runs the procedure inside a transaction whose final buffered op **consumes** that record, so the

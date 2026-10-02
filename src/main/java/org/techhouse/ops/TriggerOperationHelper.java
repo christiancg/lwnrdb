@@ -139,7 +139,7 @@ public final class TriggerOperationHelper {
 
     private static TriggerDefinition stampedDefinition(SaveTriggerRequest request, TriggerDefinition existing,
             String actingUser, String mode, String timing, LinkedHashSet<EventType> events) {
-        final var alreadyStamped = request.getStampedVersion() > 0;
+        final var alreadyStamped = request.carriesCoordinatorStamp();
         final var version = alreadyStamped
                 ? request.getStampedVersion()
                 : (existing == null ? 1L : existing.getVersion() + 1);
@@ -240,6 +240,11 @@ public final class TriggerOperationHelper {
     }
 
     public static OperationResponse executeList(ListTriggersRequest request) {
+        return OperationResponse.respondOrError(OperationType.LIST_TRIGGERS, ErrorCode.ERROR_RETRIEVING,
+                () -> listTriggers(request));
+    }
+
+    private static OperationResponse listTriggers(ListTriggersRequest request) {
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
             return new OperationResponse(OperationType.LIST_TRIGGERS, "Database '" + dbName + "' not found",

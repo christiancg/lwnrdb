@@ -285,6 +285,11 @@ peer re-executing has no acting user of its own, and two nodes disagreeing about
 trigger's definer would mean the same write runs under different authority depending on
 which node owns the collection.
 
+The stamped fields are honoured **only on a replicated apply** (`replicated`, set solely by
+`REPLICATE_ADMIN`). They are ordinary wire fields, so a client request carrying them is stamped
+from the acting user and local state like any other, and cannot choose its own `definer`, version
+or `updatedBy`.
+
 `CALL_PROCEDURE` is placed exactly like `RUN_SCRIPT` (see *Scripts*).
 
 A **trigger fires only on the collection's owner**, because `TriggerHelper` is called from
@@ -398,6 +403,10 @@ the coordinator ships the committed `admin/users` record and each peer upserts o
 it. Re-executing `CREATE_USER`/`SET_PASSWORD` would re-hash the password with a fresh
 random salt on each node, diverging the stored hashes; shipping the already-hashed record
 keeps every node byte-identical.
+
+A replicated `DELETE_USER` also runs the grant pruning the coordinator ran (`GrantPruner`), under
+`admin|users`, because it arrives as a shipped record rather than a re-executed op and nothing else
+would strip the deleted name from `AdminDbEntry.owners` on a replica.
 
 ## Transactions
 

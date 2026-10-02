@@ -30,6 +30,10 @@ public abstract class VersionedDefinitionRequest extends OperationRequest {
         this.ifVersion = ifVersion;
     }
 
+    public boolean carriesCoordinatorStamp() {
+        return isReplicated() && stampedVersion > 0;
+    }
+
     public long getStampedVersion() {
         return stampedVersion;
     }

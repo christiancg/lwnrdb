@@ -65,6 +65,38 @@ public class TriggerOperationHelperTest {
         return new SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, name, List.of("CREATED"), "recalc");
     }
 
+    @Test
+    public void test_a_client_cannot_forge_the_stamped_definer() throws Exception {
+        final var request = request("forged");
+        request.setStampedVersion(9L);
+        request.setStampedDefiner("admin");
+        request.setStampedUpdatedBy("admin");
+        request.setStampedUpdatedAt(1L);
+
+        final var response = save(request);
+
+        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        assertEquals(ACTOR, stored.getDefiner());
+        assertEquals(ACTOR, stored.getUpdatedBy());
+        assertEquals(1L, response.getVersion());
+    }
+
+    @Test
+    public void test_a_replicated_save_honours_the_stamped_definer() throws Exception {
+        final var request = request("replicated");
+        request.setStampedVersion(9L);
+        request.setStampedDefiner("admin");
+        request.setStampedUpdatedBy("admin");
+        request.setStampedUpdatedAt(5L);
+        request.setReplicated(true);
+
+        save(request);
+
+        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        assertEquals("admin", stored.getDefiner());
+        assertEquals(9L, stored.getVersion());
+    }
+
     private SaveTriggerResponse save(SaveTriggerRequest request) throws Exception {
         final var response = TriggerOperationHelper.executeSave(request, ACTOR);
         assertInstanceOf(SaveTriggerResponse.class, response, response.getMessage());
@@ -195,6 +227,7 @@ public class TriggerOperationHelperTest {
         assertEquals(1L, request.getStampedVersion());
         assertTrue(request.getStampedUpdatedAt() > 0);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+        request.setReplicated(true);
         TriggerOperationHelper.executeSave(request, "peer-has-no-acting-user");
         final var replicated = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
         assertEquals(ACTOR, replicated.getDefiner());

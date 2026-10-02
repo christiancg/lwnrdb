@@ -67,6 +67,15 @@ public class SocketServerTest {
     }
 
     @Test
+    public void test_a_server_is_not_stopping_until_told_to() {
+        final var server = new SocketServer(0);
+
+        assertFalse(server.isStopping());
+        server.stopAccepting();
+        assertTrue(server.isStopping());
+    }
+
+    @Test
     public void test_tls_server_accepts_tls_client(@TempDir Path tempDir) throws Exception {
         final int port = freePort();
         final var factory = serverFactory(tempDir.resolve("lwnrdb.p12"));

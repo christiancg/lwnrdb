@@ -5,6 +5,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
 import org.techhouse.ejson.elements.JsonBaseElement;
+import org.techhouse.ejson.elements.JsonBaseElement.JsonType;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.InvalidSchemaException;
 
@@ -93,7 +94,16 @@ final class SchemaRefValidator {
             errors.add(SchemaValidator.at(refPath) + ": " + e.getMessage());
             return;
         }
+        if (!isSchemaNode(resolved)) {
+            errors.add(SchemaValidator.at(refPath) + ": '" + SchemaKeywords.REF
+                    + "' must resolve to a schema (an object or a boolean)");
+            return;
+        }
         checkChain(resolved, refPath);
+    }
+
+    private static boolean isSchemaNode(JsonBaseElement node) {
+        return node != null && (node.isJsonObject() || node.getJsonType() == JsonType.BOOLEAN);
     }
 
     private void followSameInstanceKeywords(JsonObject node, String path) {

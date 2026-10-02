@@ -189,6 +189,11 @@ def test_cyclic_ref_rejected(c):
                save_schema(c, COLL, {"allOf": [{"$ref": "#"}]}), "ERROR", "400-8")
     check_code("an unresolvable pointer is rejected",
                save_schema(c, COLL, {"$ref": "#/$defs/missing"}), "ERROR", "400-8")
+    check_code("a pointer that resolves to a non-schema node is rejected",
+               save_schema(c, COLL, {"required": ["a"], "properties": {"x": {"$ref": "#/required"}}}),
+               "ERROR", "400-8")
+    check_status("a pointer to a boolean schema is accepted",
+                 save_schema(c, COLL, {"$defs": {"any": True}, "properties": {"x": {"$ref": "#/$defs/any"}}}), "OK")
     check_status("recursion bounded by instance depth is still accepted", save_schema(c, COLL, {
         "type": "object",
         "properties": {"name": {"type": "string"}, "child": {"$ref": "#"}},

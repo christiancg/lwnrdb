@@ -434,6 +434,7 @@ public class ProcedureImportIntegrationTest {
         request.setStampedVersion(7L);
         request.setStampedUpdatedAt(System.currentTimeMillis());
         request.setStampedUpdatedBy(OWNER);
+        request.setReplicated(true);
         final var response = ProcedureOperationHelper.executeSave(request, OWNER);
         assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
         assertNotNull(cache.getProcedure(TestGlobals.DB, "caller"));

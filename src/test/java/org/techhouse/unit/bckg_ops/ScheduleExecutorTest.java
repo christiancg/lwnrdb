@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -94,6 +95,31 @@ public class ScheduleExecutorTest {
         assertEquals("s", seen.getFirst());
         assertEquals(1L, executor.getFired());
         assertTrue(entry.getNextRunAt() > System.currentTimeMillis());
+    }
+
+    @Test
+    public void test_stopping_the_ticker_leaves_the_workers_able_to_drain() throws Exception {
+        final var entry = register("s", true);
+        final var seen = new CopyOnWriteArrayList<String>();
+        executor = new ScheduleExecutor();
+        executor.start(due -> seen.add(due.getName()));
+
+        executor.stopTicking();
+        entry.setNextRunAt(System.currentTimeMillis() - 1);
+        executor.tick(System.currentTimeMillis());
+
+        assertTrue(executor.drain(5000));
+        assertEquals(List.of("s"), seen);
+    }
+
+    @Test
+    public void test_stopping_the_ticker_twice_is_harmless() {
+        executor = new ScheduleExecutor();
+        executor.start(_ -> fail("should not have fired"));
+
+        executor.stopTicking();
+
+        assertDoesNotThrow(executor::stopTicking);
     }
 
     @Test

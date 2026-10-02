@@ -52,6 +52,7 @@ public class CollectionIncarnationTest {
     public void test_a_replicated_create_keeps_the_coordinators_incarnation() {
         final var request = new CreateCollectionRequest(TestGlobals.DB, "replicatedIncColl");
         request.setIncarnation(4242L);
+        request.setReplicated(true);
 
         assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
 

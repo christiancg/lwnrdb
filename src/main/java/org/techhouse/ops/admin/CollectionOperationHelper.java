@@ -42,6 +42,9 @@ public final class CollectionOperationHelper {
     private static OperationResponse createUnderDatabaseBarrier(CreateCollectionRequest createCollectionRequest) {
         final var dbName = createCollectionRequest.getDatabaseName();
         final var collName = createCollectionRequest.getCollectionName();
+        if (!createCollectionRequest.isReplicated()) {
+            createCollectionRequest.setIncarnation(0);
+        }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_COLLECTION,
                 ErrorCode.ERROR_CREATING_COLLECTION, createCollectionRequest.isReplicated(), () -> {
                     // A node can hold the database's admin entry without its folder (a replicated

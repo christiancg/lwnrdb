@@ -187,13 +187,17 @@ public class ScheduleExecutor {
         return queue.size() + inFlight.get();
     }
 
-    public synchronized void stop() {
-        workerCount.set(0);
-        draining = true;
+    public synchronized void stopTicking() {
         if (scheduler != null) {
             scheduler.shutdownNow();
             scheduler = null;
         }
+    }
+
+    public synchronized void stop() {
+        workerCount.set(0);
+        draining = true;
+        stopTicking();
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Schedule");
         queue.clear();
         running.clear();

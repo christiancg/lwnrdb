@@ -11,6 +11,12 @@ import org.techhouse.ops.OperationStatus;
 public class ErrorCodeTest {
 
     @Test
+    public void server_shutting_down_is_a_retryable_503() {
+        assertEquals("503-13", ErrorCode.SERVER_SHUTTING_DOWN.getCode());
+        assertEquals(OperationStatus.ERROR, ErrorCode.SERVER_SHUTTING_DOWN.getStatus());
+    }
+
+    @Test
     public void all_error_codes_have_non_blank_code_string() {
         for (ErrorCode code : ErrorCode.values()) {
             assertNotNull(code.getCode(), code.name() + " has null code");

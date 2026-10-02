@@ -111,7 +111,7 @@ public final class ProcedureOperationHelper {
 
     private static String firstUnresolvableImport(SaveProcedureRequest request, String dbName,
             CompiledScript compiled) {
-        if (request.getStampedVersion() > 0) {
+        if (request.carriesCoordinatorStamp()) {
             return null;
         }
         for (final var specifier : simpleJs.moduleSpecifiers(compiled)) {
@@ -133,7 +133,7 @@ public final class ProcedureOperationHelper {
     private static ProcedureDefinition stampedDefinition(SaveProcedureRequest request, ProcedureDefinition existing,
             String actingUser) {
         final var version = existing == null ? 1L : existing.getVersion() + 1;
-        final var alreadyStamped = request.getStampedVersion() > 0;
+        final var alreadyStamped = request.carriesCoordinatorStamp();
         final var effectiveVersion = alreadyStamped ? request.getStampedVersion() : version;
         final var effectiveUpdatedAt = alreadyStamped ? request.getStampedUpdatedAt() : System.currentTimeMillis();
         final var effectiveUpdatedBy = alreadyStamped ? request.getStampedUpdatedBy() : actingUser;
@@ -180,6 +180,11 @@ public final class ProcedureOperationHelper {
     }
 
     public static OperationResponse executeList(ListProceduresRequest request) {
+        return OperationResponse.respondOrError(OperationType.LIST_PROCEDURES, ErrorCode.ERROR_RETRIEVING,
+                () -> listProcedures(request));
+    }
+
+    private static OperationResponse listProcedures(ListProceduresRequest request) {
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
             return new OperationResponse(OperationType.LIST_PROCEDURES, "Database '" + dbName + "' not found",

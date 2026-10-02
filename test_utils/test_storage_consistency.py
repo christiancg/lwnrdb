@@ -1485,6 +1485,59 @@ def test_non_finite_numbers_stay_refused_after_a_restart(conn: Conn):
     assert_count_agrees_with_rows(conn, coll, "after REINDEX")
 
 
+SHUTDOWN_COLL = "shutdown_writes"
+SHUTDOWN_TAG = "stopped"
+SHUTDOWN_SHUTTING_DOWN = "503-13"
+
+
+def hammer_until_refused(acknowledged: list):
+    writer = admin_conn()
+    try:
+        position = 0
+        while True:
+            response = writer.save({"_id": f"w{position}", "tag": SHUTDOWN_TAG}, coll=SHUTDOWN_COLL)
+            if response.get("status") == "OK":
+                acknowledged.append(f"w{position}")
+            elif response.get("errorCode") == SHUTDOWN_SHUTTING_DOWN or "closed" in (response.get("message") or ""):
+                return
+            position += 1
+    finally:
+        writer.close()
+
+
+def stop_the_node_under_a_connected_writer(proc) -> list:
+    with admin_conn() as conn:
+        check_status("create the collection", conn.send({
+            "type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": SHUTDOWN_COLL}), "OK")
+        check_status("index the tag", conn.send({
+            "type": "CREATE_INDEX", "databaseName": DB, "collectionName": SHUTDOWN_COLL, "fieldName": "tag"}), "OK")
+    acknowledged: list = []
+    thread = threading.Thread(target=hammer_until_refused, args=(acknowledged,), daemon=True)
+    thread.start()
+    deadline = time.time() + 30
+    while len(acknowledged) < 50 and time.time() < deadline:
+        time.sleep(0.05)
+    proc.terminate()
+    thread.join(60)
+    proc.wait(timeout=60)
+    return list(acknowledged)
+
+
+def test_every_acknowledged_write_is_indexed_after_a_stop_with_a_client_still_connected(conn: Conn,
+                                                                                         acknowledged: list):
+    section("A node stopped under a connected writer refuses writes rather than losing their index events")
+    check("the writer got acknowledged writes in before the stop", len(acknowledged) >= 50,
+          f"only {len(acknowledged)}")
+    found = aggregate_ids(conn, SHUTDOWN_COLL, [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "EQUALS", "field": "tag", "value": SHUTDOWN_TAG}}])
+    missing = sorted(set(acknowledged) - set(found))
+    check("every acknowledged write is found by the index-backed filter", not missing,
+          f"{len(missing)} acknowledged write(s) missing from the indexed answer, e.g. {missing[:5]}")
+    scanned = aggregate_ids(conn, SHUTDOWN_COLL, [{"type": "SKIP", "skip": 0}])
+    check("and the indexed answer agrees with a scan", sorted(found) == sorted(scanned),
+          f"indexed={len(found)} scanned={len(scanned)}")
+
+
 def main():
     bu.banner("storage consistency e2e tests", HOST, PORT)
 
@@ -1577,6 +1630,13 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_the_admin_write_after_the_tear_is_still_there(conn)
+        acknowledged = stop_the_node_under_a_connected_writer(proc)
+        proc = None
+
+        print(f"  Restarting server on {HOST}:{PORT} ...")
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_every_acknowledged_write_is_indexed_after_a_stop_with_a_client_still_connected(conn, acknowledged)
     finally:
         bu.stop_server(proc)
 

@@ -902,6 +902,63 @@ def test_grants_are_pruned_on_every_node():
     op_with_retry(lambda: drop_db(port, grant_db))
 
 
+def test_a_deleted_users_ownership_is_pruned_on_every_node():
+    section("A deleted user stops owning databases on every node, so a recreated name inherits nothing")
+
+    owner_db = "cluster_owner_db"
+    owner = "cluster_ghost_owner"
+    port = nodes[0].client_port
+    check_status("CREATE_DATABASE", op_with_retry(lambda: create_db(port, owner_db)), "OK")
+    check_status("CREATE_COLLECTION", op_with_retry(lambda: create_coll(port, owner_db, "docs")), "OK")
+    check_status("SAVE", op_with_retry(lambda: save(port, owner_db, "docs", {"_id": "d1", "v": 1})), "OK")
+    op(port, {"type": "DELETE_USER", "username": owner})
+    create_user = {"type": "CREATE_USER", "username": owner, "password": "cluster_owner1234", "admin": False,
+                   "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {}}
+    check_status("CREATE_USER with no grants", op(port, create_user), "OK")
+    check_status("SET_DATABASE_OWNERS makes it the owner", op(port, {
+        "type": "SET_DATABASE_OWNERS", "databaseName": owner_db, "owners": [owner]}), "OK")
+
+    def read_as_owner(p):
+        c = Conn(port=p)
+        try:
+            a = c.send({"type": "AUTHENTICATE", "username": owner, "password": "cluster_owner1234"})
+            if a.get("status") != "OK":
+                return a
+            return c.send({"type": "FIND_BY_ID", "databaseName": owner_db, "collectionName": "docs", "_id": "d1"})
+        finally:
+            c.close()
+
+    check("the owner can read on every node",
+          wait_until(lambda: all(read_as_owner(p).get("status") == "OK" for p in all_ports()), timeout_s=15.0))
+
+    check_status("DELETE_USER via node-0", op(port, {"type": "DELETE_USER", "username": owner}), "OK")
+    check_status("CREATE_USER under the same name", op(port, create_user), "OK")
+
+    check("the recreated user owns nothing on any node",
+          wait_until(lambda: all(read_as_owner(p).get("status") == "FORBIDDEN" for p in all_ports()),
+                     timeout_s=15.0))
+
+    op(port, {"type": "DELETE_USER", "username": owner})
+    op_with_retry(lambda: drop_db(port, owner_db))
+
+
+def test_a_client_cannot_advance_the_write_clock_through_an_incarnation():
+    section("A client-supplied collection incarnation is ignored")
+
+    forged_db = "cluster_incarnation_db"
+    port = nodes[0].client_port
+    check_status("CREATE_DATABASE", op_with_retry(lambda: create_db(port, forged_db)), "OK")
+    check_status("CREATE_COLLECTION carrying a forged incarnation", op_with_retry(lambda: op(port, {
+        "type": "CREATE_COLLECTION", "databaseName": forged_db, "collectionName": "docs",
+        "incarnationText": "9223372036854775805"})), "OK")
+    for value in (1, 2, 3):
+        check_status(f"SAVE v={value}", op_with_retry(
+            lambda value=value: save(port, forged_db, "docs", {"_id": "d1", "v": value})), "OK")
+    check("the last write wins on every node, so versions kept increasing",
+          all_nodes_see(forged_db, "docs", "d1", 3))
+    op_with_retry(lambda: drop_db(port, forged_db))
+
+
 def test_single_node_transaction():
     section("Transaction under clustering — commit + rollback + read-your-writes (5a)")
 
@@ -2671,6 +2728,8 @@ def main():
         test_index_replication()
         test_user_and_permission_replication()
         test_grants_are_pruned_on_every_node()
+        test_a_deleted_users_ownership_is_pruned_on_every_node()
+        test_a_client_cannot_advance_the_write_clock_through_an_incarnation()
         test_single_node_transaction()
         test_multi_collection_transaction()
         test_a_replica_listener_never_sees_a_partial_transaction()
