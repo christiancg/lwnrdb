@@ -35,6 +35,7 @@ public class MessageProcessor implements Runnable {
     private static final EJson eJson = IocContainer.get(EJson.class);
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final InFlightRequests inFlightRequests = IocContainer.get(InFlightRequests.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
@@ -70,71 +71,78 @@ public class MessageProcessor implements Runnable {
                         break;
                     }
                     if (!message.isBlank()) {
-                        String response;
-                        OperationType requestType = null;
+                        inFlightRequests.enter();
                         try {
-                            final var parsedMessage = RequestParser.parseRequest(message);
-                            requestType = parsedMessage.getType();
-                            final var validationResult = RequestValidator.validate(parsedMessage);
-                            if (!validationResult.isValid()) {
-                                response = eJson.toJson(new OperationResponse(parsedMessage.getType(),
-                                        validationResult.getErrorMessage(), validationResult.getErrorCode()));
-                            } else if (isRefusedDuringShutdown(parsedMessage.getType())) {
-                                response = eJson.toJson(
-                                        new OperationResponse(parsedMessage.getType(), ErrorCode.SERVER_SHUTTING_DOWN));
-                            } else {
-                                final var type = parsedMessage.getType();
-                                final var isPublicOperation = type == OperationType.AUTHENTICATE
-                                        || type == OperationType.LIST_DATABASES
-                                        || type == OperationType.CLOSE_CONNECTION;
-
-                                if (isPublicOperation) {
-                                    final var responseObj = operationProcessor.processMessage(parsedMessage, clientId);
-                                    if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
-                                        close = true;
-                                    }
-                                    response = eJson.toJson(responseObj);
+                            String response;
+                            OperationType requestType = null;
+                            try {
+                                final var parsedMessage = RequestParser.parseRequest(message);
+                                requestType = parsedMessage.getType();
+                                final var validationResult = RequestValidator.validate(parsedMessage);
+                                if (!validationResult.isValid()) {
+                                    response = eJson.toJson(new OperationResponse(parsedMessage.getType(),
+                                            validationResult.getErrorMessage(), validationResult.getErrorCode()));
+                                } else if (isRefusedDuringShutdown(parsedMessage.getType())) {
+                                    response = eJson.toJson(new OperationResponse(parsedMessage.getType(),
+                                            ErrorCode.SERVER_SHUTTING_DOWN));
                                 } else {
-                                    final var username = clientTracker.getAuthenticatedUsername(clientId);
-                                    if (username == null) {
-                                        response = eJson
-                                                .toJson(new OperationResponse(type, ErrorCode.MUST_AUTHENTICATE_FIRST));
+                                    final var type = parsedMessage.getType();
+                                    final var isPublicOperation = type == OperationType.AUTHENTICATE
+                                            || type == OperationType.LIST_DATABASES
+                                            || type == OperationType.CLOSE_CONNECTION;
+
+                                    if (isPublicOperation) {
+                                        final var responseObj = operationProcessor.processMessage(parsedMessage,
+                                                clientId);
+                                        if (responseObj.getType() == OperationType.CLOSE_CONNECTION) {
+                                            close = true;
+                                        }
+                                        response = eJson.toJson(responseObj);
                                     } else {
-                                        final var user = cache.getAdminUserEntry(username);
-                                        if (user == null) {
+                                        final var username = clientTracker.getAuthenticatedUsername(clientId);
+                                        if (username == null) {
                                             response = eJson.toJson(
-                                                    new OperationResponse(type, ErrorCode.USER_NO_LONGER_EXISTS));
+                                                    new OperationResponse(type, ErrorCode.MUST_AUTHENTICATE_FIRST));
                                         } else {
-                                            final var authResult = AuthorizationChecker.check(parsedMessage, user);
-                                            if (!authResult.isAllowed()) {
-                                                response = eJson
-                                                        .toJson(new OperationResponse(type, ErrorCode.NO_PERMISSIONS));
+                                            final var user = cache.getAdminUserEntry(username);
+                                            if (user == null) {
+                                                response = eJson.toJson(
+                                                        new OperationResponse(type, ErrorCode.USER_NO_LONGER_EXISTS));
                                             } else {
-                                                final var handled = handleAuthorized(parsedMessage, message, clientId);
-                                                response = handled.response();
-                                                if (handled.close()) {
-                                                    close = true;
+                                                final var authResult = AuthorizationChecker.check(parsedMessage, user);
+                                                if (!authResult.isAllowed()) {
+                                                    response = eJson.toJson(
+                                                            new OperationResponse(type, ErrorCode.NO_PERMISSIONS));
+                                                } else {
+                                                    final var handled = handleAuthorized(parsedMessage, message,
+                                                            clientId);
+                                                    response = handled.response();
+                                                    if (handled.close()) {
+                                                        close = true;
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
+                            } catch (InvalidCommandException exception) {
+                                logger.warning("Refused an unparseable request: " + causeMessageOf(exception));
+                                response = exception.getMessage();
+                            } catch (RuntimeException exception) {
+                                logger.error("Request handling failed unexpectedly", exception);
+                                response = eJson.toJson(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
                             }
-                        } catch (InvalidCommandException exception) {
-                            logger.warning("Refused an unparseable request: " + causeMessageOf(exception));
-                            response = exception.getMessage();
-                        } catch (RuntimeException exception) {
-                            logger.error("Request handling failed unexpectedly", exception);
-                            response = eJson.toJson(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
-                        }
-                        clientTracker.updateLastCommandTime(clientId);
-                        writerLock.lock();
-                        try {
-                            writer.write(response);
-                            writer.newLine();
-                            writer.flush();
+                            clientTracker.updateLastCommandTime(clientId);
+                            writerLock.lock();
+                            try {
+                                writer.write(response);
+                                writer.newLine();
+                                writer.flush();
+                            } finally {
+                                writerLock.unlock();
+                            }
                         } finally {
-                            writerLock.unlock();
+                            inFlightRequests.exit();
                         }
                     }
                 }

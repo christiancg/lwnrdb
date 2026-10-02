@@ -129,4 +129,45 @@ public class MessageProcessorShutdownTest {
         assertTrue(lines.getFirst().contains("500-8"), lines.toString());
         assertTrue(lines.size() >= 2, "the loop must keep reading after a runtime failure: " + lines);
     }
+
+    @Test
+    public void test_a_request_is_in_flight_only_while_it_runs() throws Exception {
+        final var inFlight = org.techhouse.ioc.IocContainer.get(org.techhouse.conn.InFlightRequests.class);
+        final var seenWhileRunning = new java.util.concurrent.atomic.AtomicInteger(-1);
+        final var processor = mock(OperationProcessor.class);
+        when(processor.processMessage(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenAnswer(_ -> {
+                    seenWhileRunning.set(inFlight.current());
+                    return OperationResponse.ok(OperationType.LIST_DATABASES, "listed");
+                });
+        final var out = new ByteArrayOutputStream();
+        final var in = new ByteArrayInputStream("{\"type\":\"LIST_DATABASES\"}\n".getBytes(StandardCharsets.UTF_8));
+        final var messageProcessor = new MessageProcessor(socket(in, out));
+        TestUtils.setPrivateField(messageProcessor, "operationProcessor", processor);
+
+        final var thread = new Thread(messageProcessor);
+        thread.start();
+        thread.join(3000);
+
+        assertTrue(seenWhileRunning.get() >= 1);
+        org.junit.jupiter.api.Assertions.assertEquals(0, inFlight.current());
+    }
+
+    @Test
+    public void test_a_failing_request_still_leaves_the_in_flight_count() throws Exception {
+        final var inFlight = org.techhouse.ioc.IocContainer.get(org.techhouse.conn.InFlightRequests.class);
+        final var processor = mock(OperationProcessor.class);
+        when(processor.processMessage(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new IllegalStateException("boom"));
+        final var out = new ByteArrayOutputStream();
+        final var in = new ByteArrayInputStream("{\"type\":\"LIST_DATABASES\"}\n".getBytes(StandardCharsets.UTF_8));
+        final var messageProcessor = new MessageProcessor(socket(in, out));
+        TestUtils.setPrivateField(messageProcessor, "operationProcessor", processor);
+
+        final var thread = new Thread(messageProcessor);
+        thread.start();
+        thread.join(3000);
+
+        org.junit.jupiter.api.Assertions.assertEquals(0, inFlight.current());
+    }
 }

@@ -25,6 +25,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.InFlightRequests;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -239,5 +240,34 @@ public class ShutdownCoordinatorTest {
 
         assertFalse(tickerRunningAtTriggerDrain.get(),
                 "a scheduled run firing during the trigger drain would enqueue into a draining executor");
+    }
+
+    @Test
+    public void test_the_drains_wait_for_a_request_still_in_flight() throws Exception {
+        final var inFlight = IocContainer.get(InFlightRequests.class);
+        final var idleAtTriggerDrain = new AtomicBoolean(false);
+        final var triggers = mock(TriggerExecutor.class);
+        when(triggers.drain(anyLong())).thenAnswer(_ -> {
+            idleAtTriggerDrain.set(inFlight.current() == 0);
+            return true;
+        });
+        inFlight.enter();
+        final var leaving = new Thread(() -> {
+            try {
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            inFlight.exit();
+        });
+        leaving.start();
+        final var coordinator = coordinator();
+        TestUtils.setPrivateField(coordinator, "triggerExecutor", triggers);
+
+        coordinator.shutdown(null, null);
+        leaving.join();
+
+        assertTrue(idleAtTriggerDrain.get(),
+                "a write still running when the drains start submits its index events into a draining queue");
     }
 }
