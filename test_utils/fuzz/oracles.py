@@ -22,6 +22,12 @@ EMPTY_RESULT_CODE = "404-3"
 
 PRIMARY_KEY_FIELD = "_id"
 
+PRIMARY_KEY_ALIASES = ["_id.", "_id.."]
+
+TRAILING_DOT_PROBE = "abc"
+
+TRAILING_DOT_REFUSAL_CODE = "400-1"
+
 CONJUNCTION_TYPES = ["AND", "OR", "XOR", "NOR", "NAND"]
 
 FILTER_QUERY = "FILTER"
@@ -345,6 +351,18 @@ def not_equals_vs_not_in(executor, matrices: dict, stats: Stats) -> list:
             if not_equals != not_in:
                 divergences.append(
                     Divergence("not-equals-vs-not-in", db, coll, query.label, not_equals, not_in))
+    return divergences
+
+
+def trailing_dot_refused(executor, matrices: dict, stats: Stats) -> list:
+    divergences = []
+    for (db, coll), _queries in sorted(matrices.items()):
+        for alias in PRIMARY_KEY_ALIASES:
+            stats.bump("trailing_dot_refused_queries")
+            response = aggregate(executor, db, coll, [filter_step(alias, "EQUALS", TRAILING_DOT_PROBE)])
+            if response.get("errorCode") != TRAILING_DOT_REFUSAL_CODE:
+                divergences.append(Divergence("trailing-dot-refused", db, coll, f"FILTER {alias}",
+                                              TRAILING_DOT_REFUSAL_CODE, answer_of(response)))
     return divergences
 
 

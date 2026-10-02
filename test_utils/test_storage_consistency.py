@@ -1485,6 +1485,58 @@ def test_non_finite_numbers_stay_refused_after_a_restart(conn: Conn):
     assert_count_agrees_with_rows(conn, coll, "after REINDEX")
 
 
+REGISTRATION_DB = "registration_db"
+REGISTRATION_COLLS = ["reg_a", "reg_b", "reg_c"]
+REGISTRATION_DROPPED = "reg_b"
+
+
+def registration_collections(conn: Conn) -> list:
+    return sorted(conn.send({"type": "LIST_COLLECTIONS", "databaseName": REGISTRATION_DB}).get("collections") or [])
+
+
+def seed_a_database_with_a_dropped_collection(conn: Conn):
+    conn.send({"type": "DROP_DATABASE", "databaseName": REGISTRATION_DB})
+    check_status("create the registration database", conn.send(
+        {"type": "CREATE_DATABASE", "databaseName": REGISTRATION_DB}), "OK")
+    for coll in REGISTRATION_COLLS:
+        check_status(f"create {coll}", conn.send({
+            "type": "CREATE_COLLECTION", "databaseName": REGISTRATION_DB, "collectionName": coll}), "OK")
+        check_status(f"save into {coll}", conn.save({"_id": f"{coll}-1", "n": 1}, db=REGISTRATION_DB, coll=coll),
+                     "OK")
+    check_status(f"drop {REGISTRATION_DROPPED}", conn.send({
+        "type": "DROP_COLLECTION", "databaseName": REGISTRATION_DB, "collectionName": REGISTRATION_DROPPED}), "OK")
+
+
+def admin_collection_rows(work_dir: str) -> str:
+    folder = os.path.join(work_dir, "db", "admin", "collections")
+    text = []
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        with open(os.path.join(folder, name), encoding="utf-8", errors="replace") as fp:
+            text.append(fp.read())
+    return "\n".join(text)
+
+
+def test_every_registered_collection_is_unregistered_when_its_database_is_dropped(conn: Conn, work_dir: str):
+    section("A database whose collections were created and dropped before a restart drops cleanly")
+    expected = sorted(c for c in REGISTRATION_COLLS if c != REGISTRATION_DROPPED)
+    check("the database lists exactly the collections that were not dropped after the restart",
+          registration_collections(conn) == expected, f"got {registration_collections(conn)}")
+    db_folder = os.path.join(work_dir, "db", REGISTRATION_DB)
+    check("the dropped collection's folder is gone", not os.path.exists(os.path.join(db_folder, REGISTRATION_DROPPED)))
+    check("the surviving collections' folders are still there",
+          all(os.path.isdir(os.path.join(db_folder, c)) for c in expected))
+    check_status("DROP_DATABASE", conn.send({"type": "DROP_DATABASE", "databaseName": REGISTRATION_DB}), "OK")
+    check("the database folder is gone", not os.path.exists(db_folder))
+    check("no collection row of the dropped database is left in admin metadata",
+          f"{REGISTRATION_DB}|" not in admin_collection_rows(work_dir),
+          "a registered collection was never unregistered")
+    check_status("re-create the database", conn.send(
+        {"type": "CREATE_DATABASE", "databaseName": REGISTRATION_DB}), "OK")
+    check("the re-created database lists no collection", registration_collections(conn) == [],
+          f"got {registration_collections(conn)}")
+    conn.send({"type": "DROP_DATABASE", "databaseName": REGISTRATION_DB})
+
+
 SHUTDOWN_COLL = "shutdown_writes"
 SHUTDOWN_TAG = "stopped"
 SHUTDOWN_SHUTTING_DOWN = "503-13"
@@ -1630,6 +1682,7 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_the_admin_write_after_the_tear_is_still_there(conn)
+            seed_a_database_with_a_dropped_collection(conn)
         acknowledged = stop_the_node_under_a_connected_writer(proc)
         proc = None
 
@@ -1637,6 +1690,7 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_every_acknowledged_write_is_indexed_after_a_stop_with_a_client_still_connected(conn, acknowledged)
+            test_every_registered_collection_is_unregistered_when_its_database_is_dropped(conn, work_dir)
     finally:
         bu.stop_server(proc)
 

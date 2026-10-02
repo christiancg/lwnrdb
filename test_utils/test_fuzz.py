@@ -60,6 +60,8 @@ def check_all(executor, outcome, namespace, seed, stats, signature=None) -> list
         divergences.extend(oracles.count_vs_rows(executor, matrices, stats))
     if wants(signature, "not-equals-vs-not-in"):
         divergences.extend(oracles.not_equals_vs_not_in(executor, matrices, stats))
+    if wants(signature, "trailing-dot"):
+        divergences.extend(oracles.trailing_dot_refused(executor, matrices, stats))
     if wants(signature, "warm-vs-cold"):
         divergences.extend(oracles.warm_vs_cold(executor, matrices, stats))
     return divergences

@@ -1364,6 +1364,75 @@ def test_cursor(conn: Conn):
                           "break;\nreturn 'released';"), "released")
 
 
+DOOMED = "script_doomed"
+DOOMED_PASSWORD = "password1234"
+
+
+def await_document(conn: Conn, coll: str, doc_id: str, timeout=15.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        found = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": doc_id})
+        if found.get("status") == "OK":
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_script_transaction_releases_its_locks_when_its_user_is_deleted_mid_run(conn: Conn):
+    section("A script transaction whose user is deleted mid-run does not strand its write locks")
+    conn.send({"type": "DELETE_USER", "username": DOOMED})
+    check_status("create the doomed user", conn.send({
+        "type": "CREATE_USER", "username": DOOMED, "password": DOOMED_PASSWORD, "admin": False,
+        "globalPermissions": [], "databasePermissions": {DB: "READ_WRITE"}, "collectionPermissions": {},
+        "scriptPermissions": {DB: True}}), "OK")
+    script = (
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL2}", {{ _id: "doomed-started" }});\n'
+        "let firstSaved = false;\n"
+        "let message = null;\n"
+        "try {\n"
+        "  db.transaction(() => {\n"
+        f'    db.save(db.name, "{COLL}", {{ _id: "doomed-tx" }});\n'
+        "    firstSaved = true;\n"
+        "    const end = Date.now() + 4000;\n"
+        "    while (Date.now() < end) {\n"
+        f'      db.aggregate(db.name, "{BIG_COLL}", [{{ type: "FILTER", operator: '
+        '{ fieldOperatorType: "CONTAINS", field: "payload", value: "zzzz" } }]);\n'
+        "    }\n"
+        "  });\n"
+        "} catch (e) { message = e.message; }\n"
+        "return { firstSaved, message };"
+    )
+    outcome = {}
+
+    def run_as_doomed():
+        with Conn() as doomed:
+            doomed.authenticate(DOOMED, DOOMED_PASSWORD)
+            outcome["response"] = doomed.run(script)
+
+    runner = threading.Thread(target=run_as_doomed, daemon=True)
+    runner.start()
+    check("the script started", await_document(conn, COLL2, "doomed-started"))
+    time.sleep(1.0)
+    check_status("delete the user while the transaction is open", conn.send(
+        {"type": "DELETE_USER", "username": DOOMED}), "OK")
+    runner.join(30)
+    result = (outcome.get("response") or {}).get("result") or {}
+    check("the first save of the transaction had returned before the user went away",
+          result.get("firstSaved") is True, f"got {outcome.get('response')}")
+    check("the next host call failed because the user no longer exists",
+          "not found" in (result.get("message") or ""), f"got {result}")
+    started = time.time()
+    check_status("a write to the collection the transaction had locked is accepted",
+                 conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                            "object": {"_id": "after-doomed", "ok": True}}), "OK")
+    check("and it did not have to wait out a lock timeout", time.time() - started < 4.0,
+          f"took {time.time() - started:.1f}s")
+    check("the transaction's own write was rolled back",
+          conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                     "_id": "doomed-tx"}).get("status") != "OK")
+
+
 def test_permissions(conn: Conn):
     section("Permissions")
     granted = {"type": "CREATE_USER", "username": "script_granted", "password": "password1234", "admin": False,
@@ -1535,6 +1604,7 @@ def main():
             test_host_writes(conn)
             test_host_round_trip_keeps_custom_spelling(conn)
             test_transactions(conn)
+            test_a_script_transaction_releases_its_locks_when_its_user_is_deleted_mid_run(conn)
             test_scope_and_failures(conn)
             test_schema_interaction(conn)
             test_arguments(conn)
