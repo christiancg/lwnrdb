@@ -332,7 +332,7 @@ def _scalar_not_equals(query):
     operator = query.steps[0].get("operator", {})
     operand = operator.get("value")
     if (operator.get("fieldOperatorType") != "NOT_EQUALS" or operator.get("field") == PRIMARY_KEY_FIELD
-            or operand is None or isinstance(operand, (list, dict))):
+            or isinstance(operand, (list, dict))):
         return None
     return operator
 

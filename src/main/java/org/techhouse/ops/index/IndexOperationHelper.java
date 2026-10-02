@@ -8,6 +8,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.CollectionReadinessGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.OnDiskNameRegistry;
@@ -35,6 +36,13 @@ public final class IndexOperationHelper {
         final var fieldName = createIndexRequest.getFieldName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_INDEX,
                 ErrorCode.ERROR_CREATING_INDEX, createIndexRequest.isReplicated(), () -> {
+                    if (!createIndexRequest.isReplicated()) {
+                        final var readinessError = CollectionReadinessGuard.check(OperationType.CREATE_INDEX, dbName,
+                                collName);
+                        if (readinessError != null) {
+                            return readinessError;
+                        }
+                    }
                     if (!cache.hasNoIndex(dbName, collName, fieldName)) {
                         return OperationResponse.ok(OperationType.CREATE_INDEX,
                                 "Index already exists for field: " + fieldName);

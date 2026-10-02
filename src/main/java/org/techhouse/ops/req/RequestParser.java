@@ -47,7 +47,7 @@ public final class RequestParser {
 
     public static OperationRequest parseRequest(final String message) throws InvalidCommandException {
         try {
-            final var root = eJson.fromJson(message, JsonObject.class);
+            final var root = eJson.fromJson(message, JsonObject.class, Globals.MAX_REQUEST_NESTING_DEPTH);
             final var baseReq = eJson.fromJson(root, OperationRequest.class);
             return switch (baseReq.getType()) {
                 case BULK_SAVE -> eJson.fromJson(root, BulkSaveRequest.class);

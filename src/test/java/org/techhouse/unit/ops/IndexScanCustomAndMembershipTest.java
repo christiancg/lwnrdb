@@ -182,13 +182,14 @@ public class IndexScanCustomAndMembershipTest {
     }
 
     @Test
-    public void test_in_still_excludes_a_null_valued_document() throws Exception {
+    public void test_in_matches_a_null_valued_document_when_the_list_holds_null() throws Exception {
         insert("a", "Alpha");
         insertNull();
-        final var operand = membership(FieldOperatorType.IN, JsonNull.INSTANCE, new JsonString("ALPHA"));
+        final var listed = membership(FieldOperatorType.IN, JsonNull.INSTANCE, new JsonString("ALPHA"));
+        final var unlisted = membership(FieldOperatorType.IN, new JsonString("ALPHA"));
 
-        assertEquals(List.of("a"), idsOf(operand),
-                "membership stays two-valued: a null-valued document is neither in nor not in the list");
+        assertEquals(List.of("a", "n"), idsOf(listed), "a null-valued document is a member of a list holding null");
+        assertEquals(List.of("a"), idsOf(unlisted), "and of no other list");
     }
 
     @Test

@@ -486,6 +486,14 @@ def test_a_script_cannot_mutate_the_run_history(conn: Conn):
                       " return 'wrote';")
     check("a script cannot write an _id the client API refuses", bad_id.get("status") != "OK", f"got {bad_id!r}")
 
+    too_deep = conn.run("import db from 'db';"
+                        " let doc = { v: 1 }; for (let i = 0; i < 300; i++) { doc = { a: doc }; }"
+                        " db.save(db.name, '" + COLL + "', { _id: 'too_deep', n: doc });"
+                        " return 'wrote';")
+    check("a script cannot write a document nested past the limit", too_deep.get("status") != "OK",
+          f"got {too_deep!r}")
+    check("and the connection still answers afterwards", conn.run("return 1;").get("result") == 1)
+
 
 def test_history_kinds_enabled(conn: Conn):
     section("Run history with RUN_SCRIPT recorded")
@@ -503,6 +511,10 @@ def test_history_kinds_enabled(conn: Conn):
         check("the row carries metrics",
               (rows[0].get("metrics") or {}).get("instructions", 0) > 0, f"row={rows[0]!r}")
         check("an ad-hoc run has no collection of its own", rows[0].get("collection") is None, f"row={rows[0]!r}")
+        indexed = conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": "script_runs",
+                             "fieldName": "outcome"})
+        check("CREATE_INDEX on script_runs succeeds once a run has created it", indexed.get("status") == "OK",
+              f"got {indexed!r}")
         is_null = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
                              "aggregationSteps": [{"type": "FILTER", "operator": {
                                  "type": "FIELD", "field": "collection",

@@ -63,6 +63,7 @@ public final class Globals {
     public static final double EARTH_RADIUS_METERS = 6371000.0;
     public static final int GEO_HASH_MAX_PRECISION = 9;
     public static final int GEO_HASH_MAX_COVERING_CELLS = 32;
+    public static final int MAX_REQUEST_NESTING_DEPTH = 128;
     public static final String TLS_KEY_ALIAS = "lwnrdb";
     public static final String TLS_KEY_ALGORITHM = "RSA";
     public static final int TLS_KEY_SIZE = 2048;

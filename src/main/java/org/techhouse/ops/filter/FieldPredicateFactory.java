@@ -145,9 +145,6 @@ public final class FieldPredicateFactory {
             return (operation == FieldOperatorType.EQUALS) == equal;
         }
         if (operation == FieldOperatorType.IN || operation == FieldOperatorType.NOT_IN) {
-            if (toTestElement == null || toTestElement.isJsonNull()) {
-                return operation == FieldOperatorType.NOT_IN;
-            }
             return (operation == FieldOperatorType.IN) == containsEquivalent(operatorElement.asJsonArray(),
                     toTestElement, exactStrings);
         }

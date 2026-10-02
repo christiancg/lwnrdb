@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -379,5 +380,37 @@ public class RequestValidatorTest {
     public void test_ordinary_names_are_still_accepted() {
         assertTrue(RequestValidator.validate(new CreateDatabaseRequest("myDb")).isValid());
         assertTrue(RequestValidator.validate(new CreateDatabaseRequest("administrators")).isValid());
+    }
+    private static JsonObject nestedDocument(int depth) {
+        var inner = new JsonObject();
+        for (var level = 1; level < depth; level++) {
+            final var wrapper = new JsonObject();
+            wrapper.add("a", inner);
+            inner = wrapper;
+        }
+        return inner;
+    }
+
+    @Test
+    public void validate_save_documentPastTheNestingLimit_returnsFail() {
+        final var req = new SaveRequest("myDb", "myColl");
+        req.setObject(nestedDocument(Globals.MAX_REQUEST_NESTING_DEPTH + 1));
+        final var result = RequestValidator.validate(req);
+        assertFalse(result.isValid());
+        assertTrue(result.getErrorMessage().contains("nest"));
+    }
+
+    @Test
+    public void validate_save_documentAtTheNestingLimit_returnsOk() {
+        final var req = new SaveRequest("myDb", "myColl");
+        req.setObject(nestedDocument(Globals.MAX_REQUEST_NESTING_DEPTH));
+        assertTrue(RequestValidator.validate(req).isValid());
+    }
+
+    @Test
+    public void validate_bulkSave_documentPastTheNestingLimit_returnsFail() {
+        final var req = new BulkSaveRequest("myDb", "myColl");
+        req.setObjects(List.of(new JsonObject(), nestedDocument(Globals.MAX_REQUEST_NESTING_DEPTH + 1)));
+        assertFalse(RequestValidator.validate(req).isValid());
     }
 }

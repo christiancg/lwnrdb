@@ -131,6 +131,9 @@ public class MessageProcessor implements Runnable {
                             } catch (RuntimeException exception) {
                                 logger.error("Request handling failed unexpectedly", exception);
                                 response = eJson.toJson(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
+                            } catch (StackOverflowError error) {
+                                logger.error("Request handling overflowed the stack", error);
+                                response = eJson.toJson(new OperationResponse(requestType, ErrorCode.ERROR_RETRIEVING));
                             }
                             clientTracker.updateLastCommandTime(clientId);
                             writerLock.lock();

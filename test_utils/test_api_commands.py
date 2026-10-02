@@ -206,7 +206,8 @@ def test_reserved_script_runs_collection(c):
                read.get("errorCode") != "400-1", detail=f"got {read}")
     check_code("FIND_BY_ID in an unwritten script_runs -> 404-2",
                find_by_id(c, "script_runs", "nope"), "NOT_FOUND", "404-2")
-    check_status("CREATE_INDEX on script_runs is allowed", create_index(c, "script_runs", "outcome"), "OK")
+    check_code("CREATE_INDEX on an unwritten script_runs is refused like any missing collection -> 404-11",
+               create_index(c, "script_runs", "outcome"), "NOT_FOUND", "404-11")
 
 
 def test_database_and_collection_ops(c):
@@ -399,6 +400,30 @@ def test_a_line_with_a_second_value_or_a_nan_point_is_refused(c):
         check(f"nothing was stored for {doc_id}", find_by_id(c, COLL_TYPES, doc_id).get("status") != "OK")
     check_status("a finite geo point is still accepted",
                  c.send_raw(save_prefix + '{"_id":"finite_geo","p":"#geo(1,2)"}}'), "OK")
+
+
+def nested_value(depth: int) -> str:
+    return '{"a":' * (depth - 1) + '1' + '}' * (depth - 1)
+
+
+def test_deep_nesting_is_refused_not_dropped(c):
+    section("A request nested past the limit is answered with a refusal and the connection stays open")
+    save_prefix = '{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES + '","object":'
+    for depth in (200, 5000):
+        refused = c.send_raw(save_prefix + '{"_id":"deep_' + str(depth) + '","n":' + nested_value(depth) + '}}')
+        check(f"a document {depth} levels deep is refused as an invalid command",
+              refused.get("status") == "ERROR" and "closed connection" not in str(refused.get("message"))
+              and not str(refused.get("errorCode") or "").startswith("500"),
+              detail=f"status={refused.get('status')} code={refused.get('errorCode')} msg={refused.get('message')!r}")
+        check(f"the same connection still answers after the {depth}-level request",
+              find_by_id(c, COLL_TYPES, "deep_" + str(depth)).get("errorCode") == "404-2")
+    check_status("a document 120 levels deep is accepted",
+                 c.send_raw(save_prefix + '{"_id":"deep_ok","n":' + nested_value(120) + '}}'), "OK")
+    stored = find_by_id(c, COLL_TYPES, "deep_ok")
+    inner = (stored.get("object") or {}).get("n")
+    for _ in range(118):
+        inner = inner.get("a") if isinstance(inner, dict) else None
+    check("and reads back at full depth", inner == {"a": 1}, detail=str(inner)[:80])
 
 
 def test_filter_operators(c):
@@ -895,6 +920,13 @@ def test_index_ops(c):
                ids_of(aggregate(c, "idx_coll", [filter_step("email", "EQUALS", "b@x.io")])) == ["i2"])
 
     check_status("DROP_INDEX email", drop_index(c, "idx_coll", "email"), "OK")
+    check_code("CREATE_INDEX on a never-created collection -> 404-11",
+               create_index(c, "idx_never_created", "email"), "NOT_FOUND", "404-11")
+    check_status("creating that collection afterwards", create_coll(c, "idx_never_created"), "OK")
+    bulk_save(c, "idx_never_created", [{"_id": "n1", "email": "a@x.io"}])
+    check_code("it carries no index the refused CREATE_INDEX promised -> REINDEX email 404-6",
+               reindex(c, "idx_never_created", ["email"]), "NOT_FOUND", "404-6")
+    drop_coll(c, "idx_never_created")
     # DROP_INDEX is idempotent: dropping a field with no index is a no-op that returns OK.
     check_status("DROP_INDEX on a field with no index is idempotent (OK)",
           drop_index(c, "idx_coll", "no_such_field"), "OK")
@@ -1056,6 +1088,7 @@ def main():
         test_value_types,
         test_a_malformed_document_is_refused_as_a_client_error,
         test_a_line_with_a_second_value_or_a_nan_point_is_refused,
+        test_deep_nesting_is_refused_not_dropped,
         test_filter_operators,
         test_filter_with_indexes,
         test_conjunctions,

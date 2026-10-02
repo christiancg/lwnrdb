@@ -1195,6 +1195,34 @@ def test_not_equals_null_returns_the_documents_that_are_not_null(conn: Conn):
                      against_null(operator) == [], detail=str(against_null(operator)))
 
 
+def test_in_and_not_in_treat_null_as_a_member(conn: Conn):
+    section("IN and NOT_IN treat a null in the list as a member")
+    coll = "null_membership"
+    bu.check_status("create the collection",
+                    conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "m_null", "x": None}})
+    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "m_one", "x": 1}})
+    conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "m_absent"}})
+
+    def ids(operator: str, value) -> list:
+        return aggregate_ids(conn, coll, [{"type": "FILTER", "operator": {
+            "fieldOperatorType": operator, "field": "x", "value": value}}])
+
+    expected = [("IN", [None], ["m_null"]), ("IN", [1, None], ["m_null", "m_one"]),
+                ("NOT_IN", [None], ["m_one"]), ("NOT_IN", [1, None], []), ("NOT_IN", [1], ["m_null"])]
+    for stage in ("unindexed", "indexed"):
+        if stage == "indexed":
+            bu.check_status("index the field",
+                            conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll,
+                                       "fieldName": "x"}), "OK")
+        for operator, value, want in expected:
+            got = ids(operator, value)
+            bu.check(f"{operator} {value} names {want} ({stage})", got == want, detail=str(got))
+        bu.check(f"IN [null] agrees with EQUALS null ({stage})", ids("IN", [None]) == ids("EQUALS", None))
+        bu.check(f"NOT_IN [null] agrees with NOT_EQUALS null ({stage})",
+                 ids("NOT_IN", [None]) == ids("NOT_EQUALS", None))
+
+
 # ── phase 3: an unclean stop, then a restart with the cache disabled ─────────
 
 def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
@@ -1635,6 +1663,7 @@ def main():
             test_a_filter_on_id_reads_only_the_matching_document(conn)
             test_a_count_after_an_id_filter_matches_the_rows_it_returns(conn)
             test_not_equals_null_returns_the_documents_that_are_not_null(conn)
+            test_in_and_not_in_treat_null_as_a_member(conn)
             test_a_script_cannot_store_a_value_the_reader_rejects(conn)
             test_a_script_written_document_survives_a_restart(conn)
             test_count_agrees_with_a_scan_after_a_restart(conn)

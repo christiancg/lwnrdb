@@ -3,9 +3,12 @@ package org.techhouse.utils;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.function.ToIntBiFunction;
 import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
@@ -310,6 +313,37 @@ public final class JsonUtils {
     public static JsonBaseElement getFromPath(JsonObject obj, String path) {
         final var resolved = resolvePath(obj, path);
         return resolved == null ? JsonNull.INSTANCE : resolved;
+    }
+
+    private record NestedElement(JsonBaseElement element, int depth) {
+    }
+
+    public static boolean nestingExceeds(JsonBaseElement root, int limit) {
+        final var pending = new ArrayDeque<NestedElement>();
+        pending.push(new NestedElement(root, 1));
+        while (!pending.isEmpty()) {
+            final var current = pending.pop();
+            if (!isContainer(current.element())) {
+                continue;
+            }
+            if (current.depth() > limit) {
+                return true;
+            }
+            for (final var child : childrenOf(current.element())) {
+                pending.push(new NestedElement(child, current.depth() + 1));
+            }
+        }
+        return false;
+    }
+
+    private static boolean isContainer(JsonBaseElement element) {
+        return element instanceof JsonObject || element instanceof JsonArray;
+    }
+
+    private static Collection<JsonBaseElement> childrenOf(JsonBaseElement element) {
+        return element instanceof JsonObject object
+                ? object.entrySet().stream().map(Map.Entry::getValue).toList()
+                : element.asJsonArray().asList();
     }
 
 }
