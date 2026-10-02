@@ -314,4 +314,16 @@ public class SchemaValidatorTest {
         assertFalse(ok("{\"multipleOf\":1}", "1000000000000.5"));
         assertTrue(ok("{\"multipleOf\":3}", "3000000000000"));
     }
+
+    @Test
+    public void test_multiple_of_refuses_a_quotient_that_overflows() {
+        assertFalse(ok("{\"multipleOf\":0.123456789}", "1e308"));
+        assertTrue(ok("{\"multipleOf\":0.0001}", "1e308"), "1e308 is 0.0001 times 1e312, exactly");
+    }
+
+    @Test
+    public void test_multiple_of_is_exact_past_the_double_integer_range() {
+        assertFalse(ok("{\"multipleOf\":3}", "100000000000000000000"));
+        assertTrue(ok("{\"multipleOf\":5}", "100000000000000000000"));
+    }
 }

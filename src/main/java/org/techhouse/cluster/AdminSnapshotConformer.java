@@ -34,6 +34,7 @@ final class AdminSnapshotConformer {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final HybridClock hybridClock = IocContainer.get(HybridClock.class);
     private final EJson eJson = IocContainer.get(EJson.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
@@ -299,6 +300,9 @@ final class AdminSnapshotConformer {
                         + " during it. The next round reconciles from the newer local state.");
                 return false;
             }
+            if (snapshotIncarnation != 0) {
+                hybridClock.observe(snapshotIncarnation);
+            }
             quarantineStaleIncarnation(dbName, collName, snapshotIncarnation);
             fs.createCollectionFile(dbName, collName);
             final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
@@ -314,14 +318,18 @@ final class AdminSnapshotConformer {
             final var existing = new HashSet<>(cache.getIndexesForCollection(dbName, collName));
             for (final var field : desiredIndexes) {
                 if (!existing.contains(field)) {
+                    fs.indexBuildMarkers().mark(dbName, collName, field);
                     IndexHelper.createIndex(dbName, collName, field);
                     AdminOperationHelper.saveNewIndex(dbName, collName, field);
+                    fs.indexBuildMarkers().clear(dbName, collName, field);
                 }
             }
             for (final var field : existing) {
                 if (!desiredIndexes.contains(field)) {
+                    fs.indexBuildMarkers().mark(dbName, collName, field);
                     IndexHelper.dropIndex(dbName, collName, field);
                     AdminOperationHelper.deleteIndex(dbName, collName, field);
+                    fs.indexBuildMarkers().clear(dbName, collName, field);
                 }
             }
             conformSchema(dbName, collName, desiredSchema);

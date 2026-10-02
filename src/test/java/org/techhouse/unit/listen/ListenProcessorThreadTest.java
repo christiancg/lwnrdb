@@ -6,6 +6,8 @@ import java.io.BufferedWriter;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.io.Writer;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -15,10 +17,13 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.admin.AdminUserEntry;
+import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.listen.ListenProcessorThread;
 import org.techhouse.listen.ResultHasher;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.test.TestGlobals;
@@ -26,10 +31,30 @@ import org.techhouse.test.TestUtils;
 
 public class ListenProcessorThreadTest {
 
+    private static final String LISTENER = "listen-processor-admin";
+    private static final String READER = "listen-processor-reader";
+    private UUID lastListenId;
+
     @BeforeAll
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
+        AdminOperationHelper.saveUserEntry(
+                new AdminUserEntry(LISTENER, "unused", true, new HashSet<>(), new HashMap<>(), new HashMap<>()));
+        saveReader(PermissionLevel.READ);
+    }
+
+    private static void saveReader(PermissionLevel level) throws Exception {
+        final var databasePermissions = new HashMap<String, PermissionLevel>();
+        if (level != null) {
+            databasePermissions.put(TestGlobals.DB, level);
+        }
+        AdminOperationHelper.saveUserEntry(
+                new AdminUserEntry(READER, "unused", false, new HashSet<>(), databasePermissions, new HashMap<>()));
+    }
+
+    private static UUID authenticatedClient() {
+        return IocContainer.get(ClientTracker.class).registerForwardedClient(LISTENER);
     }
 
     @AfterAll
@@ -56,7 +81,7 @@ public class ListenProcessorThreadTest {
 
     @Test
     public void sameHash_registrationStays() throws Exception {
-        final var clientId = UUID.randomUUID();
+        final var clientId = authenticatedClient();
         final var manager = new ListenManager();
         final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         dirtyReq.setAggregationSteps(List.of());
@@ -79,7 +104,7 @@ public class ListenProcessorThreadTest {
 
     @Test
     public void nullWriter_registrationIsUnregistered() throws Exception {
-        final var clientId = UUID.randomUUID();
+        final var clientId = authenticatedClient();
         final var manager = new ListenManager();
         final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         dirtyReq.setAggregationSteps(List.of());
@@ -136,7 +161,7 @@ public class ListenProcessorThreadTest {
             }
         };
         dirtyReq.setDirtyRead(true);
-        final var listenId = manager.register(UUID.randomUUID(), dirtyReq, "stale-hash-for-rerun-throws-test");
+        final var listenId = manager.register(authenticatedClient(), dirtyReq, "stale-hash-for-rerun-throws-test");
 
         final var queue = new LinkedBlockingQueue<UUID>();
         queue.offer(listenId);
@@ -188,6 +213,11 @@ public class ListenProcessorThreadTest {
         final var stubWriter = new BufferedWriter(new StringWriter());
         final var stub = new ClientTracker() {
             @Override
+            public String getAuthenticatedUsername(UUID clientId) {
+                return LISTENER;
+            }
+
+            @Override
             public BufferedWriter getWriter(UUID clientId) {
                 return stubWriter;
             }
@@ -227,7 +257,7 @@ public class ListenProcessorThreadTest {
         final var listenId = manager.register(UUID.randomUUID(), dirtyReq, "stale-hash-for-push-test");
 
         final var clientTracker = IocContainer.get(ClientTracker.class);
-        final var clientId = clientTracker.registerForwardedClient("listen-processor-test-user");
+        final var clientId = clientTracker.registerForwardedClient(LISTENER);
         final var stringWriter = new StringWriter();
         final var bufferedWriter = new BufferedWriter(stringWriter);
         clientTracker.registerWriter(clientId, bufferedWriter);
@@ -275,7 +305,7 @@ public class ListenProcessorThreadTest {
         final var listenId = manager.register(UUID.randomUUID(), dirtyReq, "stale-hash-for-write-fail-test");
 
         final var clientTracker = IocContainer.get(ClientTracker.class);
-        final var clientId = clientTracker.registerForwardedClient("listen-processor-test-user-2");
+        final var clientId = clientTracker.registerForwardedClient(LISTENER);
         final var throwingWriter = new BufferedWriter(new Writer() {
             @Override
             public void write(char @NonNull [] cbuf, int off, int len) throws IOException {
@@ -324,5 +354,70 @@ public class ListenProcessorThreadTest {
         } finally {
             clientTracker.removeById(clientId);
         }
+    }
+
+    @Test
+    public void readerWithAccess_keepsTheRegistration() throws Exception {
+        saveReader(PermissionLevel.READ);
+        final var clientId = IocContainer.get(ClientTracker.class).registerForwardedClient(READER);
+        try {
+            assertNotNull(runOnce(registerUnchanged(clientId)).getRegistration(lastListenId));
+        } finally {
+            IocContainer.get(ClientTracker.class).removeById(clientId);
+        }
+    }
+
+    @Test
+    public void readerWhosePermissionWasRevoked_isUnregistered() throws Exception {
+        saveReader(PermissionLevel.READ);
+        final var clientId = IocContainer.get(ClientTracker.class).registerForwardedClient(READER);
+        try {
+            final var manager = registerUnchanged(clientId);
+            saveReader(null);
+            assertNull(runOnce(manager).getRegistration(lastListenId));
+        } finally {
+            saveReader(PermissionLevel.READ);
+            IocContainer.get(ClientTracker.class).removeById(clientId);
+        }
+    }
+
+    @Test
+    public void readerWhoWasDeleted_isUnregistered() throws Exception {
+        saveReader(PermissionLevel.READ);
+        final var clientId = IocContainer.get(ClientTracker.class).registerForwardedClient(READER);
+        try {
+            final var manager = registerUnchanged(clientId);
+            AdminOperationHelper.deleteUserEntry(READER);
+            assertNull(runOnce(manager).getRegistration(lastListenId));
+        } finally {
+            saveReader(PermissionLevel.READ);
+            IocContainer.get(ClientTracker.class).removeById(clientId);
+        }
+    }
+
+    @Test
+    public void unauthenticatedClient_isUnregistered() throws Exception {
+        assertNull(runOnce(registerUnchanged(UUID.randomUUID())).getRegistration(lastListenId));
+    }
+
+    private ListenManager registerUnchanged(UUID clientId) {
+        final var manager = new ListenManager();
+        final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        dirtyReq.setAggregationSteps(List.of());
+        dirtyReq.setDirtyRead(true);
+        lastListenId = manager.register(clientId, dirtyReq, ResultHasher.hash(List.of(), false));
+        return manager;
+    }
+
+    private ListenManager runOnce(ListenManager manager) throws InterruptedException {
+        final var queue = new LinkedBlockingQueue<UUID>();
+        queue.offer(lastListenId);
+        final var t = new Thread(new ListenProcessorThread(queue, manager));
+        t.setDaemon(true);
+        t.start();
+        Thread.sleep(300);
+        t.interrupt();
+        t.join(1000);
+        return manager;
     }
 }

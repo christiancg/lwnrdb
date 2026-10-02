@@ -1076,6 +1076,30 @@ def test_before_hook_in_transaction(conn: Conn):
     drop_hook(conn, "tx_veto")
 
 
+def test_before_hook_that_shrinks_an_oversized_document(conn: Conn):
+    section("Before hooks - a hook that shrinks an oversized document is accepted in and out of a transaction")
+    check_status("install a blob-stripping hook",
+                 install_hook(conn, "strip_blob", "stripblob",
+                              "export default (doc) => { const { blob, ...rest } = doc; return rest; };",
+                              ["CREATED", "UPDATED"]), "OK")
+    blob = "x" * (1024 * 1024 + 100)
+    check_status("an oversized standalone save is accepted once the hook shrinks it",
+                 conn.save_doc({"_id": "shrunk_standalone", "blob": blob}), "OK")
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("the same save is accepted at buffer time inside a transaction",
+                 conn.save_doc({"_id": "shrunk_buffered", "blob": blob}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    for doc_id in ("shrunk_standalone", "shrunk_buffered"):
+        stored = conn.find(doc_id).get("object") or {}
+        check(f"{doc_id} was stored without the blob", stored.get("_id") == doc_id and "blob" not in stored,
+              f"got keys {sorted(stored)}")
+    drop_hook(conn, "strip_blob")
+    check_status("start a transaction without the hook", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_code("with no hook the oversized document is still refused", conn.save_doc({"_id": "too_big", "blob": blob}),
+               "ERROR", "400-2")
+    check_status("roll back", conn.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
+
+
 def test_before_hook_validation(conn: Conn):
     section("Before hooks - validation")
     check_status("install a procedure to point at", conn.save_procedure("hookproc", "export default (d) => d;"), "OK")
@@ -1821,6 +1845,7 @@ def main():
             test_before_hook_sandbox(conn)
             test_before_hook_no_db(conn)
             test_before_hook_in_transaction(conn)
+            test_before_hook_that_shrinks_an_oversized_document(conn)
             test_before_hook_validation(conn)
             test_dry_run(conn)
             test_result_cap(conn)

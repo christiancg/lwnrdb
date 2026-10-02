@@ -2,6 +2,7 @@ package org.techhouse.cluster;
 
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
@@ -25,6 +26,7 @@ final class ClusterTxMessageHandler {
     private static final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private static final Tx2pcDirectory tx2pcDirectory = IocContainer.get(Tx2pcDirectory.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private static final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
 
     private ClusterTxMessageHandler() {
@@ -171,7 +173,12 @@ final class ClusterTxMessageHandler {
 
     static ClusterMessage handleTxStatus(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.TX_STATUS_ACK, "Failed to read transaction status",
-                response -> response.setTxStatus(Tx2pcLog.status(request.getTxId()).name()));
+                response -> response.setTxStatus(Tx2pcLog.status(request.getTxId(), selfAddress()).name()));
+    }
+
+    private static String selfAddress() {
+        final var self = membershipService.getSelf();
+        return self == null ? null : self.address().toString();
     }
 
     static ClusterMessage handleListTx() {

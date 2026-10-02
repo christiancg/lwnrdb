@@ -3,8 +3,10 @@ package org.techhouse.ejson.custom_types;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.Set;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonCustom;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.exceptions.WrongFormatCustomTypeException;
 import org.techhouse.utils.GeoPoint;
 import org.techhouse.utils.GeoUtils;
@@ -92,6 +94,20 @@ public class JsonGeo extends JsonCustom<GeoPoint> {
 
     public GeoPoint point() {
         return customValue;
+    }
+
+    public boolean isFinitePoint() {
+        return Double.isFinite(customValue.lat()) && Double.isFinite(customValue.lng());
+    }
+
+    public static boolean containsNonFinitePoint(JsonBaseElement element) {
+        return switch (element) {
+            case JsonGeo geo -> !geo.isFinitePoint();
+            case JsonObject object ->
+                object.entrySet().stream().anyMatch(member -> containsNonFinitePoint(member.getValue()));
+            case JsonArray array -> array.asList().stream().anyMatch(JsonGeo::containsNonFinitePoint);
+            default -> false;
+        };
     }
 
     public String geoHash() {

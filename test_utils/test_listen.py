@@ -652,6 +652,39 @@ def test_unauthenticated_listen():
         check_code("LISTEN without auth → MUST_AUTHENTICATE_FIRST", r, "UNAUTHENTICATED", "401-1")
 
 
+def test_a_revoked_reader_stops_receiving_pushes(writer: Conn):
+    section("LISTEN: a reader whose permission was revoked stops receiving pushes")
+    reader_name = "listen_revoked_reader"
+    writer.send({"type": "DELETE_USER", "username": reader_name})
+    check_status("create a reader on the listen database", writer.send({
+        "type": "CREATE_USER", "username": reader_name, "password": "listen_reader1234", "admin": False,
+        "globalPermissions": [], "databasePermissions": {DB: "READ"}, "collectionPermissions": {}}), "OK")
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "revoked"}}]
+    try:
+        with Conn() as reader:
+            check_status("AUTHENTICATE as the reader", reader.authenticate(reader_name, "listen_reader1234"), "OK")
+            r = listen(reader, steps)
+            check_status("the reader may LISTEN while it holds READ", r, "OK")
+
+            save_doc(writer, {"_id": "revoked-1", "kind": "revoked"})
+            pushed = reader.recv(timeout=5.0)
+            check("the reader is pushed a matching write while authorized", pushed is not None,
+                  "no push within 5 s")
+
+            check_status("revoke the reader's database permission", writer.send({
+                "type": "CHANGE_PERMISSIONS", "username": reader_name, "admin": False, "globalPermissions": [],
+                "databasePermissions": {}, "collectionPermissions": {}}), "OK")
+            save_doc(writer, {"_id": "revoked-2", "kind": "revoked"})
+            pushed = reader.recv(timeout=2.0)
+            check("no push reaches a reader after its permission was revoked", pushed is None,
+                  f"unexpected push: {pushed!r}")
+            check_status("the revoked reader's own query is refused too", aggregate(reader, steps), "FORBIDDEN")
+    finally:
+        delete_doc(writer, "revoked-1")
+        delete_doc(writer, "revoked-2")
+        writer.send({"type": "DELETE_USER", "username": reader_name})
+
+
 # ── main ─────────────────────────────────────────────────────────────────────
 
 def test_listener_survives_a_concurrent_bulk_save(writer_conn: Conn, listener_conn: Conn):
@@ -720,6 +753,7 @@ def main():
                 test_multiple_listeners(writer_conn, listener_conn)
                 test_transactional_commit_pushes_once_with_the_final_state(writer_conn, listener_conn)
                 test_listener_survives_a_concurrent_bulk_save(writer_conn, listener_conn)
+                test_a_revoked_reader_stops_receiving_pushes(writer_conn)
                 test_disconnect_cleanup(writer_conn)
 
             test_unauthenticated_listen()

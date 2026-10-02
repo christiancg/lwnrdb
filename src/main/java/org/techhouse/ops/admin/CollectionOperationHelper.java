@@ -70,6 +70,8 @@ public final class CollectionOperationHelper {
                         // first, find no admin PK entry and silently skip registering the index.
                         if (createCollectionRequest.getIncarnation() == 0 && !createCollectionRequest.isReplicated()) {
                             createCollectionRequest.setIncarnation(hybridClock.next());
+                        } else if (createCollectionRequest.getIncarnation() != 0) {
+                            hybridClock.observe(createCollectionRequest.getIncarnation());
                         }
                         AdminOperationHelper.createPageCollections(dbName, collName);
                         final var entry = new AdminCollEntry(dbName, collName);

@@ -50,12 +50,8 @@ public final class TransactionWrites {
         }
     }
 
-    // Only re-checked when a hook replaced the document: a hook can inflate one past maxEntrySize.
     public static OperationResponse checkEntrySize(String dbName, String collName, JsonObject effective,
-            JsonObject original, OperationType type) {
-        if (effective == original) {
-            return null;
-        }
+            OperationType type) {
         return EntrySizeGuard.check(dbName, collName, effective, type);
     }
 

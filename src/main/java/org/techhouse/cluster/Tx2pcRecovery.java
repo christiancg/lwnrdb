@@ -177,7 +177,7 @@ public class Tx2pcRecovery implements MembershipListener {
     private Tx2pcLog.Status statusFrom(String address, String dtxId) {
         if (isSelf(address)) {
             try {
-                return Tx2pcLog.status(dtxId);
+                return Tx2pcLog.status(dtxId, address);
             } catch (Exception e) {
                 return null;
             }

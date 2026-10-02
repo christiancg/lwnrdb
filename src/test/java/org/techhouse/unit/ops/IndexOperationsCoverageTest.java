@@ -4,12 +4,14 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.File;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonNumber;
@@ -29,6 +31,7 @@ import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -38,6 +41,7 @@ public class IndexOperationsCoverageTest {
             + TestGlobals.COLL;
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final Cache cache = IocContainer.get(Cache.class);
 
     private void seed(String id, String s, int n) {
         final var obj = new JsonObject();
@@ -189,5 +193,56 @@ public class IndexOperationsCoverageTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, LOCKED_FIELD);
         assertBlocksOnTheFieldLock(
                 () -> quietly(() -> IndexHelper.dropIndex(TestGlobals.DB, TestGlobals.COLL, LOCKED_FIELD)));
+    }
+
+    private List<String> idsWhereSIsA() {
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List
+                .of(new FilterAggregationStep(new FieldOperator(FieldOperatorType.EQUALS, "s", new JsonString("a")))));
+        final var response = (AggregateResponse) processor.processMessage(request);
+        return response.getResults().stream().map(row -> row.get("_id").asJsonString().getValue()).sorted().toList();
+    }
+
+    @Test
+    public void test_a_failed_reindex_leaves_the_field_answered_by_scan_and_unmaintained() throws Exception {
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "s")).getStatus());
+        final var folder = new File(
+                TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + TestGlobals.COLL);
+        final var stringIndex = new File(folder, TestGlobals.COLL + "-s-String.idx");
+        final var blocker = new File(folder, stringIndex.getName() + ".repair");
+        assertTrue(new File(blocker, "occupied").mkdirs());
+        try {
+            final var reindex = processor
+                    .processMessage(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("s")));
+            assertEquals(OperationStatus.ERROR, reindex.getStatus());
+        } finally {
+            TestUtils.deleteFolder(blocker);
+        }
+        assertTrue(fs.indexBuildMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
+        assertTrue(cache.hasNoIndex(TestGlobals.DB, TestGlobals.COLL, "s"));
+
+        seed("d4", "a", 40);
+        IndexHelper.updateIndexes(TestGlobals.DB, TestGlobals.COLL, "d4");
+
+        assertFalse(stringIndex.exists(), "maintenance must not rebuild a partial file from nothing");
+        assertEquals(List.of("d1", "d3", "d4"), idsWhereSIsA());
+
+        assertEquals(OperationStatus.OK, processor
+                .processMessage(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, List.of("s"))).getStatus());
+        assertFalse(fs.indexBuildMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
+        assertFalse(cache.hasNoIndex(TestGlobals.DB, TestGlobals.COLL, "s"));
+        assertEquals(List.of("d1", "d3", "d4"), idsWhereSIsA());
+    }
+
+    @Test
+    public void test_create_and_drop_index_leave_no_build_marker() {
+        processor.processMessage(new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "s"));
+        assertFalse(fs.indexBuildMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
+
+        processor.processMessage(new DropIndexRequest(TestGlobals.DB, TestGlobals.COLL, "s"));
+
+        assertFalse(fs.indexBuildMarkers().isMarked(TestGlobals.DB, TestGlobals.COLL, "s"));
+        assertTrue(cache.hasNoIndex(TestGlobals.DB, TestGlobals.COLL, "s"));
     }
 }

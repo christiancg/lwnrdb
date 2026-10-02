@@ -277,7 +277,7 @@ public final class SaveOperationHelper {
         primaryKeyIndex.remove(idxEntry);
         cache.evictEntry(dbName, collName, entry.get_id());
         final var deleteGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
-        taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, oldEntry,
+        taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, detachedCopy(oldEntry),
                 CollectionIncarnation.current(dbName, collName), deleteGeneration));
 
         final PkIndexEntry relocatedPkIndexEntry;
@@ -300,6 +300,15 @@ public final class SaveOperationHelper {
         taskManager.submitBackgroundTask(new EntityEvent(EventType.CREATED, dbName, collName, entry,
                 CollectionIncarnation.current(dbName, collName), createGeneration));
         return relocatedPkIndexEntry;
+    }
+
+    private static DbEntry detachedCopy(DbEntry entry) {
+        final var copy = DbEntry.fromJsonObject(entry.getDatabaseName(), entry.getCollectionName(), entry.getData());
+        copy.set_id(entry.get_id());
+        copy.setPage(entry.getPage());
+        copy.setVersion(entry.getVersion());
+        copy.setPreviousByteSize(entry.getPreviousByteSize());
+        return copy;
     }
 
     private static void restoreAfterFailedRelocation(String dbName, String collName, DbEntry oldEntry,

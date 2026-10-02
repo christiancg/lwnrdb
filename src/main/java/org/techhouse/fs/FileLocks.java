@@ -81,6 +81,10 @@ final class FileLocks {
         }
     }
 
+    static String separatorBeforeAppend(File file) throws IOException {
+        return endsMidLine(file) ? Globals.NEWLINE : "";
+    }
+
     static boolean endsMidLine(File file) throws IOException {
         if (!file.exists() || file.length() == 0) {
             return false;

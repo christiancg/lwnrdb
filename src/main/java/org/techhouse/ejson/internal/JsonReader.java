@@ -16,6 +16,9 @@ public class JsonReader {
     public <T> T fromJson(String input, Class<T> tClass) {
         final var tokens = Lexer.lex(input);
         final var parsed = internalParse(tokens, true);
+        if (parsed.tokensToSkip() < tokens.size()) {
+            throw new MalformedJsonException("Unexpected content after the root value");
+        }
         final var newInstance = Assigner.assign(parsed.element().asJsonObject(), tClass);
         return tClass.cast(newInstance);
     }

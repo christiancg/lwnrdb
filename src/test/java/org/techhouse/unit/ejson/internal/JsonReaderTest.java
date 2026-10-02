@@ -51,6 +51,25 @@ public class JsonReaderTest {
     }
 
     @Test
+    public void test_a_second_root_value_is_refused() {
+        new EJson();
+        final var reader = new JsonReader();
+
+        assertThrows(MalformedJsonException.class,
+                () -> reader.fromJson("{\"a\":1}{\"b\":2}", org.techhouse.ejson.elements.JsonObject.class));
+        assertThrows(MalformedJsonException.class,
+                () -> reader.fromJson("{\"a\":1} 5", org.techhouse.ejson.elements.JsonObject.class));
+    }
+
+    @Test
+    public void test_trailing_whitespace_after_the_root_value_is_accepted() {
+        new EJson();
+        final var parsed = new JsonReader().fromJson("{\"a\":1}  \n", org.techhouse.ejson.elements.JsonObject.class);
+
+        assertEquals(1, parsed.get("a").asJsonNumber().getValue().intValue());
+    }
+
+    @Test
     public void test_empty_input_string_throws_exception() {
         JsonReader reader = new JsonReader();
         String json = "";

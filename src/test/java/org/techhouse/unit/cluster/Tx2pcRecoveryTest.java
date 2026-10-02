@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
@@ -29,6 +30,8 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -122,14 +125,43 @@ public class Tx2pcRecoveryTest {
     }
 
     @Test
-    public void test_a_reachable_undecided_coordinator_leaves_the_slice_in_doubt() throws Exception {
+    public void test_a_live_undecided_coordinator_leaves_the_slice_in_doubt() throws Exception {
         final var dtxId = "44444444-4444-4444-4444-444444444444";
         seedPreparedSlice(dtxId, "rec-indoubt");
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        final var clientId = clientTracker.registerForwardedClient("coordinator");
+        clientTracker.setActiveTransaction(clientId, new Transaction(UUID.fromString(dtxId), clientId));
+        try {
+            recovery.recover();
+
+            assertEquals(OperationStatus.NOT_FOUND, findStatus("rec-indoubt"));
+            assertTrue(Tx2pcLog.isPrepared(dtxId), "a coordinator that has not decided must not lose the slice");
+            assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId, SELF_ADDRESS));
+        } finally {
+            clientTracker.clearActiveTransaction(clientId);
+            clientTracker.removeById(clientId);
+        }
+    }
+
+    @Test
+    public void test_a_coordinator_that_restarted_before_deciding_presumes_abort() throws Exception {
+        final var dtxId = "45454545-4545-4545-4545-454545454545";
+        seedPreparedSlice(dtxId, "rec-presumed-abort");
+        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(dtxId, SELF_ADDRESS));
 
         recovery.recover();
 
-        assertEquals(OperationStatus.NOT_FOUND, findStatus("rec-indoubt"));
-        assertTrue(Tx2pcLog.isPrepared(dtxId), "a coordinator that has not decided must not lose the slice");
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("rec-presumed-abort"));
+        assertFalse(Tx2pcLog.isPrepared(dtxId), "no commit was ever recorded, so the slice is aborted");
+    }
+
+    @Test
+    public void test_a_prepared_slice_coordinated_elsewhere_still_answers_prepared() throws Exception {
+        final var dtxId = "46464646-4646-4646-4646-464646464646";
+        seedPreparedSlice(dtxId, "rec-elsewhere", "127.0.0.1:1");
+
+        assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId, SELF_ADDRESS));
+        assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId));
     }
 
     @Test

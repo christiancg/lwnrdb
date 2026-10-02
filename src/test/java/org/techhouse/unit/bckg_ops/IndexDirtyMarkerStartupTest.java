@@ -3,6 +3,8 @@ package org.techhouse.unit.bckg_ops;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.argThat;
+import static org.mockito.Mockito.mockStatic;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -11,6 +13,7 @@ import org.techhouse.StartupWarnings;
 import org.techhouse.cache.Cache;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.LogWriter;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -49,5 +52,18 @@ public class IndexDirtyMarkerStartupTest {
 
         assertFalse(fs.listDirtyIndexCollections().contains(identifier()));
         assertDoesNotThrow(StartupWarnings::warnIfIndexesLeftDirty);
+    }
+
+    @Test
+    public void test_startup_warns_for_an_index_left_half_built() throws Exception {
+        fs.indexBuildMarkers().mark(TestGlobals.DB, TestGlobals.COLL, "name");
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.warnIfIndexesLeftDirty();
+
+            logWriter.verify(() -> LogWriter.writeLogEntry(
+                    argThat(entry -> entry.contains(identifier() + "|name") && entry.contains("REINDEX"))));
+        } finally {
+            fs.indexBuildMarkers().clear(TestGlobals.DB, TestGlobals.COLL, "name");
+        }
     }
 }

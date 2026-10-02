@@ -3,6 +3,8 @@ package org.techhouse.fs;
 import java.io.File;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
@@ -43,6 +45,9 @@ final class TornPageTail {
             if (cut < 0) {
                 return false;
             }
+            if (restoreMissingLineEnd(page, pageNumber, entries)) {
+                return true;
+            }
             for (final var entry : entries) {
                 if (entry.getPage() == pageNumber && entry.getPosition() + entry.getLength() > cut) {
                     logger.error("Page " + page.getName() + " does not end in a newline, but its last "
@@ -60,6 +65,38 @@ final class TornPageTail {
         } finally {
             lock.unlock();
         }
+    }
+
+    private static boolean restoreMissingLineEnd(File page, long pageNumber, List<PkIndexEntry> entries)
+            throws IOException {
+        final var indexedEnd = entries.stream().filter(entry -> entry.getPage() == pageNumber)
+                .mapToLong(entry -> entry.getPosition() + entry.getLength()).max().orElse(-1);
+        final var lineEnd = Globals.NEWLINE.getBytes(StandardCharsets.UTF_8);
+        final var missing = indexedEnd - page.length();
+        if (missing <= 0 || missing > lineEnd.length) {
+            return false;
+        }
+        final var present = lineEnd.length - (int) missing;
+        try (var writer = new RandomAccessFile(page, Globals.RW_PERMISSIONS)) {
+            if (present > 0 && !endsWith(writer, Arrays.copyOf(lineEnd, present))) {
+                return false;
+            }
+            writer.seek(writer.length());
+            writer.write(lineEnd, present, (int) missing);
+        }
+        logger.warning("Restored the missing line end of the last record in " + page.getName()
+                + ": the record was indexed, so only its terminator was lost");
+        return true;
+    }
+
+    private static boolean endsWith(RandomAccessFile file, byte[] suffix) throws IOException {
+        if (file.length() < suffix.length) {
+            return false;
+        }
+        final var tail = new byte[suffix.length];
+        file.seek(file.length() - suffix.length);
+        file.readFully(tail);
+        return Arrays.equals(tail, suffix);
     }
 
     private static long endOfLastCompleteLine(File page) throws IOException {

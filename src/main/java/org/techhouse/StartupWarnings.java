@@ -21,6 +21,12 @@ public final class StartupWarnings {
             logger.warning("These collections stopped with field-index work outstanding, so their indexes may be"
                     + " missing entries: " + String.join(", ", dirty) + ". Run REINDEX on each of them.");
         }
+        final var unbuilt = IocContainer.get(FileSystem.class).indexBuildMarkers().listMarked();
+        if (!unbuilt.isEmpty()) {
+            logger.warning("These field indexes were left half-built or half-dropped, so they are answered by a"
+                    + " full scan until rebuilt: " + String.join(", ", unbuilt)
+                    + ". Run REINDEX (or DROP_INDEX) on each of them.");
+        }
     }
 
     public static void warnIfDefaultAdminPassword() {

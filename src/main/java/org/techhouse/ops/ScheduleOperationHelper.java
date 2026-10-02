@@ -53,11 +53,8 @@ public final class ScheduleOperationHelper {
         if (timingError != null) {
             return timingError;
         }
-        final var procedure = cache.getProcedure(dbName, request.getProcedureName());
-        if (procedure == null) {
-            return new OperationResponse(OperationType.SAVE_SCHEDULE,
-                    "Procedure '" + request.getProcedureName() + "' not found in database '" + dbName + "'",
-                    ErrorCode.PROCEDURE_NOT_FOUND);
+        if (cache.getProcedure(dbName, request.getProcedureName()) == null) {
+            return procedureNotFound(request);
         }
         return OperationLocks.withDatabaseShared(dbName, OperationType.SAVE_SCHEDULE, ErrorCode.ERROR_SAVING_SCHEDULE,
                 request.isReplicated(), () -> saveUnderDatabaseBarrier(request, actingUser));
@@ -70,7 +67,11 @@ public final class ScheduleOperationHelper {
             return databaseNotFound(dbName);
         }
         locks.lock(dbName, Globals.SCHEDULES_FOLDER);
+        locks.lock(dbName, Globals.PROCEDURES_FOLDER);
         try {
+            if (cache.getProcedure(dbName, request.getProcedureName()) == null) {
+                return procedureNotFound(request);
+            }
             final var existing = cache.getSchedule(dbName, request.getName());
             if (request.getIfVersion() != null
                     && request.getIfVersion() != (existing == null ? 0L : existing.getVersion())) {
@@ -92,8 +93,14 @@ public final class ScheduleOperationHelper {
             registry.reload(dbName);
             return new SaveScheduleResponse("Schedule saved successfully", definition.getVersion());
         } finally {
+            locks.release(dbName, Globals.PROCEDURES_FOLDER);
             locks.release(dbName, Globals.SCHEDULES_FOLDER);
         }
+    }
+
+    private static OperationResponse procedureNotFound(SaveScheduleRequest request) {
+        return new OperationResponse(OperationType.SAVE_SCHEDULE, "Procedure '" + request.getProcedureName()
+                + "' not found in database '" + request.getDatabaseName() + "'", ErrorCode.PROCEDURE_NOT_FOUND);
     }
 
     private static OperationResponse databaseNotFound(String dbName) {

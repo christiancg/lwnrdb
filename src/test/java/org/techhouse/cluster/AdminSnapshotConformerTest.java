@@ -227,7 +227,7 @@ public class AdminSnapshotConformerTest {
                 "documents held under an incarnation the cluster has since dropped must stop serving reads and"
                         + " writes, or anti-entropy seeds the whole pre-drop collection back cluster-wide");
         final var dbFolder = new File(TestGlobals.PATH + File.separator + "incdb");
-        final var quarantined = dbFolder.listFiles((dir, name) -> name.startsWith("inccoll.quarantined-100-"));
+        final var quarantined = dbFolder.listFiles((_, name) -> name.startsWith("inccoll.quarantined-100-"));
         assertNotNull(quarantined);
         assertEquals(1, quarantined.length,
                 "the documents are moved aside, never deleted: anti-entropy cannot restore what no node retains");
@@ -257,5 +257,17 @@ public class AdminSnapshotConformerTest {
         assertNotNull(cache.getAdminCollectionEntry("legacydb", "legacycoll"),
                 "an entry written before incarnations existed carries 0 and must be adopted, not quarantined");
         assertEquals(300L, cache.getAdminCollectionEntry("legacydb", "legacycoll").getIncarnation());
+    }
+
+    @Test
+    public void test_conform_advances_the_write_clock_past_an_adopted_incarnation() throws Exception {
+        final var clock = IocContainer.get(org.techhouse.cluster.HybridClock.class);
+        final var ahead = clock.next() + 1_000_000_000L;
+
+        conformer.conform(snapshot(List.of(dbJson("clockdb", List.of())),
+                List.of(collJson("clockdb", "clockcoll", Set.of(), ahead)), List.of()));
+
+        assertTrue(clock.next() > ahead,
+                "a later re-create minted here must outrank the incarnation another coordinator stamped");
     }
 }

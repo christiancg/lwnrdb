@@ -21,6 +21,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.admin.AdminPageHelper;
 import org.techhouse.ops.admin.AdminRecordStore;
 import org.techhouse.ops.admin.AdminUsageHelper;
+import org.techhouse.ops.resp.OperationResponse;
 
 public final class AdminOperationHelper {
     private AdminOperationHelper() {
@@ -132,19 +133,21 @@ public final class AdminOperationHelper {
         }
     }
 
-    public static void updateDatabaseOwners(String dbName, java.util.List<String> owners)
+    public static boolean updateDatabaseOwners(String dbName, List<String> owners)
             throws IOException, InterruptedException {
-        final var dbEntry = cache.getAdminDbEntry(dbName);
-        if (dbEntry == null) {
-            return;
-        }
-        final var previousOwners = new ArrayList<>(dbEntry.getOwners());
-        dbEntry.setOwners(owners);
+        lockAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         try {
-            saveDatabaseEntry(dbEntry);
-        } catch (Exception e) {
-            dbEntry.setOwners(previousOwners);
-            throw e;
+            final var dbEntry = cache.getAdminDbEntry(dbName);
+            final var pk = cache.getPkIndexAdminDbEntry(dbName);
+            if (dbEntry == null || pk == null) {
+                return false;
+            }
+            final var updated = new AdminDbEntry(dbName, new ArrayList<>(dbEntry.getCollections()),
+                    new ArrayList<>(owners));
+            cache.putAdminDbEntry(updated, writeAdminEntry(Globals.ADMIN_DATABASES_COLLECTION_NAME, updated, pk));
+            return true;
+        } finally {
+            releaseAdmin(Globals.ADMIN_DATABASES_COLLECTION_NAME);
         }
     }
 
@@ -233,14 +236,15 @@ public final class AdminOperationHelper {
         if (adminIndexPkCollEntry != null) {
             lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             try {
-                var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
-                final var indexes = new HashSet<>(adminCollEntry.getIndexes());
+                final var cachedEntry = cache.getAdminCollectionEntry(dbName, collName);
+                final var indexes = new HashSet<>(cachedEntry.getIndexes());
                 if (add) {
                     indexes.add(fieldName);
                 } else {
                     indexes.remove(fieldName);
                 }
-                adminCollEntry.setIndexes(indexes);
+                final var adminCollEntry = new AdminCollEntry(dbName, collName, indexes);
+                adminCollEntry.setIncarnation(cachedEntry.getIncarnation());
                 adminCollEntry.setPage(adminIndexPkCollEntry.getPage());
                 final var updateResult = fs.updateFromCollection(adminCollEntry, adminIndexPkCollEntry);
                 adminIndexPkCollEntry = updateResult.indexEntry();
@@ -261,6 +265,15 @@ public final class AdminOperationHelper {
 
     public static void cleanupCollectionUsage(long maxAgeMillis) throws IOException, InterruptedException {
         AdminUsageHelper.cleanupCollectionUsage(maxAgeMillis);
+    }
+
+    public static OperationResponse withUsersLock(OperationResponse.Attempt attempt) throws Exception {
+        lockAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
+        try {
+            return attempt.run();
+        } finally {
+            releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
+        }
     }
 
     public static void saveUserEntry(AdminUserEntry userEntry) throws IOException, InterruptedException {
@@ -314,16 +327,16 @@ public final class AdminOperationHelper {
     }
 
     public static void deleteUserEntry(String username) throws IOException, InterruptedException {
-        var adminIndexPkUserEntry = cache.getPkIndexAdminUserEntry(username);
-        if (adminIndexPkUserEntry != null) {
-            lockAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
-            try {
-                eraseAdminEntry(Globals.ADMIN_USERS_COLLECTION_NAME, cache.getAdminUserEntry(username),
-                        adminIndexPkUserEntry);
+        lockAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
+        try {
+            final var adminIndexPkUserEntry = cache.getPkIndexAdminUserEntry(username);
+            final var userEntry = cache.getAdminUserEntry(username);
+            if (adminIndexPkUserEntry != null && userEntry != null) {
+                eraseAdminEntry(Globals.ADMIN_USERS_COLLECTION_NAME, userEntry, adminIndexPkUserEntry);
                 cache.removeAdminUserEntry(username);
-            } finally {
-                releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
             }
+        } finally {
+            releaseAdmin(Globals.ADMIN_USERS_COLLECTION_NAME);
         }
     }
 }

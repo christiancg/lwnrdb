@@ -383,6 +383,24 @@ def test_a_malformed_document_is_refused_as_a_client_error(c):
     check_field("the connection still answers afterwards", find_by_id(c, COLL_TYPES, "t_int"), "object.v", 42)
 
 
+def test_a_line_with_a_second_value_or_a_nan_point_is_refused(c):
+    section("A request line with trailing JSON, or a geo point that is not finite, is refused as invalid")
+    save_prefix = '{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES + '","object":'
+    for label, line, doc_id in (
+            ("a second JSON value after the request", save_prefix + '{"_id":"trail1","v":1}}{"_id":"trail2"}',
+             "trail1"),
+            ("a NaN latitude", save_prefix + '{"_id":"nan_geo","p":"#geo(NaN,1)"}}', "nan_geo"),
+            ("a NaN nested inside an array", save_prefix + '{"_id":"nan_geo2","ps":["#geo(1,NaN)"]}}',
+             "nan_geo2")):
+        refused = c.send_raw(line)
+        check(f"{label} is refused as an invalid command, not a server error",
+              refused.get("status") == "ERROR" and not str(refused.get("errorCode") or "").startswith("500"),
+              detail=f"status={refused.get('status')} code={refused.get('errorCode')} msg={refused.get('message')!r}")
+        check(f"nothing was stored for {doc_id}", find_by_id(c, COLL_TYPES, doc_id).get("status") != "OK")
+    check_status("a finite geo point is still accepted",
+                 c.send_raw(save_prefix + '{"_id":"finite_geo","p":"#geo(1,2)"}}'), "OK")
+
+
 def test_filter_operators(c):
     section("FILTER — every field operator across types (scan path)")
 
@@ -1037,6 +1055,7 @@ def main():
         test_top_level_id,
         test_value_types,
         test_a_malformed_document_is_refused_as_a_client_error,
+        test_a_line_with_a_second_value_or_a_nan_point_is_refused,
         test_filter_operators,
         test_filter_with_indexes,
         test_conjunctions,

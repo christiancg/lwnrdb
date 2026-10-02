@@ -600,6 +600,24 @@ def test_ownership(c):
           "FORBIDDEN")
 
 
+def test_owners_of_a_dropped_database(c):
+    section("SET_DATABASE_OWNERS on a dropped database does not bring it back")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    check_status("CREATE_DATABASE 'owners_gone_db'",
+                 c.send({"type": "CREATE_DATABASE", "databaseName": "owners_gone_db"}), "OK")
+    check_status("DROP_DATABASE 'owners_gone_db'",
+                 c.send({"type": "DROP_DATABASE", "databaseName": "owners_gone_db"}), "OK")
+    check_code("SET_DATABASE_OWNERS on the dropped database",
+               set_database_owners(c, "owners_gone_db", ["new_owner"]), "NOT_FOUND", "404-4")
+    listed = c.send({"type": "LIST_DATABASES"})
+    bu.check("the dropped database is not listed again", "owners_gone_db" not in str(listed), str(listed))
+    check_status("CREATE_DATABASE of the same name succeeds",
+                 c.send({"type": "CREATE_DATABASE", "databaseName": "owners_gone_db"}), "OK")
+    check_status("DROP_DATABASE it again",
+                 c.send({"type": "DROP_DATABASE", "databaseName": "owners_gone_db"}), "OK")
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
@@ -662,6 +680,9 @@ def main():
 
     with Conn() as c:
         test_ownership(c)
+
+    with Conn() as c:
+        test_owners_of_a_dropped_database(c)
 
     # ── cleanup ────────────────────────────────────────────────────────
     with Conn() as c:

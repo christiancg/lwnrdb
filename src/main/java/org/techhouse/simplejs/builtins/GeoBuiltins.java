@@ -73,11 +73,13 @@ public final class GeoBuiltins {
     }
 
     private static GeoPoint parse(String text) {
+        final GeoPoint parsed;
         try {
-            return new JsonGeo(text).point();
+            parsed = new JsonGeo(text).point();
         } catch (RuntimeException e) {
             throw new RangeErrorException("Invalid geo string: '" + text + "'");
         }
+        return point(parsed.lat(), parsed.lng());
     }
 
     private static JsValue member(JsValue target, String name, InterpreterOps ops) {

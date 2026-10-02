@@ -7,6 +7,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
@@ -47,6 +48,33 @@ public class AdminOperationHelperTest {
 
         assertEquals(before, cache.getAdminDbEntry(TestGlobals.DB).getOwners(),
                 "authorization reads the cached owners, so they may not change until the write is durable");
+    }
+
+    @Test
+    public void test_an_owner_update_for_a_dropped_database_inserts_nothing() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        AdminOperationHelper.deleteDatabaseEntry(TestGlobals.DB);
+
+        assertFalse(AdminOperationHelper.updateDatabaseOwners(TestGlobals.DB, List.of("mallory")));
+        assertNull(cache.getAdminDbEntry(TestGlobals.DB));
+        assertNull(cache.getPkIndexAdminDbEntry(TestGlobals.DB));
+    }
+
+    @Test
+    public void test_a_failed_index_registration_does_not_change_the_cached_index_set() throws Exception {
+        final var cache = IocContainer.get(Cache.class);
+        final var before = Set.copyOf(cache.getIndexesForCollection(TestGlobals.DB, TestGlobals.COLL));
+        final var fs = IocContainer.get(org.techhouse.fs.FileSystem.class);
+        final var originalPath = TestUtils.getDbPath(fs);
+        TestUtils.setDbPath(fs, originalPath + "/does-not-exist");
+        try {
+            assertThrows(Exception.class,
+                    () -> AdminOperationHelper.saveNewIndex(TestGlobals.DB, TestGlobals.COLL, "unregistered"));
+        } finally {
+            TestUtils.setDbPath(fs, originalPath);
+        }
+
+        assertEquals(before, Set.copyOf(cache.getIndexesForCollection(TestGlobals.DB, TestGlobals.COLL)));
     }
 
     @BeforeEach

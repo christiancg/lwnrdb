@@ -40,13 +40,28 @@ public class EJsonInteropNonFiniteTest {
     }
 
     @Test
+    public void test_plain_conversion_keeps_negative_zero() {
+        assertEquals(Double.doubleToRawLongBits(-0.0), Double
+                .doubleToRawLongBits(EJsonInterop.toEjson(new JsNumber(-0.0)).asJsonNumber().getValue().doubleValue()));
+    }
+
+    @Test
+    public void test_host_conversion_refuses_a_geo_string_with_a_non_finite_point() {
+        assertThrows(TypeErrorException.class,
+                () -> EJsonInterop.toHostEjson(new org.techhouse.simplejs.values.JsString("#geo(NaN,1)")));
+    }
+
+    @Test
     public void test_host_conversion_accepts_every_finite_double() {
         assertEquals(Double.MAX_VALUE,
                 EJsonInterop.toHostEjson(new JsNumber(Double.MAX_VALUE)).asJsonNumber().getValue().doubleValue());
         assertEquals(Double.MIN_VALUE,
                 EJsonInterop.toHostEjson(new JsNumber(Double.MIN_VALUE)).asJsonNumber().getValue().doubleValue());
         assertEquals(0.0, EJsonInterop.toHostEjson(new JsNumber(0.0)).asJsonNumber().getValue().doubleValue());
-        assertEquals(-0.0, EJsonInterop.toHostEjson(new JsNumber(-0.0)).asJsonNumber().getValue().doubleValue());
+        assertEquals(0L,
+                Double.doubleToRawLongBits(
+                        EJsonInterop.toHostEjson(new JsNumber(-0.0)).asJsonNumber().getValue().doubleValue()),
+                "a stored zero is positive, as it reads back after a restart");
     }
 
     @Test

@@ -26,6 +26,7 @@ import org.techhouse.ex.PartialBulkUpdateException;
 public class FileSystem {
     private final FilePaths paths = new FilePaths();
     private final DirtyIndexMarkers dirtyIndexMarkers = new DirtyIndexMarkers(paths);
+    private final IndexBuildMarkers indexBuildMarkers = new IndexBuildMarkers(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
     private final DocumentPageStore documentPageStore = new DocumentPageStore(paths);
@@ -195,6 +196,10 @@ public class FileSystem {
         return dirtyIndexMarkers.listMarked();
     }
 
+    public IndexBuildMarkers indexBuildMarkers() {
+        return indexBuildMarkers;
+    }
+
     public void appendTombstone(String dbName, String collName, String id, long version) throws IOException {
         TombstoneStore.append(paths.tombstoneFile(dbName, collName), id, version);
     }
@@ -241,6 +246,9 @@ public class FileSystem {
                         Globals.BUFFER_SIZE)) {
                     var currentOffset = file.length();
                     lengthsBeforeAppend.putIfAbsent(file, currentOffset);
+                    final var separator = FileLocks.separatorBeforeAppend(file);
+                    writer.append(separator);
+                    currentOffset += separator.getBytes(StandardCharsets.UTF_8).length;
                     for (var entry : pageEntries) {
                         final var strData = entry.toFileEntry() + Globals.NEWLINE;
                         final var bytes = strData.getBytes(StandardCharsets.UTF_8);
@@ -294,9 +302,11 @@ public class FileSystem {
             final var strData = entry.toFileEntry() + Globals.NEWLINE;
             final var length = strData.getBytes(StandardCharsets.UTF_8).length;
             final var totalFileLength = file.length();
+            final var separator = FileLocks.separatorBeforeAppend(file);
             try {
-                appendToPage(file, strData);
-                return pkIndexStore.indexNewPKValue(dbName, collName, entry.get_id(), totalFileLength, length, page,
+                appendToPage(file, separator + strData);
+                return pkIndexStore.indexNewPKValue(dbName, collName, entry.get_id(),
+                        totalFileLength + separator.getBytes(StandardCharsets.UTF_8).length, length, page,
                         entry.getVersion());
             } catch (IOException e) {
                 PageRegions.truncateTo(file, totalFileLength);

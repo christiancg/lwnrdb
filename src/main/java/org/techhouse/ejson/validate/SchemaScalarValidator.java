@@ -1,13 +1,11 @@
 package org.techhouse.ejson.validate;
 
+import java.math.BigDecimal;
 import java.util.List;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
 class SchemaScalarValidator {
-    private static final double MULTIPLE_OF_ABSOLUTE_TOLERANCE = 1e-9;
-    private static final double MULTIPLE_OF_RELATIVE_TOLERANCE = 1e-15;
-
     void validateString(JsonString instance, JsonObject obj, String path, List<String> errors) {
         final var value = instance.getValue();
         final var length = value.codePointCount(0, value.length());
@@ -47,17 +45,13 @@ class SchemaScalarValidator {
         final var multipleOf = obj.get(SchemaKeywords.MULTIPLE_OF);
         if (multipleOf != null) {
             final var divisor = multipleOf.asJsonNumber().getValue().doubleValue();
-            final var quotient = value / divisor;
-            if (isNotMultiple(value, quotient)) {
+            if (isNotMultiple(value, divisor)) {
                 errors.add(SchemaValidator.at(path) + ": value is not a multiple of " + divisor);
             }
         }
     }
 
-    private static boolean isNotMultiple(double value, double quotient) {
-        final var nearest = Math.rint(quotient);
-        final var tolerance = Math.max(MULTIPLE_OF_ABSOLUTE_TOLERANCE,
-                Math.abs(quotient) * MULTIPLE_OF_RELATIVE_TOLERANCE);
-        return Math.abs(quotient - nearest) > tolerance || (value != 0 && nearest == 0);
+    private static boolean isNotMultiple(double value, double divisor) {
+        return BigDecimal.valueOf(value).remainder(BigDecimal.valueOf(divisor)).signum() != 0;
     }
 }

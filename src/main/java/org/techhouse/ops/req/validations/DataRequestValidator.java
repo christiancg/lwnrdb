@@ -2,6 +2,7 @@ package org.techhouse.ops.req.validations;
 
 import java.util.List;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.req.AggregateRequest;
@@ -17,6 +18,7 @@ import org.techhouse.ops.req.agg.AggregationStepType;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 
 public final class DataRequestValidator {
+    private static final String NON_FINITE_GEO_MESSAGE = "a #geo value must have finite latitude and longitude";
     private static final String ID_PATTERN_MESSAGE = "_id must be 1-64 alphanumeric characters, underscores, or hyphens";
 
     private DataRequestValidator() {
@@ -33,7 +35,14 @@ public final class DataRequestValidator {
         if (request.get_id() != null && !request.get_id().matches(NameValidations.ID_PATTERN)) {
             return ValidationResult.fail(ID_PATTERN_MESSAGE);
         }
-        return validateEmbeddedId(request.getObject());
+        return validateDocument(request.getObject());
+    }
+
+    private static ValidationResult validateDocument(JsonObject object) {
+        if (JsonGeo.containsNonFinitePoint(object)) {
+            return ValidationResult.fail(NON_FINITE_GEO_MESSAGE);
+        }
+        return validateEmbeddedId(object);
     }
 
     private static ValidationResult validateEmbeddedId(JsonObject object) {
@@ -59,7 +68,7 @@ public final class DataRequestValidator {
             return ValidationResult.fail("BULK_SAVE request requires at least one object");
         }
         for (var obj : request.getObjects()) {
-            final var embedded = validateEmbeddedId(obj);
+            final var embedded = validateDocument(obj);
             if (!embedded.isValid()) {
                 return embedded;
             }

@@ -427,7 +427,11 @@ Each participant's commit reuses the same atomic `REPLICATE_TX` batch to its own
 records in `admin/transactions` (keyed `{dtxId}|part` / `{dtxId}|coord`, alongside the
 transaction's buffered slice). Presence of the coordinator marker is the commit point:
 present ⇒ commit, absent ⇒ **presumed abort**, and a coordinator that is reachable but has not
-decided yet leaves the slice in doubt rather than being read as an abort. On restart a prepared
+decided yet leaves the slice in doubt rather than being read as an abort. "Not decided yet" means
+the transaction is still live on the coordinator: a coordinator prepares its own slice before any
+other, so after a restart it can hold a participant marker naming itself with no coordinator marker
+and no live transaction, and that state answers `NO_RECORD` to its own recovery and to every
+participant's `TX_STATUS`, so all of them abort. On restart a prepared
 participant asks the coordinator via `TX_STATUS` what to do, and a coordinator that recorded a
 commit re-drives `COMMIT_TX`. The participant does **not** hold its write locks while in doubt —
 clients may write those collections meanwhile — so the replay is version-aware instead: the marker
@@ -528,6 +532,9 @@ above the original, because it is minted from *now* — and the conform then qua
 populated copy, leaving the live collection empty cluster-wide. A create on an existing collection
 now replicates that collection's existing incarnation, and a replicated request never mints one at
 all: admin ops replicate by re-execution, so a locally derived value differs on every node.
+Every incarnation a node accepts — a replicated create, an adopted snapshot entry, the registered
+entries at startup — is `observe`d by the write clock, so a coordinator that takes over later mints
+above it even if its wall clock lags the node that minted the original.
 
 Tombstones are only garbage-collected on a round in which **every** currently known peer answered
 the digest request. A node that is partitioned — or alone — keeps them: collecting a tombstone

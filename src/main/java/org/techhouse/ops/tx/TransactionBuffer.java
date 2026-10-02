@@ -9,7 +9,6 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -17,7 +16,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CollectionReadinessGuard;
-import org.techhouse.ops.EntrySizeGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -60,11 +58,6 @@ public final class TransactionBuffer {
             }
             final var object = request.getObject();
             final var id = TransactionWrites.ensureId(object, request.get_id());
-            final var entry = DbEntry.fromJsonObject(dbName, collName, object);
-            final var entrySizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
-            if (entrySizeError != null) {
-                return entrySizeError;
-            }
             final var collId = Cache.getCollectionIdentifier(dbName, collName);
             final var insert = !TransactionWrites.isVisible(transaction, collId,
                     cache.getPkIndexAndLoadIfNecessary(dbName, collName), id);
@@ -75,8 +68,7 @@ public final class TransactionBuffer {
                 return hooked.rejection();
             }
             final var effective = hooked.document();
-            final var sizeError = TransactionWrites.checkEntrySize(dbName, collName, effective, object,
-                    OperationType.SAVE);
+            final var sizeError = TransactionWrites.checkEntrySize(dbName, collName, effective, OperationType.SAVE);
             if (sizeError != null) {
                 return sizeError;
             }
@@ -103,7 +95,7 @@ public final class TransactionBuffer {
             if (readinessError != null) {
                 return readinessError;
             }
-            final var validationError = validateBulkObjects(request, dbName, collName);
+            final var validationError = validateBulkObjects(request);
             if (validationError != null) {
                 return validationError;
             }
@@ -125,7 +117,7 @@ public final class TransactionBuffer {
                     return hooked.rejection();
                 }
                 final var effective = hooked.document();
-                final var sizeError = TransactionWrites.checkEntrySize(dbName, collName, effective, object,
+                final var sizeError = TransactionWrites.checkEntrySize(dbName, collName, effective,
                         OperationType.BULK_SAVE);
                 if (sizeError != null) {
                     return sizeError;
@@ -201,15 +193,10 @@ public final class TransactionBuffer {
         return seq;
     }
 
-    private static OperationResponse validateBulkObjects(BulkSaveRequest request, String dbName, String collName) {
+    private static OperationResponse validateBulkObjects(BulkSaveRequest request) {
         final var seenIds = new HashSet<String>();
         for (final var object : request.getObjects()) {
             final var id = TransactionWrites.ensureId(object, null);
-            final var entry = DbEntry.fromJsonObject(dbName, collName, object);
-            final var entrySizeError = EntrySizeGuard.check(entry, OperationType.BULK_SAVE);
-            if (entrySizeError != null) {
-                return entrySizeError;
-            }
             if (!seenIds.add(id)) {
                 return new OperationResponse(OperationType.BULK_SAVE, "Duplicate _id in bulk save request: " + id,
                         ErrorCode.DUPLICATE_ID);

@@ -5,12 +5,14 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.locks.ReentrantLock;
+import org.techhouse.cache.Cache;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.resp.ListenResponse;
 
 public class ListenProcessorThread implements Runnable {
@@ -19,6 +21,7 @@ public class ListenProcessorThread implements Runnable {
     private final ListenManager manager;
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final EJson eJson = IocContainer.get(EJson.class);
+    private final Cache cache = IocContainer.get(Cache.class);
 
     public ListenProcessorThread(LinkedBlockingQueue<UUID> dirtyQueue, ListenManager manager) {
         this.dirtyQueue = dirtyQueue;
@@ -41,7 +44,7 @@ public class ListenProcessorThread implements Runnable {
     }
 
     private void processListen(UUID listenId) {
-        final var registration = manager.getRegistration(listenId);
+        final var registration = authorizedRegistration(listenId);
         if (registration == null) {
             return;
         }
@@ -72,6 +75,24 @@ public class ListenProcessorThread implements Runnable {
             return;
         }
         pushUpdate(listenId, results, newHash, writer, writerLock);
+    }
+
+    private ListenRegistration authorizedRegistration(UUID listenId) {
+        final var registration = manager.getRegistration(listenId);
+        if (registration == null || stillAuthorized(registration)) {
+            return registration;
+        }
+        manager.unregister(listenId);
+        return null;
+    }
+
+    private boolean stillAuthorized(ListenRegistration registration) {
+        final var username = clientTracker.getAuthenticatedUsername(registration.clientId());
+        if (username == null) {
+            return false;
+        }
+        final var user = cache.getAdminUserEntry(username);
+        return user != null && AuthorizationChecker.check(registration.request(), user).isAllowed();
     }
 
     private void pushUpdate(UUID listenId, List<JsonObject> results, String newHash, java.io.BufferedWriter writer,

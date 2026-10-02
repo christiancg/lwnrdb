@@ -64,6 +64,10 @@ public final class Tx2pcLog {
     }
 
     public static Status status(String dtxId) throws Exception {
+        return status(dtxId, null);
+    }
+
+    public static Status status(String dtxId, String selfAddress) throws Exception {
         if (isCommitted(dtxId)) {
             return Status.COMMITTED;
         }
@@ -72,9 +76,17 @@ public final class Tx2pcLog {
             return OUTCOME_COMMITTED.equals(outcome) ? Status.COMMITTED : Status.ABORTED;
         }
         if (isPrepared(dtxId)) {
-            return Status.PREPARED;
+            return coordinatorRestartedUndecided(dtxId, selfAddress) ? Status.NO_RECORD : Status.PREPARED;
         }
         return clientTracker.hasActiveTransaction(dtxId) ? Status.UNKNOWN : Status.NO_RECORD;
+    }
+
+    private static boolean coordinatorRestartedUndecided(String dtxId, String selfAddress) throws Exception {
+        if (selfAddress == null || clientTracker.hasActiveTransaction(dtxId)) {
+            return false;
+        }
+        final var marker = readParticipantMarker(dtxId);
+        return marker != null && selfAddress.equals(marker.coordinatorAddress());
     }
 
     private static String readOutcome(String dtxId) throws Exception {

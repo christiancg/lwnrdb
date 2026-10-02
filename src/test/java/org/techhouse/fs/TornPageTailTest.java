@@ -11,6 +11,7 @@ import java.nio.file.Files;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 
 public class TornPageTailTest {
@@ -117,5 +118,26 @@ public class TornPageTailTest {
         final var file = page(tmp, crlfRecord);
 
         assertFalse(TornPageTail.heal(file, 0, List.of(entryAtStart("a", crlfRecord.length(), 0))));
+    }
+
+    @Test
+    public void test_a_record_missing_only_its_line_end_gets_it_back(@TempDir File tmp) throws IOException {
+        final var unterminated = "{\"_id\":\"a\"}";
+        final var file = page(tmp, unterminated);
+        final var indexedLength = unterminated.length() + Globals.NEWLINE.length();
+
+        assertTrue(TornPageTail.heal(file, 0, List.of(entryAtStart("a", indexedLength, 0))));
+
+        assertEquals(unterminated + Globals.NEWLINE, Files.readString(file.toPath(), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void test_a_record_missing_more_than_its_line_end_is_left_alone(@TempDir File tmp) throws IOException {
+        final var unterminated = "{\"_id\":\"a\"";
+        final var file = page(tmp, unterminated);
+
+        assertFalse(TornPageTail.heal(file, 0, List.of(entryAtStart("a", unterminated.length() + 5, 0))));
+
+        assertEquals(unterminated, Files.readString(file.toPath(), StandardCharsets.UTF_8));
     }
 }

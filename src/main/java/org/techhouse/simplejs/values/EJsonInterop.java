@@ -91,6 +91,9 @@ public final class EJsonInterop {
             throw new TypeErrorException("Cannot serialize" + at(path) + ": " + NumberFormatter.toJsString(asDouble)
                     + " is not a JSON number");
         }
+        if (mode.hostMode() && asDouble == 0.0) {
+            return new JsonNumber(0.0);
+        }
         return new JsonNumber(asDouble);
     }
 
@@ -104,7 +107,12 @@ public final class EJsonInterop {
 
     private static JsonBaseElement readableCustom(JsonString customShaped, String path) {
         try {
-            return CustomTypeFactory.getCustomTypeInstance(customShaped);
+            final var custom = CustomTypeFactory.getCustomTypeInstance(customShaped);
+            if (custom instanceof JsonGeo geo && !geo.isFinitePoint()) {
+                throw new TypeErrorException(
+                        "Cannot serialize" + at(path) + ": a geo point needs finite latitude and longitude");
+            }
+            return custom;
         } catch (NonRegisteredCustomTypeException | BadImplementationCustomTypeException refused) {
             throw new TypeErrorException("Cannot serialize" + at(path) + ": " + refused.getMessage());
         }

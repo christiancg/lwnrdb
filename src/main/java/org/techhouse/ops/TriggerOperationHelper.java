@@ -6,6 +6,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
@@ -26,11 +27,13 @@ public final class TriggerOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final EJson eJson = IocContainer.get(EJson.class);
+    private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
 
     private TriggerOperationHelper() {
     }
 
-    public static OperationResponse executeSave(SaveTriggerRequest request, String actingUser) throws IOException {
+    public static OperationResponse executeSave(SaveTriggerRequest request, String actingUser)
+            throws IOException, InterruptedException {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         if (cache.getAdminCollectionEntry(dbName, collName) == null) {
@@ -69,12 +72,35 @@ public final class TriggerOperationHelper {
         if (timingError != null) {
             return timingError;
         }
-        final var procedure = cache.getProcedure(dbName, request.getProcedureName());
-        if (procedure == null || !procedure.isEnabled()) {
-            return new OperationResponse(OperationType.SAVE_TRIGGER,
-                    "Procedure '" + request.getProcedureName() + "' not found in database '" + dbName + "'",
-                    ErrorCode.PROCEDURE_NOT_FOUND);
+        if (lacksEnabledProcedure(dbName, request.getProcedureName())) {
+            return procedureNotFound(dbName, request.getProcedureName());
         }
+        locks.lock(dbName, Globals.PROCEDURES_FOLDER);
+        try {
+            if (lacksEnabledProcedure(dbName, request.getProcedureName())) {
+                return procedureNotFound(dbName, request.getProcedureName());
+            }
+            return persistDefinition(request, actingUser, mode, timing, events);
+        } finally {
+            locks.release(dbName, Globals.PROCEDURES_FOLDER);
+        }
+    }
+
+    private static boolean lacksEnabledProcedure(String dbName, String procedureName) {
+        final var procedure = cache.getProcedure(dbName, procedureName);
+        return procedure == null || !procedure.isEnabled();
+    }
+
+    private static OperationResponse procedureNotFound(String dbName, String procedureName) {
+        return new OperationResponse(OperationType.SAVE_TRIGGER,
+                "Procedure '" + procedureName + "' not found in database '" + dbName + "'",
+                ErrorCode.PROCEDURE_NOT_FOUND);
+    }
+
+    private static OperationResponse persistDefinition(SaveTriggerRequest request, String actingUser, String mode,
+            String timing, LinkedHashSet<EventType> events) throws IOException {
+        final var dbName = request.getDatabaseName();
+        final var collName = request.getCollectionName();
         final var existingList = new ArrayList<>(cache.getTriggersFor(dbName, collName));
         final var existing = findByName(existingList, request.getName());
         if (request.getIfVersion() != null

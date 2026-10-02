@@ -32,19 +32,31 @@ public final class TriggerRunRecovery {
             final var byRun = groupByRun(TriggerRunLog.pending(), TriggerRunLog.currentNodeId());
             var requeued = 0;
             for (final var chunks : byRun.values()) {
-                final var event = toEvent(chunks);
-                if (event == null) {
-                    TriggerDispatcher.consumeQuietly(chunks.getFirst().getRunId(), chunks.getFirst().getTriggerName());
-                    continue;
+                if (requeue(chunks)) {
+                    requeued++;
                 }
-                triggerExecutor.submit(event);
-                requeued++;
             }
             if (requeued > 0) {
                 logger.info("Re-queued " + requeued + " trigger run(s) left pending by the previous shutdown");
             }
         } catch (Exception e) {
             logger.error("Failed to recover pending trigger runs at startup", e);
+        }
+    }
+
+    private static boolean requeue(List<AdminTriggerRunEntry> chunks) {
+        final var first = chunks.getFirst();
+        try {
+            final var event = toEvent(chunks);
+            if (event == null) {
+                TriggerDispatcher.consumeQuietly(first.getRunId(), first.getTriggerName());
+                return false;
+            }
+            triggerExecutor.submit(event);
+            return true;
+        } catch (Exception e) {
+            logger.error("Failed to recover pending trigger run " + first.getRunId() + "; it stays pending", e);
+            return false;
         }
     }
 

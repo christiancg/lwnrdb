@@ -251,4 +251,29 @@ public class TriggerRunRecoveryTest {
 
         assertTrue(TriggerRunLog.pending().isEmpty(), "a record older than triggerRunRetentionMs is collected");
     }
+
+    @Test
+    public void test_a_run_that_cannot_be_rebuilt_does_not_strand_the_runs_after_it() throws Exception {
+        saveDocument();
+        for (final var entry : TriggerRunLog.pending()) {
+            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
+        }
+        captured.clear();
+        final var firedAt = System.currentTimeMillis();
+        final var unreadable = new JsonObject();
+        unreadable.addProperty(Globals.PK_FIELD, 5);
+        writeRecord("run-broken", TriggerRunLog.currentNodeId(), EventType.DELETED, List.of(), List.of(unreadable),
+                firedAt - 1);
+        final var recoverable = List.of("run-ok-1", "run-ok-2", "run-ok-3", "run-ok-4", "run-ok-5", "run-ok-6");
+        for (final var runId : recoverable) {
+            writeRecord(runId, TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(), firedAt);
+        }
+
+        TriggerRunRecovery.recoverLocal();
+        sleep();
+
+        assertEquals(recoverable, captured.stream().map(TriggerEvent::getRunId).sorted().toList());
+        assertTrue(TriggerRunLog.pending().stream().anyMatch(entry -> entry.getRunId().equals("run-broken")),
+                "a run that could not be rebuilt stays pending for the next recovery");
+    }
 }

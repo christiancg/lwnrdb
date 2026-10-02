@@ -139,6 +139,18 @@ def test_multiple_of_rejects_a_tiny_non_multiple(c):
                "ERROR", "400-7")
 
 
+def test_multiple_of_is_exact_for_huge_values(c):
+    section("multipleOf stays exact when the quotient overflows or passes the double integer range")
+    check_status("save a multipleOf schema",
+                 save_schema(c, COLL, {"type": "object", "properties": {
+                     "odd": {"multipleOf": 0.123456789}, "three": {"multipleOf": 3}}}), "OK")
+    check_code("1e308 is not a multiple of 0.123456789", save(c, COLL, {"_id": "huge_odd", "odd": 1e308}),
+               "ERROR", "400-7")
+    check_code("1e20 is not a multiple of 3", save(c, COLL, {"_id": "huge_three", "three": 10 ** 20}),
+               "ERROR", "400-7")
+    check_status("3e20 is a multiple of 3", save(c, COLL, {"_id": "huge_three_ok", "three": 3 * 10 ** 20}), "OK")
+
+
 def test_pattern_uses_ecma_semantics(c):
     section("pattern follows ECMA-262, not Java regex")
     check_status("save a pattern schema",
@@ -261,6 +273,7 @@ def main():
         test_save_and_enforce_schema,
         test_bulk_save_atomic,
         test_multiple_of_rejects_a_tiny_non_multiple,
+        test_multiple_of_is_exact_for_huge_values,
         test_pattern_uses_ecma_semantics,
         test_invalid_schema_rejected,
         test_cyclic_ref_rejected,

@@ -161,6 +161,11 @@ public class IndexHelper {
         }
     }
 
+    private static List<String> maintainedIndexes(String dbName, String collName) {
+        return cache.getIndexesForCollection(dbName, collName).stream()
+                .filter(fieldName -> !fs.indexBuildMarkers().isMarked(dbName, collName, fieldName)).toList();
+    }
+
     private static void lockCollectionForMaintenance(String dbName, String collName) throws InterruptedException {
         final var budget = Configuration.getInstance().getTransactionLockTimeoutMs();
         if (!rl.tryLockRead(dbName, collName, budget)) {
@@ -170,7 +175,7 @@ public class IndexHelper {
 
     public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids)
             throws IOException, InterruptedException {
-        final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
+        final var existingIndexes = maintainedIndexes(dbName, collName);
         if (existingIndexes.isEmpty() || ids.isEmpty()) {
             return;
         }
@@ -200,7 +205,7 @@ public class IndexHelper {
     // rather than trusting the event snapshot; whichever event runs last makes the index converge.
     public static void updateIndexes(String dbName, String collName, String id)
             throws IOException, InterruptedException {
-        final var existingIndexes = cache.getIndexesForCollection(dbName, collName);
+        final var existingIndexes = maintainedIndexes(dbName, collName);
         if (existingIndexes.isEmpty()) {
             return;
         }

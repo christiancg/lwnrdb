@@ -30,6 +30,7 @@ import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
 import org.techhouse.ops.req.SaveProcedureRequest;
 import org.techhouse.ops.req.SaveScheduleRequest;
+import org.techhouse.ops.req.SetDatabaseOwnersRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -131,6 +132,24 @@ public class DatabaseBarrierRaceTest {
         final var request = new SaveScheduleRequest(TestGlobals.DB, "nightly", PROCEDURE);
         request.setIntervalMs(2000L);
         return request;
+    }
+
+    @Test
+    public void test_an_owner_change_waiting_on_a_drop_does_not_resurrect_the_database() throws Exception {
+        TestUtils.setPrivateField(configuration, "transactionLockTimeoutMs", LONG_BUDGET_MS);
+        holdBarrier(TestGlobals.DB);
+        final var result = new AtomicReference<OperationResponse>();
+        final var owners = new SetDatabaseOwnersRequest(TestGlobals.DB);
+        owners.setOwners(List.of("mallory"));
+        final var setter = startParked(() -> DatabaseOperationHelper.processSetDatabaseOwners(owners), result);
+
+        dropTestDatabaseWhileHoldingTheBarrier();
+        releaseBarrier(TestGlobals.DB);
+        setter.join(LONG_BUDGET_MS);
+
+        assertEquals(ErrorCode.DATABASE_NOT_FOUND.getCode(), result.get().getErrorCode());
+        assertNull(cache.getAdminDbEntry(TestGlobals.DB));
+        assertNull(cache.getPkIndexAdminDbEntry(TestGlobals.DB));
     }
 
     @Test

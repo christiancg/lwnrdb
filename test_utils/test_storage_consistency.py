@@ -80,6 +80,10 @@ LOST_ROWS_DOCS = 12
 TORN_COLL = "torn_tail_docs"
 TORN_DOCS = 5
 TORN_BYTES = '{"_id":"torn","pad":"interrupted mid-wri'
+LINE_END_COLL = "lost_line_end_docs"
+LINE_END_DOCS = 4
+HALF_BUILT_COLL = "half_built_index_docs"
+HALF_BUILT_FIELD = "k"
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
@@ -536,6 +540,95 @@ def test_a_torn_page_tail_is_healed_at_startup(conn: Conn, work_dir: str):
           f"expected {expected} got {scanned}")
     pk = conn.count_via_pk(coll=TORN_COLL)
     check("the index-only COUNT agrees with the scan", pk == len(expected), f"count={pk} scan={len(scanned)}")
+
+
+def seed_collections_for_a_lost_line_end_and_a_half_built_index(conn: Conn):
+    section("Seed a collection whose last record will lose its line end, and one whose index build will not finish")
+    for coll in (LINE_END_COLL, HALF_BUILT_COLL):
+        check_status(f"create {coll}",
+                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    for i in range(LINE_END_DOCS):
+        check_status(f"save line{i}", conn.save({"_id": f"line{i}", "pad": "s"}, coll=LINE_END_COLL), "OK")
+    check_status("create the index that will be left half-built",
+                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": HALF_BUILT_COLL,
+                            "fieldName": HALF_BUILT_FIELD}), "OK")
+    for i in range(LINE_END_DOCS):
+        check_status(f"save half{i}", conn.save({"_id": f"half{i}", HALF_BUILT_FIELD: "same"}, coll=HALF_BUILT_COLL),
+                     "OK")
+
+
+def lose_the_last_line_end(work_dir: str):
+    folder = os.path.join(work_dir, "db", DB, LINE_END_COLL)
+    last = sorted(page_files(work_dir, DB, LINE_END_COLL), key=lambda name: int(name.rsplit("-", 1)[1][:-4]))[-1]
+    path = os.path.join(folder, last)
+    with open(path, "rb+") as page:
+        page.seek(-1, os.SEEK_END)
+        if page.read(1) == b"\n":
+            page.seek(-1, os.SEEK_END)
+            page.truncate()
+
+
+def leave_the_index_half_built(work_dir: str):
+    folder = os.path.join(work_dir, "db", DB, HALF_BUILT_COLL)
+    prefix = f"{HALF_BUILT_COLL}-{HALF_BUILT_FIELD}-"
+    for name in os.listdir(folder):
+        if name.startswith(prefix) and name.endswith(".idx"):
+            os.remove(os.path.join(folder, name))
+    with open(os.path.join(folder, f"{HALF_BUILT_COLL}-{HALF_BUILT_FIELD}.building"), "w") as marker:
+        marker.write("0")
+
+
+def ids_in_a_full_scan(conn: Conn, coll: str) -> list:
+    scan = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
+                      "aggregationSteps": [{"type": "SKIP", "skip": 0}]})
+    return sorted(doc["_id"] for doc in (scan.get("results") or []))
+
+
+def test_a_lost_line_end_is_restored_at_startup(conn: Conn, work_dir: str):
+    section("A record that lost only its line end is restored at startup, so the next write is not glued onto it")
+    folder = os.path.join(work_dir, "db", DB, LINE_END_COLL)
+    unterminated = [name for name in page_files(work_dir, DB, LINE_END_COLL)
+                    if os.path.getsize(os.path.join(folder, name)) > 0
+                    and open(os.path.join(folder, name), "rb").read()[-1:] != b"\n"]
+    check("every page ends at a record boundary after the restart", not unterminated, f"torn: {unterminated}")
+    check_status("save a document after the restart",
+                 conn.save({"_id": "after_line_end", "pad": "s"}, coll=LINE_END_COLL), "OK")
+    expected = sorted([f"line{i}" for i in range(LINE_END_DOCS)] + ["after_line_end"])
+    scanned = ids_in_a_full_scan(conn, LINE_END_COLL)
+    check("a full scan sees the record that lost its line end and the one written after it", scanned == expected,
+          f"expected {expected} got {scanned}")
+    for doc_id in ("line%d" % (LINE_END_DOCS - 1), "after_line_end"):
+        check_status(f"FIND_BY_ID {doc_id}", conn.send({"type": "FIND_BY_ID", "databaseName": DB,
+                                                         "collectionName": LINE_END_COLL, "_id": doc_id}), "OK")
+
+
+def filter_ids(conn: Conn, value: str) -> list:
+    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": HALF_BUILT_COLL,
+                          "aggregationSteps": [{"type": "FILTER", "operator": {
+                              "fieldOperatorType": "EQUALS", "field": HALF_BUILT_FIELD,
+                              "value": value}}]})
+    return sorted(doc["_id"] for doc in (response.get("results") or []))
+
+
+def test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn: Conn, work_dir: str, log_path: str,
+                                                                log_offset: int):
+    section("A half-built index is declined until REINDEX, instead of answering from a partial file")
+    log = bu.read_log(log_path)[log_offset:]
+    check("startup names the half-built index", f"{DB}|{HALF_BUILT_COLL}|{HALF_BUILT_FIELD}" in log
+          and "half-built" in log, "no startup warning about the half-built index")
+    check_status("save a document after the restart",
+                 conn.save({"_id": "half_after", HALF_BUILT_FIELD: "same"}, coll=HALF_BUILT_COLL), "OK")
+    expected = sorted([f"half{i}" for i in range(LINE_END_DOCS)] + ["half_after"])
+    found = filter_ids(conn, "same")
+    check("FILTER EQUALS on the half-built field still finds every older document", found == expected,
+          f"expected {expected} got {found}")
+    check_status("REINDEX the half-built field",
+                 conn.send({"type": "REINDEX", "databaseName": DB, "collectionName": HALF_BUILT_COLL,
+                            "fieldNames": [HALF_BUILT_FIELD]}), "OK")
+    marker = os.path.join(work_dir, "db", DB, HALF_BUILT_COLL, f"{HALF_BUILT_COLL}-{HALF_BUILT_FIELD}.building")
+    check("REINDEX clears the half-built marker", not os.path.exists(marker), marker)
+    found = filter_ids(conn, "same")
+    check("the rebuilt index answers every document", found == expected, f"expected {expected} got {found}")
 
 
 ADMIN_HEAL_DB = "heal_admin_db"
@@ -1445,6 +1538,7 @@ def main():
             test_non_finite_numbers_are_refused(conn)
             seed_a_collection_whose_page_rows_will_be_lost(conn, work_dir)
             seed_a_collection_whose_page_tail_will_tear(conn)
+            seed_collections_for_a_lost_line_end_and_a_half_built_index(conn)
 
             print("\n  Killing the server without a drain ...")
             check("the unclean stop left an index-dirty marker on disk",
@@ -1457,6 +1551,8 @@ def main():
         append_torn_pk_line(work_dir, DB, HEAL_COLL)
         lose_the_page_rows(work_dir)
         tear_the_page_tail(work_dir)
+        lose_the_last_line_end(work_dir)
+        leave_the_index_half_built(work_dir)
         tear_an_admin_page_tail(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
@@ -1466,6 +1562,8 @@ def main():
             test_non_finite_numbers_stay_refused_after_a_restart(conn)
             test_lost_page_rows_are_rebuilt_at_startup(conn, work_dir)
             test_a_torn_page_tail_is_healed_at_startup(conn, work_dir)
+            test_a_lost_line_end_is_restored_at_startup(conn, work_dir)
+            test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn, work_dir, log_path, log_offset)
             test_the_committed_transaction_is_all_there_after_the_restart(conn)
             test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)
             test_a_bulk_update_of_many_entries_leaves_every_document_consistent(conn)

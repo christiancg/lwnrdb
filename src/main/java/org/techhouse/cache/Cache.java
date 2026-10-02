@@ -225,7 +225,8 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     }
 
     public boolean hasNoIndex(String dbName, String collName, String fieldName) {
-        return !adminCache.hasIndex(dbName, collName, fieldName);
+        return !adminCache.hasIndex(dbName, collName, fieldName)
+                || fs.indexBuildMarkers().isMarked(dbName, collName, fieldName);
     }
 
 }

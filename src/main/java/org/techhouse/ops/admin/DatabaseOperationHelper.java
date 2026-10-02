@@ -81,17 +81,29 @@ public final class DatabaseOperationHelper {
     }
 
     public static OperationResponse processSetDatabaseOwners(SetDatabaseOwnersRequest request) {
+        final var dbName = request.getDatabaseName();
         return OperationResponse.respondOrError(OperationType.SET_DATABASE_OWNERS,
                 ErrorCode.ERROR_UPDATING_DATABASE_OWNERS, () -> {
-                    final var dbName = request.getDatabaseName();
                     if (cache.getAdminDbEntry(dbName) == null) {
-                        return new OperationResponse(OperationType.SET_DATABASE_OWNERS,
-                                "Database '" + dbName + "' not found", ErrorCode.DATABASE_NOT_FOUND);
+                        return databaseNotFound(dbName);
                     }
-                    AdminOperationHelper.updateDatabaseOwners(dbName, request.getOwners());
-                    return OperationResponse.ok(OperationType.SET_DATABASE_OWNERS,
-                            "Database owners updated successfully");
+                    return OperationLocks.withDatabaseShared(dbName, OperationType.SET_DATABASE_OWNERS,
+                            ErrorCode.ERROR_UPDATING_DATABASE_OWNERS, request.isReplicated(),
+                            () -> updateOwnersUnderDatabaseBarrier(dbName, request.getOwners()));
                 });
+    }
+
+    private static OperationResponse updateOwnersUnderDatabaseBarrier(String dbName, List<String> owners)
+            throws IOException, InterruptedException {
+        if (!AdminOperationHelper.updateDatabaseOwners(dbName, owners)) {
+            return databaseNotFound(dbName);
+        }
+        return OperationResponse.ok(OperationType.SET_DATABASE_OWNERS, "Database owners updated successfully");
+    }
+
+    private static OperationResponse databaseNotFound(String dbName) {
+        return new OperationResponse(OperationType.SET_DATABASE_OWNERS, "Database '" + dbName + "' not found",
+                ErrorCode.DATABASE_NOT_FOUND);
     }
 
     public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {

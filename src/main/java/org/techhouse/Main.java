@@ -168,6 +168,10 @@ public class Main {
         try {
             for (final var dbName : cache.getUserDatabaseNames()) {
                 for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
+                    final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
+                    if (collEntry != null) {
+                        highest = Math.max(highest, collEntry.getIncarnation());
+                    }
                     for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
                         highest = Math.max(highest, pkEntry.getVersion());
                     }
