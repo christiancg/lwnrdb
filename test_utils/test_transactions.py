@@ -369,6 +369,48 @@ def test_crossed_read_and_write_sets_do_not_hang(c):
                                  "object": {"_id": "after", "v": 1}}), "OK")
 
 
+def user_conn(username: str, password: str):
+    conn = Conn()
+    conn.authenticate(username, password)
+    return conn
+
+
+def create_user(c, username: str, password: str, level: str) -> dict:
+    return c.send({"type": "CREATE_USER", "username": username, "password": password, "admin": False,
+                   "globalPermissions": [], "databasePermissions": {DB: level}, "collectionPermissions": {}})
+
+
+def test_a_non_admin_user_can_use_transactions(c):
+    section("A user who is not an admin can open, commit and roll back a transaction")
+
+    for name in ("txn_writer", "txn_reader"):
+        c.send({"type": "DELETE_USER", "username": name})
+    check_status("CREATE_USER 'txn_writer' with READ_WRITE", create_user(c, "txn_writer", "txn_writer1234",
+                                                                          "READ_WRITE"), "OK")
+    check_status("CREATE_USER 'txn_reader' with READ", create_user(c, "txn_reader", "txn_reader1234", "READ"),
+                 "OK")
+
+    with user_conn("txn_writer", "txn_writer1234") as writer:
+        check_status("START_TRANSACTION as a non-admin", start_txn(writer), "OK")
+        check_status("SAVE inside it", save(writer, {"_id": "nonadmin_commit", "v": 1}), "OK")
+        check_status("COMMIT_TRANSACTION as a non-admin", commit_txn(writer), "OK")
+        check_status("START_TRANSACTION again", start_txn(writer), "OK")
+        check_status("SAVE inside it", save(writer, {"_id": "nonadmin_rollback", "v": 1}), "OK")
+        check_status("ROLLBACK_TRANSACTION as a non-admin", rollback_txn(writer), "OK")
+    check_status("the committed write is visible", find_by_id(c, "nonadmin_commit"), "OK")
+    check_status("the rolled-back write is not", find_by_id(c, "nonadmin_rollback"), "NOT_FOUND")
+
+    with user_conn("txn_reader", "txn_reader1234") as reader:
+        check_status("a READ user may open a transaction", start_txn(reader), "OK")
+        check_code("but a write inside it is still authorized on its own",
+                   save(reader, {"_id": "nonadmin_forbidden", "v": 1}), "FORBIDDEN", "403-1")
+        check_status("ROLLBACK_TRANSACTION", rollback_txn(reader), "OK")
+    check_status("the refused write never landed", find_by_id(c, "nonadmin_forbidden"), "NOT_FOUND")
+
+    for name in ("txn_writer", "txn_reader"):
+        c.send({"type": "DELETE_USER", "username": name})
+
+
 def test_entry_size_is_checked_after_the_id_is_assigned(c):
     section("An oversized-once-identified document is refused at buffer time")
 
@@ -550,6 +592,8 @@ def main():
         test_crossed_read_and_write_sets_do_not_hang(c)
     with authed_conn() as (c):
         test_entry_size_is_checked_after_the_id_is_assigned(c)
+    with authed_conn() as (c):
+        test_a_non_admin_user_can_use_transactions(c)
     test_auto_rollback_on_disconnect()
     test_a_committed_transaction_survives_the_disconnect()
 

@@ -21,7 +21,8 @@ public final class AuthorizationChecker {
             OperationType.LIST_TRANSACTIONS, OperationType.LIST_SCRIPTS, OperationType.CANCEL_SCRIPT,
             OperationType.LIST_TRIGGER_RUNS, OperationType.RESOLVE_TRIGGER_RUN);
     private static final Set<OperationType> ALWAYS_ALLOWED_OPERATIONS = Set.of(OperationType.LIST_DATABASES,
-            OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD, OperationType.STOP_LISTEN);
+            OperationType.CLOSE_CONNECTION, OperationType.SET_PASSWORD, OperationType.STOP_LISTEN,
+            OperationType.START_TRANSACTION, OperationType.COMMIT_TRANSACTION, OperationType.ROLLBACK_TRANSACTION);
     private static final Set<OperationType> SCRIPT_MANAGEMENT_OPERATIONS = Set.of(OperationType.SAVE_PROCEDURE,
             OperationType.DELETE_PROCEDURE, OperationType.SAVE_TRIGGER, OperationType.DELETE_TRIGGER,
             OperationType.SAVE_SCHEDULE, OperationType.DELETE_SCHEDULE, OperationType.TEST_TRIGGER);

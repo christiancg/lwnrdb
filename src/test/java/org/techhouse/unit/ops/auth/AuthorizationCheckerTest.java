@@ -14,11 +14,14 @@ import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.CloseConnectionRequest;
+import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListDatabasesRequest;
+import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
@@ -44,6 +47,26 @@ public class AuthorizationCheckerTest {
         final var user = createNonAdminUser();
         final var createUserReq = new CreateUserRequest();
         assertFalse(AuthorizationChecker.check(createUserReq, user).isAllowed());
+    }
+
+    @Test
+    public void test_transaction_control_is_allowed_for_a_user_with_no_grants() {
+        final var user = createNonAdminUser();
+
+        assertTrue(AuthorizationChecker.check(new StartTransactionRequest(), user).isAllowed());
+        assertTrue(AuthorizationChecker.check(new CommitTransactionRequest(), user).isAllowed());
+        assertTrue(AuthorizationChecker.check(new RollbackTransactionRequest(), user).isAllowed());
+    }
+
+    @Test
+    public void test_a_write_inside_a_transaction_is_still_authorized_on_its_own() {
+        final var dbPerms = new HashMap<String, PermissionLevel>();
+        dbPerms.put("testDb", PermissionLevel.READ);
+        final var user = new AdminUserEntry("user", "hash", false, new HashSet<>(), dbPerms, new HashMap<>());
+
+        assertTrue(AuthorizationChecker.check(new StartTransactionRequest(), user).isAllowed());
+        assertFalse(AuthorizationChecker.check(new SaveRequest("testDb", "testColl"), user).isAllowed(),
+                "opening a transaction must not widen what the user may write");
     }
 
     @Test

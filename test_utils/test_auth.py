@@ -743,8 +743,8 @@ def test_a_deleted_user_can_still_roll_back(c):
     check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
     delete_user(c, "doomed_writer")
     c.send({"type": "DELETE", "databaseName": "auth_db", "collectionName": "allowed", "_id": "held_by_doomed"})
-    check_status("CREATE_USER 'doomed_writer' as an admin, the role that may open a transaction",
-                 create_user(c, "doomed_writer", "doomed_writer1234", admin=True), "OK")
+    check_status("CREATE_USER 'doomed_writer' with READ_WRITE on auth_db",
+                 create_user(c, "doomed_writer", "doomed_writer1234", db_perms={"auth_db": "READ_WRITE"}), "OK")
     held_save = {"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
                  "object": {"_id": "held_by_doomed", "value": 1}}
     with Conn() as doomed:
