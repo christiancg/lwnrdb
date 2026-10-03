@@ -175,7 +175,7 @@ public class Main {
                     for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
                         highest = Math.max(highest, pkEntry.getVersion());
                     }
-                    for (final var tombstoneVersion : fs.readTombstones(dbName, collName).values()) {
+                    for (final var tombstoneVersion : fs.tombstones().read(dbName, collName).values()) {
                         highest = Math.max(highest, tombstoneVersion);
                     }
                 }

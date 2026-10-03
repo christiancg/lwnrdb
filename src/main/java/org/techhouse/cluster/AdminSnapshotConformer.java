@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
@@ -46,10 +47,11 @@ final class AdminSnapshotConformer {
         final var snapshotUsers = conformUsers(snapshot);
         removeAbsentUsers(snapshotUsers);
         final var outcome = new ConformOutcome();
+        final var unreadable = new UnreadableItems(Set.copyOf(snapshot.getUnreadable()), snapshot.getNodeId());
         final var snapshotDbs = conformDatabases(snapshot, outcome);
-        outcome.record(conformProcedures(snapshot, snapshotDbs));
-        outcome.record(conformSchedules(snapshot, snapshotDbs));
-        final var snapshotColls = conformCollections(snapshot, snapshotDbs, epochAtStart, outcome);
+        outcome.record(conformProcedures(snapshot, snapshotDbs, unreadable));
+        outcome.record(conformSchedules(snapshot, snapshotDbs, unreadable));
+        final var snapshotColls = conformCollections(snapshot, snapshotDbs, epochAtStart, outcome, unreadable);
         if (adminEpoch.current() != epochAtStart) {
             logger.warning("Skipping the quarantine phase of the admin conform: a local admin op committed"
                     + " during it. The next round reconciles from the newer local state.");
@@ -67,6 +69,18 @@ final class AdminSnapshotConformer {
         void record(boolean stepComplete) {
             complete &= stepComplete;
         }
+    }
+
+    private record UnreadableItems(Set<String> keys, String nodeId) {
+        boolean contains(String key) {
+            return keys.contains(key);
+        }
+    }
+
+    private boolean skipUnreadable(String key, UnreadableItems unreadable) {
+        logger.warning("Leaving " + key + " as it is: the admin snapshot of " + unreadable.nodeId()
+                + " could not read it. The next round retries it.");
+        return false;
     }
 
     private HashSet<String> conformUsers(AdminSnapshotPayload snapshot) throws Exception {
@@ -134,7 +148,7 @@ final class AdminSnapshotConformer {
     }
 
     private HashSet<String> conformCollections(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs,
-            long epochAtStart, ConformOutcome outcome) {
+            long epochAtStart, ConformOutcome outcome, UnreadableItems unreadable) {
         final var snapshotColls = new HashSet<String>();
         for (final var collJson : snapshot.getCollections()) {
             final var coll = AdminCollEntry.fromJsonObject(collJson);
@@ -149,7 +163,7 @@ final class AdminSnapshotConformer {
             final var desiredSchema = schemaEl != null && schemaEl.isJsonObject() ? schemaEl.asJsonObject() : null;
             try {
                 outcome.record(conformCollection(dbName, collName, coll.getIndexes(), desiredSchema,
-                        snapshot.getTriggers(), epochAtStart, coll.getIncarnation()));
+                        snapshot.getTriggers(), epochAtStart, coll.getIncarnation(), unreadable));
             } catch (Exception e) {
                 outcome.record(false);
                 logger.warning("Skipping the admin conform of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
@@ -159,8 +173,8 @@ final class AdminSnapshotConformer {
         return snapshotColls;
     }
 
-    private boolean conformProcedures(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs)
-            throws Exception {
+    private boolean conformProcedures(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs,
+            UnreadableItems unreadable) throws Exception {
         var complete = true;
         final var desired = new HashMap<String, JsonObject>();
         for (final var entry : snapshot.getProcedures().entrySet()) {
@@ -176,7 +190,10 @@ final class AdminSnapshotConformer {
             }
             try {
                 for (final var existingName : new ArrayList<>(fs.listProcedureNames(dbName))) {
-                    if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
+                    final var key = AdminSnapshotKeys.procedure(dbName, existingName);
+                    if (unreadable.contains(key)) {
+                        complete &= skipUnreadable(key, unreadable);
+                    } else if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
                         fs.deleteProcedure(dbName, existingName);
                         cache.removeProcedure(dbName, existingName);
                         compiledProcedures.invalidateProcedure(dbName, existingName);
@@ -217,8 +234,8 @@ final class AdminSnapshotConformer {
         }
     }
 
-    private boolean conformSchedules(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs)
-            throws Exception {
+    private boolean conformSchedules(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs,
+            UnreadableItems unreadable) throws Exception {
         var complete = true;
         final var desired = new HashMap<String, JsonObject>();
         for (final var entry : snapshot.getSchedules().entrySet()) {
@@ -235,7 +252,10 @@ final class AdminSnapshotConformer {
             }
             try {
                 for (final var existingName : new ArrayList<>(fs.listScheduleNames(dbName))) {
-                    if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
+                    final var key = AdminSnapshotKeys.schedule(dbName, existingName);
+                    if (unreadable.contains(key)) {
+                        complete &= skipUnreadable(key, unreadable);
+                    } else if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
                         fs.deleteSchedule(dbName, existingName);
                         cache.removeSchedule(dbName, existingName);
                         changed = true;
@@ -293,8 +313,8 @@ final class AdminSnapshotConformer {
     }
 
     private boolean conformCollection(String dbName, String collName, java.util.Set<String> desiredIndexes,
-            JsonObject desiredSchema, JsonObject snapshotTriggers, long epochAtStart, long snapshotIncarnation)
-            throws Exception {
+            JsonObject desiredSchema, JsonObject snapshotTriggers, long epochAtStart, long snapshotIncarnation,
+            UnreadableItems unreadable) throws Exception {
         final var waitMillis = clusterConfig.replicationAckTimeoutMs();
         if (!locks.tryLockDatabaseShared(dbName, waitMillis)) {
             logger.warning("Skipping the conform of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
@@ -303,7 +323,7 @@ final class AdminSnapshotConformer {
         }
         try {
             return conformCollectionUnderDatabaseBarrier(dbName, collName, desiredIndexes, desiredSchema,
-                    snapshotTriggers, epochAtStart, snapshotIncarnation, waitMillis);
+                    snapshotTriggers, epochAtStart, snapshotIncarnation, waitMillis, unreadable);
         } finally {
             locks.releaseDatabaseShared(dbName);
         }
@@ -311,7 +331,7 @@ final class AdminSnapshotConformer {
 
     private boolean conformCollectionUnderDatabaseBarrier(String dbName, String collName,
             java.util.Set<String> desiredIndexes, JsonObject desiredSchema, JsonObject snapshotTriggers,
-            long epochAtStart, long snapshotIncarnation, long waitMillis) throws Exception {
+            long epochAtStart, long snapshotIncarnation, long waitMillis, UnreadableItems unreadable) throws Exception {
         if (!locks.tryLockWrite(dbName, collName, waitMillis)) {
             logger.warning("Skipping the conform of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
                     + ": its write lock stayed held for " + waitMillis + "ms. The next round retries it.");
@@ -358,9 +378,20 @@ final class AdminSnapshotConformer {
                     fs.indexBuildMarkers().clear(dbName, collName, field);
                 }
             }
-            conformSchema(dbName, collName, desiredSchema);
-            conformTriggers(dbName, collName, snapshotTriggers);
-            return true;
+            var complete = true;
+            final var schemaKey = AdminSnapshotKeys.schema(dbName, collName);
+            if (unreadable.contains(schemaKey)) {
+                complete = skipUnreadable(schemaKey, unreadable);
+            } else {
+                conformSchema(dbName, collName, desiredSchema);
+            }
+            final var triggersKey = AdminSnapshotKeys.triggers(dbName, collName);
+            if (unreadable.contains(triggersKey)) {
+                complete &= skipUnreadable(triggersKey, unreadable);
+            } else {
+                conformTriggers(dbName, collName, snapshotTriggers);
+            }
+            return complete;
         } finally {
             locks.release(dbName, collName);
         }

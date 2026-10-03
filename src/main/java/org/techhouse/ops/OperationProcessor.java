@@ -389,7 +389,7 @@ public class OperationProcessor {
                     }
                     final var reservedVersion = ClusterWriteHelper.reserveDelete(dbName, collName,
                             deleteRequest.get_id());
-                    final var local = DeleteOperationHelper.executeDelete(deleteRequest);
+                    final var local = ClusterWriteHelper.deleteOrRetract(deleteRequest, reservedVersion);
                     if (local instanceof DeleteResponse) {
                         TriggerHelper.afterWrite(dbName, collName, EventType.DELETED, deleted, actingUser,
                                 deleteRequest.getTriggerDepth());

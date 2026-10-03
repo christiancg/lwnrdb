@@ -20,10 +20,14 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.DeleteOperationHelper;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
+import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -87,7 +91,7 @@ public class TombstoneOnMissingDeleteTest {
 
         assertEquals(OperationStatus.NOT_FOUND, delete("never-existed"));
 
-        assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).isEmpty());
+        assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).isEmpty());
     }
 
     @Test
@@ -96,8 +100,38 @@ public class TombstoneOnMissingDeleteTest {
 
         assertEquals(OperationStatus.OK, delete("present"));
 
-        final var tombstones = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+        final var tombstones = fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL);
         assertEquals(1, tombstones.size());
         assertTrue(tombstones.containsKey("present"));
+    }
+
+    @Test
+    public void test_a_failed_delete_retracts_its_reserved_tombstone() throws Exception {
+        save();
+
+        try (var deletes = org.mockito.Mockito.mockStatic(DeleteOperationHelper.class)) {
+            deletes.when(() -> DeleteOperationHelper.executeDelete(org.mockito.ArgumentMatchers.any()))
+                    .thenThrow(new java.io.IOException("disk full"));
+
+            assertEquals(OperationStatus.ERROR, delete("present"));
+        }
+
+        assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).isEmpty(),
+                "a tombstone outliving a delete that never applied deletes the document cluster-wide on the next"
+                        + " sweep");
+    }
+
+    @Test
+    public void test_a_delete_that_answers_an_error_retracts_its_reserved_tombstone() throws Exception {
+        save();
+
+        try (var deletes = org.mockito.Mockito.mockStatic(DeleteOperationHelper.class)) {
+            deletes.when(() -> DeleteOperationHelper.executeDelete(org.mockito.ArgumentMatchers.any()))
+                    .thenReturn(new OperationResponse(OperationType.DELETE, ErrorCode.ERROR_DELETING));
+
+            assertEquals(OperationStatus.ERROR, delete("present"));
+        }
+
+        assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).isEmpty());
     }
 }

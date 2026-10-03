@@ -117,6 +117,29 @@ final class TombstoneStore {
         }
     }
 
+    static void retract(File file, String id, long version) throws IOException {
+        if (!file.exists()) {
+            return;
+        }
+        final var lock = FileLocks.lockFor(file).writeLock();
+        lock.lock();
+        try {
+            final var parsed = parseTombstones(file);
+            if (parsed.unrecognised()) {
+                logger.error("No line in " + file.getName() + " could be read as a tombstone entry; leaving it"
+                        + " untouched rather than retracting from it");
+                return;
+            }
+            final var retracted = FieldIndexEntry.escapeIndexToken(id) + Globals.ID_SEPARATOR + version;
+            final var kept = parsed.lines().stream().filter(line -> !line.equals(retracted)).toList();
+            if (kept.size() != parsed.lines().size()) {
+                FileLocks.rewriteFileAtomically(file.toPath(), kept);
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
     private static ParsedTombstones parseTombstones(File file) throws IOException {
         final var entries = new HashMap<String, Long>();
         final var lines = new ArrayList<String>();

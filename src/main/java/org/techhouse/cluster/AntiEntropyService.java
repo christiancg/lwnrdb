@@ -124,7 +124,7 @@ public class AntiEntropyService implements MembershipListener {
                 entries.add(
                         new DigestEntry(entry.getValue(), entry.getVersion(), false, selfNodeId, entry.getLength()));
             }
-            for (final var tombstone : fs.readTombstones(dbName, collName).entrySet()) {
+            for (final var tombstone : fs.tombstones().read(dbName, collName).entrySet()) {
                 entries.add(new DigestEntry(tombstone.getKey(), tombstone.getValue(), true, selfNodeId));
             }
         } finally {
@@ -190,7 +190,7 @@ public class AntiEntropyService implements MembershipListener {
             for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
                 localLive.put(entry.getValue(), new LocalEntry(entry.getVersion(), entry.getLength()));
             }
-            localTombstones = fs.readTombstones(dbName, collName);
+            localTombstones = fs.tombstones().read(dbName, collName);
         } finally {
             locks.releaseRead(dbName, collName);
         }
@@ -272,7 +272,7 @@ public class AntiEntropyService implements MembershipListener {
         if (retention <= 0 || !everyPeerAnswered) {
             return;
         }
-        fs.compactTombstones(dbName, collName, HybridClock.pack(System.currentTimeMillis() - retention, 0));
+        fs.tombstones().compact(dbName, collName, HybridClock.pack(System.currentTimeMillis() - retention, 0));
     }
 
     private static List<DigestEntry> localDigest(Map<String, LocalEntry> localLive, Map<String, Long> localTombstones) {

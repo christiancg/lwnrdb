@@ -737,6 +737,39 @@ def test_a_session_does_not_survive_its_user_being_recreated(c):
     delete_user(c, "recycled_name")
 
 
+def test_a_deleted_user_can_still_roll_back(c):
+    section("A connection whose user was deleted mid-transaction can still roll back")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    delete_user(c, "doomed_writer")
+    c.send({"type": "DELETE", "databaseName": "auth_db", "collectionName": "allowed", "_id": "held_by_doomed"})
+    check_status("CREATE_USER 'doomed_writer' as an admin, the role that may open a transaction",
+                 create_user(c, "doomed_writer", "doomed_writer1234", admin=True), "OK")
+    held_save = {"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
+                 "object": {"_id": "held_by_doomed", "value": 1}}
+    with Conn() as doomed:
+        check_status("AUTHENTICATE as 'doomed_writer'", doomed.authenticate("doomed_writer", "doomed_writer1234"),
+                     "OK")
+        check_status("START_TRANSACTION", doomed.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("SAVE inside the transaction takes the collection lock", doomed.send(held_save), "OK")
+
+        check_status("DELETE_USER 'doomed_writer'", delete_user(c, "doomed_writer"), "OK")
+
+        check_code("COMMIT is refused once the user is gone", doomed.send({"type": "COMMIT_TRANSACTION"}),
+                   "UNAUTHENTICATED", "401-1")
+        check_status("ROLLBACK still ends the transaction", doomed.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
+        check_status("the admin can write the collection without waiting for the socket to close",
+                     c.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
+                             "object": {"_id": "after_rollback", "value": 2}}), "OK")
+        check_status("the rolled-back write never landed",
+                     c.send({"type": "FIND_BY_ID", "databaseName": "auth_db", "collectionName": "allowed",
+                             "_id": "held_by_doomed"}), "NOT_FOUND")
+        check_code("with no transaction left, ROLLBACK needs authentication again",
+                   doomed.send({"type": "ROLLBACK_TRANSACTION"}), "UNAUTHENTICATED", "401-1")
+
+    c.send({"type": "DELETE", "databaseName": "auth_db", "collectionName": "allowed", "_id": "after_rollback"})
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
@@ -811,6 +844,9 @@ def main():
 
     with Conn() as c:
         test_a_session_does_not_survive_its_user_being_recreated(c)
+
+    with Conn() as c:
+        test_a_deleted_user_can_still_roll_back(c)
 
     # ── cleanup ────────────────────────────────────────────────────────
     with Conn() as c:

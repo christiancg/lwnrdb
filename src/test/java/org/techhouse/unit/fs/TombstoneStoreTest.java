@@ -43,32 +43,73 @@ public class TombstoneStoreTest {
 
     @Test
     public void test_a_tombstone_id_with_a_pipe_round_trips() throws Exception {
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "mydb|mycoll|3", 42L);
-        assertEquals(42L, fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).get("mydb|mycoll|3"));
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "mydb|mycoll|3", 42L);
+        assertEquals(42L, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get("mydb|mycoll|3"));
     }
 
     @Test
     public void test_a_tombstone_id_with_a_delimiter_round_trips() throws Exception {
         final var id = "a" + Globals.ID_SEPARATOR + "b";
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, id, 7L);
-        assertEquals(7L, fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).get(id));
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, id, 7L);
+        assertEquals(7L, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get(id));
     }
 
     @Test
     public void test_a_tombstone_id_with_a_newline_round_trips() throws Exception {
         final var id = "a\nb\rc\\d";
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, id, 9L);
-        assertEquals(9L, fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).get(id));
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, id, 9L);
+        assertEquals(9L, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get(id));
+    }
+
+    @Test
+    public void test_retract_removes_only_the_matching_id_and_version() throws Exception {
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 5L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a|b", 7L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "b", 7L);
+
+        fs.tombstones().retract(TestGlobals.DB, TestGlobals.COLL, "a|b", 7L);
+        fs.tombstones().retract(TestGlobals.DB, TestGlobals.COLL, "a", 6L);
+
+        final var tombstones = fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL);
+        assertEquals(5L, tombstones.get("a"));
+        assertEquals(7L, tombstones.get("b"));
+        assertFalse(tombstones.containsKey("a|b"));
+    }
+
+    @Test
+    public void test_retract_keeps_an_older_tombstone_of_the_same_id() throws Exception {
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 5L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "a", 9L);
+
+        fs.tombstones().retract(TestGlobals.DB, TestGlobals.COLL, "a", 9L);
+
+        assertEquals(5L, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get("a"));
+    }
+
+    @Test
+    public void test_retract_leaves_an_unrecognised_file_alone() throws Exception {
+        java.nio.file.Files.writeString(tombstoneFile().toPath(), "garbage\n");
+
+        fs.tombstones().retract(TestGlobals.DB, TestGlobals.COLL, "a", 1L);
+
+        assertEquals("garbage\n", java.nio.file.Files.readString(tombstoneFile().toPath()));
+    }
+
+    @Test
+    public void test_retract_of_an_absent_file_is_a_no_op() throws Exception {
+        fs.tombstones().retract(TestGlobals.DB, TestGlobals.COLL, "a", 1L);
+
+        assertFalse(tombstoneFile().exists());
     }
 
     @Test
     public void test_compact_rewrites_in_the_new_grammar() throws Exception {
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "old|id", 1L);
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "new|id", 100L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "old|id", 1L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "new|id", 100L);
 
-        fs.compactTombstones(TestGlobals.DB, TestGlobals.COLL, 50L);
+        fs.tombstones().compact(TestGlobals.DB, TestGlobals.COLL, 50L);
 
-        final var remaining = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+        final var remaining = fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL);
         assertEquals(1, remaining.size());
         assertEquals(100L, remaining.get("new|id"));
         assertTrue(java.nio.file.Files.readString(tombstoneFile().toPath()).contains(Globals.ID_SEPARATOR),
@@ -80,9 +121,9 @@ public class TombstoneStoreTest {
         final var content = "a|1" + System.lineSeparator() + "b|2" + System.lineSeparator();
         java.nio.file.Files.writeString(tombstoneFile().toPath(), content);
 
-        assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).isEmpty(),
+        assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).isEmpty(),
                 "a pre-change tombstone file is unparseable, not half-readable");
-        assertDoesNotThrow(() -> fs.compactTombstones(TestGlobals.DB, TestGlobals.COLL, 0L));
+        assertDoesNotThrow(() -> fs.tombstones().compact(TestGlobals.DB, TestGlobals.COLL, 0L));
     }
 
     @Test
@@ -90,7 +131,7 @@ public class TombstoneStoreTest {
         final var content = "a|1" + System.lineSeparator() + "b|2" + System.lineSeparator();
         java.nio.file.Files.writeString(tombstoneFile().toPath(), content);
 
-        fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+        fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL);
 
         assertEquals(content, java.nio.file.Files.readString(tombstoneFile().toPath()),
                 "a file where nothing parsed is not the file this loader expects, so it must be left untouched"
@@ -102,7 +143,7 @@ public class TombstoneStoreTest {
         final var content = "a|1" + System.lineSeparator() + "b|2" + System.lineSeparator();
         java.nio.file.Files.writeString(tombstoneFile().toPath(), content);
 
-        fs.compactTombstones(TestGlobals.DB, TestGlobals.COLL, 0L);
+        fs.tombstones().compact(TestGlobals.DB, TestGlobals.COLL, 0L);
 
         assertEquals(content, java.nio.file.Files.readString(tombstoneFile().toPath()),
                 "compaction must not rewrite a file it understood none of");
@@ -110,11 +151,11 @@ public class TombstoneStoreTest {
 
     @Test
     public void test_a_torn_last_line_is_healed_on_read() throws Exception {
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "surviving", 5L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "surviving", 5L);
         java.nio.file.Files.writeString(tombstoneFile().toPath(),
                 "torn-line-with-no-separator" + System.lineSeparator(), java.nio.file.StandardOpenOption.APPEND);
 
-        final var read = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+        final var read = fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL);
 
         assertEquals(1, read.size());
         assertEquals(5L, read.get("surviving"));
@@ -125,14 +166,14 @@ public class TombstoneStoreTest {
 
     @Test
     public void test_append_failure_leaves_the_file_unchanged() throws Exception {
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "existing", 1L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "existing", 1L);
         final var file = tombstoneFile();
         final var before = java.nio.file.Files.readAllBytes(file.toPath());
 
         assertTrue(file.setWritable(false), "the test needs a writable-toggle filesystem to force the append to fail");
         try {
             assertThrows(java.io.IOException.class,
-                    () -> fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "blocked", 2L));
+                    () -> fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "blocked", 2L));
         } finally {
             assertTrue(file.setWritable(true));
         }
@@ -145,9 +186,9 @@ public class TombstoneStoreTest {
     public void test_an_append_after_an_unterminated_parseable_line_keeps_both_tombstones() throws Exception {
         java.nio.file.Files.writeString(tombstoneFile().toPath(), "torn" + Globals.ID_SEPARATOR + "17");
 
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "acked", 99L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "acked", 99L);
 
-        final var read = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+        final var read = fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL);
         assertEquals(17L, read.get("torn"));
         assertEquals(99L, read.get("acked"),
                 "an acknowledged tombstone must not be glued onto a torn line the next heal would drop");
@@ -155,8 +196,8 @@ public class TombstoneStoreTest {
 
     @Test
     public void test_an_append_after_a_terminated_line_writes_no_blank_line() throws Exception {
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "first", 1L);
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "second", 2L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "first", 1L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "second", 2L);
 
         assertEquals(2, java.nio.file.Files.readAllLines(tombstoneFile().toPath()).size());
     }

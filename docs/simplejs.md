@@ -692,6 +692,13 @@ refusals only). A row carries the run's identity, outcome, attempt number and me
 is the outcome no other surface reports — a trigger whose definer was deleted, a schedule whose
 procedure is gone. An hourly owner-only sweep applies the retention.
 
+Script-controlled text in a row (`errorName`, `errorMessage`, each `stack` and `logs` line) that is
+shaped like a custom type — `#name(...)` — is stored with a leading backslash, so `#tag(fix)` reads
+back as `\#tag(fix)`. The row is built in Java rather than parsed from the wire, and the reader
+promotes every custom-shaped string, so without the escape an unregistered shape made the row
+unreadable after an eviction or restart (skipped by every scan) and a registered one such as
+`#geo(1,2)` came back as a custom value where the warm row held a string.
+
 ### Under clustering
 
 `EnforcingDatabaseAccess.dispatch` consults `cluster/ClusterRouter` before running locally, so a

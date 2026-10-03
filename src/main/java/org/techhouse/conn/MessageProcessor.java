@@ -98,6 +98,8 @@ public class MessageProcessor implements Runnable {
                                             close = true;
                                         }
                                         response = eJson.toJson(responseObj);
+                                    } else if (isOwnTransactionRollback(type, clientId)) {
+                                        response = handleAuthorized(parsedMessage, message, clientId).response();
                                     } else {
                                         final var username = clientTracker.getAuthenticatedUsername(clientId);
                                         if (username == null) {
@@ -205,6 +207,10 @@ public class MessageProcessor implements Runnable {
         } catch (Exception e) {
             return rawMessage;
         }
+    }
+
+    private boolean isOwnTransactionRollback(OperationType type, UUID clientId) {
+        return type == OperationType.ROLLBACK_TRANSACTION && clientTracker.getActiveTransaction(clientId) != null;
     }
 
     private Handled handleAuthorized(OperationRequest parsedMessage, String rawMessage, UUID clientId) {

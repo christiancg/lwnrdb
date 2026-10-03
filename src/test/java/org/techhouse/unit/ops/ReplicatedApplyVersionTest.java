@@ -133,8 +133,8 @@ public class ReplicatedApplyVersionTest {
         assertTrue(applyDelete(100L));
 
         assertEquals(OperationStatus.OK, find("a").getStatus(), "the newer document must survive an older delete");
-        assertEquals(100L, IocContainer.get(org.techhouse.fs.FileSystem.class)
-                .readTombstones(TestGlobals.DB, TestGlobals.COLL).get("a"));
+        assertEquals(100L, IocContainer.get(org.techhouse.fs.FileSystem.class).tombstones()
+                .read(TestGlobals.DB, TestGlobals.COLL).get("a"));
     }
 
     @Test

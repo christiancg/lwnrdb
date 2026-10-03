@@ -73,6 +73,6 @@ public class ReplicatedTxApplyHelperTest {
         assertEquals(OperationStatus.OK, findStatus("tx-a"));
         assertEquals(OperationStatus.OK, findStatus("tx-b"));
         assertEquals(OperationStatus.NOT_FOUND, findStatus("tx-del"));
-        assertEquals(12L, fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).get("tx-del"));
+        assertEquals(12L, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get("tx-del"));
     }
 }

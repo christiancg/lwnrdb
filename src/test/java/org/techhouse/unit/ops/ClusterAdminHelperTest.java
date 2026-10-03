@@ -147,6 +147,47 @@ public class ClusterAdminHelperTest {
         assertNull(ClusterAdminHelper.guard(adminOp()));
     }
 
+    private void becomeNonCoordinator(int expectedSize) throws Exception {
+        enable(expectedSize);
+        armAdminSync(true);
+        ownership.setSelfNodeId("not-the-coordinator");
+        ownership.onMembershipChanged(
+                new MembershipView(List.of(node(), new NodeInfo("other", "127.0.0.1", 9991, NodeState.ALIVE, 1L, 1L))));
+        org.junit.jupiter.api.Assumptions.assumeFalse(ownership.isAdminCoordinator(),
+                "this node must not be the coordinator");
+    }
+
+    @Test
+    public void test_guard_refuses_a_coordinated_op_on_a_non_coordinator() throws Exception {
+        becomeNonCoordinator(2);
+
+        assertEquals("421-1", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode(),
+                "a DDL that runs where it cannot be replicated diverges this node at an unchanged epoch");
+    }
+
+    @Test
+    public void test_guard_lets_a_replicated_op_through_on_a_non_coordinator() throws Exception {
+        becomeNonCoordinator(2);
+        final var request = adminOp();
+        request.setReplicated(true);
+
+        assertNull(ClusterAdminHelper.guard(request));
+    }
+
+    @Test
+    public void test_guard_ignores_non_admin_ops_on_a_non_coordinator() throws Exception {
+        becomeNonCoordinator(2);
+
+        assertNull(ClusterAdminHelper.guard(new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL)));
+    }
+
+    @Test
+    public void test_guard_answers_not_owner_before_no_quorum_on_a_non_coordinator() throws Exception {
+        becomeNonCoordinator(5);
+
+        assertEquals("421-1", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode());
+    }
+
     @Test
     public void test_guard_rejects_admin_without_quorum() throws Exception {
         enable(3);

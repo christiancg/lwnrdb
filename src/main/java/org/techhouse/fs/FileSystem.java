@@ -27,6 +27,7 @@ public class FileSystem {
     private final FilePaths paths = new FilePaths();
     private final DirtyIndexMarkers dirtyIndexMarkers = new DirtyIndexMarkers(paths);
     private final IndexBuildMarkers indexBuildMarkers = new IndexBuildMarkers(paths);
+    private final Tombstones tombstones = new Tombstones(paths);
     private final FolderQuarantine folderQuarantine = new FolderQuarantine(paths);
     private final FieldIndexStore fieldIndexStore = new FieldIndexStore(paths);
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
@@ -194,16 +195,8 @@ public class FileSystem {
         return folderQuarantine;
     }
 
-    public void appendTombstone(String dbName, String collName, String id, long version) throws IOException {
-        TombstoneStore.append(paths.tombstoneFile(dbName, collName), id, version);
-    }
-
-    public Map<String, Long> readTombstones(String dbName, String collName) throws IOException {
-        return TombstoneStore.read(paths.tombstoneFile(dbName, collName));
-    }
-
-    public void compactTombstones(String dbName, String collName, long minVersionToKeep) throws IOException {
-        TombstoneStore.compact(paths.tombstoneFile(dbName, collName), minVersionToKeep);
+    public Tombstones tombstones() {
+        return tombstones;
     }
 
     public List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {

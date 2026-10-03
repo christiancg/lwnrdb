@@ -1307,6 +1307,15 @@ def test_run_history_failures(conn: Conn):
         check("the row carries the message", "history boom" in (row.get("errorMessage") or ""), f"row={row!r}")
         check("the row carries a stack", bool(row.get("stack")), f"row={row!r}")
 
+    check_status("install a procedure whose message is shaped like a custom type",
+                 conn.save_procedure("history_shaped", "throw new Error('#tag(fix)');"), "OK")
+    conn.send({"type": "CALL_PROCEDURE", "databaseName": DB, "procedureName": "history_shaped"})
+    shaped = await_history(conn, kind="CALL_PROCEDURE", name="history_shaped")
+    check("the custom-shaped failure is recorded", len(shaped) == 1, f"rows={shaped!r}")
+    if shaped:
+        check("its message is stored escaped", shaped[0].get("errorMessage") == "\\#tag(fix)",
+              f"row={shaped[0]!r}")
+
     # A trigger whose definer is gone never runs at all, which no other surface reports.
     check_status("install a trigger owned by a user about to be deleted",
                  conn.send({"type": "CREATE_USER", "username": "ghostdefiner", "password": "password123",
@@ -1332,6 +1341,15 @@ def test_run_history_failures(conn: Conn):
 # ══════════════════════════════════════════════════════════════════════════
 # Phase 2 — an interrupted commit, an unreadable trigger file, retries
 # ══════════════════════════════════════════════════════════════════════════
+
+def test_a_custom_shaped_history_row_survives_the_restart(conn: Conn):
+    section("A custom-shaped run history row is still readable after a restart")
+    rows = history_rows(conn, kind="CALL_PROCEDURE", name="history_shaped")
+    check("the row is still listed after the restart", len(rows) == 1, f"rows={rows!r}")
+    if rows:
+        check("and reads back as the same plain string", rows[0].get("errorMessage") == "\\#tag(fix)",
+              f"row={rows[0]!r}")
+
 
 def fenced_collection_folder(work_dir: str) -> str:
     return os.path.join(work_dir, "db", DB, FENCED_COLL)
@@ -1931,6 +1949,7 @@ def main():
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_a_recovered_commit_fires_its_triggers(conn)
+            test_a_custom_shaped_history_row_survives_the_restart(conn)
             test_an_unreadable_trigger_file_is_not_an_empty_one(conn, work_dir)
             test_a_corrupt_trigger_file_is_not_an_empty_one(conn, work_dir)
             test_an_unparseable_definition_is_answered_not_dropped(conn, work_dir)

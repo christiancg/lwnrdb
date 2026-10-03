@@ -75,6 +75,7 @@ CLUSTER_SECRET = "integration-cluster-secret"
 # Kept as a constant because a test has to reason in gossip rounds: a dead node's NodeInfo stays
 # frozen at whatever it last published, and how long that takes to happen is this interval.
 GOSSIP_INTERVAL_S = 0.5
+ANTI_ENTROPY_INTERVAL_S = 3.0
 
 # How the crash-during-placement test fills the short window between killing a node and the driver
 # dropping it: concurrent connections, for long enough to cover suspectTimeoutMs several times over.
@@ -560,7 +561,7 @@ class Node:
             "replicationAckTimeoutMs=5000\n"
             "virtualNodesPerNode=128\n"
             "readFallbackToLocal=true\n"
-            "antiEntropyIntervalMs=3000\n"
+            f"antiEntropyIntervalMs={int(ANTI_ENTROPY_INTERVAL_S * 1000)}\n"
             "tombstoneRetentionMs=86400000\n"
             "scriptsEnabled=true\n"
             # Well above replicationAckTimeoutMs, so a script that outlives a write ack proves
@@ -2500,6 +2501,48 @@ def test_admin_ops_replicate_in_commit_order():
     check("every node holds the burst's last version and body", wait_until(_last_write_everywhere, timeout_s=30.0))
 
 
+def node_id_of(node) -> str:
+    with open(os.path.join(node.work_dir, "db", "cluster", "node.id")) as fp:
+        content = fp.read()
+    return content.strip()
+
+
+def procedure_file(node, name: str) -> str:
+    return os.path.join(node.work_dir, "db", DB, ".procedures", f"{name}.json")
+
+
+def test_an_unreadable_definition_is_not_deleted_on_peers():
+    section("Admin anti-entropy — a definition the winning node cannot read is not deleted elsewhere")
+
+    name = "unreadable_probe"
+    check_status("SAVE_PROCEDURE", op_with_retry(lambda: op(nodes[0].client_port, {
+        "type": "SAVE_PROCEDURE", "databaseName": DB, "name": name, "script": "return 1;"})), "OK")
+    alive = [node for node in nodes if node.alive]
+    check("the procedure reaches every node",
+          wait_until(lambda: all(os.path.isfile(procedure_file(node, name)) for node in alive), timeout_s=30.0))
+
+    winner = max(alive, key=node_id_of)
+    peers = [node for node in alive if node is not winner]
+    with open(procedure_file(peers[0], name)) as fp:
+        intact = fp.read()
+    with open(procedure_file(winner, name), "w") as fp:
+        fp.write("{\"name\": \"torn")
+
+    time.sleep(4 * ANTI_ENTROPY_INTERVAL_S)
+
+    for peer in peers:
+        path = procedure_file(peer, name)
+        still_there = os.path.isfile(path)
+        check(f"node-{peer.index} still holds the procedure after several admin sweeps", still_there)
+        if still_there:
+            with open(path) as fp:
+                check(f"node-{peer.index}'s copy is unchanged", fp.read() == intact)
+
+    with open(procedure_file(winner, name), "w") as fp:
+        fp.write(intact)
+    op_with_retry(lambda: op(nodes[0].client_port, {"type": "DELETE_PROCEDURE", "databaseName": DB, "name": name}))
+
+
 def test_schedule_replication_and_single_firing():
     section("Scheduled procedures — DDL replicates, and a schedule fires on exactly one node")
 
@@ -2906,6 +2949,7 @@ def main():
         test_script_placement_falls_back_when_the_target_dies()
         test_before_hook_runs_on_the_owner()
         test_admin_ops_replicate_in_commit_order()
+        test_an_unreadable_definition_is_not_deleted_on_peers()
         test_schedule_replication_and_single_firing()
         # Failure / rejoin last: they degrade then restore the cluster.
         test_node_failure_quorum_maintained()

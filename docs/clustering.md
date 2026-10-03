@@ -378,6 +378,14 @@ membership machinery — serializes them:
    node's own documents) that each node must perform locally and deterministically.
 3. A node without a write quorum rejects an admin op up front (`503-2`) — the same
    split-brain protection document writes get.
+4. A node that is not the coordinator refuses a coordinated, non-replicated admin op with
+   `421-1` **before** running it. The router forwards from the view it holds, so a peer whose
+   view is stale can forward to a node that no longer coordinates, and the coordinator role can
+   also move between routing and execution. Running the op there used to commit it locally with
+   no epoch bump and no replication while the client was told `421-1`, leaving a change only the
+   next admin conform resolved — pushed cluster-wide or reverted by node id. The coordinator
+   check runs ahead of the quorum check, so a minority node that does not coordinate still says
+   "retry elsewhere" rather than `503-2`.
 
 The coordinator runs coordinated admin ops **one at a time**, through an *admin lane*
 (`ClusterAdminHelper.inAdminLane`) that spans the quorum/sync guard, the local execution,
@@ -644,7 +652,7 @@ behind.
 
 On a membership change and on the same periodic sweep, `cluster/AdminAntiEntropyService`
 pulls each live peer's `ADMIN_SNAPSHOT` (`{epoch, epochUnconfirmed, databases, collections, users, schemas,
-procedures, triggers, schedules}`, built from disk) and keeps the winner under the
+procedures, triggers, schedules, unreadable}`, built from disk) and keeps the winner under the
 `(epoch, nodeId)` order — a higher epoch wins, and at an **equal** epoch the higher node id
 does, so two nodes at the same epoch converge instead of conforming to each other forever.
 When that winner is a peer rather than this node, it **conforms** local state to it: upsert
@@ -657,7 +665,15 @@ re-created name always starts empty. Each create/drop takes the target collectio
 mirroring the DDL handlers, and skips the target for the round if that lock stays busy. The
 winning epoch is adopted only when nothing was skipped: adopting it after a partial conform
 would leave this node equal to the peer, and an equal epoch outranks only on node id, so the
-skipped work might never be retried. A document reconciliation pass follows, so freshly materialized
+skipped work might never be retried.
+
+A definition the snapshot's node could not read (a torn schema, triggers file, procedure or
+schedule) is listed under `unreadable` as `<kind>|<db>|<name>` instead of being left out. Left
+out, it read as deleted, and every peer conformed by deleting its own valid copy — one torn file
+on the node with the highest id stripped schemas, before-write hooks, procedures or schedules from
+the rest of the cluster. The conform leaves an unreadable item exactly as it is and reports the
+round incomplete, so the epoch is not adopted and the next round retries. A peer on an older
+version sends no `unreadable` field and behaves as before. A document reconciliation pass follows, so freshly materialized
 collections repopulate. Because authority is the highest epoch, a stale rejoining node
 never overwrites live state — it catches up instead.
 

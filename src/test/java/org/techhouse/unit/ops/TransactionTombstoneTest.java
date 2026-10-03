@@ -96,7 +96,7 @@ public class TransactionTombstoneTest {
 
         assertEquals(OperationStatus.OK, TransactionOperationHelper.commit(clientId).getStatus());
 
-        assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("gone"),
+        assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("gone"),
                 "a committed transactional delete must leave a tombstone behind");
     }
 
@@ -110,7 +110,7 @@ public class TransactionTombstoneTest {
 
         coordinator.reserveTransactionTombstones(transaction);
 
-        assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("moved"),
+        assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("moved"),
                 "a tombstone is local durability, not replication: ownership must not gate it");
     }
 
@@ -144,7 +144,7 @@ public class TransactionTombstoneTest {
 
         org.techhouse.ops.TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
 
-        assertFalse(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("survivor"),
+        assertFalse(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("survivor"),
                 "the replay skipped this delete because the document was written after the prepare, so reserving a"
                         + " tombstone at a fresh clock version would outrank the survivor and delete it everywhere");
         final var find = new org.techhouse.ops.req.FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
@@ -172,7 +172,7 @@ public class TransactionTombstoneTest {
 
         org.techhouse.ops.TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
 
-        assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("doomed"),
+        assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("doomed"),
                 "a delete the replay actually applies must still leave its tombstone");
     }
 }

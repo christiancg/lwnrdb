@@ -6,6 +6,7 @@ import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.WriteGuard;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.OperationResponse;
@@ -51,6 +52,25 @@ public final class ClusterWriteHelper {
 
     public static Long reserveDelete(String dbName, String collName, String id) throws java.io.IOException {
         return coordinator.reserveDelete(dbName, collName, List.of(id));
+    }
+
+    public static OperationResponse deleteOrRetract(DeleteRequest request, Long reservedVersion) throws Exception {
+        final OperationResponse local;
+        try {
+            local = DeleteOperationHelper.executeDelete(request);
+        } catch (Exception e) {
+            retractDelete(request, reservedVersion);
+            throw e;
+        }
+        if (!(local instanceof DeleteResponse)) {
+            retractDelete(request, reservedVersion);
+        }
+        return local;
+    }
+
+    private static void retractDelete(DeleteRequest request, Long reservedVersion) throws java.io.IOException {
+        coordinator.retractDelete(request.getDatabaseName(), request.getCollectionName(), List.of(request.get_id()),
+                reservedVersion);
     }
 
     public static OperationResponse afterDelete(String dbName, String collName, String id, Long reservedVersion,

@@ -44,9 +44,15 @@ public class UserOperationHelper {
             if (user == null || !PasswordHasher.verify(password, user.getPasswordHash())) {
                 return new OperationResponse(OperationType.AUTHENTICATE, ErrorCode.WRONG_CREDENTIALS);
             }
-
-            clientTracker.setAuthenticatedUser(clientId, username);
-            return OperationResponse.ok(OperationType.AUTHENTICATE, "Authenticated");
+            final var verifiedHash = user.getPasswordHash();
+            return AdminOperationHelper.withUsersLock(() -> {
+                final var current = cache.getAdminUserEntry(username);
+                if (current == null || !verifiedHash.equals(current.getPasswordHash())) {
+                    return new OperationResponse(OperationType.AUTHENTICATE, ErrorCode.WRONG_CREDENTIALS);
+                }
+                clientTracker.setAuthenticatedUser(clientId, username);
+                return OperationResponse.ok(OperationType.AUTHENTICATE, "Authenticated");
+            });
         });
     }
 

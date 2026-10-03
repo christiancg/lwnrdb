@@ -72,10 +72,20 @@ public class ClusterCoordinator {
                 .collect(Collectors.toSet());
         for (final var id : ids) {
             if (present.contains(id)) {
-                fs.appendTombstone(dbName, collName, id, version);
+                fs.tombstones().append(dbName, collName, id, version);
             }
         }
         return version;
+    }
+
+    public void retractDelete(String dbName, String collName, List<String> ids, Long reservedVersion)
+            throws java.io.IOException {
+        if (reservedVersion == null) {
+            return;
+        }
+        for (final var id : ids) {
+            fs.tombstones().retract(dbName, collName, id, reservedVersion);
+        }
     }
 
     public ReplicationOutcome replicateDelete(String dbName, String collName, List<String> ids, Long reservedVersion) {
@@ -117,7 +127,7 @@ public class ClusterCoordinator {
             final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
             final var version = hybridClock.next();
             for (final var id : deleteIds) {
-                fs.appendTombstone(parts[0], parts[1], id, version);
+                fs.tombstones().append(parts[0], parts[1], id, version);
             }
             reserved.put(collId, version);
         }
@@ -177,7 +187,7 @@ public class ClusterCoordinator {
             } else {
                 version = hybridClock.next();
                 for (final var id : deleteIds) {
-                    fs.appendTombstone(dbName, collName, id, version);
+                    fs.tombstones().append(dbName, collName, id, version);
                 }
             }
             final var versions = new ArrayList<>(Collections.nCopies(deleteIds.size(), Long.toString(version)));

@@ -20,6 +20,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
@@ -263,8 +264,8 @@ public class ScriptRunHistory {
         document.addProperty("durationMs", runRecord.durationMs());
         document.addProperty("attempt", runRecord.attempt());
         document.addProperty("outcome", runRecord.outcome());
-        document.addProperty("errorName", runRecord.errorName());
-        document.addProperty("errorMessage", clip(runRecord.errorMessage()));
+        document.addProperty("errorName", storedText(runRecord.errorName()));
+        document.addProperty("errorMessage", storedText(clip(runRecord.errorMessage())));
         document.add("stack", strings(runRecord.stack()));
         document.add("metrics", runRecord.metrics().toJson());
         document.add("logs",
@@ -276,9 +277,13 @@ public class ScriptRunHistory {
     private static JsonArray strings(Iterable<String> values) {
         final var array = new JsonArray();
         for (final var value : values) {
-            array.add(new JsonString(value));
+            array.add(new JsonString(storedText(value)));
         }
         return array;
+    }
+
+    private static String storedText(String value) {
+        return value != null && JsonCustom.isJsonCustom(new JsonString(value)) ? "\\" + value : value;
     }
 
     private static String clip(String message) {

@@ -81,7 +81,7 @@ public final class ReplicatedApplyHelper {
         final var versions = payload.getVersions();
         final var acceptedDocuments = new ArrayList<JsonObject>();
         final var acceptedVersions = new ArrayList<Long>();
-        final var tombstones = fs.readTombstones(payload.getDbName(), payload.getCollName());
+        final var tombstones = fs.tombstones().read(payload.getDbName(), payload.getCollName());
         for (var i = 0; i < documents.size(); i++) {
             final var document = documents.get(i);
             final var version = versionAt(versions, i);
@@ -142,7 +142,7 @@ public final class ReplicatedApplyHelper {
             final var version = versionAt(versions, i);
             // Tombstone with the owner's version even when absent, so anti-entropy cannot resurrect it.
             if (version != null) {
-                fs.appendTombstone(payload.getDbName(), payload.getCollName(), id, version);
+                fs.tombstones().append(payload.getDbName(), payload.getCollName(), id, version);
                 hybridClock.observe(version);
             }
             final var stored = storedVersionOf(payload.getDbName(), payload.getCollName(), id);

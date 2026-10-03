@@ -1,6 +1,7 @@
 package org.techhouse.cluster;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 import org.techhouse.cache.Cache;
@@ -143,12 +144,12 @@ public class AdminAntiEntropyService implements MembershipListener {
         return nodeId.compareTo(bestNodeId) > 0;
     }
 
-    private <T> T readable(String dbName, String name, String kind, Supplier<T> loader) {
+    private <T> T readable(String key, List<String> unreadable, Supplier<T> loader) {
         try {
             return loader.get();
         } catch (MetadataReadException e) {
-            logger.warning("Leaving the " + kind + " of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + name
-                    + " out of the admin snapshot: " + e.getMessage());
+            logger.warning("Marking " + key + " unreadable in the admin snapshot: " + e.getMessage());
+            unreadable.add(key);
             return null;
         }
     }
@@ -163,16 +164,17 @@ public class AdminAntiEntropyService implements MembershipListener {
         final var procedures = new JsonObject();
         final var triggers = new JsonObject();
         final var schedules = new JsonObject();
+        final var unreadable = new ArrayList<String>();
         for (final var dbName : cache.getUserDatabaseNames()) {
             for (final var procedureName : fs.listProcedureNames(dbName)) {
-                final var procedure = readable(dbName, procedureName, "procedure",
+                final var procedure = readable(AdminSnapshotKeys.procedure(dbName, procedureName), unreadable,
                         () -> cache.loadProcedureUncached(dbName, procedureName));
                 if (procedure != null) {
                     procedures.add(Cache.getCollectionIdentifier(dbName, procedureName), procedure.toJsonObject());
                 }
             }
             for (final var scheduleName : fs.listScheduleNames(dbName)) {
-                final var schedule = readable(dbName, scheduleName, "schedule",
+                final var schedule = readable(AdminSnapshotKeys.schedule(dbName, scheduleName), unreadable,
                         () -> cache.loadScheduleUncached(dbName, scheduleName));
                 if (schedule != null) {
                     schedules.add(Cache.getCollectionIdentifier(dbName, scheduleName), schedule.toJsonObject());
@@ -184,12 +186,12 @@ public class AdminAntiEntropyService implements MembershipListener {
                     final var json = collEntry.getData().deepCopy();
                     json.addProperty(Globals.PK_FIELD, collEntry.get_id());
                     collections.add(json);
-                    final var schema = readable(dbName, collName, "schema",
+                    final var schema = readable(AdminSnapshotKeys.schema(dbName, collName), unreadable,
                             () -> cache.loadSchemaUncached(dbName, collName));
                     if (schema != null) {
                         schemas.add(collEntry.get_id(), schema);
                     }
-                    final var collTriggers = readable(dbName, collName, "triggers",
+                    final var collTriggers = readable(AdminSnapshotKeys.triggers(dbName, collName), unreadable,
                             () -> cache.loadTriggersUncached(dbName, collName));
                     if (collTriggers != null && !collTriggers.isEmpty()) {
                         triggers.add(collEntry.get_id(), TriggerDefinition.toJsonArray(collTriggers));
@@ -204,6 +206,7 @@ public class AdminAntiEntropyService implements MembershipListener {
         final var payload = new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas,
                 procedures, triggers, schedules);
         payload.setEpochConfirmed(adminEpoch.isConfirmed());
+        payload.setUnreadable(unreadable);
         final var self = membershipService.getSelf();
         payload.setNodeId(self != null ? self.getNodeId() : null);
         return payload;

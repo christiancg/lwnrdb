@@ -95,7 +95,7 @@ public class AntiEntropyServiceTest {
     @Test
     public void test_build_digest_includes_live_docs_and_tombstones() throws Exception {
         seed();
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "gone", 555L);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "gone", 555L);
         final var digest = service.buildDigest(TestGlobals.DB, TestGlobals.COLL).getDigest();
         final var live = digest.stream().filter(e -> e.getId().equals("a")).findFirst().orElseThrow();
         assertFalse(live.isDeleted());
@@ -109,7 +109,7 @@ public class AntiEntropyServiceTest {
     public void test_summary_matches_between_owner_and_replica_after_a_write() throws Exception {
         seed();
         for (var logical = 1; logical <= 8; logical++) {
-            fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "gone-" + logical,
+            fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "gone-" + logical,
                     HybridClock.pack(System.currentTimeMillis(), logical));
         }
         final var owner = service.buildDigest(TestGlobals.DB, TestGlobals.COLL);
@@ -122,7 +122,8 @@ public class AntiEntropyServiceTest {
     @Test
     public void test_the_summary_reconcile_sends_matches_the_digest_it_would_build() throws Exception {
         seed();
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "gone", HybridClock.pack(System.currentTimeMillis(), 1));
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "gone",
+                HybridClock.pack(System.currentTimeMillis(), 1));
         final var sentSummary = new AtomicReference<String>();
         final var pool = mock(PeerConnectionPool.class);
         when(pool.request(any(), any(), anyLong())).thenAnswer(invocation -> {
@@ -238,7 +239,7 @@ public class AntiEntropyServiceTest {
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
         assertFalse(hasLive());
-        assertEquals(tombstoneVersion, fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).get("a"));
+        assertEquals(tombstoneVersion, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get("a"));
     }
 
     @Test
@@ -356,14 +357,14 @@ public class AntiEntropyServiceTest {
         final var originalRetention = config.getTombstoneRetentionMs();
         TestUtils.setPrivateField(config, "tombstoneRetentionMs", 1L);
         try {
-            fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "old", HybridClock.pack(1L, 0));
+            fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "old", HybridClock.pack(1L, 0));
             final var pool = mock(PeerConnectionPool.class);
             when(pool.request(any(), any(), anyLong())).thenThrow(new java.io.IOException("unreachable"));
             injectPeer(pool);
 
             service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
-            assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("old"),
+            assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("old"),
                     "a tombstone must survive a round no peer answered: collecting it while partitioned is"
                             + " exactly when a peer still holding the document resurrects it");
         } finally {
@@ -378,7 +379,7 @@ public class AntiEntropyServiceTest {
         final var originalRetention = config.getTombstoneRetentionMs();
         TestUtils.setPrivateField(config, "tombstoneRetentionMs", 1L);
         try {
-            fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "lonely", HybridClock.pack(1L, 0));
+            fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "lonely", HybridClock.pack(1L, 0));
             final var self = node("self", 5000);
             final var membership = mock(MembershipService.class);
             when(membership.getSelf()).thenReturn(self);
@@ -387,7 +388,7 @@ public class AntiEntropyServiceTest {
 
             service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
-            assertTrue(fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).containsKey("lonely"),
+            assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("lonely"),
                     "a node that can see nobody may itself be the partitioned side");
         } finally {
             TestUtils.setPrivateField(config, "tombstoneRetentionMs", originalRetention);
@@ -399,13 +400,13 @@ public class AntiEntropyServiceTest {
         final var retention = Configuration.getInstance().getTombstoneRetentionMs();
         final var expired = HybridClock.pack(System.currentTimeMillis() - (2L * retention), 0);
         final var recent = HybridClock.pack(System.currentTimeMillis(), 0);
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "old", expired);
-        fs.appendTombstone(TestGlobals.DB, TestGlobals.COLL, "recent", recent);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "old", expired);
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "recent", recent);
         injectPeer(emptyDigestPool());
 
         service.reconcile(TestGlobals.DB, TestGlobals.COLL);
 
-        final var tombstones = fs.readTombstones(TestGlobals.DB, TestGlobals.COLL);
+        final var tombstones = fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL);
         assertNull(tombstones.get("old"));
         assertEquals(recent, tombstones.get("recent"));
     }

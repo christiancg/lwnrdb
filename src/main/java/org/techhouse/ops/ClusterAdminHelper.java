@@ -77,6 +77,9 @@ public final class ClusterAdminHelper {
         if (!isCoordinatedAdminOp(request.getType())) {
             return null;
         }
+        if (clusterConfig.isEnabled() && !request.isReplicated() && !ownershipManager.isAdminCoordinator()) {
+            return new OperationResponse(request.getType(), ErrorCode.NOT_COLLECTION_OWNER);
+        }
         if (coordinator.guardAdmin().kind() == WriteGuard.Kind.NO_QUORUM) {
             return new OperationResponse(request.getType(), ErrorCode.NO_QUORUM);
         }

@@ -25,6 +25,7 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.UserOperationHelper;
+import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.DeleteUserRequest;
@@ -36,6 +37,7 @@ public class UserOperationHelperConcurrencyTest {
     private static final long BUDGET_MS = 10_000L;
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final ExecutorService holder = Executors.newSingleThreadExecutor();
     private final java.util.concurrent.atomic.AtomicBoolean usersLockHeld = new java.util.concurrent.atomic.AtomicBoolean();
 
@@ -205,6 +207,67 @@ public class UserOperationHelperConcurrencyTest {
         AdminOperationHelper.deleteUserEntry("nobody");
 
         assertNotNull(cache.getAdminUserEntry("alpha"));
+    }
+
+    @Test
+    public void test_authenticate_refuses_a_user_deleted_during_the_hash() throws Exception {
+        final var clientId = clientTracker.registerForwardedClient(null);
+        holdUsersLock();
+        final var result = new AtomicReference<OperationResponse>();
+        final var authenticate = startParked(
+                () -> UserOperationHelper.processAuthenticate(authenticateGamma(), clientId), result);
+
+        onHolder(() -> {
+            AdminOperationHelper.deleteUserEntry("gamma");
+            return null;
+        });
+        releaseUsersLock();
+        authenticate.join(BUDGET_MS);
+
+        assertEquals(ErrorCode.WRONG_CREDENTIALS.getCode(), result.get().getErrorCode());
+        assertNull(clientTracker.getAuthenticatedUsername(clientId));
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void test_authenticate_refuses_a_password_changed_during_the_hash() throws Exception {
+        final var clientId = clientTracker.registerForwardedClient(null);
+        holdUsersLock();
+        final var result = new AtomicReference<OperationResponse>();
+        final var authenticate = startParked(
+                () -> UserOperationHelper.processAuthenticate(authenticateGamma(), clientId), result);
+
+        onHolder(() -> {
+            final var gamma = cache.getAdminUserEntry("gamma");
+            AdminOperationHelper.saveUserEntry(new AdminUserEntry("gamma", PasswordHasher.hash("renewed-password"),
+                    gamma.isAdmin(), gamma.getGlobalPermissions(), gamma.getDatabasePermissions(),
+                    gamma.getCollectionPermissions(), gamma.getScriptPermissions()));
+            return null;
+        });
+        releaseUsersLock();
+        authenticate.join(BUDGET_MS);
+
+        assertEquals(ErrorCode.WRONG_CREDENTIALS.getCode(), result.get().getErrorCode());
+        assertNull(clientTracker.getAuthenticatedUsername(clientId));
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void test_authenticate_binds_when_the_entry_is_unchanged() {
+        final var clientId = clientTracker.registerForwardedClient(null);
+
+        final var response = UserOperationHelper.processAuthenticate(authenticateGamma(), clientId);
+
+        assertEquals(OperationStatus.OK, response.getStatus());
+        assertEquals("gamma", clientTracker.getAuthenticatedUsername(clientId));
+        clientTracker.removeById(clientId);
+    }
+
+    private static AuthenticateRequest authenticateGamma() {
+        final var request = new AuthenticateRequest();
+        request.setUsername("gamma");
+        request.setPassword("gamma-password");
+        return request;
     }
 
     private void createUser(String username, boolean admin) {

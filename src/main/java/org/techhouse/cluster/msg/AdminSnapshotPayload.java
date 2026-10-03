@@ -16,6 +16,7 @@ public class AdminSnapshotPayload {
     private JsonObject procedures;
     private JsonObject triggers;
     private JsonObject schedules;
+    private List<String> unreadable = List.of();
 
     public AdminSnapshotPayload() {
         this.schemas = new JsonObject();
@@ -120,5 +121,13 @@ public class AdminSnapshotPayload {
 
     public void setSchedules(JsonObject schedules) {
         this.schedules = schedules == null ? new JsonObject() : schedules;
+    }
+
+    public List<String> getUnreadable() {
+        return unreadable == null ? List.of() : unreadable;
+    }
+
+    public void setUnreadable(List<String> unreadable) {
+        this.unreadable = unreadable == null ? List.of() : unreadable;
     }
 }
