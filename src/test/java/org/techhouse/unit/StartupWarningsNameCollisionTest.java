@@ -83,6 +83,24 @@ public class StartupWarningsNameCollisionTest {
     }
 
     @Test
+    public void test_a_database_named_like_the_cluster_folder_is_warned_about() {
+        createDatabase("cluster", true);
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
+            assertLogged(logWriter, "Database 'cluster' is stored in the folder this node keeps its cluster state");
+        }
+    }
+
+    @Test
+    public void test_an_ordinary_database_is_not_warned_about_the_cluster_folder() {
+        createDatabase("clusters", false);
+        try (var logWriter = mockStatic(LogWriter.class)) {
+            StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
+            logWriter.verifyNoInteractions();
+        }
+    }
+
+    @Test
     public void test_distinct_names_are_silent() {
         createCollection("alpha", false);
         createCollection("beta", false);

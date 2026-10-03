@@ -12,6 +12,7 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.ErrorCode;
@@ -110,8 +111,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     @Override
     public List<JsonObject> aggregate(String db, String coll, JsonArray pipeline) {
         final var rawJson = aggregateMessage(db, coll, pipeline);
-        final OperationRequest request = RequestParser.parseRequest(rawJson);
-        final var response = dispatch(request, rawJson);
+        final var response = dispatch(parsedAggregate(rawJson), rawJson);
         if (response instanceof AggregateResponse aggregateResponse) {
             return aggregateResponse.getResults();
         }
@@ -119,6 +119,14 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
             return List.of();
         }
         throw jsError(response.getMessage());
+    }
+
+    private OperationRequest parsedAggregate(String rawJson) {
+        try {
+            return RequestParser.parseRequest(rawJson);
+        } catch (InvalidCommandException unparseable) {
+            throw jsError(unparseable.getMessage());
+        }
     }
 
     @Override

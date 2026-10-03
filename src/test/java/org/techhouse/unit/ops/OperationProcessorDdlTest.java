@@ -189,13 +189,12 @@ public class OperationProcessorDdlTest {
         assertTrue(new File(dbFolder, "repairedColl").isDirectory());
     }
 
-    // The other side of that repair: with no admin entry there is no such database, and the missing parent
-    // folder is the only thing refusing the create - so it has to keep refusing it.
     @Test
-    public void test_create_collection_on_an_unknown_database_still_fails() {
+    public void test_create_collection_on_an_unknown_database_is_not_found() {
         final var response = processor.processMessage(new CreateCollectionRequest("noSuchDb", "orphanColl"));
 
-        assertEquals(OperationStatus.ERROR, response.getStatus());
+        assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
+        assertEquals("404-4", response.getErrorCode());
         assertNull(cache.getAdminCollectionEntry("noSuchDb", "orphanColl"));
     }
 

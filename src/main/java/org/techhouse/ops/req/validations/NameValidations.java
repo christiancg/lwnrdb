@@ -59,7 +59,8 @@ public final class NameValidations {
     }
 
     static boolean isReservedDbName(String dbName) {
-        return Globals.ADMIN_DB_NAME.equalsIgnoreCase(dbName) || Globals.ADMIN_PAGES_DB_NAME.equalsIgnoreCase(dbName);
+        return Globals.ADMIN_DB_NAME.equalsIgnoreCase(dbName) || Globals.ADMIN_PAGES_DB_NAME.equalsIgnoreCase(dbName)
+                || Globals.CLUSTER_FOLDER.equalsIgnoreCase(dbName);
     }
 
     static ValidationResult validateIndexFieldName(String fieldName) {

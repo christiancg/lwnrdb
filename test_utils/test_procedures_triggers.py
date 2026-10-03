@@ -999,6 +999,54 @@ def test_before_hook_bulk_save(conn: Conn):
     drop_hook(conn, "bulk_collide")
 
 
+COUNTED_COLL = "bulk_counted"
+COUNTING_HOOK = "let calls = 0; export default (doc) => ({ ...doc, call: ++calls });"
+
+
+def calls_of(conn: Conn, ids, coll=COLL):
+    return [(conn.find(doc_id, coll=coll).get("object") or {}).get("call") for doc_id in ids]
+
+
+def test_before_hook_bulk_save_in_a_transaction(conn: Conn):
+    section("Before hooks - a bulk save shares one context inside a transaction and a trigger too")
+    check_status("install a hook counting its calls",
+                 install_hook(conn, "bulk_count", "bulkcount", COUNTING_HOOK, ["CREATED", "UPDATED"]), "OK")
+    check_status("bulk save three documents outside a transaction", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+         "objects": [{"_id": f"bo{i}", "qty": i} for i in range(3)]}), "OK")
+    check("outside a transaction the calls are numbered 1..3",
+          calls_of(conn, ["bo0", "bo1", "bo2"]) == [1, 2, 3], f"got {calls_of(conn, ['bo0', 'bo1', 'bo2'])}")
+
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_status("bulk save three documents inside it", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+         "objects": [{"_id": f"bt{i}", "qty": i} for i in range(3)]}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    check("inside a transaction the calls are numbered 1..3 as well",
+          calls_of(conn, ["bt0", "bt1", "bt2"]) == [1, 2, 3], f"got {calls_of(conn, ['bt0', 'bt1', 'bt2'])}")
+    drop_hook(conn, "bulk_count")
+
+    check_status("create the collection a trigger bulk-saves into",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": COUNTED_COLL}), "OK")
+    check_status("install the counting hook on it",
+                 install_hook(conn, "bulk_count_target", "bulkcounttarget", COUNTING_HOOK, ["CREATED", "UPDATED"],
+                              coll=COUNTED_COLL), "OK")
+    fan_out = ("import db from 'db'; import args from 'args';"
+               " if (args.id === 'fanout') { db.bulkSave(db.name, '" + COUNTED_COLL + "',"
+               " [{ _id: 'tg0' }, { _id: 'tg1' }, { _id: 'tg2' }]); }"
+               " return 'ok';")
+    check_status("install the fan-out procedure", conn.save_procedure("fanout", fan_out), "OK")
+    check_status("install a trigger running it", conn.save_trigger("fan_out", ["CREATED"], "fanout"), "OK")
+    check_status("write the document that fires it", conn.save_doc({"_id": "fanout", "qty": 1}), "OK")
+    landed = await_doc(conn, "tg2", coll=COUNTED_COLL)
+    check("the trigger's bulk save landed", landed.get("status") == "OK", f"got {landed}")
+    check("a bulk save from a trigger numbers its calls 1..3 too",
+          calls_of(conn, ["tg0", "tg1", "tg2"], coll=COUNTED_COLL) == [1, 2, 3],
+          f"got {calls_of(conn, ['tg0', 'tg1', 'tg2'], coll=COUNTED_COLL)}")
+    drop_hook(conn, "fan_out")
+    drop_hook(conn, "bulk_count_target", coll=COUNTED_COLL)
+
+
 def test_before_hook_chaining(conn: Conn):
     section("Before hooks - chaining in name order")
     check_status("install the first hook",
@@ -1900,6 +1948,7 @@ def main():
             test_before_hook_schema_recheck(conn)
             test_before_hook_on_delete(conn)
             test_before_hook_bulk_save(conn)
+            test_before_hook_bulk_save_in_a_transaction(conn)
             test_before_hook_chaining(conn)
             test_before_hook_sandbox(conn)
             test_before_hook_no_db(conn)

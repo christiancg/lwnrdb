@@ -87,6 +87,14 @@ public final class StartupWarnings {
         }
     }
 
+    public static void warnIfDatabaseSharesTheClusterFolder() {
+        for (final var dbName : OnDiskNameRegistry.registeredDatabasesInTheClusterFolder()) {
+            logger.warning("Database '" + dbName + "' is stored in the folder this node keeps its cluster state in"
+                    + " (node id and admin epoch). Writes to it are refused because the name is reserved; copy"
+                    + " its data out with AGGREGATE into another database before enabling clustering.");
+        }
+    }
+
     public static void warnIfXmxExceedsMaxMemory() {
         if (config.isCachingDisabled() || config.isCacheUnlimited()) {
             return;

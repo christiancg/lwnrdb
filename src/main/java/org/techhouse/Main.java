@@ -106,6 +106,7 @@ public class Main {
         StartupWarnings.warnIfScriptFetchEnabled();
         StartupWarnings.warnIfIndexesLeftDirty();
         StartupWarnings.warnIfNamesShareAnOnDiskKey();
+        StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
         startClusterIfEnabled();
         TriggerRunRecovery.recoverLocal();
         final var sslServerSocketFactory = createTlsFactory();

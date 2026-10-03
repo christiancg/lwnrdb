@@ -13,7 +13,7 @@ import org.techhouse.ioc.IocContainer;
 public final class OnDiskNameRegistry {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final List<String> RESERVED_DATABASE_NAMES = List.of(Globals.ADMIN_DB_NAME,
-            Globals.ADMIN_PAGES_DB_NAME);
+            Globals.ADMIN_PAGES_DB_NAME, Globals.CLUSTER_FOLDER);
 
     private OnDiskNameRegistry() {
     }
@@ -45,6 +45,17 @@ public final class OnDiskNameRegistry {
             addGroupsOf(groups, collectionNamesOf(dbName));
         }
         return groups;
+    }
+
+    public static List<String> registeredDatabasesInTheClusterFolder() {
+        final var names = new ArrayList<String>();
+        for (final var entry : cache.getAllAdminDbEntries()) {
+            final var name = entry.get_id();
+            if (name != null && onDiskKey(name).equals(Globals.CLUSTER_FOLDER)) {
+                names.add(name);
+            }
+        }
+        return names;
     }
 
     private static void addGroupsOf(List<List<String>> groups, Collection<String> names) {

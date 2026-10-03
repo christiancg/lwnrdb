@@ -715,6 +715,11 @@ def test_ddl_replication():
         timeout_s=15.0)
     check("new collection is listed on every node", seen_coll)
 
+    check_code("CREATE_DATABASE cluster is refused: it is every node's cluster state folder",
+               op_with_retry(lambda: create_db(nodes[1].client_port, "cluster")), "ERROR", "400-1")
+    check("every node still holds its persisted node id",
+          all(os.path.isfile(os.path.join(node.work_dir, "db", "cluster", "node.id")) for node in nodes))
+
     # A duplicate CREATE routed through a different node still conflicts (shared metadata).
     check_code("duplicate CREATE_DATABASE via node-2 conflicts (409-2)",
                op_with_retry(lambda: create_db(nodes[2].client_port, "ddl_repl_db")), "ERROR", "409-2")

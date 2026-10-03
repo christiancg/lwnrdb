@@ -917,6 +917,28 @@ def test_db_save_rejects_a_non_string_id(conn: Conn):
                         "400-9", "")
 
 
+def test_db_aggregate_refuses_an_unparseable_pipeline(conn: Conn):
+    section("Host interface - db.aggregate / db.cursor with a pipeline the parser cannot read")
+    for label, pipeline in (("a FILTER step with no operator", '[{ type: "FILTER" }]'),
+                            ("an unknown step type", '[{ type: "NOPE" }]')):
+        check_failed_script(f"db.aggregate with {label} is an Error, not an InternalError",
+                            conn.run('import db from "db";\n'
+                                     f'db.aggregate(db.name, "{COLL}", {pipeline});'),
+                            "400-9", "Error: The command is not valid")
+        check_result(f"db.aggregate with {label} is catchable inside the script", conn.run(
+            'import db from "db";\n'
+            f'try {{ db.aggregate(db.name, "{COLL}", {pipeline}); return "returned"; }}\n'
+            "catch (e) { return e.name; }"), "Error")
+        check_result(f"db.cursor with {label} is catchable inside the script", conn.run(
+            'import db from "db";\n'
+            f'try {{ for (const doc of db.cursor(db.name, "{COLL}", {pipeline})) {{ return "row"; }}'
+            ' return "empty"; }\n'
+            "catch (e) { return e.name; }"), "Error")
+    check_status("the connection still answers after the refusals",
+                 conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                            "_id": "unparseable-pipeline"}), "NOT_FOUND")
+
+
 def test_capabilities(conn: Conn):
     section("Host interface — capabilities and environment")
     check_result("crypto.randomUUID", conn.run("return crypto.randomUUID().length;"), 36)
@@ -1624,6 +1646,7 @@ def main():
             test_value_guards(conn)
             test_db_module_arity(conn)
             test_db_save_rejects_a_non_string_id(conn)
+            test_db_aggregate_refuses_an_unparseable_pipeline(conn)
             test_capabilities(conn)
             test_procedure_imports(conn)
             test_language_surface(conn)

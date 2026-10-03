@@ -223,6 +223,12 @@ def test_database_and_collection_ops(c):
                create_db(c, "ab"), "ERROR", "400-1")
     check_code("CREATE_DATABASE reserved name 'admin' -> 400-1",
                create_db(c, "admin"), "ERROR", "400-1")
+    check_code("CREATE_DATABASE reserved name 'cluster' (the node's cluster state folder) -> 400-1",
+               create_db(c, "cluster"), "ERROR", "400-1")
+    check_code("CREATE_DATABASE Cluster -> 400-1 reserved in any case",
+               create_db(c, "Cluster"), "ERROR", "400-1")
+    check_code("CREATE_COLLECTION in a database that was never created -> 404-4",
+               create_coll(c, "things", db="never_created_db"), "NOT_FOUND", "404-4")
 
     check_status("CREATE_COLLECTION ddl_db/things", create_coll(c, "things", db="ddl_db"), "OK")
     check_status("LIST_COLLECTIONS ddl_db", list_collections(c, "ddl_db"), "OK")

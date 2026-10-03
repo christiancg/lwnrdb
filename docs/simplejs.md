@@ -382,8 +382,9 @@ collection's write lock across calls and `ResourceLocking.releaseWrite` is threa
 callback **may not suspend** — an async function, a generator and a returned promise are all
 rejected with a `TypeError`, and `EnforcingDatabaseAccess` pins the session to the opening
 thread. Because the rollback lives in Java, a sandbox abort still rolls back and releases the
-locks. Three limitations: `listCollections`/`listDatabases` inside a transaction observe an empty
-list rather than throwing; under clustering the 2PC round trips block the thread owning the
+locks. Three limitations: `listCollections` inside a transaction throws a catchable `Error`
+(`409-6`, listing is refused while a transaction is open), and `listDatabases` answers the run's
+scope without a request when the run is scoped and otherwise throws the same error; under clustering the 2PC round trips block the thread owning the
 locks; and the three control ops skip `AuthorizationChecker` (they carry nothing to authorize —
 each buffered write is still authorized on its own request).
 
@@ -606,7 +607,10 @@ its own code, so an operator can tell a hook that said no from one that never fi
 failure is **fail-closed**. They run on the `openCallable` seam rather than `SimpleJs.run`, which
 is the entry point whose call happens on the caller's thread (the write lock is thread-owned) and
 which gives **one interpreter per request** — a `BULK_SAVE` of N documents evaluates the body
-once and shares one budget across all N invocations. There is **no `db`**: a re-entrant call from
+once and shares one budget across all N invocations (one interpreter for its inserts, one for its
+updates). That holds inside a transaction and inside a trigger exactly as outside one: both paths
+open their hooks through `BulkBeforeHooks`, so module-level state and the budget behave the same
+whichever way the bulk arrived. There is **no `db`**: a re-entrant call from
 under a held write lock would take a lock this thread owns, or make a network round trip while a
 writer waits; the module resolver is kept so a hook can import shared code, since that takes no
 locks. A replacement may not change `_id` (that would relocate the document, turning an update

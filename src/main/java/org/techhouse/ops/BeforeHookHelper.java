@@ -64,8 +64,7 @@ public final class BeforeHookHelper {
             return null;
         }
         return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING, () -> {
-            try (var creates = BeforeHookContext.open(dbName, collName, EventType.CREATED, actingUser);
-                    var updates = BeforeHookContext.open(dbName, collName, EventType.UPDATED, actingUser)) {
+            try (var hooks = BulkBeforeHooks.open(dbName, collName, actingUser)) {
                 final var existingIds = new HashSet<String>();
                 cache.getPkIndexAndLoadIfNecessary(dbName, collName)
                         .forEach(entry -> existingIds.add(entry.getValue()));
@@ -73,8 +72,8 @@ public final class BeforeHookHelper {
                 for (var i = 0; i < objects.size(); i++) {
                     final var object = objects.get(i);
                     final var id = assignedId(object, null);
-                    final var isInsert = id == null || !existingIds.contains(id);
-                    final var outcome = (isInsert ? creates : updates).apply(object, id, OperationType.BULK_SAVE);
+                    final var isUpdate = id != null && existingIds.contains(id);
+                    final var outcome = hooks.apply(isUpdate, object, id, OperationType.BULK_SAVE);
                     if (outcome.isRejected()) {
                         return outcome.rejection();
                     }

@@ -15,6 +15,7 @@ import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.BulkBeforeHooks;
 import org.techhouse.ops.CollectionReadinessGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
@@ -106,29 +107,29 @@ public final class TransactionBuffer {
             final var inserted = new ArrayList<String>();
             final var updated = new ArrayList<String>();
             final var overlayUpdates = new java.util.LinkedHashMap<String, JsonObject>();
-            for (final var object : request.getObjects()) {
-                final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
-                final var isUpdate = TransactionWrites.isVisible(transaction, collId, primaryKeyIndex, id);
-                final var hooked = TransactionWrites.runBeforeHooks(dbName, collName,
-                        isUpdate ? EventType.UPDATED : EventType.CREATED,
-                        clientTracker.getAuthenticatedUsername(transaction.getClientId()), object, id,
-                        OperationType.BULK_SAVE);
-                if (hooked.isRejected()) {
-                    return hooked.rejection();
+            try (var hooks = BulkBeforeHooks.open(dbName, collName,
+                    clientTracker.getAuthenticatedUsername(transaction.getClientId()))) {
+                for (final var object : request.getObjects()) {
+                    final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
+                    final var isUpdate = TransactionWrites.isVisible(transaction, collId, primaryKeyIndex, id);
+                    final var hooked = hooks.apply(isUpdate, object, id, OperationType.BULK_SAVE);
+                    if (hooked.isRejected()) {
+                        return hooked.rejection();
+                    }
+                    final var effective = hooked.document();
+                    final var sizeError = TransactionWrites.checkEntrySize(dbName, collName, effective,
+                            OperationType.BULK_SAVE);
+                    if (sizeError != null) {
+                        return sizeError;
+                    }
+                    array.add(effective);
+                    if (isUpdate) {
+                        updated.add(id);
+                    } else {
+                        inserted.add(id);
+                    }
+                    overlayUpdates.put(id, effective);
                 }
-                final var effective = hooked.document();
-                final var sizeError = TransactionWrites.checkEntrySize(dbName, collName, effective,
-                        OperationType.BULK_SAVE);
-                if (sizeError != null) {
-                    return sizeError;
-                }
-                array.add(effective);
-                if (isUpdate) {
-                    updated.add(id);
-                } else {
-                    inserted.add(id);
-                }
-                overlayUpdates.put(id, effective);
             }
             payload.add(OBJECTS_FIELD, array);
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_BULK_SAVE, dbName, collName,

@@ -89,6 +89,20 @@ public class OnDiskNameRegistryTest {
     }
 
     @Test
+    public void test_case_differing_cluster_folder_collides() {
+        assertEquals(Globals.CLUSTER_FOLDER, OnDiskNameRegistry.collidingDatabase("Cluster"));
+    }
+
+    @Test
+    public void test_only_a_database_named_like_the_cluster_folder_is_listed_as_in_it() {
+        assertEquals(List.of(), OnDiskNameRegistry.registeredDatabasesInTheClusterFolder());
+        final var request = new CreateDatabaseRequest("CLUSTER");
+        request.setReplicated(true);
+        assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+        assertEquals(List.of("CLUSTER"), OnDiskNameRegistry.registeredDatabasesInTheClusterFolder());
+    }
+
+    @Test
     public void test_unrelated_names_do_not_collide() {
         assertNull(OnDiskNameRegistry.collidingDatabase("somethingElse"));
         assertNull(OnDiskNameRegistry.collidingCollection(TestGlobals.DB, "unrelatedCollection"));

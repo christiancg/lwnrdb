@@ -47,11 +47,10 @@ public final class CollectionOperationHelper {
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_COLLECTION,
                 ErrorCode.ERROR_CREATING_COLLECTION, createCollectionRequest.isReplicated(), () -> {
-                    // A node can hold the database's admin entry without its folder (a replicated
-                    // CREATE_DATABASE returns early), and createCollectionFile only mkdirs one level.
-                    if (cache.getAdminDbEntry(dbName) != null) {
-                        fs.createDatabaseFolder(dbName);
+                    if (cache.getAdminDbEntry(dbName) == null) {
+                        return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.DATABASE_NOT_FOUND);
                     }
+                    fs.createDatabaseFolder(dbName);
                     final var colliding = createCollectionRequest.isReplicated()
                             ? null
                             : OnDiskNameRegistry.collidingCollection(dbName, collName);
