@@ -5,6 +5,8 @@ import org.techhouse.ejson.elements.JsonObject;
 
 public class AdminSnapshotPayload {
     private long epoch;
+    private boolean epochUnconfirmed;
+    private String nodeId;
     private List<JsonObject> databases = List.of();
     private List<JsonObject> collections = List.of();
     private List<JsonObject> users = List.of();
@@ -14,6 +16,7 @@ public class AdminSnapshotPayload {
     private JsonObject procedures;
     private JsonObject triggers;
     private JsonObject schedules;
+    private List<String> unreadable = List.of();
 
     public AdminSnapshotPayload() {
         this.schemas = new JsonObject();
@@ -25,11 +28,6 @@ public class AdminSnapshotPayload {
     public AdminSnapshotPayload(long epoch, List<JsonObject> databases, List<JsonObject> collections,
             List<JsonObject> users, JsonObject schemas) {
         this(epoch, databases, collections, users, schemas, new JsonObject(), new JsonObject(), new JsonObject());
-    }
-
-    public AdminSnapshotPayload(long epoch, List<JsonObject> databases, List<JsonObject> collections,
-            List<JsonObject> users, JsonObject schemas, JsonObject procedures, JsonObject triggers) {
-        this(epoch, databases, collections, users, schemas, procedures, triggers, new JsonObject());
     }
 
     public AdminSnapshotPayload(long epoch, List<JsonObject> databases, List<JsonObject> collections,
@@ -49,8 +47,24 @@ public class AdminSnapshotPayload {
         return epoch;
     }
 
+    public String getNodeId() {
+        return nodeId;
+    }
+
+    public void setNodeId(String nodeId) {
+        this.nodeId = nodeId;
+    }
+
     public void setEpoch(long epoch) {
         this.epoch = epoch;
+    }
+
+    public boolean isEpochConfirmed() {
+        return !epochUnconfirmed;
+    }
+
+    public void setEpochConfirmed(boolean epochConfirmed) {
+        this.epochUnconfirmed = !epochConfirmed;
     }
 
     public List<JsonObject> getDatabases() {
@@ -107,5 +121,13 @@ public class AdminSnapshotPayload {
 
     public void setSchedules(JsonObject schedules) {
         this.schedules = schedules == null ? new JsonObject() : schedules;
+    }
+
+    public List<String> getUnreadable() {
+        return unreadable == null ? List.of() : unreadable;
+    }
+
+    public void setUnreadable(List<String> unreadable) {
+        this.unreadable = unreadable == null ? List.of() : unreadable;
     }
 }

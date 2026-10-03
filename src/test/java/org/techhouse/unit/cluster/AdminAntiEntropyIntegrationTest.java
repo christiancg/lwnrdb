@@ -1,28 +1,38 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.techhouse.test.ClusterTestHarness.SECRET;
 
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.PeerConnectionPool;
+import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
+import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
@@ -94,5 +104,83 @@ public class AdminAntiEntropyIntegrationTest {
         assertEquals(ClusterMessageType.REPLICATE_USER_ACK, ack.getType());
         assertEquals(9L, adminEpoch.current());
         assertNotNull(cache.getAdminUserEntry("wireuser"));
+    }
+
+    private static void conform(AdminAntiEntropyService target, AdminSnapshotPayload snapshot) throws Exception {
+        final var field = AdminAntiEntropyService.class.getDeclaredField("conformer");
+        field.setAccessible(true);
+        final var conformer = field.get(target);
+        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class);
+        method.setAccessible(true);
+        method.invoke(conformer, snapshot);
+    }
+
+    @Test
+    public void test_a_create_during_a_conform_is_not_quarantined() throws Exception {
+        final var service = IocContainer.get(AdminAntiEntropyService.class);
+        final var snapshot = service.buildSnapshot();
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, "latecoll"));
+
+        final var locks = IocContainer.get(ResourceLocking.class);
+        final var failure = new AtomicReference<Throwable>();
+        final var done = new CountDownLatch(1);
+        locks.lock(TestGlobals.DB, Globals.PROCEDURES_FOLDER);
+        final var worker = new Thread(() -> {
+            try {
+                conform(service, snapshot);
+            } catch (Throwable t) {
+                failure.set(t);
+            } finally {
+                done.countDown();
+            }
+        }, "conformer");
+        worker.start();
+        try {
+            assertFalse(done.await(300, TimeUnit.MILLISECONDS), "the conform should be parked in the procedures phase");
+            adminEpoch.bump();
+        } finally {
+            locks.release(TestGlobals.DB, Globals.PROCEDURES_FOLDER);
+        }
+        assertTrue(done.await(10, TimeUnit.SECONDS));
+        assertNull(failure.get());
+
+        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, "latecoll"),
+                "a CREATE_COLLECTION that commits during a conform must not be quarantined by a snapshot taken"
+                        + " before it, or the client was told it succeeded and it silently disappears");
+    }
+
+    @Test
+    public void test_a_drop_during_a_conform_is_not_reregistered() throws Exception {
+        final var service = IocContainer.get(AdminAntiEntropyService.class);
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, "droppedcoll"));
+        final var snapshot = service.buildSnapshot();
+        AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, "droppedcoll");
+
+        final var locks = IocContainer.get(ResourceLocking.class);
+        final var failure = new AtomicReference<Throwable>();
+        final var done = new CountDownLatch(1);
+        locks.lock(TestGlobals.DB, Globals.PROCEDURES_FOLDER);
+        final var worker = new Thread(() -> {
+            try {
+                conform(service, snapshot);
+            } catch (Throwable t) {
+                failure.set(t);
+            } finally {
+                done.countDown();
+            }
+        }, "conformer");
+        worker.start();
+        try {
+            assertFalse(done.await(300, TimeUnit.MILLISECONDS), "the conform should be parked in the procedures phase");
+            adminEpoch.bump();
+        } finally {
+            locks.release(TestGlobals.DB, Globals.PROCEDURES_FOLDER);
+        }
+        assertTrue(done.await(10, TimeUnit.SECONDS));
+        assertNull(failure.get());
+
+        assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, "droppedcoll"),
+                "a DROP_COLLECTION that commits during a conform must not be re-registered from a snapshot taken"
+                        + " before it, or the client was told it succeeded and it silently comes back");
     }
 }

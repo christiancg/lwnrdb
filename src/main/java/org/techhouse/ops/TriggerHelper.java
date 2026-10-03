@@ -18,12 +18,48 @@ import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.OperationResponse;
 
 public final class TriggerHelper {
-    private static final Cache cache = IocContainer.get(Cache.class);
+    private static final int DOCUMENT_READ_RETRY_ATTEMPTS = 3;
+    private static final long DOCUMENT_READ_RETRY_DELAY_MS = 25L;
+
+    @SuppressWarnings("FieldMayBeFinal")
+    private static Cache cache = IocContainer.get(Cache.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private static final Configuration configuration = Configuration.getInstance();
     private static final Logger logger = Logger.logFor(TriggerHelper.class);
 
     private TriggerHelper() {
+    }
+
+    private static List<DbEntry> readEntriesWithRetry(String dbName, String collName, Set<String> ids)
+            throws IOException {
+        IOException lastFailure = null;
+        for (var attempt = 0; attempt < DOCUMENT_READ_RETRY_ATTEMPTS; attempt++) {
+            try {
+                return cache.getEntriesByIds(dbName, collName, ids);
+            } catch (IOException e) {
+                lastFailure = e;
+                sleepBeforeRetry();
+            }
+        }
+        throw lastFailure;
+    }
+
+    private static void sleepBeforeRetry() {
+        try {
+            Thread.sleep(DOCUMENT_READ_RETRY_DELAY_MS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static List<org.techhouse.data.TriggerDefinition> triggersOrNone(String dbName, String collName) {
+        try {
+            return cache.getTriggersFor(dbName, collName);
+        } catch (org.techhouse.ex.MetadataReadException e) {
+            logger.warning("Could not read the triggers for " + dbName + "|" + collName
+                    + "; firing none for this write: " + e.getMessage());
+            return List.of();
+        }
     }
 
     public static void afterWrite(String dbName, String collName, EventType type, List<DbEntry> entries,
@@ -32,7 +68,7 @@ public final class TriggerHelper {
                 || Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName)) {
             return;
         }
-        final var triggers = cache.getTriggersFor(dbName, collName);
+        final var triggers = triggersOrNone(dbName, collName);
         if (triggers.isEmpty()) {
             return;
         }
@@ -73,7 +109,7 @@ public final class TriggerHelper {
             return;
         }
         try {
-            afterWrite(dbName, collName, type, cache.getEntriesByIds(dbName, collName, new HashSet<>(ids)), actingUser,
+            afterWrite(dbName, collName, type, readEntriesWithRetry(dbName, collName, new HashSet<>(ids)), actingUser,
                     depth);
         } catch (IOException e) {
             logger.error("Could not read the committed documents to fire a trigger on " + dbName + "|" + collName, e);
@@ -93,7 +129,7 @@ public final class TriggerHelper {
             return null;
         }
         try {
-            final var entries = cache.getEntriesByIds(dbName, collName, Set.of(id));
+            final var entries = readEntriesWithRetry(dbName, collName, Set.of(id));
             return entries.isEmpty() ? null : entries.getFirst();
         } catch (IOException e) {
             logger.error("Could not read the document being deleted to fire a trigger on " + dbName + "|" + collName,
@@ -107,10 +143,10 @@ public final class TriggerHelper {
     }
 
     private static boolean hasNotTriggerFor(String dbName, String collName, EventType type, int depth) {
-        if (!configuration.isTriggersEnabled()) {
+        if (!configuration.isTriggersEnabled() || Globals.SCRIPT_RUNS_COLLECTION_NAME.equals(collName)) {
             return true;
         }
-        for (final var trigger : cache.getTriggersFor(dbName, collName)) {
+        for (final var trigger : triggersOrNone(dbName, collName)) {
             if (!trigger.isBefore() && trigger.isEnabled() && trigger.getEvents().contains(type)
                     && (depth == 0 || trigger.isAllowCascade())) {
                 return false;

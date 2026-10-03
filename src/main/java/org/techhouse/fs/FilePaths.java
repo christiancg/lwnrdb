@@ -33,13 +33,21 @@ final class FilePaths {
                 + Globals.DB_FILE_EXTENSION);
     }
 
-    File indexFile(String dbName, String collectionName, String indexName, String indexType) {
-        return new File(collectionPrefix(dbName, collectionName) + Globals.INDEX_FILE_NAME_SEPARATOR + indexName
+    File indexFile(String dbName, String collectionName, String fieldName, String indexType) {
+        if (isReservedFileName(fieldName)) {
+            return null;
+        }
+        return new File(collectionPrefix(dbName, collectionName) + Globals.INDEX_FILE_NAME_SEPARATOR + fieldName
                 + Globals.INDEX_FILE_NAME_SEPARATOR + indexType + Globals.INDEX_FILE_EXTENSION);
     }
 
+    private static boolean isReservedFileName(String fieldName) {
+        return Globals.PK_FIELD.equals(fieldName) || Globals.TOMBSTONE_FILE_NAME.equals(fieldName);
+    }
+
     File pkIndexFile(String dbName, String collectionName) {
-        return indexFile(dbName, collectionName, Globals.PK_FIELD, Globals.INDEX_TYPE_STRING);
+        return new File(collectionPrefix(dbName, collectionName) + Globals.INDEX_FILE_NAME_SEPARATOR
+                + Globals.PK_INDEX_FILE_NAME + Globals.INDEX_FILE_EXTENSION);
     }
 
     File tombstoneFile(String dbName, String collectionName) {

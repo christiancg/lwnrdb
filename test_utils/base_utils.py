@@ -32,6 +32,12 @@ from typing import Callable, Optional
 
 # ── report format ────────────────────────────────────────────────────────────
 
+# CI merges stdout and stderr into one pipe, where stdout is block-buffered and stderr is not, so a
+# server-log dump written to stderr used to surface thousands of lines into the middle of the check
+# report - ahead of checks that had already printed. Line buffering keeps the merged stream ordered.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 WIDTH = 70
 
 GREEN = "\033[92m"
@@ -206,12 +212,18 @@ class Conn:
 
     def send(self, payload: dict, timeout: Optional[float] = None) -> dict:
         """Send one request, read one response line. Never raises on a dead connection."""
+        return self.send_raw(json.dumps(payload), timeout)
+
+    def send_raw(self, line: str, timeout: Optional[float] = None) -> dict:
         if timeout is not None:
             self.s.settimeout(timeout)
         try:
-            self.s.sendall((json.dumps(payload) + "\n").encode())
+            self.s.sendall((line + "\n").encode())
         except (BrokenPipeError, OSError):
             return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
+        return self._read_response()
+
+    def _read_response(self) -> dict:
         try:
             raw = self.f.readline().decode().strip()
         except (OSError, ConnectionError):

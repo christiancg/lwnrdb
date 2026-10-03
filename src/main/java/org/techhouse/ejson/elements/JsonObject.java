@@ -13,7 +13,7 @@ public class JsonObject extends JsonBaseElement {
     }
 
     public void add(String property, String value) {
-        put(property, new JsonString(value));
+        put(property, value == null ? JsonNull.INSTANCE : new JsonString(value));
     }
 
     private void put(String property, JsonBaseElement value) {
@@ -25,19 +25,19 @@ public class JsonObject extends JsonBaseElement {
     }
 
     public void addProperty(String property, Boolean value) {
-        put(property, new JsonBoolean(value));
+        put(property, value == null ? JsonNull.INSTANCE : new JsonBoolean(value));
     }
 
     public void addProperty(String property, Integer value) {
-        put(property, new JsonNumber(value));
+        put(property, value == null ? JsonNull.INSTANCE : new JsonNumber(value));
     }
 
     public void addProperty(String property, Number value) {
-        put(property, new JsonNumber(value));
+        put(property, value == null ? JsonNull.INSTANCE : new JsonNumber(value));
     }
 
     public void addProperty(String property, Long value) {
-        put(property, new JsonNumber(value));
+        put(property, value == null ? JsonNull.INSTANCE : new JsonNumber(value));
     }
 
     public void remove(String property) {

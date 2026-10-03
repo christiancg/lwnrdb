@@ -15,6 +15,7 @@ import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.AntiEntropyService;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterServer;
+import org.techhouse.cluster.HybridClock;
 import org.techhouse.cluster.MetadataCachePruner;
 import org.techhouse.cluster.TransactionSessionReaper;
 import org.techhouse.cluster.Tx2pcRecovery;
@@ -38,6 +39,7 @@ import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunRecovery;
+import org.techhouse.ops.admin.PageOccupancyReconciler;
 
 public class Main {
     private static final Configuration config = Configuration.getInstance();
@@ -50,6 +52,7 @@ public class Main {
     private static final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private static final MetadataCachePruner metadataCachePruner = IocContainer.get(MetadataCachePruner.class);
@@ -82,6 +85,8 @@ public class Main {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         cache.loadAdminData();
+        seedHybridClock();
+        PageOccupancyReconciler.reconcileAll();
         cleanupOrphanedTransactions();
         bootstrapDefaultAdmin();
         final var port = getPort(args);
@@ -90,7 +95,6 @@ public class Main {
         // Must run after cleanupOrphanedTransactions: the records left are runs that never applied.
         TriggerRunRecovery.garbageCollect();
         TriggerRunRecovery.warnAboutStrandedRuns();
-        TriggerRunRecovery.recoverLocal();
         startSchedulerIfEnabled();
         listenManager.startWorkers();
         memoryManagement.loadProfileFromAdmin();
@@ -100,7 +104,11 @@ public class Main {
         StartupWarnings.warnIfCachesExceedHeap();
         StartupWarnings.warnIfDefaultAdminPassword();
         StartupWarnings.warnIfScriptFetchEnabled();
+        StartupWarnings.warnIfIndexesLeftDirty();
+        StartupWarnings.warnIfNamesShareAnOnDiskKey();
+        StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
         startClusterIfEnabled();
+        TriggerRunRecovery.recoverLocal();
         final var sslServerSocketFactory = createTlsFactory();
         final var server = new SocketServer(port, sslServerSocketFactory);
         registerShutdownHook(server);
@@ -111,7 +119,11 @@ public class Main {
         if (!config.isSchedulesEnabled()) {
             return;
         }
-        scheduleRegistry.loadAll();
+        try {
+            scheduleRegistry.loadAll();
+        } catch (RuntimeException e) {
+            logger.error("Failed to load the schedule definitions; the scheduler starts with the ones that loaded", e);
+        }
         scheduleExecutor.start(ScheduleDispatcher::dispatch);
     }
 
@@ -149,11 +161,39 @@ public class Main {
         }
     }
 
+    private static void seedHybridClock() {
+        if (!clusterConfig.isEnabled()) {
+            return;
+        }
+        var highest = 0L;
+        try {
+            for (final var dbName : cache.getUserDatabaseNames()) {
+                for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
+                    final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
+                    if (collEntry != null) {
+                        highest = Math.max(highest, collEntry.getIncarnation());
+                    }
+                    for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
+                        highest = Math.max(highest, pkEntry.getVersion());
+                    }
+                    for (final var tombstoneVersion : fs.tombstones().read(dbName, collName).values()) {
+                        highest = Math.max(highest, tombstoneVersion);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Failed to seed the write clock from disk; versions could regress after this restart", e);
+            return;
+        }
+        hybridClock.seed(highest);
+        logger.info("Seeded the write clock from disk at version " + highest);
+    }
+
     private static void cleanupOrphanedTransactions() {
         try {
             TransactionOperationHelper.cleanupOrphansAtStartup();
-        } catch (Exception e) {
-            logger.error("Failed to clean up orphaned transactions at startup", e);
+        } catch (Throwable failure) {
+            logger.error("Failed to clean up orphaned transactions at startup", failure);
         }
     }
 

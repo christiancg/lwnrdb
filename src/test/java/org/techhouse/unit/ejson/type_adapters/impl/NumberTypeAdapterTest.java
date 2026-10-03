@@ -73,6 +73,23 @@ public class NumberTypeAdapterTest {
     }
 
     @Test
+    public void test_non_finite_is_emitted_as_null() {
+        NumberTypeAdapter adapter = new NumberTypeAdapter();
+        assertEquals("null", adapter.toJson(Double.POSITIVE_INFINITY));
+        assertEquals("null", adapter.toJson(Double.NEGATIVE_INFINITY));
+        assertEquals("null", adapter.toJson(Double.NaN));
+        assertEquals("null", adapter.toJson(Float.NaN));
+    }
+
+    @Test
+    public void test_finite_values_are_unchanged_by_the_non_finite_guard() {
+        NumberTypeAdapter adapter = new NumberTypeAdapter();
+        assertEquals("1.7976931348623157e+308", adapter.toJson(Double.MAX_VALUE));
+        assertEquals("5e-324", adapter.toJson(Double.MIN_VALUE));
+        assertEquals("-1.5", adapter.toJson(-1.5));
+    }
+
+    @Test
     public void test_json_number_returns_numeric_value() {
         NumberTypeAdapter adapter = new NumberTypeAdapter();
         JsonNumber jsonNumber = new JsonNumber(42);

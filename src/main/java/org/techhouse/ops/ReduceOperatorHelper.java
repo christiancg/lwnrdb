@@ -7,6 +7,7 @@ import java.util.stream.Stream;
 import org.techhouse.analyze.AnalyzeContext;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
@@ -14,6 +15,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.step.ReduceAggregationStep;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.simplejs.values.EJsonInterop;
+import org.techhouse.utils.JsonUtils;
 
 public final class ReduceOperatorHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -24,18 +26,21 @@ public final class ReduceOperatorHelper {
 
     public static Stream<JsonObject> processReduceStep(ReduceAggregationStep step, Stream<JsonObject> resultStream,
             String dbName, String collName, PipelineScriptContext context) throws IOException {
-        final var stream = cache.initializeStreamIfNecessary(resultStream, dbName, collName);
         final var callable = context.callableFor(step.getScript());
         var accumulator = step.getInitialValue() == null ? JsonNull.INSTANCE : step.getInitialValue();
-        for (final var document : (Iterable<JsonObject>) stream::iterator) {
-            final var analyze = AnalyzeContext.current();
-            final var start = analyze == null ? 0 : System.nanoTime();
-            accumulator = callable.apply(accumulator, document);
-            if (analyze != null) {
-                analyze.recordScriptInvocation(System.nanoTime() - start);
-            }
-            if (accumulator == null) {
-                accumulator = JsonNull.INSTANCE;
+        try (var stream = resultStream != null
+                ? resultStream
+                : cache.streamCollectionInScanOrder(dbName, collName).map(DbEntry::getData)) {
+            for (final var document : (Iterable<JsonObject>) stream::iterator) {
+                final var analyze = AnalyzeContext.current();
+                final var start = analyze == null ? 0 : System.nanoTime();
+                accumulator = callable.apply(accumulator, document);
+                if (analyze != null) {
+                    analyze.recordScriptInvocation(System.nanoTime() - start);
+                }
+                if (accumulator == null) {
+                    accumulator = JsonNull.INSTANCE;
+                }
             }
         }
         return Stream.of(resultDocument(step, accumulator));
@@ -51,7 +56,7 @@ public final class ReduceOperatorHelper {
             }
         }
         final var result = new JsonObject();
-        result.add(step.getResultField(), accumulator);
+        JsonUtils.setPath(result, step.getResultField(), accumulator);
         return result;
     }
 }

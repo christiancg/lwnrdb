@@ -1,6 +1,7 @@
 package org.techhouse.listen;
 
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -20,7 +21,9 @@ public class ListenManager {
     private final Map<String, Set<UUID>> collectionToListens = new ConcurrentHashMap<>();
     private final LinkedBlockingQueue<UUID> dirtyQueue = new LinkedBlockingQueue<>();
     private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
-    private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private final ThreadLocal<Set<String>> deferred = new ThreadLocal<>();
+    private final ThreadLocal<Integer> deferralDepth = ThreadLocal.withInitial(() -> 0);
+    private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public UUID register(UUID clientId, AggregateRequest dirtyRequest, String initialHash) {
         final var listenId = UUID.randomUUID();
@@ -32,6 +35,14 @@ public class ListenManager {
             collectionToListens.computeIfAbsent(key, _ -> ConcurrentHashMap.newKeySet()).add(listenId);
         }
         return listenId;
+    }
+
+    public boolean unregister(UUID listenId, UUID clientId) {
+        final var registration = registrations.get(listenId);
+        if (registration == null || !registration.clientId().equals(clientId)) {
+            return false;
+        }
+        return unregister(listenId);
     }
 
     public boolean unregister(UUID listenId) {
@@ -84,8 +95,43 @@ public class ListenManager {
         }
     }
 
+    public void deferNotifications() {
+        if (deferralDepth.get() == 0) {
+            deferred.set(new LinkedHashSet<>());
+        }
+        deferralDepth.set(deferralDepth.get() + 1);
+    }
+
+    public void flushDeferredNotifications() {
+        final var depth = deferralDepth.get();
+        if (depth == 0) {
+            return;
+        }
+        if (depth > 1) {
+            deferralDepth.set(depth - 1);
+            return;
+        }
+        deferralDepth.remove();
+        final var pending = deferred.get();
+        deferred.remove();
+        if (pending != null) {
+            for (final var key : pending) {
+                enqueueDirty(key);
+            }
+        }
+    }
+
     public void markDirty(String dbName, String collName) {
         final var key = dbName + "|" + collName;
+        final var pending = deferred.get();
+        if (pending != null) {
+            pending.add(key);
+            return;
+        }
+        enqueueDirty(key);
+    }
+
+    private void enqueueDirty(String key) {
         final var listenIds = collectionToListens.get(key);
         if (listenIds == null || listenIds.isEmpty()) {
             return;
@@ -105,12 +151,12 @@ public class ListenManager {
         return registrations.get(listenId);
     }
 
-    public void startWorkers() {
+    public synchronized void startWorkers() {
         pool.execute(new ListenProcessorThread(dirtyQueue, this));
         logger.info("Started listen processor worker");
     }
 
-    public void stopWorkers() {
+    public synchronized void stopWorkers() {
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Listen");
         dirtyQueue.clear();
         queued.clear();

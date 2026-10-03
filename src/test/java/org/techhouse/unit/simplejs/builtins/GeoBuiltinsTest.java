@@ -105,4 +105,10 @@ public class GeoBuiltinsTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("Geo.from({ lat: 91, lng: 0 })"));
         assertThrows(RangeErrorException.class, () -> Interpreter.run("Geo.from({})"));
     }
+
+    @Test
+    public void test_from_a_string_refuses_a_non_finite_point_like_the_constructor() {
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("Geo.from('#geo(NaN,1)')"));
+        assertThrows(RangeErrorException.class, () -> Interpreter.run("Geo.from('#geo(1,NaN)')"));
+    }
 }

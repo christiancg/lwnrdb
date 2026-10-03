@@ -61,6 +61,24 @@ public class TriggerRunLogTest {
     }
 
     @Test
+    public void test_mark_attempt_updates_rather_than_duplicates() throws Exception {
+        final var runId = TriggerRunLog.record(descriptor(EventType.CREATED, List.of(entry("a", 1))));
+        assertNotNull(runId);
+        final var recordIds = TriggerRunLog.recordIdsFor(runId);
+
+        for (var attempt = 1; attempt <= 3; attempt++) {
+            TriggerRunLog.markAttempt(runId, org.techhouse.data.admin.TriggerRunStatus.PENDING, attempt, "boom",
+                    System.currentTimeMillis());
+        }
+
+        assertEquals(recordIds.size(), TriggerRunLog.recordIdsFor(runId).size(),
+                "a retry must update the run record in place, not append another physical copy of it");
+        final var pending = TriggerRunLog.pending();
+        assertEquals(1, pending.size(), "one run must stay one row however many times it is retried");
+        assertEquals(3, pending.getFirst().getAttempts());
+    }
+
+    @Test
     public void test_records_a_single_chunk_for_a_small_run() throws Exception {
         final var runId = TriggerRunLog.record(descriptor(EventType.CREATED, List.of(entry("a", 1))));
 

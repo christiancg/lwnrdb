@@ -10,6 +10,7 @@ public class OperationRequest {
     // Carried on the request rather than in a ThreadLocal so the bound survives a cluster forward, where a
     // thread-scoped counter would reset to zero on the receiving node and let a cascade run forever.
     private int triggerDepth;
+    private boolean replicated;
 
     public OperationRequest(OperationType type, String databaseName, String collectionName) {
         this.type = type;
@@ -27,6 +28,14 @@ public class OperationRequest {
 
     public void setDirtyRead(boolean dirtyRead) {
         this.dirtyRead = dirtyRead;
+    }
+
+    public boolean isReplicated() {
+        return replicated;
+    }
+
+    public void setReplicated(boolean replicated) {
+        this.replicated = replicated;
     }
 
     public int getTriggerDepth() {

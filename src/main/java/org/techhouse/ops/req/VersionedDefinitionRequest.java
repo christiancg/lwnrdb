@@ -8,6 +8,7 @@ public abstract class VersionedDefinitionRequest extends OperationRequest {
     private long stampedVersion;
     private long stampedUpdatedAt;
     private String stampedUpdatedBy;
+    private long stampedCreatedAt;
 
     protected VersionedDefinitionRequest(OperationType type, String databaseName, String collectionName) {
         super(type, databaseName, collectionName);
@@ -27,6 +28,10 @@ public abstract class VersionedDefinitionRequest extends OperationRequest {
 
     public void setIfVersion(Long ifVersion) {
         this.ifVersion = ifVersion;
+    }
+
+    public boolean carriesCoordinatorStamp() {
+        return isReplicated() && stampedVersion > 0;
     }
 
     public long getStampedVersion() {
@@ -51,5 +56,13 @@ public abstract class VersionedDefinitionRequest extends OperationRequest {
 
     public void setStampedUpdatedBy(String stampedUpdatedBy) {
         this.stampedUpdatedBy = stampedUpdatedBy;
+    }
+
+    public long getStampedCreatedAt() {
+        return stampedCreatedAt;
+    }
+
+    public void setStampedCreatedAt(long stampedCreatedAt) {
+        this.stampedCreatedAt = stampedCreatedAt;
     }
 }

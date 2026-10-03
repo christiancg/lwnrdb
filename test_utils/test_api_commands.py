@@ -128,11 +128,13 @@ def wait_for_index(c, coll, field, db=DB, timeout_s=15.0):
 
 COLL_CRUD = "crud"
 COLL_AGG = "agg"
+COLL_CASTS = "casts"
 COLL_JOIN_LEFT = "agg_join_left"
 COLL_JOIN_RIGHT = "agg_join_right"
 COLL_TYPES = "types"
 COLL_FLOWS = "flows"
 COLL_PERM = "perm_coll"
+COLL_MATH = "map_math"
 
 TEST_USERS = ("api_reader", "api_join_user")
 
@@ -204,7 +206,8 @@ def test_reserved_script_runs_collection(c):
                read.get("errorCode") != "400-1", detail=f"got {read}")
     check_code("FIND_BY_ID in an unwritten script_runs -> 404-2",
                find_by_id(c, "script_runs", "nope"), "NOT_FOUND", "404-2")
-    check_status("CREATE_INDEX on script_runs is allowed", create_index(c, "script_runs", "outcome"), "OK")
+    check_code("CREATE_INDEX on an unwritten script_runs is refused like any missing collection -> 404-11",
+               create_index(c, "script_runs", "outcome"), "NOT_FOUND", "404-11")
 
 
 def test_database_and_collection_ops(c):
@@ -220,6 +223,12 @@ def test_database_and_collection_ops(c):
                create_db(c, "ab"), "ERROR", "400-1")
     check_code("CREATE_DATABASE reserved name 'admin' -> 400-1",
                create_db(c, "admin"), "ERROR", "400-1")
+    check_code("CREATE_DATABASE reserved name 'cluster' (the node's cluster state folder) -> 400-1",
+               create_db(c, "cluster"), "ERROR", "400-1")
+    check_code("CREATE_DATABASE Cluster -> 400-1 reserved in any case",
+               create_db(c, "Cluster"), "ERROR", "400-1")
+    check_code("CREATE_COLLECTION in a database that was never created -> 404-4",
+               create_coll(c, "things", db="never_created_db"), "NOT_FOUND", "404-4")
 
     check_status("CREATE_COLLECTION ddl_db/things", create_coll(c, "things", db="ddl_db"), "OK")
     check_status("LIST_COLLECTIONS ddl_db", list_collections(c, "ddl_db"), "OK")
@@ -230,6 +239,18 @@ def test_database_and_collection_ops(c):
 
     check_status("DROP_COLLECTION ddl_db/things", drop_coll(c, "things", db="ddl_db"), "OK")
     check_status("DROP_DATABASE ddl_db", drop_db(c, "ddl_db"), "OK")
+
+    check_status("CREATE_DATABASE ghost_db", create_db(c, "ghost_db"), "OK")
+    check_status("CREATE_COLLECTION ghost_db/items", create_coll(c, "items", db="ghost_db"), "OK")
+    check_status("SAVE a document before the drop", save(c, "items", {"_id": "g1", "v": 1}, db="ghost_db"), "OK")
+    check_status("DROP_DATABASE ghost_db", drop_db(c, "ghost_db"), "OK")
+    check_status("re-CREATE_DATABASE ghost_db", create_db(c, "ghost_db"), "OK")
+    check_status("re-CREATE_COLLECTION ghost_db/items", create_coll(c, "items", db="ghost_db"), "OK")
+    check_code("the re-created collection holds no pre-drop document",
+               find_by_id(c, "items", "g1", db="ghost_db"), "NOT_FOUND", "404-2")
+    check_code("a scan of it finds nothing either",
+               aggregate(c, "items", [], db="ghost_db"), "NOT_FOUND", "404-3")
+    check_status("DROP_DATABASE ghost_db again", drop_db(c, "ghost_db"), "OK")
 
     r = c.send({"type": "GET_DATABASE_STATS"})
     check_status("GET_DATABASE_STATS (admin, OK)", r, "OK")
@@ -274,6 +295,41 @@ def test_crud(c):
                save(c, COLL_CRUD, {"_id": "bad id!", "v": 1}), "ERROR", "400-1")
     check_code("SAVE invalid _id (too long) -> 400-1",
                save(c, COLL_CRUD, {"_id": "x" * 65, "v": 1}), "ERROR", "400-1")
+    check_code("SAVE non-string _id -> 400-1",
+               save(c, COLL_CRUD, {"_id": 123, "v": 1}), "ERROR", "400-1")
+    check_code("BULK_SAVE non-string _id -> 400-1",
+               bulk_save(c, COLL_CRUD, [{"_id": 123, "v": 1}]), "ERROR", "400-1")
+    check_code("BULK_SAVE invalid _id (illegal chars) -> 400-1",
+               bulk_save(c, COLL_CRUD, [{"_id": "bad id!", "v": 1}]), "ERROR", "400-1")
+
+
+def test_top_level_id(c):
+    section("SAVE with a top-level _id")
+
+    check_status("seed the target document", save(c, COLL_CRUD, {"_id": "tl1", "name": "alpha"}), "OK")
+    r = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_CRUD,
+                "_id": "tl1", "object": {"name": "beta"}})
+    check_status("SAVE with only a top-level _id", r, "OK")
+    check("the response names the same document", r.get("_id") == "tl1", detail=f"got {r.get('_id')!r}")
+
+    found = find_by_id(c, COLL_CRUD, "tl1")
+    check_status("the target document still exists", found, "OK")
+    check_field("and carries the new value", found, "object.name", "beta")
+
+    r = c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_CRUD,
+                "_id": "tl2", "object": {"name": "gamma"}})
+    check_status("a top-level _id for a new document inserts under that id", r, "OK")
+    check_field("the document is readable under that id", find_by_id(c, COLL_CRUD, "tl2"), "object.name", "gamma")
+
+    # When both ids are present on the wire the parser gives the object's _id precedence, so the two
+    # can never disagree by the time the write runs. What matters is that exactly one document is
+    # written, under the object's id, and no stray document appears under the top-level one.
+    check_status("a top-level _id alongside an object _id is accepted",
+                 c.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL_CRUD,
+                         "_id": "outside", "object": {"_id": "inside", "name": "x"}}), "OK")
+    check_field("the object's _id wins", find_by_id(c, COLL_CRUD, "inside"), "object.name", "x")
+    check_code("no document is written under the discarded top-level _id",
+               find_by_id(c, COLL_CRUD, "outside"), "NOT_FOUND", "404-2")
 
 
 def test_value_types(c):
@@ -318,6 +374,64 @@ def test_value_types(c):
                '"v":42' in raw and '"v":42.0' not in raw, detail=raw.strip())
 
 
+def test_a_malformed_document_is_refused_as_a_client_error(c):
+    section("A request with a missing JSON value is refused as invalid, not answered with a server error")
+    for label, document in (("a doubled comma in an array", '{"_id":"mal1","v":[1,,2]}'),
+                            ("a missing object value", '{"_id":"mal2","v":,"w":1}'),
+                            ("a leading comma in an array", '{"_id":"mal3","v":[,1]}')):
+        line = ('{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES
+                + '","object":' + document + '}')
+        refused = c.send_raw(line)
+        check(f"{label} is refused as an invalid command, not a server error",
+              refused.get("status") == "ERROR" and not str(refused.get("errorCode") or "").startswith("500"),
+              detail=f"status={refused.get('status')} code={refused.get('errorCode')} msg={refused.get('message')!r}")
+    for doc_id in ("mal1", "mal2", "mal3"):
+        check(f"nothing was stored for {doc_id}", find_by_id(c, COLL_TYPES, doc_id).get("status") != "OK")
+    check_field("the connection still answers afterwards", find_by_id(c, COLL_TYPES, "t_int"), "object.v", 42)
+
+
+def test_a_line_with_a_second_value_or_a_nan_point_is_refused(c):
+    section("A request line with trailing JSON, or a geo point that is not finite, is refused as invalid")
+    save_prefix = '{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES + '","object":'
+    for label, line, doc_id in (
+            ("a second JSON value after the request", save_prefix + '{"_id":"trail1","v":1}}{"_id":"trail2"}',
+             "trail1"),
+            ("a NaN latitude", save_prefix + '{"_id":"nan_geo","p":"#geo(NaN,1)"}}', "nan_geo"),
+            ("a NaN nested inside an array", save_prefix + '{"_id":"nan_geo2","ps":["#geo(1,NaN)"]}}',
+             "nan_geo2")):
+        refused = c.send_raw(line)
+        check(f"{label} is refused as an invalid command, not a server error",
+              refused.get("status") == "ERROR" and not str(refused.get("errorCode") or "").startswith("500"),
+              detail=f"status={refused.get('status')} code={refused.get('errorCode')} msg={refused.get('message')!r}")
+        check(f"nothing was stored for {doc_id}", find_by_id(c, COLL_TYPES, doc_id).get("status") != "OK")
+    check_status("a finite geo point is still accepted",
+                 c.send_raw(save_prefix + '{"_id":"finite_geo","p":"#geo(1,2)"}}'), "OK")
+
+
+def nested_value(depth: int) -> str:
+    return '{"a":' * (depth - 1) + '1' + '}' * (depth - 1)
+
+
+def test_deep_nesting_is_refused_not_dropped(c):
+    section("A request nested past the limit is answered with a refusal and the connection stays open")
+    save_prefix = '{"type":"SAVE","databaseName":"' + DB + '","collectionName":"' + COLL_TYPES + '","object":'
+    for depth in (200, 5000):
+        refused = c.send_raw(save_prefix + '{"_id":"deep_' + str(depth) + '","n":' + nested_value(depth) + '}}')
+        check(f"a document {depth} levels deep is refused as an invalid command",
+              refused.get("status") == "ERROR" and "closed connection" not in str(refused.get("message"))
+              and not str(refused.get("errorCode") or "").startswith("500"),
+              detail=f"status={refused.get('status')} code={refused.get('errorCode')} msg={refused.get('message')!r}")
+        check(f"the same connection still answers after the {depth}-level request",
+              find_by_id(c, COLL_TYPES, "deep_" + str(depth)).get("errorCode") == "404-2")
+    check_status("a document 120 levels deep is accepted",
+                 c.send_raw(save_prefix + '{"_id":"deep_ok","n":' + nested_value(120) + '}}'), "OK")
+    stored = find_by_id(c, COLL_TYPES, "deep_ok")
+    inner = (stored.get("object") or {}).get("n")
+    for _ in range(118):
+        inner = inner.get("a") if isinstance(inner, dict) else None
+    check("and reads back at full depth", inner == {"a": 1}, detail=str(inner)[:80])
+
+
 def test_filter_operators(c):
     section("FILTER — every field operator across types (scan path)")
 
@@ -349,6 +463,14 @@ def test_filter_operators(c):
                ids_of(aggregate(c, COLL_AGG, [filter_step("name", "NOT_IN", ["alice", "bob"])])) == ["a3", "a4"])
     check("IN over a list of Objects (element-match)",
                ids_of(aggregate(c, COLL_AGG, [filter_step("meta", "IN", [{"k": 1}, {"k": 3}])])) == ["a1", "a3", "a4"])
+    check("IN uses the same string equality as EQUALS, so a case-mismatched operand matches",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("name", "IN", ["ALICE", "Bob"])])) == ["a1", "a2"])
+    check("NOT_IN excludes a case-mismatched operand for the same reason",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("name", "NOT_IN", ["ALICE", "Bob"])])) == ["a3", "a4"])
+    check("_id IN stays exact, matching FIND_BY_ID",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("_id", "IN", ["A1", "a2"])])) == ["a2"])
+    check("_id NOT_IN stays exact too",
+               ids_of(aggregate(c, COLL_AGG, [filter_step("_id", "NOT_IN", ["A1"])])) == ["a1", "a2", "a3", "a4"])
 
     check("CONTAINS on an array field",
                ids_of(aggregate(c, COLL_AGG, [filter_step("tags", "CONTAINS", "z")])) == ["a2", "a3"])
@@ -406,6 +528,191 @@ def test_conjunctions(c):
     check_field("COUNT after NAND conjunction", r, "results.0.count", 2)
 
 
+def test_map_conditions_and_number_casts(c):
+    section("MAP conditions agree with FILTER; CAST to STRING spells numbers like the document does")
+
+    active = {"fieldOperatorType": "EQUALS", "field": "active", "value": True}
+    rating45 = {"fieldOperatorType": "EQUALS", "field": "rating", "value": 4.5}
+    age25 = {"fieldOperatorType": "EQUALS", "field": "age", "value": 25}
+
+    for conj_type, leaves in (("AND", [active, rating45]), ("OR", [age25, active]),
+                              ("XOR", [active, rating45]), ("NOR", [age25]),
+                              ("NAND", [active, rating45])):
+        condition = {"conjunctionType": conj_type, "operators": leaves}
+        by_filter = ids_of(aggregate(c, COLL_AGG, [{"type": "FILTER", "operator": condition}]))
+        mapped = aggregate(c, COLL_AGG, [{"type": "MAP", "operators": [
+            {"fieldName": "meta", "condition": condition}]}])
+        by_map = sorted(d.get("_id") for d in (mapped.get("results") or []) if "meta" not in d)
+        check(f"a {conj_type} MAP condition selects exactly what the same FILTER selects",
+              by_map == by_filter, detail=f"FILTER={by_filter}, MAP={by_map}")
+
+    create_coll(c, COLL_CASTS)
+    save(c, COLL_CASTS, {"_id": "big", "n": 3000000000})
+    save(c, COLL_CASTS, {"_id": "small", "n": 123})
+    cast_step = [{"type": "MAP", "operators": [
+        {"fieldName": "asText", "operator": {"type": "CAST", "fieldName": "n", "toType": "STRING"}}]}]
+    by_id = {d.get("_id"): d for d in (aggregate(c, COLL_CASTS, cast_step).get("results") or [])}
+    check("CAST to STRING of a number past the int range is not clamped",
+          by_id.get("big", {}).get("asText") == "3000000000",
+          detail=f"got {by_id.get('big', {}).get('asText')!r}")
+    check("CAST to STRING of a small integral number is unchanged",
+          by_id.get("small", {}).get("asText") == "123",
+          detail=f"got {by_id.get('small', {}).get('asText')!r}")
+
+    nearest_condition = {"customOperatorName": "nearest", "field": "embedding",
+                         "value": "#vector(1.0,0.0)", "k": 3}
+    refused = aggregate(c, COLL_AGG, [{"type": "MAP", "operators": [
+        {"fieldName": "meta", "condition": nearest_condition}]}])
+    check_status("a ranking operator used as a MAP condition", refused, "ERROR")
+    check("the refusal names the operator and its role",
+          "nearest" in (refused.get("message") or "") and "MAP condition" in (refused.get("message") or ""),
+          detail=f"got {refused.get('message')!r}")
+
+    still_ranks = aggregate(c, COLL_AGG, [{"type": "FILTER", "operator": nearest_condition}])
+    check("the same ranking operator is still accepted by FILTER",
+          still_ranks.get("errorCode") != "400-1",
+          detail=f"got {still_ranks.get('status')!r} {still_ranks.get('message')!r}")
+
+    oversized_k_condition = {"customOperatorName": "nearest", "field": "embedding",
+                             "value": "#vector(1.0,0.0)", "k": 2147483647}
+    oversized_k_refused = aggregate(c, COLL_AGG, [{"type": "FILTER", "operator": oversized_k_condition}])
+    check_status("nearest with a k past the candidate-budget overflow ceiling is refused",
+                 oversized_k_refused, "ERROR")
+
+
+def raw_send(c, payload) -> str:
+    """The response line before json.loads sees it.
+
+    base_utils.Conn.send parses with plain json.loads, which accepts Infinity/-Infinity/NaN
+    as a Python extension; RFC 8259 does not, and neither does any other client's parser.
+    """
+    c.s.sendall((json.dumps(payload) + "\n").encode())
+    return c.f.readline().decode().strip()
+
+
+def map_math(c, operation, operands, field="r"):
+    steps = [{"type": "MAP", "operators": [
+        {"fieldName": field, "operator": {"type": operation, "operands": operands}}]}]
+    return (aggregate(c, COLL_MATH, steps).get("results") or [{}])[0].get(field)
+
+
+def test_map_arithmetic(c):
+    section("MAP arithmetic: the first valid operand seeds the fold, and no sentinel leaks")
+
+    create_coll(c, COLL_MATH)
+    save(c, COLL_MATH, {"_id": "m1", "a": 10, "b": 2, "z": 0, "big": 3000000000, "nullField": None})
+
+    for operation in ("MULTIPLY", "SUBS", "DIVIDE", "POW", "ROOT"):
+        from_literals = map_math(c, operation, [10, 2])
+        from_fields = map_math(c, operation, ["a", "b"])
+        check(f"{operation} answers the same for literal and field operands",
+              from_literals == from_fields,
+              detail=f"literals={from_literals!r} fields={from_fields!r}")
+
+    check("MULTIPLY [10,2] is 20", map_math(c, "MULTIPLY", [10, 2]) == 20,
+          detail=f"got {map_math(c, 'MULTIPLY', [10, 2])!r}")
+    check("MULTIPLY [2,'a'] does not depend on operand order",
+          map_math(c, "MULTIPLY", [2, "a"]) == map_math(c, "MULTIPLY", ["a", 2]) == 20,
+          detail=f"got {map_math(c, 'MULTIPLY', [2, 'a'])!r}")
+    check("a field holding zero does not restart the fold",
+          map_math(c, "MULTIPLY", ["a", "z", "b"]) == 0 and map_math(c, "MULTIPLY", ["z", "a", "b"]) == 0,
+          detail=f"a,z,b={map_math(c, 'MULTIPLY', ['a', 'z', 'b'])!r} "
+                 f"z,a,b={map_math(c, 'MULTIPLY', ['z', 'a', 'b'])!r}")
+    check("SUBS and DIVIDE keep left-to-right order",
+          map_math(c, "SUBS", [10, 2, 1]) == 7 and map_math(c, "DIVIDE", [100, 5, 2]) == 10,
+          detail=f"subs={map_math(c, 'SUBS', [10, 2, 1])!r} divide={map_math(c, 'DIVIDE', [100, 5, 2])!r}")
+    check("POW seeds from the first operand", map_math(c, "POW", [2, 10]) == 1024,
+          detail=f"got {map_math(c, 'POW', [2, 10])!r}")
+    check("SUM is unchanged", map_math(c, "SUM", [10, 2]) == 12,
+          detail=f"got {map_math(c, 'SUM', [10, 2])!r}")
+
+    check("MIN over a value past the int range does not leak Integer.MAX_VALUE",
+          map_math(c, "MIN", ["big"]) == 3000000000, detail=f"got {map_math(c, 'MIN', ['big'])!r}")
+    check("MAX over a value past the int range does not leak Integer.MIN_VALUE",
+          map_math(c, "MAX", ["big"]) == 3000000000, detail=f"got {map_math(c, 'MAX', ['big'])!r}")
+    for operation in ("MIN", "MAX", "AVG", "MULTIPLY"):
+        for operand in ("missing", "nullField"):
+            check(f"{operation} over only {operand} answers null",
+                  map_math(c, operation, [operand]) is None,
+                  detail=f"got {map_math(c, operation, [operand])!r}")
+    check("a divide by zero answers null", map_math(c, "DIVIDE", ["a", "z"]) is None,
+          detail=f"got {map_math(c, 'DIVIDE', ['a', 'z'])!r}")
+
+    concat_literal_null = map_math(c, "CONCAT", ["-x", None, "-y"])
+    concat_null_field = map_math(c, "CONCAT", ["-x", "nullField", "-y"])
+    check("CONCAT spells a literal null like a null-valued field",
+          concat_literal_null == concat_null_field == "xnully",
+          detail=f"literal={concat_literal_null!r} field={concat_null_field!r}")
+    check("CONCAT never emits a Java identity string",
+          "@" not in (concat_literal_null or "") and "org.techhouse" not in (concat_literal_null or ""),
+          detail=f"got {concat_literal_null!r}")
+
+    concat_nested_null = map_math(c, "CONCAT", [["x", None, "y"]])
+    check("CONCAT spells a null inside an array operand like one beside it",
+          concat_nested_null == concat_literal_null == "xnully",
+          detail=f"nested={concat_nested_null!r} top_level={concat_literal_null!r}")
+    check("CONCAT keeps an array element a literal rather than a field path",
+          map_math(c, "CONCAT", [["a"]]) == "a",
+          detail=f"got {map_math(c, 'CONCAT', [['a']])!r}")
+
+    save(c, COLL_MATH, {"_id": "m2", "a": 10, "b": 2, "z": 0, "big": 3000000000, "nullField": None})
+    save(c, COLL_MATH, {"_id": "m3", "b": 2, "z": 0, "big": 3000000000, "nullField": None})
+    derive_avg = {"type": "MAP", "operators": [
+        {"fieldName": "derived", "operator": {"type": "AVG", "operands": ["a"]}}]}
+
+    derived = aggregate(c, COLL_MATH, [derive_avg]).get("results") or []
+    missing_row = next((row for row in derived if row.get("_id") == "m3"), None)
+    check("a fold with no valid operand answers a real null",
+          missing_row is not None and "derived" in missing_row and missing_row["derived"] is None,
+          detail=f"got {missing_row!r}")
+
+    sorted_after_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "SORT", "fieldName": "derived",
+                                                             "ascending": True}])
+    check_status("SORT after a MAP that answered null", sorted_after_map, "OK")
+
+    filtered_after_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "FILTER", "operator": {
+        "type": "FIELD", "field": "derived", "fieldOperatorType": "GREATER_THAN", "value": 0}}])
+    check_status("a numeric FILTER after a MAP that answered null", filtered_after_map, "OK")
+    check("the numeric FILTER keeps only the rows that have a value",
+          sorted({row["_id"] for row in filtered_after_map.get("results") or []}) == ["m1", "m2"],
+          detail=f"got {filtered_after_map.get('results')!r}")
+
+    is_null_after_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "FILTER", "operator": {
+        "type": "FIELD", "field": "derived", "fieldOperatorType": "EQUALS", "value": None}}])
+    check("EQUALS null matches the row whose response showed null",
+          [row["_id"] for row in is_null_after_map.get("results") or []] == ["m3"],
+          detail=f"got {is_null_after_map.get('results')!r}")
+
+    second_map = aggregate(c, COLL_MATH, [derive_avg, {"type": "MAP", "operators": [
+        {"fieldName": "plusOne", "operator": {"type": "SUM", "operands": ["derived", 1]}}]}])
+    check_status("a second MAP reading a null result", second_map, "OK")
+
+
+def test_every_aggregate_response_is_strict_json(c):
+    section("Every AGGREGATE response parses under a strict RFC 8259 reader")
+
+    def reject(token):
+        raise ValueError(f"non-RFC JSON token {token!r}")
+
+    shapes = {
+        "a divide by zero": {"type": "DIVIDE", "operands": ["a", "z"]},
+        "an average of nothing": {"type": "AVG", "operands": ["missing"]},
+        "a min of nothing": {"type": "MIN", "operands": ["missing"]},
+        "an overflowing pow": {"type": "POW", "operands": [1.7976931348623157e308, 2]},
+    }
+    for label, operator in shapes.items():
+        raw = raw_send(c, {"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL_MATH,
+                           "aggregationSteps": [{"type": "MAP", "operators": [
+                               {"fieldName": "r", "operator": operator}]}]})
+        try:
+            json.loads(raw, parse_constant=reject)
+            ok = True
+        except ValueError as failure:
+            ok = False
+            raw = f"{failure}: {raw}"
+        check(f"the response for {label} is strict JSON", ok, detail=raw)
+
+
 def test_aggregation_steps(c):
     section("Aggregation steps (MAP / GROUP_BY / JOIN / COUNT / DISTINCT / LIMIT / SKIP / SORT)")
 
@@ -429,6 +736,20 @@ def test_aggregation_steps(c):
     check("JOIN populates asField for l1",
                (by_id.get("l1", {}).get("joined") or [{}])[0].get("label") == "first",
                detail=f"l1.joined={by_id.get('l1', {}).get('joined')}")
+
+    ordered_ids = ["doc-06", "doc-01", "doc-05", "doc-02", "doc-04", "doc-03"]
+    bulk_save(c, COLL_JOIN_RIGHT, [{"_id": i, "key": "kOrder", "label": i} for i in ordered_ids])
+    save(c, COLL_JOIN_LEFT, {"_id": "lOrder", "key": "kOrder"})
+    r = aggregate(c, COLL_JOIN_LEFT, [filter_step("_id", "EQUALS", "lOrder"),
+                                      {"type": "JOIN", "joinCollection": COLL_JOIN_RIGHT,
+                                       "localField": "key", "remoteField": "key", "asField": "joined"}])
+    joined_ids = [d.get("_id") for d in ((r.get("results") or [{}])[0].get("joined") or [])]
+    check("a joined array is in _id order", joined_ids == sorted(ordered_ids), detail=f"got {joined_ids}")
+
+    grouped = aggregate(c, COLL_JOIN_RIGHT, [{"type": "GROUP_BY", "fieldName": "key"}])
+    order_group = next((g for g in (grouped.get("results") or []) if g.get("key") == "kOrder"), {})
+    group_ids = [d.get("_id") for d in (order_group.get("group") or [])]
+    check("a GROUP_BY group is in _id order", group_ids == sorted(ordered_ids), detail=f"got {group_ids}")
 
     r = aggregate(c, COLL_AGG, [{"type": "COUNT"}])
     check_field("COUNT whole collection", r, "results.0.count", 4)
@@ -478,6 +799,42 @@ def test_aggregation_steps(c):
                                    {"type": "SORT", "fieldName": "age", "ascending": True},
                                    {"type": "LIMIT", "limit": 1}])
     check_field("FILTER->SORT->LIMIT yields the youngest active user", r, "results.0._id", "a1")
+
+
+def test_aggregation_steps_write_dotted_fields_nested(c):
+    section("A step writes a dotted field name the way every step reads one")
+    coll = "agg_nested_paths"
+    create_coll(c, coll)
+    bulk_save(c, coll, [{"_id": "n1", "a": {"b": "x", "n": -2}}, {"_id": "n2", "a": {"b": "y", "n": 5}},
+                        {"_id": "n3", "a": {"b": "x", "n": 7}}])
+
+    grouped = aggregate(c, coll, [{"type": "GROUP_BY", "fieldName": "a.b"}]).get("results") or []
+    check("GROUP_BY a.b emits the key nested", sorted((g.get("a") or {}).get("b") for g in grouped) == ["x", "y"]
+          and all("a.b" not in g for g in grouped), detail=f"got {grouped}")
+    r = aggregate(c, coll, [{"type": "GROUP_BY", "fieldName": "a.b"}, filter_step("a.b", "EQUALS", "x")])
+    rows = r.get("results") or []
+    check("a FILTER on the GROUP_BY key finds its group", len(rows) == 1 and len(rows[0].get("group") or []) == 2,
+          detail=f"got {rows}")
+
+    r = aggregate(c, coll, [{"type": "DISTINCT", "fieldName": "a.b"},
+                            {"type": "SORT", "fieldName": "a.b", "ascending": False}])
+    check("DISTINCT then SORT on a.b orders the nested keys",
+          [(d.get("a") or {}).get("b") for d in (r.get("results") or [])] == ["y", "x"], detail=f"got {r}")
+
+    r = aggregate(c, coll, [{"type": "MAP", "operators": [
+        {"fieldName": "a.abs", "operator": {"type": "ABS", "operand": "a.n"}},
+        {"fieldName": "a.b"}]}, filter_step("_id", "EQUALS", "n1")])
+    row = (r.get("results") or [{}])[0]
+    check("MAP ADD_FIELD a.abs writes beside a.n", (row.get("a") or {}).get("abs") == 2, detail=f"got {row}")
+    check("MAP REMOVE_FIELD a.b removes the nested key", "b" not in (row.get("a") or {}) and "a.abs" not in row,
+          detail=f"got {row}")
+
+    r = aggregate(c, coll, [filter_step("_id", "EQUALS", "n1"),
+                            {"type": "JOIN", "joinCollection": coll, "localField": "a.b", "remoteField": "a.b",
+                             "asField": "same.rows"}])
+    row = (r.get("results") or [{}])[0]
+    joined = [d.get("_id") for d in ((row.get("same") or {}).get("rows") or [])]
+    check("JOIN asField same.rows nests the joined array", joined == ["n1", "n3"], detail=f"got {row}")
 
 
 def test_analyze(c):
@@ -569,6 +926,13 @@ def test_index_ops(c):
                ids_of(aggregate(c, "idx_coll", [filter_step("email", "EQUALS", "b@x.io")])) == ["i2"])
 
     check_status("DROP_INDEX email", drop_index(c, "idx_coll", "email"), "OK")
+    check_code("CREATE_INDEX on a never-created collection -> 404-11",
+               create_index(c, "idx_never_created", "email"), "NOT_FOUND", "404-11")
+    check_status("creating that collection afterwards", create_coll(c, "idx_never_created"), "OK")
+    bulk_save(c, "idx_never_created", [{"_id": "n1", "email": "a@x.io"}])
+    check_code("it carries no index the refused CREATE_INDEX promised -> REINDEX email 404-6",
+               reindex(c, "idx_never_created", ["email"]), "NOT_FOUND", "404-6")
+    drop_coll(c, "idx_never_created")
     # DROP_INDEX is idempotent: dropping a field with no index is a no-op that returns OK.
     check_status("DROP_INDEX on a field with no index is idempotent (OK)",
           drop_index(c, "idx_coll", "no_such_field"), "OK")
@@ -659,6 +1023,55 @@ def test_operation_permissions(c):
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
+def test_name_case_collisions(c):
+    section("A name that differs only by case is refused, on every filesystem")
+    # FilePaths uses the logical name verbatim as a path segment, so on a case-insensitive volume
+    # MyColl and mycoll share one folder: each collection then serves the other's documents after a
+    # restart and DROP_COLLECTION destroys both. The refusal is unconditional, so this section
+    # asserts the same codes on a case-sensitive host.
+    check_status("CREATE_DATABASE CaseDb", create_db(c, "CaseDb"), "OK")
+    check_code("CREATE_DATABASE casedb -> 409-11", create_db(c, "casedb"), "ERROR", "409-11")
+    check_code("CREATE_DATABASE CaseDb again is still the duplicate code",
+               create_db(c, "CaseDb"), "ERROR", "409-2")
+
+    check_status("CREATE_COLLECTION MyColl", create_coll(c, "MyColl", db="CaseDb"), "OK")
+    check_code("CREATE_COLLECTION mycoll -> 409-11",
+               create_coll(c, "mycoll", db="CaseDb"), "ERROR", "409-11")
+    check_status("CREATE_COLLECTION MyColl again stays idempotent",
+                 create_coll(c, "MyColl", db="CaseDb"), "OK")
+
+    check_status("CREATE_INDEX Foo", create_index(c, "MyColl", "Foo", db="CaseDb"), "OK")
+    check_code("CREATE_INDEX foo -> 409-11",
+               create_index(c, "MyColl", "foo", db="CaseDb"), "ERROR", "409-11")
+
+    check_code("CREATE_DATABASE Admin -> 400-1 reserved", create_db(c, "Admin"), "ERROR", "400-1")
+    check_code("CREATE_DATABASE ADMIN -> 400-1 reserved", create_db(c, "ADMIN"), "ERROR", "400-1")
+    check_code("CREATE_COLLECTION inside Admin is refused with it",
+               create_coll(c, "users", db="Admin"), "ERROR", "400-1")
+
+    check_code("CREATE_INDEX with a space in the field name -> 400-1",
+               create_index(c, "MyColl", "a b", db="CaseDb"), "ERROR", "400-1")
+    check_status("CREATE_INDEX on a nested path is accepted",
+                 create_index(c, "MyColl", "address.city", db="CaseDb"), "OK")
+    check_status("CREATE_INDEX on a hyphenated field is accepted",
+                 create_index(c, "MyColl", "first-name", db="CaseDb"), "OK")
+
+    check_status("SAVE into MyColl before the case-variant drops",
+                 save(c, "MyColl", {"_id": "keepme", "v": 1}, db="CaseDb"), "OK")
+    check_status("DROP_COLLECTION mycoll is refused", drop_coll(c, "mycoll", db="CaseDb"), "ERROR")
+    check_status("DROP_DATABASE casedb is refused", drop_db(c, "casedb"), "ERROR")
+    check_status("MyColl still answers after both refusals",
+                 find_by_id(c, "MyColl", "keepme", db="CaseDb"), "OK")
+    check_status("DROP_COLLECTION of an unregistered name is refused",
+                 drop_coll(c, "neverCreated", db="CaseDb"), "ERROR")
+    check_status("DROP_COLLECTION MyColl still works", drop_coll(c, "MyColl", db="CaseDb"), "OK")
+    check_status("DROP_COLLECTION MyColl twice is refused",
+                 drop_coll(c, "MyColl", db="CaseDb"), "ERROR")
+
+    check_status("DROP_DATABASE CaseDb still works", drop_db(c, "CaseDb"), "OK")
+    check_status("DROP_DATABASE CaseDb twice is refused", drop_db(c, "CaseDb"), "ERROR")
+
+
 def main():
     bu.banner("API commands & aggregations integration suite", HOST, PORT)
 
@@ -674,13 +1087,22 @@ def main():
 
     groups = [
         test_database_and_collection_ops,
+        test_name_case_collisions,
         test_reserved_script_runs_collection,
         test_crud,
+        test_top_level_id,
         test_value_types,
+        test_a_malformed_document_is_refused_as_a_client_error,
+        test_a_line_with_a_second_value_or_a_nan_point_is_refused,
+        test_deep_nesting_is_refused_not_dropped,
         test_filter_operators,
         test_filter_with_indexes,
         test_conjunctions,
         test_aggregation_steps,
+        test_aggregation_steps_write_dotted_fields_nested,
+        test_map_conditions_and_number_casts,
+        test_map_arithmetic,
+        test_every_aggregate_response_is_strict_json,
         test_analyze,
         test_empty_collection_aggregate,
         test_index_ops,

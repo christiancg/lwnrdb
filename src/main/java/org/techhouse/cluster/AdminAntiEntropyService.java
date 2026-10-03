@@ -1,7 +1,9 @@
 package org.techhouse.cluster;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
@@ -9,6 +11,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -40,14 +43,22 @@ public class AdminAntiEntropyService implements MembershipListener {
     }
 
     public void stop() {
+        stop(clusterConfig.antiEntropyIntervalMs());
+    }
+
+    public void stop(long awaitMillis) {
         started = false;
         adminSyncCompleted.set(false);
         publishSyncState();
-        sweep.stopPeriodic();
+        sweep.stop(awaitMillis);
     }
 
     public boolean hasCompletedAdminSync() {
         return !started || adminSyncCompleted.get();
+    }
+
+    public boolean hasNotConformedSinceStart() {
+        return clusterConfig.isEnabled() && !adminSyncCompleted.get();
     }
 
     // Gossiped so peers can keep a script off a node whose admin state is not caught up yet
@@ -68,25 +79,78 @@ public class AdminAntiEntropyService implements MembershipListener {
         if (!clusterConfig.isEnabled()) {
             return;
         }
+        if (adminEpoch.isUnreadable()) {
+            return;
+        }
+        boolean answered;
         try {
             AdminSnapshotPayload best = null;
-            var bestEpoch = adminEpoch.current();
             final var self = membershipService.getSelf();
-            for (final var member : membershipService.membershipView().peers(self)) {
+            var bestEpoch = adminEpoch.current();
+            var bestConfirmed = adminEpoch.isConfirmed();
+            var bestNodeId = self != null ? self.getNodeId() : null;
+            final var peers = membershipService.membershipView().peers(self);
+            answered = peers.isEmpty();
+            for (final var member : peers) {
                 final var snapshot = requestSnapshot(member.address());
-                if (snapshot != null && snapshot.getEpoch() > bestEpoch) {
+                if (snapshot == null) {
+                    continue;
+                }
+                answered = true;
+                final var snapshotNodeId = snapshot.getNodeId() != null ? snapshot.getNodeId() : member.getNodeId();
+                final var snapshotConfirmed = snapshot.isEpochConfirmed();
+                if (outranks(snapshot.getEpoch(), snapshotConfirmed, snapshotNodeId, bestEpoch, bestConfirmed,
+                        bestNodeId)) {
                     bestEpoch = snapshot.getEpoch();
+                    bestConfirmed = snapshotConfirmed;
+                    bestNodeId = snapshotNodeId;
                     best = snapshot;
                 }
             }
-            if (best != null) {
-                conformer.conform(best);
-                adminEpoch.adopt(best.getEpoch());
+            if (best != null && wouldEmptyThisNode(best)) {
+                logger.warning("Refusing to conform to the admin snapshot of " + bestNodeId + " at epoch " + bestEpoch
+                        + ": it lists no databases while this node holds some, which would unregister every one"
+                        + " of them and delete every user");
+            } else if (best != null) {
+                if (conformer.conform(best)) {
+                    adminEpoch.adopt(best.getEpoch(), best.isEpochConfirmed());
+                }
                 antiEntropyService.reconcileNow();
             }
+            if (answered) {
+                adminSyncCompleted.set(true);
+            }
         } finally {
-            adminSyncCompleted.set(true);
             publishSyncState();
+        }
+    }
+
+    private boolean wouldEmptyThisNode(AdminSnapshotPayload snapshot) {
+        final var offered = snapshot.getDatabases();
+        return (offered == null || offered.isEmpty()) && !cache.getAllAdminDbEntries().isEmpty();
+    }
+
+    private static boolean outranks(long epoch, boolean confirmed, String nodeId, long bestEpoch, boolean bestConfirmed,
+            String bestNodeId) {
+        if (epoch != bestEpoch) {
+            return epoch > bestEpoch;
+        }
+        if (confirmed != bestConfirmed) {
+            return confirmed;
+        }
+        if (nodeId == null || bestNodeId == null) {
+            return false;
+        }
+        return nodeId.compareTo(bestNodeId) > 0;
+    }
+
+    private <T> T readable(String key, List<String> unreadable, Supplier<T> loader) {
+        try {
+            return loader.get();
+        } catch (MetadataReadException e) {
+            logger.warning("Marking " + key + " unreadable in the admin snapshot: " + e.getMessage());
+            unreadable.add(key);
+            return null;
         }
     }
 
@@ -100,15 +164,18 @@ public class AdminAntiEntropyService implements MembershipListener {
         final var procedures = new JsonObject();
         final var triggers = new JsonObject();
         final var schedules = new JsonObject();
+        final var unreadable = new ArrayList<String>();
         for (final var dbName : cache.getUserDatabaseNames()) {
             for (final var procedureName : fs.listProcedureNames(dbName)) {
-                final var procedure = cache.loadProcedureUncached(dbName, procedureName);
+                final var procedure = readable(AdminSnapshotKeys.procedure(dbName, procedureName), unreadable,
+                        () -> cache.loadProcedureUncached(dbName, procedureName));
                 if (procedure != null) {
                     procedures.add(Cache.getCollectionIdentifier(dbName, procedureName), procedure.toJsonObject());
                 }
             }
             for (final var scheduleName : fs.listScheduleNames(dbName)) {
-                final var schedule = cache.loadScheduleUncached(dbName, scheduleName);
+                final var schedule = readable(AdminSnapshotKeys.schedule(dbName, scheduleName), unreadable,
+                        () -> cache.loadScheduleUncached(dbName, scheduleName));
                 if (schedule != null) {
                     schedules.add(Cache.getCollectionIdentifier(dbName, scheduleName), schedule.toJsonObject());
                 }
@@ -119,12 +186,14 @@ public class AdminAntiEntropyService implements MembershipListener {
                     final var json = collEntry.getData().deepCopy();
                     json.addProperty(Globals.PK_FIELD, collEntry.get_id());
                     collections.add(json);
-                    final var schema = cache.loadSchemaUncached(dbName, collName);
+                    final var schema = readable(AdminSnapshotKeys.schema(dbName, collName), unreadable,
+                            () -> cache.loadSchemaUncached(dbName, collName));
                     if (schema != null) {
                         schemas.add(collEntry.get_id(), schema);
                     }
-                    final var collTriggers = cache.loadTriggersUncached(dbName, collName);
-                    if (!collTriggers.isEmpty()) {
+                    final var collTriggers = readable(AdminSnapshotKeys.triggers(dbName, collName), unreadable,
+                            () -> cache.loadTriggersUncached(dbName, collName));
+                    if (collTriggers != null && !collTriggers.isEmpty()) {
                         triggers.add(collEntry.get_id(), TriggerDefinition.toJsonArray(collTriggers));
                     }
                 }
@@ -134,8 +203,13 @@ public class AdminAntiEntropyService implements MembershipListener {
         for (final var userEntry : cache.getAllAdminUserEntries()) {
             users.add(userEntry.getData());
         }
-        return new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas, procedures,
-                triggers, schedules);
+        final var payload = new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas,
+                procedures, triggers, schedules);
+        payload.setEpochConfirmed(adminEpoch.isConfirmed());
+        payload.setUnreadable(unreadable);
+        final var self = membershipService.getSelf();
+        payload.setNodeId(self != null ? self.getNodeId() : null);
+        return payload;
     }
 
     private AdminSnapshotPayload requestSnapshot(NodeAddress address) {

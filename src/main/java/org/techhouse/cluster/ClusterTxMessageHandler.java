@@ -1,5 +1,8 @@
 package org.techhouse.cluster;
 
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
@@ -8,9 +11,12 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.OperationProcessor;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.ReplicatedTxApplyHelper;
+import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.RequestParser;
 
@@ -19,6 +25,8 @@ final class ClusterTxMessageHandler {
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private static final Tx2pcDirectory tx2pcDirectory = IocContainer.get(Tx2pcDirectory.class);
+    private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private static final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
 
     private ClusterTxMessageHandler() {
@@ -32,6 +40,12 @@ final class ClusterTxMessageHandler {
             final var session = clientTracker.registerTxSession(sessionId, request.getActingUser(), edgeNodeId);
             final var clientId = session.clientId();
             final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            final var schemaError = SchemaValidationHelper.check(parsed);
+            if (schemaError != null) {
+                response.setType(ClusterMessageType.FORWARD_RESPONSE);
+                response.setForwardBody(ForwardBody.encode(eJson.toJson(schemaError)));
+                return response;
+            }
             final var type = parsed.getType();
             // Run every op of the session on its own single-thread executor so the collection write locks it
             // holds across messages are acquired and released by the same thread.
@@ -40,20 +54,29 @@ final class ClusterTxMessageHandler {
                 if (startsTransaction(type) && clientTracker.getActiveTransaction(clientId) == null) {
                     // Start with the coordinator's distributed-tx id so the buffered slice and 2PC markers
                     // key on the same id everywhere.
-                    TransactionOperationHelper.start(clientId, java.util.UUID.fromString(txId));
+                    TransactionOperationHelper.start(clientId, java.util.UUID.fromString(txId),
+                            parsed.getTriggerDepth());
                 }
                 return operationProcessor.processMessage(parsed, clientId);
-            }).get();
-            if (type == OperationType.COMMIT_TRANSACTION || type == OperationType.ROLLBACK_TRANSACTION) {
+            }).get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
+            clientTracker.updateLastCommandTime(clientId);
+            if (finishesSession(type) && TransactionOperationHelper.releasedItsLocks(result)) {
                 clientTracker.removeTxSession(sessionId);
             }
             response.setType(ClusterMessageType.FORWARD_RESPONSE);
             response.setForwardBody(ForwardBody.encode(eJson.toJson(result)));
+        } catch (TimeoutException e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Forwarded transaction op did not resolve within the ack timeout");
         } catch (Exception e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to execute forwarded transaction op: " + e.getMessage());
         }
         return response;
+    }
+
+    private static boolean finishesSession(OperationType type) {
+        return type == OperationType.COMMIT_TRANSACTION || type == OperationType.ROLLBACK_TRANSACTION;
     }
 
     private static boolean startsTransaction(OperationType type) {
@@ -65,7 +88,7 @@ final class ClusterTxMessageHandler {
 
     static ClusterMessage handleReplicateTx(ClusterMessage request) {
         final var response = new ClusterMessage();
-        if (ReplicatedTxApplyHelper.apply(request.getTxReplication())) {
+        if (ReplicatedTxApplyHelper.apply(request.getTxReplication(), clusterConfig.replicationAckTimeoutMs())) {
             response.setType(ClusterMessageType.REPLICATE_TX_ACK);
         } else {
             response.setType(ClusterMessageType.ERROR);
@@ -82,11 +105,13 @@ final class ClusterTxMessageHandler {
         var vote = false;
         if (session != null) {
             try {
-                vote = session.submit(
-                        () -> TransactionOperationHelper.prepare(session.clientId(), coordinatorAddress, participants))
-                        .get();
+                vote = session
+                        .submit(() -> TwoPhaseParticipant.prepare(session.clientId(), coordinatorAddress, participants))
+                        .get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+            } catch (TimeoutException e) {
+                logger.warning("Forwarded transaction prepare did not resolve within the ack timeout");
             } catch (Exception e) {
                 logger.warning("Failed to prepare forwarded transaction: " + e.getMessage());
             }
@@ -114,18 +139,31 @@ final class ClusterTxMessageHandler {
         final var session = clientTracker.txSession(sessionId);
         try {
             if (session != null) {
-                session.submit(() -> commit
-                        ? TransactionOperationHelper.commitPrepared(session.clientId())
-                        : TransactionOperationHelper.abort(session.clientId())).get();
-                clientTracker.removeTxSession(sessionId);
+                final var result = session
+                        .submit(() -> commit
+                                ? TwoPhaseParticipant.commitPrepared(session.clientId())
+                                : TransactionOperationHelper.abort(session.clientId()))
+                        .get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
+                if (TransactionOperationHelper.releasedItsLocks(result)) {
+                    clientTracker.removeTxSession(sessionId);
+                }
+                if (result != null && result.getStatus() != OperationStatus.OK) {
+                    response.setType(ClusterMessageType.ERROR);
+                    response.setErrorMessage("Participant failed to resolve transaction: " + result.getMessage());
+                    return response;
+                }
             } else {
-                TransactionOperationHelper.resolveFromDurable(request.getTxId(), commit);
+                TwoPhaseParticipant.resolveFromDurable(request.getTxId(), commit,
+                        clusterConfig.replicationAckTimeoutMs());
             }
             response.setType(ackType);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Interrupted resolving transaction");
+        } catch (TimeoutException e) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage("Participant did not resolve the transaction within the ack timeout");
         } catch (Exception e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to resolve transaction: " + e.getMessage());
@@ -135,7 +173,12 @@ final class ClusterTxMessageHandler {
 
     static ClusterMessage handleTxStatus(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.TX_STATUS_ACK, "Failed to read transaction status",
-                response -> response.setTxStatus(Tx2pcLog.status(request.getTxId()).name()));
+                response -> response.setTxStatus(Tx2pcLog.status(request.getTxId(), selfAddress()).name()));
+    }
+
+    private static String selfAddress() {
+        final var self = membershipService.getSelf();
+        return self == null ? null : self.address().toString();
     }
 
     static ClusterMessage handleListTx() {

@@ -3,9 +3,15 @@ package org.techhouse.utils;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HexFormat;
+import java.util.List;
+import java.util.Map;
 import java.util.function.ToIntBiFunction;
+import org.techhouse.config.Globals;
+import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBoolean;
@@ -17,6 +23,8 @@ import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
 
 public final class JsonUtils {
+    private static final double MAX_EXACT_LONG = 9007199254740992d;
+
     private JsonUtils() {
     }
 
@@ -66,21 +74,27 @@ public final class JsonUtils {
     }
 
     private static int ascendingPrimitives(JsonPrimitive<?> o1Primitive, JsonPrimitive<?> o2Primitive) {
-        if (o1Primitive.isJsonCustom() && o2Primitive.isJsonCustom()
-                && o1Primitive.getClass().isAssignableFrom(o2Primitive.getClass())) {
-            return o1Primitive.asJsonCustom().getValue().compareTo(o2Primitive.asJsonCustom().getValue());
+        if (o1Primitive.isJsonCustom() || o2Primitive.isJsonCustom()) {
+            return o1Primitive.getClass() == o2Primitive.getClass()
+                    ? compareSameCustom(o1Primitive.asJsonCustom(), o2Primitive.asJsonCustom())
+                    : compareByType(o1Primitive, o2Primitive);
         }
         if (o1Primitive.isJsonString() && o2Primitive.isJsonString()) {
             return o1Primitive.asJsonString().getValue().compareTo(o2Primitive.asJsonString().getValue());
         }
         if (o1Primitive.isJsonNumber() && o2Primitive.isJsonNumber()) {
-            return Double.compare(o1Primitive.asJsonNumber().getValue().doubleValue(),
-                    o2Primitive.asJsonNumber().getValue().doubleValue());
+            return FieldIndexEntry.compareIndexedNumbers(o1Primitive.asJsonNumber().getValue(),
+                    o2Primitive.asJsonNumber().getValue());
         }
         if (o1Primitive.isJsonBoolean() && o2Primitive.isJsonBoolean()) {
             return Boolean.compare(o1Primitive.asJsonBoolean().getValue(), o2Primitive.asJsonBoolean().getValue());
         }
         return compareByType(o1Primitive, o2Primitive);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static int compareSameCustom(JsonCustom<?> left, JsonCustom<?> right) {
+        return ((JsonCustom<Object>) left).compareToCustom((JsonCustom<Object>) right);
     }
 
     // Values of different types still need a total order, or each compares greater than the other and
@@ -119,7 +133,7 @@ public final class JsonUtils {
             case JsonNull ignored -> sb.append("null");
             case JsonObject object -> appendCanonicalObject(object, sb);
             case JsonArray array -> appendCanonicalArray(array, sb);
-            case JsonCustom<?> custom -> sb.append(custom.getValue());
+            case JsonCustom<?> custom -> sb.append(custom.canonicalSpelling());
             case JsonNumber number -> sb.append(normalizeNumber(number.getValue()));
             case JsonBoolean bool -> sb.append(bool.getValue().booleanValue());
             case JsonString string -> appendCanonicalString(string.getValue(), sb);
@@ -171,7 +185,7 @@ public final class JsonUtils {
 
     private static String normalizeNumber(Number value) {
         final var asDouble = value.doubleValue();
-        if (asDouble % 1.0 == 0 && !Double.isInfinite(asDouble)) {
+        if (asDouble % 1.0 == 0 && !Double.isInfinite(asDouble) && Math.abs(asDouble) <= MAX_EXACT_LONG) {
             return String.valueOf((long) asDouble);
         }
         return String.valueOf(asDouble);
@@ -194,6 +208,18 @@ public final class JsonUtils {
         } catch (NoSuchAlgorithmException e) {
             throw new IllegalStateException("SHA-256 not available", e);
         }
+    }
+
+    public static String stripTrailingDots(String path) {
+        var limit = path.length();
+        while (limit > 0 && path.charAt(limit - 1) == '.') {
+            limit--;
+        }
+        return path.substring(0, limit);
+    }
+
+    public static boolean isPrimaryKeyPath(String path) {
+        return path != null && Globals.PK_FIELD.equals(stripTrailingDots(path));
     }
 
     public static JsonBaseElement resolvePath(JsonObject obj, String path) {
@@ -219,13 +245,65 @@ public final class JsonUtils {
             if (step == null) {
                 return null;
             }
-            if (step.isJsonObject()) {
-                currentPart = step.asJsonObject();
-            }
             result = step;
             start = dot + 1;
+            if (start <= limit) {
+                if (!step.isJsonObject()) {
+                    return null;
+                }
+                currentPart = step.asJsonObject();
+            }
         }
         return result;
+    }
+
+    public static void setPath(JsonObject obj, String path, JsonBaseElement value) {
+        final var segments = pathSegments(path);
+        if (segments.isEmpty()) {
+            return;
+        }
+        var parent = obj;
+        for (final var segment : segments.subList(0, segments.size() - 1)) {
+            final var child = parent.get(segment);
+            if (child != null && child.isJsonObject()) {
+                parent = child.asJsonObject();
+            } else {
+                final var created = new JsonObject();
+                parent.add(segment, created);
+                parent = created;
+            }
+        }
+        parent.add(segments.getLast(), value);
+    }
+
+    public static void removePath(JsonObject obj, String path) {
+        final var segments = pathSegments(path);
+        if (segments.isEmpty()) {
+            return;
+        }
+        var parent = obj;
+        for (final var segment : segments.subList(0, segments.size() - 1)) {
+            final var child = parent.get(segment);
+            if (child == null || !child.isJsonObject()) {
+                return;
+            }
+            parent = child.asJsonObject();
+        }
+        parent.remove(segments.getLast());
+    }
+
+    private static List<String> pathSegments(String path) {
+        if (path.indexOf('.') < 0) {
+            return List.of(path);
+        }
+        var limit = path.length();
+        while (limit > 0 && path.charAt(limit - 1) == '.') {
+            limit--;
+        }
+        if (limit == 0) {
+            return List.of();
+        }
+        return List.of(path.substring(0, limit).split("\\.", -1));
     }
 
     public static boolean hasInPath(JsonObject obj, String path) {
@@ -235,6 +313,37 @@ public final class JsonUtils {
     public static JsonBaseElement getFromPath(JsonObject obj, String path) {
         final var resolved = resolvePath(obj, path);
         return resolved == null ? JsonNull.INSTANCE : resolved;
+    }
+
+    private record NestedElement(JsonBaseElement element, int depth) {
+    }
+
+    public static boolean nestingExceeds(JsonBaseElement root, int limit) {
+        final var pending = new ArrayDeque<NestedElement>();
+        pending.push(new NestedElement(root, 1));
+        while (!pending.isEmpty()) {
+            final var current = pending.pop();
+            if (!isContainer(current.element())) {
+                continue;
+            }
+            if (current.depth() > limit) {
+                return true;
+            }
+            for (final var child : childrenOf(current.element())) {
+                pending.push(new NestedElement(child, current.depth() + 1));
+            }
+        }
+        return false;
+    }
+
+    private static boolean isContainer(JsonBaseElement element) {
+        return element instanceof JsonObject || element instanceof JsonArray;
+    }
+
+    private static Collection<JsonBaseElement> childrenOf(JsonBaseElement element) {
+        return element instanceof JsonObject object
+                ? object.entrySet().stream().map(Map.Entry::getValue).toList()
+                : element.asJsonArray().asList();
     }
 
 }

@@ -10,6 +10,7 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
+import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.OperationResponse;
@@ -34,6 +35,7 @@ public final class DeleteOperationHelper {
         if (foundIndexEntry.isPresent()) {
             final var idxEntry = foundIndexEntry.get();
             final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
+            entryToBeDeleted.setPage(idxEntry.getPage());
             final var compaction = fs.deleteFromCollection(idxEntry);
             cache.shiftPkPositionsAfterCompaction(compaction);
             primaryKeyIndex.remove(idxEntry);
@@ -41,8 +43,9 @@ public final class DeleteOperationHelper {
             cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
             // Pending until the async DELETED event clears it: the field index still maps the value to
             // this id, so index-only reads (COUNT, DISTINCT) would otherwise surface the deleted doc.
-            pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
-            taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted));
+            final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
+            taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted,
+                    CollectionIncarnation.current(dbName, collName), pendingGeneration));
             listenManager.markDirty(dbName, collName);
             CollectionAccessHelper.recordCollectionAccess(dbName, collName);
             return new DeleteResponse("Entry with id " + deleteRequest.get_id() + " deleted successfully");

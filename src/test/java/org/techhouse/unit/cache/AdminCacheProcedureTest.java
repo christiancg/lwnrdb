@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.data.ProcedureDefinition;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
@@ -92,8 +93,21 @@ public class AdminCacheProcedureTest {
     }
 
     @Test
-    public void test_malformed_procedure_file_reads_as_absent() throws Exception {
+    public void test_a_malformed_procedure_file_refuses_rather_than_reading_as_absent() throws Exception {
         fs.writeProcedure(TestGlobals.DB, "broken", "not json at all");
-        assertNull(cache.getProcedure(TestGlobals.DB, "broken"));
+
+        assertThrows(MetadataReadException.class, () -> cache.getProcedure(TestGlobals.DB, "broken"),
+                "conflating a read failure with absence makes an existing procedure answer PROCEDURE_NOT_FOUND");
+    }
+
+    @Test
+    public void test_a_read_failure_is_not_cached_as_absence() throws Exception {
+        fs.writeProcedure(TestGlobals.DB, "flaky", "not json at all");
+        assertThrows(MetadataReadException.class, () -> cache.getProcedure(TestGlobals.DB, "flaky"));
+
+        write("flaky");
+
+        assertNotNull(cache.getProcedure(TestGlobals.DB, "flaky"),
+                "a failed read cached as a miss leaves the procedure invisible until eviction or restart");
     }
 }

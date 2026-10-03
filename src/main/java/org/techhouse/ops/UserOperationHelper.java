@@ -13,6 +13,7 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PasswordHasher;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.admin.GrantPruner;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
 import org.techhouse.ops.req.CreateUserRequest;
@@ -43,108 +44,110 @@ public class UserOperationHelper {
             if (user == null || !PasswordHasher.verify(password, user.getPasswordHash())) {
                 return new OperationResponse(OperationType.AUTHENTICATE, ErrorCode.WRONG_CREDENTIALS);
             }
-
-            clientTracker.setAuthenticatedUser(clientId, username);
-            return OperationResponse.ok(OperationType.AUTHENTICATE, "Authenticated");
+            final var verifiedHash = user.getPasswordHash();
+            return AdminOperationHelper.withUsersLock(() -> {
+                final var current = cache.getAdminUserEntry(username);
+                if (current == null || !verifiedHash.equals(current.getPasswordHash())) {
+                    return new OperationResponse(OperationType.AUTHENTICATE, ErrorCode.WRONG_CREDENTIALS);
+                }
+                clientTracker.setAuthenticatedUser(clientId, username);
+                return OperationResponse.ok(OperationType.AUTHENTICATE, "Authenticated");
+            });
         });
     }
 
     public static OperationResponse processCreateUser(CreateUserRequest request) {
-        try {
-            final var username = request.getUsername();
-            if (cache.getAdminUserEntry(username) != null) {
-                return new OperationResponse(OperationType.CREATE_USER, ErrorCode.USER_ALREADY_EXISTS);
-            }
-
-            final var passwordHash = PasswordHasher.hash(request.getPassword());
-            final var userEntry = new AdminUserEntry(username, passwordHash, request.getAdmin(),
-                    request.getGlobalPermissions(), request.getDatabasePermissions(),
-                    request.getCollectionPermissions(), request.getScriptPermissions());
-
-            AdminOperationHelper.saveUserEntry(userEntry);
-            return OperationResponse.ok(OperationType.CREATE_USER, "User created successfully");
-        } catch (IOException | InterruptedException e) {
-            return new OperationResponse(OperationType.CREATE_USER, ErrorCode.ERROR_CREATING_USER);
-        }
+        final var passwordHash = PasswordHasher.hash(request.getPassword());
+        return OperationResponse.respondOrError(OperationType.CREATE_USER, ErrorCode.ERROR_CREATING_USER,
+                () -> AdminOperationHelper.withUsersLock(() -> {
+                    final var username = request.getUsername();
+                    if (cache.getAdminUserEntry(username) != null) {
+                        return new OperationResponse(OperationType.CREATE_USER, ErrorCode.USER_ALREADY_EXISTS);
+                    }
+                    AdminOperationHelper.saveUserEntry(new AdminUserEntry(username, passwordHash, request.getAdmin(),
+                            request.getGlobalPermissions(), request.getDatabasePermissions(),
+                            request.getCollectionPermissions(), request.getScriptPermissions()));
+                    return OperationResponse.ok(OperationType.CREATE_USER, "User created successfully");
+                }));
     }
 
     public static OperationResponse processDeleteUser(DeleteUserRequest request) {
-        try {
-            final var username = request.getUsername();
-            final var user = cache.getAdminUserEntry(username);
-
-            if (user == null) {
-                return new OperationResponse(OperationType.DELETE_USER, ErrorCode.USER_NOT_FOUND);
-            }
-
-            if (user.isAdmin()
-                    && cache.getAllAdminUserEntries().stream().filter(AdminUserEntry::isAdmin).count() == 1) {
-                return new OperationResponse(OperationType.DELETE_USER, ErrorCode.CANNOT_DELETE_LAST_ADMIN);
-            }
-
-            AdminOperationHelper.deleteUserEntry(username);
-            return OperationResponse.ok(OperationType.DELETE_USER, "User deleted successfully");
-        } catch (IOException | InterruptedException e) {
-            return new OperationResponse(OperationType.DELETE_USER, ErrorCode.ERROR_DELETING_USER);
-        }
+        return OperationResponse.respondOrError(OperationType.DELETE_USER, ErrorCode.ERROR_DELETING_USER,
+                () -> AdminOperationHelper.withUsersLock(() -> {
+                    final var username = request.getUsername();
+                    final var user = cache.getAdminUserEntry(username);
+                    if (user == null) {
+                        return new OperationResponse(OperationType.DELETE_USER, ErrorCode.USER_NOT_FOUND);
+                    }
+                    if (user.isAdmin() && isLastAdmin()) {
+                        return new OperationResponse(OperationType.DELETE_USER, ErrorCode.CANNOT_DELETE_LAST_ADMIN);
+                    }
+                    AdminOperationHelper.deleteUserEntry(username);
+                    GrantPruner.forDeletedUser(username);
+                    return OperationResponse.ok(OperationType.DELETE_USER, "User deleted successfully");
+                }));
     }
 
     public static OperationResponse processSetPassword(SetPasswordRequest request, UUID clientId) {
-        try {
+        return OperationResponse.respondOrError(OperationType.SET_PASSWORD, ErrorCode.ERROR_CHANGING_PASSWORD, () -> {
             final var callerUsername = clientTracker.getAuthenticatedUsername(clientId);
             final var targetUsername = request.getUsername();
             final var caller = cache.getAdminUserEntry(callerUsername);
             final var target = cache.getAdminUserEntry(targetUsername);
-
             if (target == null) {
                 return new OperationResponse(OperationType.SET_PASSWORD, ErrorCode.USER_NOT_FOUND);
             }
-
+            final var verifiedHash = target.getPasswordHash();
             if (!caller.isAdmin()) {
                 if (!callerUsername.equals(targetUsername)) {
                     return new OperationResponse(OperationType.SET_PASSWORD, ErrorCode.NO_PERMISSIONS);
                 }
-                if (!PasswordHasher.verify(request.getCurrentPassword(), target.getPasswordHash())) {
+                if (!PasswordHasher.verify(request.getCurrentPassword(), verifiedHash)) {
                     return new OperationResponse(OperationType.SET_PASSWORD, ErrorCode.CURRENT_PASSWORD_INCORRECT);
                 }
             }
-
             final var newHash = PasswordHasher.hash(request.getNewPassword());
-            final var updated = new AdminUserEntry(target.get_id(), newHash, target.isAdmin(),
-                    target.getGlobalPermissions(), target.getDatabasePermissions(), target.getCollectionPermissions(),
-                    target.getScriptPermissions());
-            AdminOperationHelper.saveUserEntry(updated);
-            return OperationResponse.ok(OperationType.SET_PASSWORD, "Password changed successfully");
-        } catch (IOException | InterruptedException e) {
-            return new OperationResponse(OperationType.SET_PASSWORD, ErrorCode.ERROR_CHANGING_PASSWORD);
+            return AdminOperationHelper
+                    .withUsersLock(() -> savePassword(targetUsername, newHash, caller.isAdmin() ? null : verifiedHash));
+        });
+    }
+
+    private static OperationResponse savePassword(String username, String newHash, String requiredCurrentHash)
+            throws IOException, InterruptedException {
+        final var current = cache.getAdminUserEntry(username);
+        if (current == null) {
+            return new OperationResponse(OperationType.SET_PASSWORD, ErrorCode.USER_NOT_FOUND);
         }
+        if (requiredCurrentHash != null && !requiredCurrentHash.equals(current.getPasswordHash())) {
+            return new OperationResponse(OperationType.SET_PASSWORD, ErrorCode.CURRENT_PASSWORD_INCORRECT);
+        }
+        AdminOperationHelper.saveUserEntry(new AdminUserEntry(current.get_id(), newHash, current.isAdmin(),
+                current.getGlobalPermissions(), current.getDatabasePermissions(), current.getCollectionPermissions(),
+                current.getScriptPermissions()));
+        return OperationResponse.ok(OperationType.SET_PASSWORD, "Password changed successfully");
     }
 
     public static OperationResponse processChangePermissions(ChangePermissionsRequest request) {
-        try {
-            final var username = request.getUsername();
-            final var user = cache.getAdminUserEntry(username);
+        return OperationResponse.respondOrError(OperationType.CHANGE_PERMISSIONS, ErrorCode.ERROR_CHANGING_PERMISSIONS,
+                () -> AdminOperationHelper.withUsersLock(() -> {
+                    final var username = request.getUsername();
+                    final var user = cache.getAdminUserEntry(username);
+                    if (user == null) {
+                        return new OperationResponse(OperationType.CHANGE_PERMISSIONS, ErrorCode.USER_NOT_FOUND);
+                    }
+                    final var isBecomingAdmin = request.getAdmin();
+                    if (user.isAdmin() && !isBecomingAdmin && isLastAdmin()) {
+                        return new OperationResponse(OperationType.CHANGE_PERMISSIONS,
+                                ErrorCode.CANNOT_DEMOTE_LAST_ADMIN);
+                    }
+                    AdminOperationHelper.saveUserEntry(new AdminUserEntry(username, user.getPasswordHash(),
+                            isBecomingAdmin, request.getGlobalPermissions(), request.getDatabasePermissions(),
+                            request.getCollectionPermissions(), request.getScriptPermissions()));
+                    return OperationResponse.ok(OperationType.CHANGE_PERMISSIONS, "Permissions changed successfully");
+                }));
+    }
 
-            if (user == null) {
-                return new OperationResponse(OperationType.CHANGE_PERMISSIONS, ErrorCode.USER_NOT_FOUND);
-            }
-
-            final var wasAdmin = user.isAdmin();
-            final var isBecomingAdmin = request.getAdmin();
-
-            if (wasAdmin && !isBecomingAdmin
-                    && cache.getAllAdminUserEntries().stream().filter(AdminUserEntry::isAdmin).count() == 1) {
-                return new OperationResponse(OperationType.CHANGE_PERMISSIONS, ErrorCode.CANNOT_DEMOTE_LAST_ADMIN);
-            }
-
-            final var updatedUser = new AdminUserEntry(username, user.getPasswordHash(), isBecomingAdmin,
-                    request.getGlobalPermissions(), request.getDatabasePermissions(),
-                    request.getCollectionPermissions(), request.getScriptPermissions());
-
-            AdminOperationHelper.saveUserEntry(updatedUser);
-            return OperationResponse.ok(OperationType.CHANGE_PERMISSIONS, "Permissions changed successfully");
-        } catch (IOException | InterruptedException e) {
-            return new OperationResponse(OperationType.CHANGE_PERMISSIONS, ErrorCode.ERROR_CHANGING_PERMISSIONS);
-        }
+    private static boolean isLastAdmin() {
+        return cache.getAllAdminUserEntries().stream().filter(AdminUserEntry::isAdmin).count() == 1;
     }
 }

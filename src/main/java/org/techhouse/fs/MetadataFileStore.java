@@ -21,10 +21,8 @@ final class MetadataFileStore {
     }
 
     static String read(File file) throws IOException {
-        if (!file.exists()) {
-            return null;
-        }
-        return String.join("", FileLocks.readAllLinesLocked(file));
+        final var lines = FileLocks.readAllLinesIfExists(file);
+        return lines == null ? null : String.join("", lines);
     }
 
     static boolean delete(File file) {

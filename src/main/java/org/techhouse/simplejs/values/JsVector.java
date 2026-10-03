@@ -7,8 +7,19 @@ public final class JsVector extends JsValue {
 
     private final double[] components;
 
+    private final JsonVector source;
+
     public JsVector(double[] components) {
+        this(components, null);
+    }
+
+    public JsVector(JsonVector source) {
+        this(source.getCustomValue(), source);
+    }
+
+    private JsVector(double[] components, JsonVector source) {
         this.components = components.clone();
+        this.source = source;
     }
 
     public double[] getComponents() {
@@ -23,13 +34,17 @@ public final class JsVector extends JsValue {
         return components[index];
     }
 
+    public JsVector copy() {
+        return new JsVector(components, source);
+    }
+
     public JsonVector toJsonVector() {
-        return new JsonVector(components);
+        return source != null ? source : new JsonVector(components);
     }
 
     @Override
     public String toString() {
-        return toJsonVector().getValue();
+        return new JsonVector(components).getValue();
     }
 
     @Override

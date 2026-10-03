@@ -1,6 +1,9 @@
 package org.techhouse.ops;
 
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Supplier;
 import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterConfig;
@@ -32,7 +35,37 @@ public final class ClusterAdminHelper {
     private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
             .get(AdminAntiEntropyService.class);
 
+    private static final ReentrantLock adminLane = new ReentrantLock(true);
+
     private ClusterAdminHelper() {
+    }
+
+    public static OperationResponse inAdminLane(OperationRequest request, Supplier<OperationResponse> op) {
+        if (!needsAdminLane(request)) {
+            return op.get();
+        }
+        try {
+            if (!adminLane.tryLock(clusterConfig.adminLaneTimeoutMs(), TimeUnit.MILLISECONDS)) {
+                return new OperationResponse(request.getType(), ErrorCode.ADMIN_LANE_BUSY);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new OperationResponse(request.getType(), ErrorCode.ADMIN_LANE_BUSY);
+        }
+        try {
+            return op.get();
+        } finally {
+            adminLane.unlock();
+        }
+    }
+
+    public static boolean holdsAdminLane() {
+        return adminLane.isHeldByCurrentThread();
+    }
+
+    private static boolean needsAdminLane(OperationRequest request) {
+        return isCoordinatedAdminOp(request.getType()) && !request.isReplicated() && clusterConfig.isEnabled()
+                && ownershipManager.isAdminCoordinator();
     }
 
     public static boolean isCoordinatedAdminOp(OperationType type) {
@@ -43,6 +76,9 @@ public final class ClusterAdminHelper {
     public static OperationResponse guard(OperationRequest request) {
         if (!isCoordinatedAdminOp(request.getType())) {
             return null;
+        }
+        if (clusterConfig.isEnabled() && !request.isReplicated() && !ownershipManager.isAdminCoordinator()) {
+            return new OperationResponse(request.getType(), ErrorCode.NOT_COLLECTION_OWNER);
         }
         if (coordinator.guardAdmin().kind() == WriteGuard.Kind.NO_QUORUM) {
             return new OperationResponse(request.getType(), ErrorCode.NO_QUORUM);
@@ -57,7 +93,7 @@ public final class ClusterAdminHelper {
     public static OperationResponse afterAdminOp(OperationRequest request, String actingUser,
             OperationResponse response) {
         final var type = request.getType();
-        if (!isCoordinatedAdminOp(type) || response.getStatus() != OperationStatus.OK) {
+        if (!isCoordinatedAdminOp(type) || request.isReplicated() || response.getStatus() != OperationStatus.OK) {
             return response;
         }
         // Bump the epoch before replicating so the new value ships on the replication message.
@@ -67,9 +103,27 @@ public final class ClusterAdminHelper {
         final var outcome = USER_OPS.contains(type)
                 ? coordinator.replicateUserOp(usernameOf(request), type == OperationType.DELETE_USER)
                 : coordinator.replicateAdminOp(request, actingUser);
-        return outcome == ReplicationOutcome.TIMEOUT
-                ? new OperationResponse(type, ErrorCode.REPLICATION_TIMEOUT)
-                : response;
+        recordReplicationReach(outcome);
+        return switch (outcome) {
+            case TIMEOUT -> new OperationResponse(type, ErrorCode.REPLICATION_TIMEOUT);
+            case NOT_COORDINATOR, NOT_OWNER -> new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
+            case NOT_CLUSTERED, QUORUM_MET -> response;
+        };
+    }
+
+    private static void recordReplicationReach(ReplicationOutcome outcome) {
+        if (!clusterConfig.isEnabled() || !ownershipManager.isAdminCoordinator()) {
+            return;
+        }
+        final var reachedQuorum = switch (outcome) {
+            case QUORUM_MET, NOT_CLUSTERED -> true;
+            case TIMEOUT, NOT_COORDINATOR, NOT_OWNER -> false;
+        };
+        if (reachedQuorum) {
+            adminEpoch.confirm();
+        } else {
+            adminEpoch.markUnconfirmed();
+        }
     }
 
     private static String usernameOf(OperationRequest request) {

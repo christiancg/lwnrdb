@@ -65,6 +65,14 @@ public class OperationProcessorOwnershipTest {
     @Test
     public void test_set_database_owners_success() throws Exception {
         TestUtils.createTestDatabaseAndCollection();
+        final var alice = new CreateUserRequest();
+        alice.setUsername("Alice");
+        alice.setPassword("password123");
+        alice.setAdmin(false);
+        alice.setGlobalPermissions(new java.util.HashSet<>());
+        alice.setDatabasePermissions(new java.util.HashMap<>());
+        alice.setCollectionPermissions(new java.util.HashMap<>());
+        UserOperationHelper.processCreateUser(alice);
 
         final var req = new SetDatabaseOwnersRequest(TestGlobals.DB);
         req.setOwners(List.of("Alice"));

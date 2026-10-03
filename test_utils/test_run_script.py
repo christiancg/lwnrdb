@@ -47,7 +47,7 @@ import threading
 import time
 
 import base_utils as bu
-from base_utils import check, check_code, check_result, check_status, section
+from base_utils import check, check_code, check_field, check_result, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("SCRIPT_TEST_PORT", "8995"))
@@ -466,6 +466,35 @@ def test_history_kinds(conn: Conn):
     check("an ad-hoc run is not recorded under the default kinds", not ad_hoc, f"rows={ad_hoc!r}")
 
 
+def test_a_script_cannot_mutate_the_run_history(conn: Conn):
+    section("Reserved collections are closed to scripts")
+
+    forged = conn.run("import db from 'db';"
+                      " db.save(db.name, 'script_runs', { _id: 'forged', kind: 'RUN_SCRIPT' });"
+                      " return 'wrote';")
+    check("a script cannot forge a run-history row", forged.get("status") != "OK", f"got {forged!r}")
+
+    erased = conn.run("import db from 'db'; db.delete(db.name, 'script_runs', 'forged'); return 'deleted';")
+    check("a script cannot erase a run-history row", erased.get("status") != "OK", f"got {erased!r}")
+
+    readable = conn.run("import db from 'db';"
+                        " return db.aggregate(db.name, 'script_runs', []).length >= 0;")
+    check_result("a script can still read the run history", readable, True)
+
+    bad_id = conn.run("import db from 'db';"
+                      " db.save(db.name, '" + COLL + "', { _id: 'has spaces!', v: 1 });"
+                      " return 'wrote';")
+    check("a script cannot write an _id the client API refuses", bad_id.get("status") != "OK", f"got {bad_id!r}")
+
+    too_deep = conn.run("import db from 'db';"
+                        " let doc = { v: 1 }; for (let i = 0; i < 300; i++) { doc = { a: doc }; }"
+                        " db.save(db.name, '" + COLL + "', { _id: 'too_deep', n: doc });"
+                        " return 'wrote';")
+    check("a script cannot write a document nested past the limit", too_deep.get("status") != "OK",
+          f"got {too_deep!r}")
+    check("and the connection still answers afterwards", conn.run("return 1;").get("result") == 1)
+
+
 def test_history_kinds_enabled(conn: Conn):
     section("Run history with RUN_SCRIPT recorded")
     check_result("a recorded ad-hoc run", conn.run("let t = 0; for (let i = 0; i < 20; i++) t += i; return t;"), 190)
@@ -481,6 +510,25 @@ def test_history_kinds_enabled(conn: Conn):
         check("the row reports the outcome", rows[0].get("outcome") == "ok", f"row={rows[0]!r}")
         check("the row carries metrics",
               (rows[0].get("metrics") or {}).get("instructions", 0) > 0, f"row={rows[0]!r}")
+        check("an ad-hoc run has no collection of its own", rows[0].get("collection") is None, f"row={rows[0]!r}")
+        indexed = conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": "script_runs",
+                             "fieldName": "outcome"})
+        check("CREATE_INDEX on script_runs succeeds once a run has created it", indexed.get("status") == "OK",
+              f"got {indexed!r}")
+        is_null = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
+                             "aggregationSteps": [{"type": "FILTER", "operator": {
+                                 "type": "FIELD", "field": "collection",
+                                 "fieldOperatorType": "EQUALS", "value": None}}]})
+        matched = {row.get("_id") for row in (is_null.get("results") or [])}
+        check("EQUALS null finds the freshly written row the response showed as null",
+              rows[0].get("_id") in matched, f"matched={matched!r} row={rows[0]!r}")
+        not_null = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": "script_runs",
+                              "aggregationSteps": [{"type": "FILTER", "operator": {
+                                  "type": "FIELD", "field": "collection",
+                                  "fieldOperatorType": "NOT_EQUALS", "value": None}}]})
+        check("NOT_EQUALS null excludes that same row",
+              rows[0].get("_id") not in {row.get("_id") for row in (not_null.get("results") or [])},
+              f"got {not_null.get('results')!r}")
 
 
 def test_fetch_unavailable(conn: Conn):
@@ -625,6 +673,27 @@ def test_host_writes(conn: Conn):
                  conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "visible"}), "OK")
 
 
+def test_host_round_trip_keeps_custom_spelling(conn: Conn):
+    section("Host interface — a re-saved document keeps its custom spellings")
+    spellings = {"loc": "#geo(45,-122)", "at": "#datetime(2024-01-01T10:00:00)",
+                 "time": "#time(10:00:00)", "vec": "#vector(1,2)"}
+    check_status("write custom values over the wire",
+                 conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                            "object": {"_id": "spell", **spellings}}), "OK")
+    check_result("re-save the document read back, untouched and as a structured clone",
+                 conn.run('import db from "db";\n'
+                          f'const doc = db.findById(db.name, "{COLL}", "spell");\n'
+                          f'db.save(db.name, "{COLL}", {{ ...doc, touched: true }});\n'
+                          f'db.save(db.name, "{COLL}", {{ ...structuredClone(doc), _id: "spell-clone" }});\n'
+                          'return "saved";'), "saved")
+    for doc_id in ("spell", "spell-clone"):
+        stored = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                            "_id": doc_id}).get("object") or {}
+        for field, spelling in spellings.items():
+            check(f"{doc_id}: {field} is stored exactly as written", stored.get(field) == spelling,
+                  f"expected {spelling!r}, got {stored.get(field)!r}")
+
+
 def test_transactions(conn: Conn):
     section("Host interface — transactions")
     check_result("a transaction commits both collections",
@@ -746,6 +815,128 @@ def test_custom_types(conn: Conn):
                           f'return db.findById(db.name, "{COLL}", "t1").when.toString();'), "#time(23:15:42)")
     check_result("a geo value is queryable from the wire after a script wrote it",
                  conn.run('import db from "db";\nreturn typeof Geo.from("#geo(1,2)").geoHash;'), "string")
+
+
+def test_value_guards(conn: Conn):
+    section("Host interface — values a document cannot hold")
+    for label, literal in (("1/0", "1/0"), ("-1/0", "-1/0"), ("0/0", "0/0"),
+                           ("an overflow", "Number.MAX_VALUE * 2")):
+        check_failed_script(f"storing {label} is refused", conn.run(
+            'import db from "db";\n'
+            f'db.save(db.name, "{COLL}", {{ _id: "nonfinite", v: {literal} }});'),
+            "400-9", "is not a JSON number")
+    check_result("the refusal is catchable inside the script", conn.run(
+        'import db from "db";\n'
+        f'try {{ db.save(db.name, "{COLL}", {{ _id: "nonfinite", v: 1/0 }}); return "saved"; }}\n'
+        "catch (e) { return e.name; }"), "TypeError")
+    check_failed_script("returning a non-finite number is refused too",
+                        conn.run("return 1/0;"), "400-9", "is not a JSON number")
+    check_code("no refused write reached the collection",
+               conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                          "_id": "nonfinite"}), "NOT_FOUND", "404-2")
+
+    check_failed_script("an unregistered custom type is refused", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "badcustom", f: "#nosuch(1)" }});'),
+        "400-9", "nosuch")
+    check_failed_script("a malformed custom value is refused", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "badcustom", f: "#geo(bad)" }});'), "400-9", "Cannot serialize")
+    check_code("neither reached the collection",
+               conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                          "_id": "badcustom"}), "NOT_FOUND", "404-2")
+
+    check_result("a custom-shaped string stores as the custom type the wire would build", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "promoted", loc: "#geo(3.0,4.0)" }});\n'
+        f'const stored = db.findById(db.name, "{COLL}", "promoted");\n'
+        "return [typeof stored.loc, stored.loc.lat, stored.loc.toString()];"),
+        ["object", 3, "#geo(3.0,4.0)"])
+    check_status("store an unnormalised custom value from a script", conn.run(
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL}", {{ _id: "promoted2", loc: "#geo(1,2)" }});'), "OK")
+    check_field("promotion keeps the raw wire text rather than normalising it",
+                conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                           "_id": "promoted2"}), "object.loc", "#geo(1,2)")
+    check_result("JSON.stringify still treats a custom-shaped string as a string",
+                 conn.run("return JSON.stringify({ a: '#geo(1,2)', b: 1/0 });"),
+                 '{"a":"#geo(1,2)","b":null}')
+
+
+def test_db_module_arity(conn: Conn):
+    section("Host interface - a db call with too few arguments")
+    for label, call in (("db.save", f'db.save("{COLL}", {{ _id: "arity" }})'),
+                        ("db.aggregate", f'db.aggregate(db.name, "{COLL}")'),
+                        ("db.bulkSave", f'db.bulkSave("{COLL}", [{{ _id: "arity" }}])'),
+                        ("db.cursor", f'db.cursor(db.name, "{COLL}")')):
+        check_failed_script(f"{label} with too few arguments is a TypeError",
+                            conn.run(f'import db from "db";\n{call};'), "400-9", "TypeError")
+        check_status(f"the connection still answers after {label} was refused",
+                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                                "_id": "arity"}), "NOT_FOUND")
+
+    check_result("the refusal is catchable inside the script", conn.run(
+        'import db from "db";\n'
+        f'try {{ db.save("{COLL}", {{ _id: "arity" }}); return "saved"; }}\n'
+        "catch (e) { return e.name; }"), "TypeError")
+    check_failed_script("a third argument of the wrong shape is refused the same way",
+                        conn.run('import db from "db";\n'
+                                 f'db.aggregate(db.name, "{COLL}", {{}});'), "400-9", "TypeError")
+    check_failed_script("an empty bulkSave array reaches request validation, not the arity guard",
+                        conn.run('import db from "db";\n'
+                                 f'db.bulkSave(db.name, "{COLL}", []);'),
+                        "400-9", "at least one object")
+
+
+def test_db_save_rejects_a_non_string_id(conn: Conn):
+    section("Host interface - db.save with an _id that is not a string")
+    # The wire path leaves a non-string _id unset and lets DataRequestValidator answer "_id must be a
+    # string". db.save used to read it with an unchecked cast before dispatching, so the identical
+    # document died on a ClassCastException reported as an InternalError and logged as an engine fault.
+    for label, literal in (("a number", "123"), ("a boolean", "true"), ("an object", "{ a: 1 }"),
+                           ("an array", "[1]"), ("null", "null")):
+        check_failed_script(f"{label} _id is a validation error, not an InternalError",
+                            conn.run('import db from "db";\n'
+                                     f'db.save(db.name, "{COLL}", {{ _id: {literal}, v: 1 }});'),
+                            "400-9", "_id must be a string")
+        check_status(f"the connection still answers after {label} was refused",
+                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                                "_id": "non-string-id"}), "NOT_FOUND")
+
+    check_result("the refusal is catchable inside the script", conn.run(
+        'import db from "db";\n'
+        f'try {{ db.save(db.name, "{COLL}", {{ _id: 123, v: 1 }}); return "saved"; }}\n'
+        "catch (e) { return e.message.indexOf(\"_id must be a string\") >= 0 ? \"refused\" : e.message; }"),
+        "refused")
+    check_result("a valid string _id still saves", conn.run(
+        'import db from "db";\n'
+        f'return db.save(db.name, "{COLL}", {{ _id: "string-id-ok", v: 1 }})._id;'), "string-id-ok")
+    check_failed_script("a string _id that breaks the charset is still refused",
+                        conn.run('import db from "db";\n'
+                                 f'db.save(db.name, "{COLL}", {{ _id: "not valid!", v: 1 }});'),
+                        "400-9", "")
+
+
+def test_db_aggregate_refuses_an_unparseable_pipeline(conn: Conn):
+    section("Host interface - db.aggregate / db.cursor with a pipeline the parser cannot read")
+    for label, pipeline in (("a FILTER step with no operator", '[{ type: "FILTER" }]'),
+                            ("an unknown step type", '[{ type: "NOPE" }]')):
+        check_failed_script(f"db.aggregate with {label} is an Error, not an InternalError",
+                            conn.run('import db from "db";\n'
+                                     f'db.aggregate(db.name, "{COLL}", {pipeline});'),
+                            "400-9", "Error: The command is not valid")
+        check_result(f"db.aggregate with {label} is catchable inside the script", conn.run(
+            'import db from "db";\n'
+            f'try {{ db.aggregate(db.name, "{COLL}", {pipeline}); return "returned"; }}\n'
+            "catch (e) { return e.name; }"), "Error")
+        check_result(f"db.cursor with {label} is catchable inside the script", conn.run(
+            'import db from "db";\n'
+            f'try {{ for (const doc of db.cursor(db.name, "{COLL}", {pipeline})) {{ return "row"; }}'
+            ' return "empty"; }\n'
+            "catch (e) { return e.name; }"), "Error")
+    check_status("the connection still answers after the refusals",
+                 conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                            "_id": "unparseable-pipeline"}), "NOT_FOUND")
 
 
 def test_capabilities(conn: Conn):
@@ -1153,6 +1344,15 @@ def test_cursor(conn: Conn):
             "seen.add(doc._id);\n"
             "return seen.size;")
     check_result("a walk visits every document exactly once", conn.run(walk), BIG_DOCS)
+    unordered_walk = ('import db from "db";\n'
+                      "const seen = [];\n"
+                      f'for (const doc of db.cursor(db.name, "{BIG_COLL}", [], {{ batchSize: 20 }})) '
+                      "seen.push(doc._id);\n"
+                      "const sorted = [...seen].sort();\n"
+                      "return { distinct: new Set(seen).size, total: seen.length,"
+                      " inIdOrder: seen.every((id, i) => id === sorted[i]) };")
+    check_result("a walk over a pipeline with no SORT still visits every document exactly once, in _id order",
+                 conn.run(unordered_walk), {"distinct": BIG_DOCS, "total": BIG_DOCS, "inIdOrder": True})
 
     counted = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BIG_COLL,
                          "aggregationSteps": [{"type": "COUNT"}]})
@@ -1196,6 +1396,75 @@ def test_cursor(conn: Conn):
                  conn.run('import db from "db";\n'
                           f'for (const doc of db.cursor(db.name, "{BIG_COLL}", {sort}, {{ batchSize: 20 }})) '
                           "break;\nreturn 'released';"), "released")
+
+
+DOOMED = "script_doomed"
+DOOMED_PASSWORD = "password1234"
+
+
+def await_document(conn: Conn, coll: str, doc_id: str, timeout=15.0) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        found = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": doc_id})
+        if found.get("status") == "OK":
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def test_a_script_transaction_releases_its_locks_when_its_user_is_deleted_mid_run(conn: Conn):
+    section("A script transaction whose user is deleted mid-run does not strand its write locks")
+    conn.send({"type": "DELETE_USER", "username": DOOMED})
+    check_status("create the doomed user", conn.send({
+        "type": "CREATE_USER", "username": DOOMED, "password": DOOMED_PASSWORD, "admin": False,
+        "globalPermissions": [], "databasePermissions": {DB: "READ_WRITE"}, "collectionPermissions": {},
+        "scriptPermissions": {DB: True}}), "OK")
+    script = (
+        'import db from "db";\n'
+        f'db.save(db.name, "{COLL2}", {{ _id: "doomed-started" }});\n'
+        "let firstSaved = false;\n"
+        "let message = null;\n"
+        "try {\n"
+        "  db.transaction(() => {\n"
+        f'    db.save(db.name, "{COLL}", {{ _id: "doomed-tx" }});\n'
+        "    firstSaved = true;\n"
+        "    const end = Date.now() + 4000;\n"
+        "    while (Date.now() < end) {\n"
+        f'      db.aggregate(db.name, "{BIG_COLL}", [{{ type: "FILTER", operator: '
+        '{ fieldOperatorType: "CONTAINS", field: "payload", value: "zzzz" } }]);\n'
+        "    }\n"
+        "  });\n"
+        "} catch (e) { message = e.message; }\n"
+        "return { firstSaved, message };"
+    )
+    outcome = {}
+
+    def run_as_doomed():
+        with Conn() as doomed:
+            doomed.authenticate(DOOMED, DOOMED_PASSWORD)
+            outcome["response"] = doomed.run(script)
+
+    runner = threading.Thread(target=run_as_doomed, daemon=True)
+    runner.start()
+    check("the script started", await_document(conn, COLL2, "doomed-started"))
+    time.sleep(1.0)
+    check_status("delete the user while the transaction is open", conn.send(
+        {"type": "DELETE_USER", "username": DOOMED}), "OK")
+    runner.join(30)
+    result = (outcome.get("response") or {}).get("result") or {}
+    check("the first save of the transaction had returned before the user went away",
+          result.get("firstSaved") is True, f"got {outcome.get('response')}")
+    check("the next host call failed because the user no longer exists",
+          "not found" in (result.get("message") or ""), f"got {result}")
+    started = time.time()
+    check_status("a write to the collection the transaction had locked is accepted",
+                 conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                            "object": {"_id": "after-doomed", "ok": True}}), "OK")
+    check("and it did not have to wait out a lock timeout", time.time() - started < 4.0,
+          f"took {time.time() - started:.1f}s")
+    check("the transaction's own write was rolled back",
+          conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                     "_id": "doomed-tx"}).get("status") != "OK")
 
 
 def test_permissions(conn: Conn):
@@ -1361,16 +1630,23 @@ def main():
             test_sandbox_limits(conn)
             test_run_metrics(conn)
             test_history_kinds(conn)
+            test_a_script_cannot_mutate_the_run_history(conn)
             test_fetch_unavailable(conn)
             test_locale_arguments(conn)
             test_request_validation(conn)
             test_host_reads(conn)
             test_host_writes(conn)
+            test_host_round_trip_keeps_custom_spelling(conn)
             test_transactions(conn)
+            test_a_script_transaction_releases_its_locks_when_its_user_is_deleted_mid_run(conn)
             test_scope_and_failures(conn)
             test_schema_interaction(conn)
             test_arguments(conn)
             test_custom_types(conn)
+            test_value_guards(conn)
+            test_db_module_arity(conn)
+            test_db_save_rejects_a_non_string_id(conn)
+            test_db_aggregate_refuses_an_unparseable_pipeline(conn)
             test_capabilities(conn)
             test_procedure_imports(conn)
             test_language_surface(conn)

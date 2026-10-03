@@ -78,12 +78,12 @@ public class FilterConjunctionDedupTest {
     }
 
     @Test
-    public void test_or_falls_back_to_content_dedup_without_an_id() throws IOException {
+    public void test_or_keeps_equal_rows_without_an_id() throws IOException {
         final var source = List.of(doc(null, "admin", "yes"), doc(null, "admin", "yes"), doc(null, "user", "yes"));
 
         final var result = run(source, conjunction(ConjunctionOperatorType.OR));
 
-        assertEquals(2, result.size(), "documents without _id must still deduplicate on content");
+        assertEquals(3, result.size(), "a conjunction filters rows; it must not collapse two equal rows into one");
     }
 
     @Test
@@ -120,10 +120,23 @@ public class FilterConjunctionDedupTest {
     }
 
     @Test
-    public void test_and_without_an_id_is_still_refused() {
-        final var source = List.of(doc(null, "admin", "yes"));
+    public void test_and_without_an_id_keys_on_the_row_itself() throws IOException {
+        final var source = List.of(doc(null, "admin", "yes"), doc(null, "user", "yes"));
 
-        assertThrows(IllegalStateException.class, () -> run(source, conjunction(ConjunctionOperatorType.AND)),
-                "AND grouping still requires _id");
+        final var result = run(source, conjunction(ConjunctionOperatorType.AND));
+
+        assertEquals(1, result.size());
+        assertEquals("admin", result.getFirst().get("role").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_every_conjunction_without_an_id_emits_each_row_once() throws IOException {
+        final var source = List.of(doc(null, "admin", "yes"), doc(null, "admin", "no"), doc(null, "user", "yes"));
+
+        assertEquals(1, run(source, conjunction(ConjunctionOperatorType.AND)).size());
+        assertEquals(2, run(source, conjunction(ConjunctionOperatorType.XOR)).size());
+        assertEquals(2, run(source, conjunction(ConjunctionOperatorType.NAND)).size());
+        assertEquals(0, run(source, conjunction(ConjunctionOperatorType.NOR)).size());
+        assertEquals(3, run(source, conjunction(ConjunctionOperatorType.OR)).size());
     }
 }

@@ -250,7 +250,7 @@ public class TransactionTriggerTest {
     }
 
     @Test
-    public void test_a_document_inserted_then_saved_again_fires_created_then_updated() {
+    public void test_a_document_inserted_then_saved_again_fires_created_once() {
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
         save("tx-new-2", 1, clientId);
@@ -258,9 +258,9 @@ public class TransactionTriggerTest {
         processor.processMessage(new CommitTransactionRequest(), clientId);
 
         final var events = settle();
-        assertEquals(2, events.size());
+        assertEquals(1, events.size());
         assertEquals(Set.of("tx-new-2"), idsOf(events, EventType.CREATED));
-        assertEquals(Set.of("tx-new-2"), idsOf(events, EventType.UPDATED));
+        assertEquals(Set.of(), idsOf(events, EventType.UPDATED));
     }
 
     @Test
@@ -278,5 +278,32 @@ public class TransactionTriggerTest {
         final var events = settle();
         assertEquals(Set.of("tx-new-3"), idsOf(events, EventType.CREATED));
         assertEquals(Set.of("tx-new-3"), idsOf(events, EventType.DELETED));
+    }
+
+    @Test
+    public void test_a_recovered_commit_fires_its_after_triggers() throws Exception {
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        save("tx-recovered-1", 1, clientId);
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var txId = transaction.getTransactionId().toString();
+        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+        final var collections = List.copyOf(transaction.getHeldLocks());
+        org.techhouse.ops.TxCommitLog.recordLocalCommit(txId, opIds, collections);
+        clientTracker.clearActiveTransaction(clientId);
+        clientTracker.clearTransactionState(clientId);
+        TestUtils.releaseAllLocks();
+        captured.clear();
+
+        org.techhouse.ops.tx.TransactionRecovery.commitLocalFromDurable(txId, collections);
+
+        final var events = settle();
+        assertEquals(1, events.size(),
+                "a commit finished by recovery applies its writes, so it must fire the same after-triggers the"
+                        + " online commit would have");
+        assertEquals(EventType.CREATED, events.getFirst().getType(),
+                "the insert-or-update decision is persisted on the buffered op, so the replay reports CREATED"
+                        + " exactly as the original commit would have");
+        assertEquals("tx-recovered-1", events.getFirst().getEntries().getFirst().get_id());
     }
 }

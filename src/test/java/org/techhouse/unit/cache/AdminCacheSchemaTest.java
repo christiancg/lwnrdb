@@ -2,6 +2,7 @@ package org.techhouse.unit.cache;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -11,6 +12,7 @@ import org.techhouse.cache.AdminCache;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestGlobals;
@@ -75,5 +77,17 @@ public class AdminCacheSchemaTest {
         adminCache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL, schema("object"));
         adminCache.removeCollectionSchemasForDatabase(TestGlobals.DB);
         assertNull(adminCache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+    }
+
+    @Test
+    public void test_a_read_failure_is_not_cached_as_absence() throws Exception {
+        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, "{\"type\": \"obj");
+
+        assertThrows(MetadataReadException.class,
+                () -> adminCache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
+
+        fs.writeCollectionSchema(TestGlobals.DB, TestGlobals.COLL, eJson.toJson(schema("object")));
+        assertEquals(schema("object"), adminCache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL),
+                "a failed read must not be remembered as a definitive absence");
     }
 }

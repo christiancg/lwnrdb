@@ -11,6 +11,12 @@ import org.techhouse.ops.OperationStatus;
 public class ErrorCodeTest {
 
     @Test
+    public void server_shutting_down_is_a_retryable_503() {
+        assertEquals("503-13", ErrorCode.SERVER_SHUTTING_DOWN.getCode());
+        assertEquals(OperationStatus.ERROR, ErrorCode.SERVER_SHUTTING_DOWN.getStatus());
+    }
+
+    @Test
     public void all_error_codes_have_non_blank_code_string() {
         for (ErrorCode code : ErrorCode.values()) {
             assertNotNull(code.getCode(), code.name() + " has null code");
@@ -119,5 +125,12 @@ public class ErrorCodeTest {
         assertEquals("400-12", ErrorCode.SCRIPT_MEMORY_EXCEEDED.getCode());
         assertEquals(ErrorCode.SCRIPT_TIMEOUT, ErrorCode.byCode("408-1"));
         assertEquals(ErrorCode.SCRIPT_MEMORY_EXCEEDED, ErrorCode.byCode("400-12"));
+    }
+
+    @Test
+    public void test_name_collides_on_disk_code_and_status() {
+        assertEquals("409-11", ErrorCode.NAME_COLLIDES_ON_DISK.getCode());
+        assertEquals(OperationStatus.ERROR, ErrorCode.NAME_COLLIDES_ON_DISK.getStatus());
+        assertFalse(ErrorCode.NAME_COLLIDES_ON_DISK.getDefaultMessage().isBlank());
     }
 }

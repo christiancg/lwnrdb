@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
@@ -13,17 +14,22 @@ import org.techhouse.ioc.IocContainer;
 // The coordinator marker's presence is the commit point: present means committed, absent means presumed-abort.
 public final class Tx2pcLog {
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final org.techhouse.cluster.HybridClock hybridClock = IocContainer
+            .get(org.techhouse.cluster.HybridClock.class);
+    private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final String COORDINATOR_ADDRESS_FIELD = "coordinatorAddress";
     private static final String COLLECTIONS_FIELD = "collections";
     private static final String PARTICIPANTS_FIELD = "participants";
+    private static final String SESSION_ID_FIELD = "sessionId";
     private static final String PREPARED_AT_FIELD = "preparedAt";
+    private static final String PREPARED_VERSION_FIELD = "preparedVersion";
     private static final String OUTCOME_FIELD = "outcome";
     private static final String RESOLVED_AT_FIELD = "resolvedAt";
     private static final String OUTCOME_COMMITTED = "committed";
     private static final String OUTCOME_ABORTED = "aborted";
 
     public enum Status {
-        COMMITTED, ABORTED, PREPARED, UNKNOWN
+        COMMITTED, ABORTED, PREPARED, UNKNOWN, NO_RECORD
     }
 
     private Tx2pcLog() {
@@ -40,6 +46,7 @@ public final class Tx2pcLog {
         payload.add(PARTICIPANTS_FIELD, stringArray(participants));
         payload.add(COLLECTIONS_FIELD, stringArray(collections));
         payload.addProperty(PREPARED_AT_FIELD, Long.toString(System.currentTimeMillis()));
+        payload.addProperty(PREPARED_VERSION_FIELD, Long.toString(hybridClock.current()));
         AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId,
                 AdminTransactionEntry.MARKER_PARTICIPANT, AdminTransactionEntry.OP_TYPE_PARTICIPANT_PREPARED, payload));
     }
@@ -57,6 +64,10 @@ public final class Tx2pcLog {
     }
 
     public static Status status(String dtxId) throws Exception {
+        return status(dtxId, null);
+    }
+
+    public static Status status(String dtxId, String selfAddress) throws Exception {
         if (isCommitted(dtxId)) {
             return Status.COMMITTED;
         }
@@ -64,7 +75,18 @@ public final class Tx2pcLog {
         if (outcome != null) {
             return OUTCOME_COMMITTED.equals(outcome) ? Status.COMMITTED : Status.ABORTED;
         }
-        return isPrepared(dtxId) ? Status.PREPARED : Status.UNKNOWN;
+        if (isPrepared(dtxId)) {
+            return coordinatorRestartedUndecided(dtxId, selfAddress) ? Status.NO_RECORD : Status.PREPARED;
+        }
+        return clientTracker.hasActiveTransaction(dtxId) ? Status.UNKNOWN : Status.NO_RECORD;
+    }
+
+    private static boolean coordinatorRestartedUndecided(String dtxId, String selfAddress) throws Exception {
+        if (selfAddress == null || clientTracker.hasActiveTransaction(dtxId)) {
+            return false;
+        }
+        final var marker = readParticipantMarker(dtxId);
+        return marker != null && selfAddress.equals(marker.coordinatorAddress());
     }
 
     private static String readOutcome(String dtxId) throws Exception {
@@ -89,8 +111,10 @@ public final class Tx2pcLog {
         }
     }
 
-    public static void recordCoordinatorCommit(String dtxId, List<String> participants) throws Exception {
+    public static void recordCoordinatorCommit(String dtxId, String sessionId, List<String> participants)
+            throws Exception {
         final var payload = new JsonObject();
+        payload.addProperty(SESSION_ID_FIELD, sessionId);
         payload.add(PARTICIPANTS_FIELD, stringArray(participants));
         AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId,
                 AdminTransactionEntry.MARKER_COORDINATOR, AdminTransactionEntry.OP_TYPE_COORDINATOR_COMMIT, payload));
@@ -134,8 +158,12 @@ public final class Tx2pcLog {
         final var preparedAt = payload.has(PREPARED_AT_FIELD)
                 ? Long.parseLong(payload.get(PREPARED_AT_FIELD).asJsonString().getValue())
                 : 0L;
+        final var preparedVersion = payload.has(PREPARED_VERSION_FIELD)
+                ? Long.parseLong(payload.get(PREPARED_VERSION_FIELD).asJsonString().getValue())
+                : 0L;
         return new ParticipantMarker(payload.get(COORDINATOR_ADDRESS_FIELD).asJsonString().getValue(),
-                readStringArray(payload, PARTICIPANTS_FIELD), readStringArray(payload, COLLECTIONS_FIELD), preparedAt);
+                readStringArray(payload, PARTICIPANTS_FIELD), readStringArray(payload, COLLECTIONS_FIELD), preparedAt,
+                preparedVersion);
     }
 
     public static List<String> readCoordinatorParticipants(String dtxId) throws Exception {
@@ -145,6 +173,19 @@ public final class Tx2pcLog {
             return List.of();
         }
         return readStringArray(entries.getFirst().getPayload(), PARTICIPANTS_FIELD);
+    }
+
+    public static String readCoordinatorSessionId(String dtxId) throws Exception {
+        final var entries = AdminOperationHelper
+                .readTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_COORDINATOR)));
+        if (entries.isEmpty()) {
+            return null;
+        }
+        final var payload = entries.getFirst().getPayload();
+        if (!payload.has(SESSION_ID_FIELD) || payload.get(SESSION_ID_FIELD).isJsonNull()) {
+            return null;
+        }
+        return payload.get(SESSION_ID_FIELD).asJsonString().getValue();
     }
 
     // Slice op ids are {dtxId}|{seq}; the numeric-suffix test is what excludes the marker records.
@@ -192,6 +233,6 @@ public final class Tx2pcLog {
     }
 
     public record ParticipantMarker(String coordinatorAddress, List<String> participants, List<String> collections,
-            long preparedAt) {
+            long preparedAt, long preparedVersion) {
     }
 }

@@ -17,6 +17,29 @@ public class MembershipViewTest {
     }
 
     @Test
+    public void test_snapshot_excludes_dead_members() throws Exception {
+        final var membership = org.techhouse.ioc.IocContainer
+                .get(org.techhouse.cluster.membership.MembershipService.class);
+        @SuppressWarnings("unchecked")
+        final var members = (java.util.Map<String, NodeInfo>) org.techhouse.test.TestUtils.getPrivateField(membership,
+                "members", java.util.Map.class);
+        members.clear();
+        members.put("alive", node("alive", NodeState.ALIVE));
+        members.put("dead", node("dead", NodeState.DEAD));
+        try {
+            final var method = membership.getClass().getDeclaredMethod("snapshot");
+            method.setAccessible(true);
+            @SuppressWarnings("unchecked")
+            final var snapshot = (List<NodeInfo>) method.invoke(membership);
+
+            assertEquals(1, snapshot.size(), "a DEAD member must not be gossiped on to peers");
+            assertEquals("alive", snapshot.getFirst().getNodeId());
+        } finally {
+            members.clear();
+        }
+    }
+
+    @Test
     public void test_size_find_and_alive_filters() {
         final var view = new MembershipView(List.of(node("a", NodeState.ALIVE), node("b", NodeState.SUSPECT),
                 node("c", NodeState.DEAD), node("d", NodeState.ALIVE)));

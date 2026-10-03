@@ -2,7 +2,7 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -28,6 +28,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.RunningScript;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ScriptRunKind;
 import org.techhouse.ops.ScriptRunRegistry;
@@ -188,7 +189,7 @@ public class ScriptRunDirectoryTest {
         registry.register(ScriptRunKind.RUN_SCRIPT, "shop", null, "alice", null);
         final var row = directory.listClusterWide().getFirst();
         assertEquals("RUN_SCRIPT", row.get("kind").asJsonString().getValue());
-        assertNull(row.get("name").asJsonString().getValue());
+        assertSame(JsonNull.INSTANCE, row.get("name"));
     }
 
     @Test

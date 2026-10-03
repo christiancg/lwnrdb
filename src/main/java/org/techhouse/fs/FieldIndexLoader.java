@@ -1,5 +1,6 @@
 package org.techhouse.fs;
 
+import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -39,11 +40,57 @@ final class FieldIndexLoader {
             String label, Function<String, FieldIndexEntry<T>> parser, Comparator<FieldIndexEntry<T>> order)
             throws IOException {
         final var indexFile = paths.indexFile(dbName, collName, fieldName, indexTypeLabel);
-        if (!indexFile.exists()) {
+        if (indexFile == null || !indexFile.exists()) {
             return null;
         }
-        final var lines = FileLocks.readAllLinesIfExists(indexFile);
-        if (lines == null) {
+        final var readLock = FileLocks.lockFor(indexFile).readLock();
+        readLock.lock();
+        final ParsedIndex<T> parsed;
+        try {
+            parsed = parseIndex(indexFile, label, parser);
+        } finally {
+            readLock.unlock();
+        }
+        if (parsed == null) {
+            return null;
+        }
+        if (parsed.unrecognised()) {
+            logger.error("No line in " + indexFile.getName() + " could be read as a " + label
+                    + " index entry, so it is not the file this loader expects; leaving it untouched."
+                    + " Run REINDEX on this collection to rebuild it from the stored documents.");
+            return null;
+        }
+        if (!parsed.dropped()) {
+            parsed.entries().sort(order);
+            return parsed.entries();
+        }
+        final var writeLock = FileLocks.lockFor(indexFile).writeLock();
+        writeLock.lock();
+        try {
+            final var reparsed = parseIndex(indexFile, label, parser);
+            if (reparsed == null) {
+                return null;
+            }
+            if (reparsed.dropped()) {
+                FileLocks.rewriteFileAtomically(indexFile.toPath(), reparsed.lines());
+            }
+            reparsed.entries().sort(order);
+            return reparsed.entries();
+        } finally {
+            writeLock.unlock();
+        }
+    }
+
+    private record ParsedIndex<T>(List<FieldIndexEntry<T>> entries, List<String> lines, boolean dropped,
+            boolean unrecognised) {
+    }
+
+    private <T> ParsedIndex<T> parseIndex(File indexFile, String label, Function<String, FieldIndexEntry<T>> parser)
+            throws IOException {
+        final List<String> lines;
+        try {
+            lines = FileLocks.decodeLines(java.nio.file.Files.readAllBytes(indexFile.toPath()));
+        } catch (java.nio.file.NoSuchFileException e) {
             return null;
         }
         final var entries = new ArrayList<FieldIndexEntry<T>>();
@@ -59,14 +106,11 @@ final class FieldIndexLoader {
             } catch (Exception e) {
                 dropped = true;
                 logger.warning("Removing malformed " + label + " index entry in " + indexFile.getName() + ": "
-                        + e.getMessage());
+                        + e.getMessage() + ". Dropped line was: " + line
+                        + ". Run REINDEX on this collection to rebuild it from the stored documents.");
             }
         }
-        if (dropped) {
-            FileLocks.rewriteFileAtomically(indexFile.toPath(), keepLines);
-        }
-        entries.sort(order);
-        return entries;
+        return new ParsedIndex<>(entries, keepLines, dropped, dropped && entries.isEmpty());
     }
 
     private static <T> Comparator<FieldIndexEntry<T>> byIndexedValue() {

@@ -8,8 +8,12 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
+import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.simplejs.exceptions.JsThrowException;
@@ -32,6 +36,10 @@ public class EnforcingDatabaseAccessScopeTest {
         request.setDatabasePermissions(new HashMap<>());
         request.setCollectionPermissions(new HashMap<>());
         UserOperationHelper.processCreateUser(request);
+        IocContainer.get(FileSystem.class).createCollectionFile(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME);
+        AdminOperationHelper.createPageCollections(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME);
+        AdminOperationHelper
+                .saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME));
     }
 
     @AfterAll
@@ -106,5 +114,65 @@ public class EnforcingDatabaseAccessScopeTest {
         db.save(TestGlobals.DB, TestGlobals.COLL, doc("tx-scoped"));
         db.commitTransaction();
         assertNotNull(db.findById(TestGlobals.DB, TestGlobals.COLL, "tx-scoped"));
+    }
+
+    @Test
+    public void test_a_script_cannot_write_to_script_runs() {
+        final var db = scoped();
+
+        assertThrows(JsThrowException.class,
+                () -> db.save(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME, doc("forged")),
+                "script_runs is the audit trail, so a script with READ_WRITE must not be able to forge a row");
+        assertThrows(JsThrowException.class,
+                () -> db.delete(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME, "forged"));
+    }
+
+    @Test
+    public void test_a_script_cannot_write_an_invalid_id() {
+        final var db = scoped();
+
+        assertThrows(JsThrowException.class, () -> db.save(TestGlobals.DB, TestGlobals.COLL, doc("has spaces!")),
+                "an id the client API refuses would be unreachable through FIND_BY_ID and DELETE");
+    }
+
+    @Test
+    public void test_a_script_can_still_read_script_runs() {
+        final var db = scoped();
+
+        assertDoesNotThrow(() -> db.findById(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME, "any"));
+    }
+
+    private static org.techhouse.ejson.elements.JsonArray pipeline(String... types) {
+        final var steps = new org.techhouse.ejson.elements.JsonArray();
+        for (final var type : types) {
+            final var step = new JsonObject();
+            step.add("type", new JsonString(type));
+            if ("SORT".equals(type)) {
+                step.add("fieldName", new JsonString("_id"));
+                step.add("ascending", new org.techhouse.ejson.elements.JsonBoolean(true));
+            } else {
+                step.add("limit", new org.techhouse.ejson.elements.JsonNumber(5));
+            }
+            steps.add(step);
+        }
+        return steps;
+    }
+
+    @Test
+    public void test_orders_results_reports_a_trailing_sort_as_ordered() {
+        assertTrue(scoped().ordersResults(TestGlobals.DB, TestGlobals.COLL, pipeline("SORT", "LIMIT")));
+    }
+
+    @Test
+    public void test_orders_results_reports_a_bare_limit_as_unordered() {
+        assertFalse(scoped().ordersResults(TestGlobals.DB, TestGlobals.COLL, pipeline("LIMIT")));
+    }
+
+    @Test
+    public void test_orders_results_leaves_an_unparseable_pipeline_to_aggregate() {
+        final var steps = new org.techhouse.ejson.elements.JsonArray();
+        steps.add(new JsonString("not a step"));
+
+        assertTrue(scoped().ordersResults(TestGlobals.DB, TestGlobals.COLL, steps));
     }
 }

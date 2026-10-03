@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -254,5 +255,19 @@ public class RequestParserTest {
         OperationRequest result = RequestParser.parseRequest(msg);
         assertInstanceOf(CreateCollectionRequest.class, result);
         assertEquals(OperationType.CREATE_COLLECTION, result.getType());
+    }
+
+    @Test
+    public void test_save_with_overflowing_number_is_an_invalid_command() {
+        final var message = "{\"type\":\"SAVE\",\"databaseName\":\"myDb\",\"collectionName\":\"myCollection\","
+                + "\"object\":{\"_id\":\"a1\",\"v\":1e400}}";
+        assertThrows(InvalidCommandException.class, () -> RequestParser.parseRequest(message));
+    }
+
+    @Test
+    public void test_save_with_a_representable_number_still_parses() {
+        final var message = "{\"type\":\"SAVE\",\"databaseName\":\"myDb\",\"collectionName\":\"myCollection\","
+                + "\"object\":{\"_id\":\"a1\",\"v\":1.7976931348623157e308}}";
+        assertEquals(OperationType.SAVE, RequestParser.parseRequest(message).getType());
     }
 }

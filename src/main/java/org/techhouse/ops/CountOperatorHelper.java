@@ -27,7 +27,9 @@ public final class CountOperatorHelper {
     public static Stream<JsonObject> processCountStep(Stream<JsonObject> resultStream, String dbName, String collName) {
         final var result = new JsonObject();
         if (resultStream != null) {
-            result.addProperty(COUNT_FIELD_NAME, resultStream.count());
+            try (var documents = resultStream) {
+                result.addProperty(COUNT_FIELD_NAME, documents.count());
+            }
         } else {
             result.addProperty(COUNT_FIELD_NAME, wholeCollectionCount(dbName, collName));
         }

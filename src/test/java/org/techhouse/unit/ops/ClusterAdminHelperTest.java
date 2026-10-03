@@ -17,6 +17,7 @@ import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
+import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.ioc.IocContainer;
@@ -66,6 +67,7 @@ public class ClusterAdminHelperTest {
         TestUtils.setPrivateField(adminAntiEntropyService, "started", false);
         TestUtils.setPrivateField(adminAntiEntropyService, "adminSyncCompleted", new AtomicBoolean(false));
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
+        TestUtils.setPrivateField(adminEpoch, "confirmed", true);
     }
 
     private void armAdminSync(boolean completed) throws Exception {
@@ -78,6 +80,55 @@ public class ClusterAdminHelperTest {
         TestUtils.setPrivateField(config, "clusterExpectedSize", expectedSize);
         ownership.setSelfNodeId("self");
         ownership.onMembershipChanged(new MembershipView(List.of(node())));
+    }
+
+    private void afterAdminOpWith(ReplicationOutcome outcome) throws Exception {
+        final var replicator = org.mockito.Mockito.mock(org.techhouse.cluster.Replicator.class);
+        final var coordinator = IocContainer.get(org.techhouse.cluster.ClusterCoordinator.class);
+        final var original = TestUtils.getPrivateField(coordinator, "replicator",
+                org.techhouse.cluster.Replicator.class);
+        org.mockito.Mockito
+                .when(replicator.broadcastAdmin(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(outcome);
+        TestUtils.setPrivateField(coordinator, "replicator", replicator);
+        try {
+            ClusterAdminHelper.afterAdminOp(adminOp(), "alice",
+                    new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok"));
+        } finally {
+            TestUtils.setPrivateField(coordinator, "replicator", original);
+        }
+    }
+
+    @Test
+    public void test_a_replication_timeout_leaves_the_epoch_unconfirmed() throws Exception {
+        enable(1);
+        armAdminSync(true);
+
+        afterAdminOpWith(ReplicationOutcome.TIMEOUT);
+
+        assertEquals(1L, adminEpoch.current());
+        assertFalse(adminEpoch.isConfirmed(),
+                "an epoch no peer acknowledged must not win an equal-epoch tie by node id against one a"
+                        + " majority really did commit");
+    }
+
+    @Test
+    public void test_a_quorum_met_replication_confirms_the_epoch() throws Exception {
+        enable(1);
+        armAdminSync(true);
+
+        afterAdminOpWith(ReplicationOutcome.QUORUM_MET);
+
+        assertEquals(1L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed());
+    }
+
+    @Test
+    public void test_a_standalone_node_neither_bumps_nor_unconfirms() throws Exception {
+        afterAdminOpWith(ReplicationOutcome.NOT_CLUSTERED);
+
+        assertEquals(0L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed(), "an unclustered node has nothing to reach and nothing to lose");
     }
 
     @Test
@@ -96,10 +147,130 @@ public class ClusterAdminHelperTest {
         assertNull(ClusterAdminHelper.guard(adminOp()));
     }
 
+    private void becomeNonCoordinator(int expectedSize) throws Exception {
+        enable(expectedSize);
+        armAdminSync(true);
+        ownership.setSelfNodeId("not-the-coordinator");
+        ownership.onMembershipChanged(
+                new MembershipView(List.of(node(), new NodeInfo("other", "127.0.0.1", 9991, NodeState.ALIVE, 1L, 1L))));
+        org.junit.jupiter.api.Assumptions.assumeFalse(ownership.isAdminCoordinator(),
+                "this node must not be the coordinator");
+    }
+
+    @Test
+    public void test_guard_refuses_a_coordinated_op_on_a_non_coordinator() throws Exception {
+        becomeNonCoordinator(2);
+
+        assertEquals("421-1", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode(),
+                "a DDL that runs where it cannot be replicated diverges this node at an unchanged epoch");
+    }
+
+    @Test
+    public void test_guard_lets_a_replicated_op_through_on_a_non_coordinator() throws Exception {
+        becomeNonCoordinator(2);
+        final var request = adminOp();
+        request.setReplicated(true);
+
+        assertNull(ClusterAdminHelper.guard(request));
+    }
+
+    @Test
+    public void test_guard_ignores_non_admin_ops_on_a_non_coordinator() throws Exception {
+        becomeNonCoordinator(2);
+
+        assertNull(ClusterAdminHelper.guard(new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL)));
+    }
+
+    @Test
+    public void test_guard_answers_not_owner_before_no_quorum_on_a_non_coordinator() throws Exception {
+        becomeNonCoordinator(5);
+
+        assertEquals("421-1", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode());
+    }
+
     @Test
     public void test_guard_rejects_admin_without_quorum() throws Exception {
         enable(3);
         assertEquals("503-2", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode());
+    }
+
+    @Test
+    public void test_a_replicated_admin_op_does_not_rebroadcast() throws Exception {
+        enable(1);
+        armAdminSync(true);
+        final var replicator = org.mockito.Mockito.mock(org.techhouse.cluster.Replicator.class);
+        final var coordinator = IocContainer.get(org.techhouse.cluster.ClusterCoordinator.class);
+        final var original = TestUtils.getPrivateField(coordinator, "replicator",
+                org.techhouse.cluster.Replicator.class);
+        TestUtils.setPrivateField(coordinator, "replicator", replicator);
+        try {
+            final var request = adminOp();
+            request.setReplicated(true);
+            final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
+            final var epochBefore = adminEpoch.current();
+
+            assertSame(response, ClusterAdminHelper.afterAdminOp(request, "alice", response));
+
+            org.mockito.Mockito.verifyNoInteractions(replicator);
+            assertEquals(epochBefore, adminEpoch.current(),
+                    "a replica applying someone else's admin op must not bump its own epoch");
+        } finally {
+            TestUtils.setPrivateField(coordinator, "replicator", original);
+        }
+    }
+
+    @Test
+    public void test_a_client_admin_op_does_replicate() throws Exception {
+        enable(1);
+        armAdminSync(true);
+        final var replicator = org.mockito.Mockito.mock(org.techhouse.cluster.Replicator.class);
+        final var coordinator = IocContainer.get(org.techhouse.cluster.ClusterCoordinator.class);
+        final var original = TestUtils.getPrivateField(coordinator, "replicator",
+                org.techhouse.cluster.Replicator.class);
+        org.mockito.Mockito
+                .when(replicator.broadcastAdmin(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenReturn(org.techhouse.cluster.ReplicationOutcome.QUORUM_MET);
+        TestUtils.setPrivateField(coordinator, "replicator", replicator);
+        try {
+            final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
+            final var epochBefore = adminEpoch.current();
+
+            ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response);
+
+            assertEquals(epochBefore + 1, adminEpoch.current(),
+                    "a client's own admin op is the one that bumps the epoch and replicates");
+        } finally {
+            TestUtils.setPrivateField(coordinator, "replicator", original);
+        }
+    }
+
+    @Test
+    public void test_losing_coordinatorship_mid_op_is_reported_retryably() throws Exception {
+        enable(1);
+        armAdminSync(true);
+        ownership.setSelfNodeId("not-the-coordinator");
+        ownership.onMembershipChanged(
+                new MembershipView(List.of(node(), new NodeInfo("other", "127.0.0.1", 9991, NodeState.ALIVE, 1L, 1L))));
+        final var wasCoordinator = ownership.isAdminCoordinator();
+        org.junit.jupiter.api.Assumptions.assumeFalse(wasCoordinator, "this node must not be the coordinator");
+        final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
+
+        final var answered = ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response);
+
+        assertEquals("421-1", answered.getErrorCode(),
+                "DDL that could not be replicated because coordinatorship moved must be retryable, not OK");
+    }
+
+    @Test
+    public void test_a_missing_user_entry_is_not_reported_as_success() throws Exception {
+        enable(1);
+        armAdminSync(true);
+        final var coordinator = IocContainer.get(org.techhouse.cluster.ClusterCoordinator.class);
+
+        final var outcome = coordinator.replicateUserOp("nobody-at-all", false);
+
+        assertEquals(org.techhouse.cluster.ReplicationOutcome.NOT_COORDINATOR, outcome,
+                "a user record that is not there is a failure to replicate, not a non-clustered no-op");
     }
 
     @Test

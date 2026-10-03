@@ -12,24 +12,41 @@ public class BackgroundProcessorThread implements Runnable {
     private final Logger logger = Logger.logFor(BackgroundProcessorThread.class);
     private final LinkedBlockingQueue<Event> queue;
     private final AtomicInteger inFlight;
+    private final AtomicInteger parked;
+    private final AtomicInteger workerCount;
     private final IdleSignal idleSignal;
 
-    public BackgroundProcessorThread(LinkedBlockingQueue<Event> queue, AtomicInteger inFlight, IdleSignal idleSignal) {
+    public BackgroundProcessorThread(LinkedBlockingQueue<Event> queue, AtomicInteger inFlight, AtomicInteger parked,
+            AtomicInteger workerCount, IdleSignal idleSignal) {
         this.queue = queue;
         this.inFlight = inFlight;
+        this.parked = parked;
+        this.workerCount = workerCount;
         this.idleSignal = idleSignal;
     }
 
     @Override
     public void run() {
+        try {
+            workLoop();
+        } finally {
+            workerCount.updateAndGet(live -> Math.max(0, live - 1));
+            idleSignal.signal();
+        }
+    }
+
+    private void workLoop() {
         final var batch = new ArrayList<Event>(MAX_BATCH);
         while (!Thread.currentThread().isInterrupted()) {
             final Event first;
+            parked.incrementAndGet();
             try {
                 first = queue.take();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 return;
+            } finally {
+                parked.decrementAndGet();
             }
             inFlight.incrementAndGet();
             batch.clear();
@@ -43,7 +60,9 @@ public class BackgroundProcessorThread implements Runnable {
                 batch.add(next);
             }
             try {
-                EventProcessorHelper.processBatch(batch);
+                queue.addAll(EventProcessorHelper.processBatch(batch));
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             } catch (Exception e) {
                 logger.error("Error while processing background task: ", e);
             } finally {

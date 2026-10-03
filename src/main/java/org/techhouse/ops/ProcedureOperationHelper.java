@@ -49,8 +49,7 @@ public final class ProcedureOperationHelper {
         }
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
-            return new OperationResponse(OperationType.SAVE_PROCEDURE, "Database '" + dbName + "' not found",
-                    ErrorCode.DATABASE_NOT_FOUND);
+            return databaseNotFound(dbName);
         }
         final var source = request.getScript();
         if (source.getBytes(StandardCharsets.UTF_8).length > configuration.getScriptMaxSourceBytes()) {
@@ -72,6 +71,16 @@ public final class ProcedureOperationHelper {
                     ErrorCode.PROCEDURE_IMPORT_NOT_FOUND.getDefaultMessage() + ": '" + missingImport + "'",
                     ErrorCode.PROCEDURE_IMPORT_NOT_FOUND);
         }
+        return OperationLocks.withDatabaseShared(dbName, OperationType.SAVE_PROCEDURE, ErrorCode.ERROR_SAVING_PROCEDURE,
+                request.isReplicated(), () -> saveUnderDatabaseBarrier(request, actingUser));
+    }
+
+    private static OperationResponse saveUnderDatabaseBarrier(SaveProcedureRequest request, String actingUser)
+            throws IOException, InterruptedException {
+        final var dbName = request.getDatabaseName();
+        if (cache.getAdminDbEntry(dbName) == null) {
+            return databaseNotFound(dbName);
+        }
         locks.lock(dbName, Globals.PROCEDURES_FOLDER);
         try {
             final var existing = cache.getProcedure(dbName, request.getName());
@@ -79,18 +88,30 @@ public final class ProcedureOperationHelper {
                     && request.getIfVersion() != (existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
             }
+            final var colliding = request.isReplicated()
+                    ? null
+                    : OnDiskNameRegistry.collidingDefinition(fs.listProcedureNames(dbName), request.getName());
+            if (colliding != null) {
+                return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
+            }
             final var definition = stampedDefinition(request, existing, actingUser);
             fs.writeProcedure(dbName, definition.getName(), eJson.toJson(definition.toJsonObject()));
             cache.putProcedure(dbName, definition);
+            compiledProcedures.invalidateProcedure(dbName, definition.getName());
             return new SaveProcedureResponse("Procedure saved successfully", definition.getVersion());
         } finally {
             locks.release(dbName, Globals.PROCEDURES_FOLDER);
         }
     }
 
+    private static OperationResponse databaseNotFound(String dbName) {
+        return new OperationResponse(OperationType.SAVE_PROCEDURE, "Database '" + dbName + "' not found",
+                ErrorCode.DATABASE_NOT_FOUND);
+    }
+
     private static String firstUnresolvableImport(SaveProcedureRequest request, String dbName,
             CompiledScript compiled) {
-        if (request.getStampedVersion() > 0) {
+        if (request.carriesCoordinatorStamp()) {
             return null;
         }
         for (final var specifier : simpleJs.moduleSpecifiers(compiled)) {
@@ -112,14 +133,18 @@ public final class ProcedureOperationHelper {
     private static ProcedureDefinition stampedDefinition(SaveProcedureRequest request, ProcedureDefinition existing,
             String actingUser) {
         final var version = existing == null ? 1L : existing.getVersion() + 1;
-        final var createdAt = existing == null ? System.currentTimeMillis() : existing.getCreatedAt();
-        final var alreadyStamped = request.getStampedVersion() > 0;
+        final var alreadyStamped = request.carriesCoordinatorStamp();
         final var effectiveVersion = alreadyStamped ? request.getStampedVersion() : version;
         final var effectiveUpdatedAt = alreadyStamped ? request.getStampedUpdatedAt() : System.currentTimeMillis();
         final var effectiveUpdatedBy = alreadyStamped ? request.getStampedUpdatedBy() : actingUser;
+        final var localCreatedAt = existing == null ? effectiveUpdatedAt : existing.getCreatedAt();
+        final var createdAt = alreadyStamped && request.getStampedCreatedAt() > 0
+                ? request.getStampedCreatedAt()
+                : localCreatedAt;
         request.setStampedVersion(effectiveVersion);
         request.setStampedUpdatedAt(effectiveUpdatedAt);
         request.setStampedUpdatedBy(effectiveUpdatedBy);
+        request.setStampedCreatedAt(createdAt);
         return new ProcedureDefinition(request.getName(), request.getScript(), effectiveVersion,
                 request.getDescription(), request.isEnabled(), createdAt, effectiveUpdatedAt, effectiveUpdatedBy);
     }
@@ -155,6 +180,11 @@ public final class ProcedureOperationHelper {
     }
 
     public static OperationResponse executeList(ListProceduresRequest request) {
+        return OperationResponse.respondOrError(OperationType.LIST_PROCEDURES, ErrorCode.ERROR_RETRIEVING,
+                () -> listProcedures(request));
+    }
+
+    private static OperationResponse listProcedures(ListProceduresRequest request) {
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
             return new OperationResponse(OperationType.LIST_PROCEDURES, "Database '" + dbName + "' not found",

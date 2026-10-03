@@ -1,108 +1,63 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
 
-import java.net.InetAddress;
-import java.net.Socket;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
-import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
-import org.techhouse.conn.ClientTracker;
-import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.ejson.elements.JsonString;
-import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.FindByIdRequest;
-import org.techhouse.ops.req.SaveProcedureRequest;
+import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
+import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class TransactionBeforeHookTest {
-    private static final String ACTOR = "alice";
     private static final Configuration configuration = Configuration.getInstance();
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
-    private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
-    private final Cache cache = IocContainer.get(Cache.class);
-    private final FileSystem fs = IocContainer.get(FileSystem.class);
 
     @BeforeAll
     static void setUp() throws Exception {
-        TestUtils.standardInitialSetup();
-        TestUtils.createTestDatabaseAndCollection();
+        BeforeHookTestSupport.setUpAll();
     }
 
     @AfterAll
     static void tearDown() throws Exception {
-        TestUtils.setPrivateField(configuration, "triggersEnabled", false);
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", false);
-        TestUtils.releaseAllLocks();
-        TestUtils.standardTearDown();
+        BeforeHookTestSupport.tearDownAll();
     }
 
     @BeforeEach
     void reset() throws Exception {
-        TestUtils.setPrivateField(configuration, "triggersEnabled", true);
-        TestUtils.setPrivateField(configuration, "scriptsEnabled", true);
-        TestUtils.setPrivateField(configuration, "beforeHookInstructionBudget", 200_000L);
-        TestUtils.setPrivateField(configuration, "beforeHookTimeoutMs", 2_000L);
-        TestUtils.resetClients();
-        fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
-        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
-            fs.deleteProcedure(TestGlobals.DB, name);
-        }
-        cache.removeProceduresForDatabase(TestGlobals.DB);
-        IocContainer.get(CompiledProcedureCache.class).invalidateDatabase(TestGlobals.DB);
+        BeforeHookTestSupport.reset();
     }
 
     private void installHook(String name, String procedure, String source, EventType... events) throws Exception {
-        ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, procedure, source), ACTOR);
-        final var existing = new ArrayList<>(cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL));
-        existing.add(new TriggerDefinition(name, new LinkedHashSet<>(Set.of(events)), procedure,
-                TriggerDefinition.MODE_DOCUMENT, TriggerDefinition.TIMING_BEFORE, false, true, ACTOR, 1L, 1L, 1L,
-                ACTOR));
-        cache.putTriggers(TestGlobals.DB, TestGlobals.COLL, existing);
+        BeforeHookTestSupport.installHook(name, procedure, source, events);
     }
 
     private UUID newClient() {
-        final var socket = mock(Socket.class);
-        final var address = mock(InetAddress.class);
-        when(socket.getInetAddress()).thenReturn(address);
-        when(address.getHostAddress()).thenReturn("127.0.0.1");
-        return clientTracker.addClient(socket);
+        return BeforeHookTestSupport.newClient();
     }
 
     private static JsonObject document(String id) {
-        final var object = new JsonObject();
-        object.add("_id", new JsonString(id));
-        object.add("qty", new JsonNumber(2));
-        object.add("price", new JsonNumber(10));
-        return object;
+        return BeforeHookTestSupport.document(id);
     }
 
     private org.techhouse.ops.resp.OperationResponse save(String id, UUID clientId) {
@@ -211,5 +166,69 @@ public class TransactionBeforeHookTest {
         assertEquals(OperationStatus.OK, processor.processMessage(request, client).getStatus());
         assertEquals(OperationStatus.OK, processor.processMessage(new CommitTransactionRequest(), client).getStatus());
         assertNull(find("t9"));
+    }
+
+    private void vetoOn(String id) throws Exception {
+        installHook("veto", "veto", "export default (d) => { if (d._id === '" + id + "') { throw new Error('no'); } };",
+                EventType.CREATED, EventType.UPDATED);
+    }
+
+    private void bulkRejectedAt(UUID client, String keptId, String vetoedId) {
+        final var request = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObjects(List.of(document(keptId), document(vetoedId)));
+        assertEquals(ErrorCode.BEFORE_HOOK_REJECTED.getCode(),
+                processor.processMessage(request, client).getErrorCode());
+    }
+
+    @Test
+    public void test_a_rejected_bulk_save_leaves_no_overlay_entries() throws Exception {
+        vetoOn("t20");
+        final var client = newClient();
+        processor.processMessage(new StartTransactionRequest(), client);
+        try {
+            bulkRejectedAt(client, "t19", "t20");
+
+            final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+            request.set_id("t19");
+            assertEquals(OperationStatus.NOT_FOUND, processor.processMessage(request, client).getStatus(),
+                    "an object from a refused bulk save must not be readable through the transaction's overlay");
+        } finally {
+            processor.processMessage(new RollbackTransactionRequest(), client);
+        }
+    }
+
+    @Test
+    public void test_a_later_save_of_a_rejected_id_is_classified_as_an_insert() throws Exception {
+        vetoOn("t22");
+        final var client = newClient();
+        processor.processMessage(new StartTransactionRequest(), client);
+        try {
+            bulkRejectedAt(client, "t21", "t22");
+
+            final var retry = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+            retry.setObjects(List.of(document("t21")));
+            final var response = (BulkSaveResponse) processor.processMessage(retry, client);
+
+            assertEquals(List.of("t21"), response.getInserted(),
+                    "a phantom overlay entry would classify the retry as an update and fire the wrong event");
+            assertTrue(response.getUpdated().isEmpty());
+        } finally {
+            processor.processMessage(new RollbackTransactionRequest(), client);
+        }
+    }
+
+    @Test
+    public void test_an_idless_transactional_save_whose_hook_drops_the_id_is_refused() throws Exception {
+        installHook("freshTx", "freshTx", "export default () => ({ fresh: true });", EventType.CREATED);
+        final var client = newClient();
+        processor.processMessage(new StartTransactionRequest(), client);
+        final var object = new JsonObject();
+        object.add("qty", new JsonNumber(1));
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(object);
+
+        assertEquals(ErrorCode.BEFORE_HOOK_REJECTED.getCode(),
+                processor.processMessage(request, client).getErrorCode());
+        processor.processMessage(new org.techhouse.ops.req.RollbackTransactionRequest(), client);
     }
 }

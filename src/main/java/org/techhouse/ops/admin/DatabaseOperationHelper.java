@@ -1,5 +1,6 @@
 package org.techhouse.ops.admin;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -16,6 +17,8 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OnDiskNameRegistry;
+import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
@@ -38,79 +41,160 @@ public final class DatabaseOperationHelper {
 
     public static OperationResponse processCreateDatabaseOperation(CreateDatabaseRequest createDatabaseRequest,
             UUID clientId) {
+        final var dbName = createDatabaseRequest.getDatabaseName();
         return OperationResponse.respondOrError(OperationType.CREATE_DATABASE, ErrorCode.ERROR_CREATING_DATABASE,
                 () -> {
-                    final var dbName = createDatabaseRequest.getDatabaseName();
-                    // createDatabaseFolder returns true for an already-present folder, so without this guard
-                    // a duplicate CREATE_DATABASE would overwrite the existing admin entry and report success.
-                    if (cache.getAdminDbEntry(dbName) != null) {
-                        return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
+                    if (!locks.tryLockDatabaseExclusive(dbName,
+                            OperationLocks.lockBudgetMillis(createDatabaseRequest.isReplicated()))) {
+                        return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
                     }
-                    final var result = fs.createDatabaseFolder(dbName);
-                    if (result) {
-                        final var username = clientTracker.getAuthenticatedUsername(clientId);
-                        final var owners = username != null ? List.of(username) : List.<String>of();
-                        final var newEntry = new AdminDbEntry(dbName, new java.util.ArrayList<>(),
-                                new java.util.ArrayList<>(owners));
-                        AdminOperationHelper.saveDatabaseEntry(newEntry);
-                        return OperationResponse.ok(OperationType.CREATE_DATABASE, "Database created successfully");
+                    try {
+                        return createUnderDatabaseBarrier(createDatabaseRequest, clientId);
+                    } finally {
+                        locks.releaseDatabaseExclusive(dbName);
                     }
-                    return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
                 });
     }
 
+    private static OperationResponse createUnderDatabaseBarrier(CreateDatabaseRequest createDatabaseRequest,
+            UUID clientId) throws Exception {
+        final var dbName = createDatabaseRequest.getDatabaseName();
+        if (cache.getAdminDbEntry(dbName) != null) {
+            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
+        }
+        final var colliding = createDatabaseRequest.isReplicated()
+                ? null
+                : OnDiskNameRegistry.collidingDatabase(dbName);
+        if (colliding != null) {
+            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
+        }
+        if (!LeftoverFolders.moveAsideUnregisteredDatabase(dbName)) {
+            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.ERROR_CREATING_DATABASE);
+        }
+        if (fs.createDatabaseFolder(dbName)) {
+            final var username = clientTracker.getAuthenticatedUsername(clientId);
+            if (createDatabaseRequest.isReplicated()) {
+                return saveNewDatabaseEntry(dbName, username);
+            }
+            return AdminOperationHelper.withUsersLock(() -> saveNewDatabaseEntry(dbName, existingUser(username)));
+        }
+        return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
+    }
+
+    private static String existingUser(String username) {
+        return username != null && cache.getAdminUserEntry(username) != null ? username : null;
+    }
+
+    private static OperationResponse saveNewDatabaseEntry(String dbName, String owner)
+            throws IOException, InterruptedException {
+        final var owners = owner != null ? List.of(owner) : List.<String>of();
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(dbName, new ArrayList<>(), new ArrayList<>(owners)));
+        return OperationResponse.ok(OperationType.CREATE_DATABASE, "Database created successfully");
+    }
+
     public static OperationResponse processSetDatabaseOwners(SetDatabaseOwnersRequest request) {
+        final var dbName = request.getDatabaseName();
         return OperationResponse.respondOrError(OperationType.SET_DATABASE_OWNERS,
                 ErrorCode.ERROR_UPDATING_DATABASE_OWNERS, () -> {
-                    final var dbName = request.getDatabaseName();
                     if (cache.getAdminDbEntry(dbName) == null) {
-                        return new OperationResponse(OperationType.SET_DATABASE_OWNERS,
-                                "Database '" + dbName + "' not found", ErrorCode.DATABASE_NOT_FOUND);
+                        return databaseNotFound(dbName);
                     }
-                    AdminOperationHelper.updateDatabaseOwners(dbName, request.getOwners());
-                    return OperationResponse.ok(OperationType.SET_DATABASE_OWNERS,
-                            "Database owners updated successfully");
+                    return OperationLocks.withDatabaseShared(dbName, OperationType.SET_DATABASE_OWNERS,
+                            ErrorCode.ERROR_UPDATING_DATABASE_OWNERS, request.isReplicated(),
+                            () -> request.isReplicated()
+                                    ? updateOwnersUnderDatabaseBarrier(dbName, request.getOwners())
+                                    : AdminOperationHelper.withUsersLock(
+                                            () -> updateOwnersOfExistingUsers(dbName, request.getOwners())));
                 });
+    }
+
+    private static OperationResponse updateOwnersUnderDatabaseBarrier(String dbName, List<String> owners)
+            throws IOException, InterruptedException {
+        if (!AdminOperationHelper.updateDatabaseOwners(dbName, owners)) {
+            return databaseNotFound(dbName);
+        }
+        return OperationResponse.ok(OperationType.SET_DATABASE_OWNERS, "Database owners updated successfully");
+    }
+
+    private static OperationResponse updateOwnersOfExistingUsers(String dbName, List<String> owners)
+            throws IOException, InterruptedException {
+        if (cache.getAdminDbEntry(dbName) == null) {
+            return databaseNotFound(dbName);
+        }
+        final var missing = owners.stream().filter(owner -> cache.getAdminUserEntry(owner) == null).findFirst();
+        if (missing.isPresent()) {
+            return new OperationResponse(OperationType.SET_DATABASE_OWNERS,
+                    "user '" + missing.get() + "' does not exist", ErrorCode.USER_NOT_FOUND);
+        }
+        return updateOwnersUnderDatabaseBarrier(dbName, owners);
+    }
+
+    private static OperationResponse databaseNotFound(String dbName) {
+        return new OperationResponse(OperationType.SET_DATABASE_OWNERS, "Database '" + dbName + "' not found",
+                ErrorCode.DATABASE_NOT_FOUND);
     }
 
     public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
         final var dbName = dropDatabaseRequest.getDatabaseName();
-        // Lock every collection in a stable order (deadlock avoidance with other multi-collection
-        // acquisitions) so nothing races the file deletion and cache eviction below.
-        final var dbEntry = cache.getAdminDbEntry(dbName);
-        final var collNames = dbEntry != null ? new ArrayList<>(dbEntry.getCollections()) : new ArrayList<String>();
-        Collections.sort(collNames);
+        final var deadline = System.currentTimeMillis()
+                + OperationLocks.lockBudgetMillis(dropDatabaseRequest.isReplicated());
         final var lockedColls = new ArrayList<String>();
+        var barrierHeld = false;
         try {
+            if (!locks.tryLockDatabaseExclusive(dbName, remainingUntil(deadline))) {
+                return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+            }
+            barrierHeld = true;
+            final var dbEntry = cache.getAdminDbEntry(dbName);
+            if (dbEntry == null) {
+                return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+            }
+            final var collNames = new ArrayList<>(dbEntry.getCollections());
+            Collections.sort(collNames);
             for (final var collName : collNames) {
-                locks.lock(dbName, collName);
+                if (!locks.tryLockWrite(dbName, collName, remainingUntil(deadline))) {
+                    return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+                }
                 lockedColls.add(collName);
             }
             final var result = fs.deleteDatabase(dbName);
             if (result) {
                 cache.evictDatabase(dbName);
-                for (final var collName : lockedColls) {
-                    locks.removeLock(dbName, collName);
-                }
-                // Synchronous, mirroring creation: a background delete lets an immediate re-CREATE hit the
-                // duplicate guard and wrongly return DATABASE_ALREADY_EXISTS.
                 AdminOperationHelper.deleteDatabaseEntry(dbName);
-                // A re-created database restarts its procedure versions at 1, so compiled programs go too.
                 compiledProcedures.invalidateDatabase(dbName);
                 scheduleRegistry.removeDatabase(dbName);
                 listenManager.unregisterAllForDatabase(dbName);
+                GrantPruner.forDroppedDatabase(dbName);
                 return OperationResponse.ok(OperationType.DROP_DATABASE, "Database dropped successfully");
             }
             return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return dropFailed(exception);
         } catch (Exception exception) {
-            logger.error(OperationType.DROP_DATABASE + " failed with " + ErrorCode.ERROR_DROPPING_DATABASE.getCode(),
-                    exception);
-            return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+            return dropFailed(exception);
         } finally {
             for (final var collName : lockedColls) {
                 locks.release(dbName, collName);
             }
+            for (final var collName : lockedColls) {
+                locks.removeLock(dbName, collName);
+            }
+            if (barrierHeld) {
+                locks.releaseDatabaseExclusive(dbName);
+                locks.removeDatabaseLock(dbName);
+            }
         }
+    }
+
+    private static OperationResponse dropFailed(Exception exception) {
+        logger.error(OperationType.DROP_DATABASE + " failed with " + ErrorCode.ERROR_DROPPING_DATABASE.getCode(),
+                exception);
+        return new OperationResponse(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE);
+    }
+
+    private static long remainingUntil(long deadline) {
+        return Math.max(0, deadline - System.currentTimeMillis());
     }
 
     public static OperationResponse processListDatabasesOperation() {

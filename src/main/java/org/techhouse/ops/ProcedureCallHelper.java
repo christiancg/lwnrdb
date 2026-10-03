@@ -19,6 +19,11 @@ public final class ProcedureCallHelper {
     }
 
     public static OperationResponse execute(CallProcedureRequest request, String username, UUID clientId) {
+        return OperationResponse.respondOrError(OperationType.CALL_PROCEDURE, ErrorCode.ERROR_RETRIEVING,
+                () -> call(request, username, clientId));
+    }
+
+    private static OperationResponse call(CallProcedureRequest request, String username, UUID clientId) {
         if (!configuration.isScriptsEnabled()) {
             return new OperationResponse(OperationType.CALL_PROCEDURE, ErrorCode.SCRIPTS_DISABLED);
         }

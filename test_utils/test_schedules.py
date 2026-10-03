@@ -215,6 +215,23 @@ def test_interval_schedule(conn: Conn):
           f"counter advanced from {settled} to {after} after the delete")
 
 
+def test_interval_schedule_holds_its_rate(conn: Conn):
+    section("An interval schedule does not drift")
+    check_status("save a 1s schedule against the 1s tick", conn.save_schedule(
+        "rate", "counter", intervalMs=1000, args={"id": "rate"}), "OK")
+
+    await_counter(conn, "rate", 1)
+    start_value = counter_value(conn, "rate")
+    start_time = time.time()
+    await_counter(conn, "rate", start_value + 5, timeout=20.0)
+    elapsed = time.time() - start_time
+    fired = counter_value(conn, "rate") - start_value
+
+    conn.delete_schedule("rate")
+    check("five 1s occurrences take about five seconds", fired >= 5 and elapsed < 9.0,
+          f"{fired} fires in {elapsed:.1f}s")
+
+
 def test_cron_schedule(conn: Conn):
     section("Cron schedule")
     # A cron for the minute after next, so the test never races the current minute rolling over.
@@ -265,6 +282,11 @@ def test_validation(conn: Conn):
     check_code("both cron and intervalMs are refused",
                conn.save_schedule("bad", "counter", cron="0 3 * * *", intervalMs=1000), "ERROR", "400-16")
     check_code("neither cron nor intervalMs is refused", conn.save_schedule("bad", "counter"), "ERROR", "400-16")
+    check_code("a parsable but unsatisfiable cron is refused",
+               conn.save_schedule("bad", "counter", cron="0 0 31 4 *"), "ERROR", "400-16")
+    check_status("a distant but reachable cron is accepted",
+                 conn.save_schedule("leapday", "counter", cron="0 0 29 2 *"), "OK")
+    conn.delete_schedule("leapday")
     check_code("an unknown procedure is refused", conn.save_schedule("bad", "nosuchproc", intervalMs=1000),
                "NOT_FOUND", "404-8")
     check_code("an unknown database is refused",
@@ -424,6 +446,23 @@ def test_referential_integrity(conn: Conn):
     check_status("restore the procedure", conn.save_procedure("counter", COUNTER_SOURCE), "OK")
 
 
+def test_a_client_cannot_forge_the_stamped_definer():
+    section("A client cannot forge the coordinator's stamp")
+    forged = {"stampedVersion": 7, "stampedDefiner": ADMIN_USERNAME, "stampedUpdatedBy": ADMIN_USERNAME,
+              "stampedUpdatedAt": 1, "stampedCreatedAt": 1}
+    with user_conn(MANAGER) as manager:
+        check_status("a MANAGE user installs a schedule carrying a forged stamp",
+                     manager.save_schedule("forgedStamp", "counter", cron="0 3 * * *", **forged), "OK")
+        with admin_conn() as admin:
+            stored = next((entry for entry in admin.list_schedules().get("schedules", [])
+                           if entry.get("name") == "forgedStamp"), {})
+            check("the definer is the caller, not the forged admin", stored.get("definer") == MANAGER,
+                  f"got {stored}")
+            check("so is updatedBy", stored.get("updatedBy") == MANAGER, f"got {stored}")
+            check("and the version was assigned by the server", stored.get("version") == 1, f"got {stored}")
+        check_status("clean up the schedule", manager.delete_schedule("forgedStamp"), "OK")
+
+
 def test_permissions():
     section("Permissions")
     with user_conn(MANAGER) as manager:
@@ -520,6 +559,7 @@ def main():
         with admin_conn() as conn:
             setup_data(conn)
             test_interval_schedule(conn)
+            test_interval_schedule_holds_its_rate(conn)
             test_cron_schedule(conn)
             test_listing(conn)
             test_validation(conn)
@@ -528,6 +568,7 @@ def main():
             test_run_history(conn)
             test_referential_integrity(conn)
         test_permissions()
+        test_a_client_cannot_forge_the_stamped_definer()
         with admin_conn() as conn:
             test_storage_placement(conn, work_dir)
             test_stats(conn)

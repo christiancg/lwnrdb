@@ -1,8 +1,11 @@
 package org.techhouse;
 
+import org.techhouse.config.ConfigKey;
 import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
+import org.techhouse.fs.FileSystem;
+import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.simplejs.host.HostAllowlist;
 
 public final class StartupWarnings {
@@ -12,8 +15,22 @@ public final class StartupWarnings {
     private StartupWarnings() {
     }
 
+    public static void warnIfIndexesLeftDirty() {
+        final var dirty = IocContainer.get(FileSystem.class).listDirtyIndexCollections();
+        if (!dirty.isEmpty()) {
+            logger.warning("These collections stopped with field-index work outstanding, so their indexes may be"
+                    + " missing entries: " + String.join(", ", dirty) + ". Run REINDEX on each of them.");
+        }
+        final var unbuilt = IocContainer.get(FileSystem.class).indexBuildMarkers().listMarked();
+        if (!unbuilt.isEmpty()) {
+            logger.warning("These field indexes were left half-built or half-dropped, so they are answered by a"
+                    + " full scan until rebuilt: " + String.join(", ", unbuilt)
+                    + ". Run REINDEX (or DROP_INDEX) on each of them.");
+        }
+    }
+
     public static void warnIfDefaultAdminPassword() {
-        if (Globals.DEFAULT_ADMIN_PASSWORD.equals(config.getDefaultAdminPassword())) {
+        if (ConfigKey.DEFAULT_ADMIN_PASSWORD.defaultValue().equals(config.getDefaultAdminPassword())) {
             logger.warning("SECURITY WARNING: defaultAdminPassword is still set to the well-known default value. "
                     + "Change it in lwnrdb.cfg and update the admin user's password immediately to avoid "
                     + "unauthorized access.");
@@ -60,6 +77,22 @@ public final class StartupWarnings {
         final var interpreters = (long) config.getMaxConcurrentScripts() + config.getTriggerThreads()
                 + config.getScheduleThreads();
         return interpreters * config.getScriptMaxMemoryBytes();
+    }
+
+    public static void warnIfNamesShareAnOnDiskKey() {
+        for (final var group : OnDiskNameRegistry.groupedByOnDiskKey()) {
+            logger.warning("These names share one on-disk path and collide on a case-insensitive filesystem: "
+                    + String.join(", ", group)
+                    + ". Only one of them has storage; the others read and write that one's files.");
+        }
+    }
+
+    public static void warnIfDatabaseSharesTheClusterFolder() {
+        for (final var dbName : OnDiskNameRegistry.registeredDatabasesInTheClusterFolder()) {
+            logger.warning("Database '" + dbName + "' is stored in the folder this node keeps its cluster state in"
+                    + " (node id and admin epoch). Writes to it are refused because the name is reserved; copy"
+                    + " its data out with AGGREGATE into another database before enabling clustering.");
+        }
     }
 
     public static void warnIfXmxExceedsMaxMemory() {

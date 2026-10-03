@@ -20,6 +20,7 @@ import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsArray;
 import org.techhouse.simplejs.values.JsNativeFunction;
 import org.techhouse.simplejs.values.JsNull;
+import org.techhouse.simplejs.values.JsNumber;
 import org.techhouse.simplejs.values.JsObject;
 import org.techhouse.simplejs.values.JsString;
 import org.techhouse.simplejs.values.JsUndefined;
@@ -126,6 +127,53 @@ public class DbModuleTest {
     }
 
     @Test
+    public void test_save_without_a_document_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "save", new JsString("d"), new JsString("c")));
+    }
+
+    @Test
+    public void test_save_without_any_argument_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "save"));
+    }
+
+    @Test
+    public void test_save_rejects_a_non_object_document() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class,
+                () -> call(db, "save", new JsString("d"), new JsString("c"), new JsNumber(5)));
+    }
+
+    @Test
+    public void test_aggregate_without_a_pipeline_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "aggregate", new JsString("d"), new JsString("c")));
+    }
+
+    @Test
+    public void test_aggregate_rejects_a_non_array_pipeline() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class,
+                () -> call(db, "aggregate", new JsString("d"), new JsString("c"), new JsObject()));
+    }
+
+    @Test
+    public void test_bulk_save_without_documents_is_a_type_error() {
+        final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
+        assertThrows(TypeErrorException.class, () -> call(db, "bulkSave", new JsString("d"), new JsString("c")));
+    }
+
+    @Test
+    public void test_bulk_save_accepts_an_empty_array() {
+        final var fake = new FakeDatabaseAccess();
+        final var db = DbModule.create(fake, null, null, null);
+        final var result = (JsObject) call(db, "bulkSave", new JsString("d"), new JsString("c"), new JsArray());
+        assertEquals("bulkSave:d/c/0", fake.calls.getFirst());
+        assertInstanceOf(JsArray.class, result.get("inserted"));
+    }
+
+    @Test
     public void test_module_exposes_new_members() {
         final var db = DbModule.create(new FakeDatabaseAccess(), null, null, null);
         assertInstanceOf(JsNativeFunction.class, db.get("bulkSave"));
@@ -180,6 +228,21 @@ public class DbModuleTest {
                 """);
         assertTrue(result.isError());
         assertEquals(List.of("beginTransaction", "rollbackTransaction"), fake.calls);
+    }
+
+    @Test
+    public void test_an_error_thrown_by_the_callback_still_rolls_back() {
+        final var fake = new FakeDatabaseAccess();
+        final var ops = org.mockito.Mockito.mock(org.techhouse.simplejs.builtins.InterpreterOps.class);
+        org.mockito.Mockito.when(ops.call(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
+                org.mockito.ArgumentMatchers.any())).thenThrow(new StackOverflowError("simulated"));
+        final var db = DbModule.create(fake, ops, null, null);
+        final var callback = new JsNativeFunction("cb", (_, _) -> JsUndefined.getInstance());
+
+        assertThrows(StackOverflowError.class, () -> call(db, "transaction", callback));
+
+        assertEquals(List.of("beginTransaction", "rollbackTransaction"), fake.calls,
+                "an Error out of the callback must still release the transaction's write locks");
     }
 
     @Test

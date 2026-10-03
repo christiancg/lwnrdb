@@ -11,7 +11,9 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,7 +28,10 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -42,6 +47,7 @@ import org.techhouse.test.TestUtils;
 
 public class Tx2pcRecoveryTest {
     private static final String SELF_ADDRESS = "127.0.0.1:5000";
+    private static final long LOCK_HOLD_MILLIS = 1_500L;
     private final Configuration config = Configuration.getInstance();
     private final Tx2pcRecovery recovery = IocContainer.get(Tx2pcRecovery.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
@@ -109,7 +115,7 @@ public class Tx2pcRecoveryTest {
     public void test_committed_transaction_is_replayed() throws Exception {
         final var dtxId = "33333333-3333-3333-3333-333333333333";
         seedPreparedSlice(dtxId, "rec-commit");
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
 
         recovery.recover();
 
@@ -119,14 +125,43 @@ public class Tx2pcRecoveryTest {
     }
 
     @Test
-    public void test_undecided_transaction_is_presumed_abort() throws Exception {
+    public void test_a_live_undecided_coordinator_leaves_the_slice_in_doubt() throws Exception {
         final var dtxId = "44444444-4444-4444-4444-444444444444";
-        seedPreparedSlice(dtxId, "rec-abort");
+        seedPreparedSlice(dtxId, "rec-indoubt");
+        final var clientTracker = IocContainer.get(ClientTracker.class);
+        final var clientId = clientTracker.registerForwardedClient("coordinator");
+        clientTracker.setActiveTransaction(clientId, new Transaction(UUID.fromString(dtxId), clientId));
+        try {
+            recovery.recover();
+
+            assertEquals(OperationStatus.NOT_FOUND, findStatus("rec-indoubt"));
+            assertTrue(Tx2pcLog.isPrepared(dtxId), "a coordinator that has not decided must not lose the slice");
+            assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId, SELF_ADDRESS));
+        } finally {
+            clientTracker.clearActiveTransaction(clientId);
+            clientTracker.removeById(clientId);
+        }
+    }
+
+    @Test
+    public void test_a_coordinator_that_restarted_before_deciding_presumes_abort() throws Exception {
+        final var dtxId = "45454545-4545-4545-4545-454545454545";
+        seedPreparedSlice(dtxId, "rec-presumed-abort");
+        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(dtxId, SELF_ADDRESS));
 
         recovery.recover();
 
-        assertEquals(OperationStatus.NOT_FOUND, findStatus("rec-abort"));
-        assertFalse(Tx2pcLog.isPrepared(dtxId));
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("rec-presumed-abort"));
+        assertFalse(Tx2pcLog.isPrepared(dtxId), "no commit was ever recorded, so the slice is aborted");
+    }
+
+    @Test
+    public void test_a_prepared_slice_coordinated_elsewhere_still_answers_prepared() throws Exception {
+        final var dtxId = "46464646-4646-4646-4646-464646464646";
+        seedPreparedSlice(dtxId, "rec-elsewhere", "127.0.0.1:1");
+
+        assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId, SELF_ADDRESS));
+        assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId));
     }
 
     @Test
@@ -157,7 +192,7 @@ public class Tx2pcRecoveryTest {
                 AdminTransactionEntry.OP_TYPE_DELETE, TestGlobals.DB, TestGlobals.COLL, delPayload));
         Tx2pcLog.recordParticipantPrepared(dtxId, SELF_ADDRESS, List.of(SELF_ADDRESS),
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of(SELF_ADDRESS));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
 
         recovery.recover();
 
@@ -180,11 +215,32 @@ public class Tx2pcRecoveryTest {
     @Test
     public void test_coordinator_redrive_to_unreachable_keeps_marker() throws Exception {
         final var dtxId = "99999999-9999-9999-9999-999999999999";
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of("127.0.0.1:1"));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of("127.0.0.1:1"));
 
         recovery.recover();
 
         org.junit.jupiter.api.Assertions.assertTrue(Tx2pcLog.isCommitted(dtxId));
+    }
+
+    @Test
+    public void test_coordinator_redrive_sends_the_recorded_session_id_not_the_dtx_id() throws Exception {
+        final var dtxId = "10101010-1010-1010-1010-101010101010";
+        final var sessionId = "20202020-2020-2020-2020-202020202020";
+        Tx2pcLog.recordCoordinatorCommit(dtxId, sessionId, List.of("127.0.0.1:2"));
+        final var pool = mock(PeerConnectionPool.class);
+        final var captor = org.mockito.ArgumentCaptor.forClass(ClusterMessage.class);
+        when(pool.request(any(), captor.capture(), anyLong())).thenAnswer(_ -> {
+            final var response = new ClusterMessage();
+            response.setType(ClusterMessageType.COMMIT_TX_ACK);
+            return response;
+        });
+        TestUtils.setPrivateField(recovery, "pool", pool);
+
+        recovery.recover();
+
+        assertEquals(sessionId, captor.getValue().getTxSessionId(),
+                "recovery must re-drive to the session the participant registered under, not the transaction id");
+        assertFalse(Tx2pcLog.isCommitted(dtxId));
     }
 
     @Test
@@ -209,6 +265,39 @@ public class Tx2pcRecoveryTest {
             return response;
         });
         TestUtils.setPrivateField(recovery, "pool", pool);
+    }
+
+    private void injectCoordinatorPool(Tx2pcLog.Status coordinatorStatus) throws Exception {
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
+            final var response = new ClusterMessage();
+            response.setType(ClusterMessageType.TX_STATUS_ACK);
+            response.setTxStatus(coordinatorStatus.name());
+            return response;
+        });
+        TestUtils.setPrivateField(recovery, "pool", pool);
+    }
+
+    @Test
+    public void test_a_restarted_coordinator_with_no_record_is_presumed_abort() throws Exception {
+        injectCoordinatorPool(Tx2pcLog.Status.NO_RECORD);
+        final var dtxId = seedCrossNodePrepared("no-record");
+
+        recovery.recover();
+
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("no-record"));
+        assertFalse(Tx2pcLog.isPrepared(dtxId));
+    }
+
+    @Test
+    public void test_a_reachable_coordinator_with_a_live_session_leaves_the_slice_in_doubt() throws Exception {
+        injectCoordinatorPool(Tx2pcLog.Status.UNKNOWN);
+        final var dtxId = seedCrossNodePrepared("live-session");
+
+        recovery.recover();
+
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("live-session"));
+        assertTrue(Tx2pcLog.isPrepared(dtxId), "a coordinator still fanning out must not be read as an abort");
     }
 
     private String seedCrossNodePrepared(String id) throws Exception {
@@ -269,5 +358,83 @@ public class Tx2pcRecoveryTest {
         TestUtils.setPrivateField(config, "clusterEnabled", false);
         recovery.start();
         recovery.stop();
+    }
+
+    private static Thread collectionLockHolder(CountDownLatch held) {
+        return new Thread(() -> {
+            final var locks = IocContainer.get(ResourceLocking.class);
+            try {
+                locks.lock(TestGlobals.DB, TestGlobals.COLL);
+                held.countDown();
+                Thread.sleep(LOCK_HOLD_MILLIS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            } finally {
+                locks.release(TestGlobals.DB, TestGlobals.COLL);
+            }
+        }, "lock-holder");
+    }
+
+    @Test
+    @SuppressWarnings("BusyWait")
+    public void test_recovery_does_not_run_on_the_membership_thread() throws Exception {
+        final var dtxId = "12121212-1212-1212-1212-121212121212";
+        seedPreparedSlice(dtxId, "rec-async");
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
+        final var listener = new Tx2pcRecovery();
+        final var held = new CountDownLatch(1);
+        final var holder = collectionLockHolder(held);
+        holder.start();
+        assertTrue(held.await(5, java.util.concurrent.TimeUnit.SECONDS));
+
+        final var start = System.nanoTime();
+        listener.onMembershipChanged(membershipService.membershipView());
+        final var elapsedMillis = (System.nanoTime() - start) / 1_000_000L;
+
+        assertTrue(elapsedMillis < 500L,
+                "recovery waits on collection write locks with no timeout, so running it inline stalls the gossip"
+                        + " thread and the node is marked dead while it is alive holding locks");
+        holder.join(10_000L);
+        for (var i = 0; i < 200 && findStatus("rec-async") != OperationStatus.OK; i++) {
+            Thread.sleep(20);
+        }
+        assertEquals(OperationStatus.OK, findStatus("rec-async"),
+                "the recovery still runs, just off the gossip thread");
+        listener.stop();
+    }
+
+    private void savePostRestart(String id) {
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        final var object = new JsonObject();
+        object.add("_id", new JsonString(id));
+        object.add("source", new JsonString("post-restart"));
+        request.setObject(object);
+        request.set_id(id);
+        processor.processMessage(request);
+    }
+
+    private String sourceOf() {
+        final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("rec-newer");
+        final var response = processor.processMessage(request);
+        if (response instanceof org.techhouse.ops.resp.FindByIdResponse found && found.getObject().has("source")) {
+            return found.getObject().get("source").asJsonString().getValue();
+        }
+        return null;
+    }
+
+    @Test
+    public void test_in_doubt_slice_does_not_clobber_post_restart_writes() throws Exception {
+        final var dtxId = "14141414-1414-1414-1414-141414141414";
+        savePostRestart("clock-warmup");
+        seedPreparedSlice(dtxId, "rec-newer");
+        savePostRestart("rec-newer");
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
+
+        recovery.recover();
+
+        assertEquals("post-restart", sourceOf(),
+                "the node does not hold its prepared slice's locks across a restart, so a replay that overwrites a"
+                        + " newer committed version silently loses everything written since the crash");
     }
 }

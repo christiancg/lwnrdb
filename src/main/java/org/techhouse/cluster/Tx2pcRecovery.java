@@ -1,21 +1,33 @@
 package org.techhouse.cluster;
 
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessageType;
+import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.TxSession;
+import org.techhouse.ex.CollectionBusyException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerRunRecovery;
+import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 
 public class Tx2pcRecovery implements MembershipListener {
     private final Logger logger = Logger.logFor(Tx2pcRecovery.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
+    private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
+    private final AtomicBoolean pendingRecovery = new AtomicBoolean();
+    private final ExecutorService membershipWorker = Executors
+            .newSingleThreadExecutor(Thread.ofVirtual().name("tx2pc-membership-", 0).factory());
     private ScheduledExecutorService sweeper;
 
     private enum Decision {
@@ -24,7 +36,22 @@ public class Tx2pcRecovery implements MembershipListener {
 
     @Override
     public void onMembershipChanged(MembershipView view) {
-        recover();
+        if (!pendingRecovery.compareAndSet(false, true)) {
+            return;
+        }
+        try {
+            membershipWorker.execute(() -> {
+                pendingRecovery.set(false);
+                try {
+                    recover();
+                } catch (Exception e) {
+                    logger.warning("Membership-triggered transaction recovery failed: " + e.getMessage());
+                }
+            });
+        } catch (RejectedExecutionException rejected) {
+            pendingRecovery.set(false);
+            logger.info("Skipping membership-triggered transaction recovery: this node is shutting down");
+        }
     }
 
     public void start() {
@@ -40,6 +67,7 @@ public class Tx2pcRecovery implements MembershipListener {
         if (sweeper != null) {
             sweeper.shutdownNow();
         }
+        membershipWorker.shutdownNow();
     }
 
     private void sweep() {
@@ -48,9 +76,17 @@ public class Tx2pcRecovery implements MembershipListener {
             Tx2pcLog.garbageCollectOutcomes(clusterConfig.tombstoneRetentionMs());
             TriggerRunRecovery.warnAboutStrandedRuns();
             TriggerRunRecovery.garbageCollect();
+            reapAbandonedSessions();
             warnLongInDoubt();
-        } catch (Exception e) {
-            logger.warning("Transaction recovery sweep failed: " + e.getMessage());
+        } catch (Throwable failure) {
+            restoreInterruptFrom(failure);
+            logger.warning("Transaction recovery sweep failed: " + failure.getMessage());
+        }
+    }
+
+    private static void restoreInterruptFrom(Throwable failure) {
+        if (failure instanceof InterruptedException) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -70,12 +106,17 @@ public class Tx2pcRecovery implements MembershipListener {
                     continue;
                 }
                 switch (resolve(marker.coordinatorAddress(), marker.participants(), dtxId)) {
-                    case COMMIT -> TransactionOperationHelper.commitPreparedFromDurable(dtxId, marker.collections());
-                    case ABORT -> TransactionOperationHelper.abortFromDurable(dtxId);
+                    case COMMIT -> TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections(),
+                            clusterConfig.replicationAckTimeoutMs());
+                    case ABORT -> TwoPhaseParticipant.abortFromDurable(dtxId, clusterConfig.replicationAckTimeoutMs());
                     default -> logger.info("Transaction " + dtxId + " still in-doubt; will retry");
                 }
-            } catch (Exception e) {
-                logger.warning("Failed to recover prepared transaction " + dtxId + ": " + e.getMessage());
+            } catch (CollectionBusyException | TimeoutException busy) {
+                logger.warning(
+                        "Skipped recovering prepared transaction " + dtxId + " this round: " + busy.getMessage());
+            } catch (Throwable failure) {
+                restoreInterruptFrom(failure);
+                logger.warning("Failed to recover prepared transaction " + dtxId + ": " + failure.getMessage());
             }
         }
     }
@@ -84,32 +125,39 @@ public class Tx2pcRecovery implements MembershipListener {
         for (final var dtxId : Tx2pcLog.committedDtxIds()) {
             try {
                 var allResolved = true;
+                final var sessionId = Tx2pcLog.readCoordinatorSessionId(dtxId);
                 for (final var address : Tx2pcLog.readCoordinatorParticipants(dtxId)) {
                     if (isSelf(address)) {
                         resolveLocalCommitted(dtxId);
-                    } else if (!sendCommit(address, dtxId)) {
+                    } else if (!sendCommit(address, sessionId, dtxId)) {
                         allResolved = false;
                     }
                 }
                 if (allResolved) {
                     Tx2pcLog.deleteCoordinatorMarker(dtxId);
                 }
-            } catch (Exception e) {
-                logger.warning("Failed to re-drive committed transaction " + dtxId + ": " + e.getMessage());
+            } catch (CollectionBusyException | TimeoutException busy) {
+                logger.warning(
+                        "Skipped re-driving committed transaction " + dtxId + " this round: " + busy.getMessage());
+            } catch (Throwable failure) {
+                restoreInterruptFrom(failure);
+                logger.warning("Failed to re-drive committed transaction " + dtxId + ": " + failure.getMessage());
             }
         }
     }
 
     private void resolveLocalCommitted(String dtxId) throws Exception {
-        TransactionOperationHelper.resolveFromDurable(dtxId, true);
+        TwoPhaseParticipant.resolveFromDurable(dtxId, true, clusterConfig.replicationAckTimeoutMs());
     }
 
-    // The coordinator is authoritative when reachable (commit marker ⇒ commit, otherwise presumed-abort);
-    // only when it is unreachable do we fall back to cooperative termination among the other participants.
     private Decision resolve(String coordinatorAddress, java.util.List<String> participants, String dtxId) {
         final var fromCoordinator = statusFrom(coordinatorAddress, dtxId);
         if (fromCoordinator != null) {
-            return fromCoordinator == Tx2pcLog.Status.COMMITTED ? Decision.COMMIT : Decision.ABORT;
+            return switch (fromCoordinator) {
+                case COMMITTED -> Decision.COMMIT;
+                case ABORTED, NO_RECORD -> Decision.ABORT;
+                case PREPARED, UNKNOWN -> Decision.UNKNOWN;
+            };
         }
         for (final var peer : participants) {
             if (isSelf(peer) || peer.equals(coordinatorAddress)) {
@@ -129,7 +177,7 @@ public class Tx2pcRecovery implements MembershipListener {
     private Tx2pcLog.Status statusFrom(String address, String dtxId) {
         if (isSelf(address)) {
             try {
-                return Tx2pcLog.status(dtxId);
+                return Tx2pcLog.status(dtxId, address);
             } catch (Exception e) {
                 return null;
             }
@@ -148,15 +196,58 @@ public class Tx2pcRecovery implements MembershipListener {
         }
     }
 
-    private boolean sendCommit(String address, String dtxId) {
+    private boolean sendCommit(String address, String sessionId, String dtxId) {
         final var message = PeerRequest.message(ClusterMessageType.COMMIT_TX);
-        message.setTxSessionId(dtxId);
+        message.setTxSessionId(sessionId != null ? sessionId : dtxId);
         message.setTxId(dtxId);
         try {
             return pool.request(NodeAddress.parse(address), message, clusterConfig.replicationAckTimeoutMs())
                     .getType() == ClusterMessageType.COMMIT_TX_ACK;
         } catch (Exception e) {
             return false;
+        }
+    }
+
+    // A forwarded slice holds its collection write locks from the moment it buffers an op until its
+    // coordinator says commit or abort. When that word never comes -- the client vanished mid-commit, the edge
+    // tore the transaction down locally, a forward failed after the slice was already buffered -- the locks are
+    // stranded for the life of the process and every sweep, peer digest and write on that collection parks
+    // behind them. Only a slice that has not prepared is reaped here: a prepared one is the 2PC protocol's to
+    // resolve. The coordinator is asked rather than guessed at, and answers NO_RECORD only when it has neither
+    // a durable record nor the transaction still open, so a merely slow coordinator is never cut off.
+    void reapAbandonedSessions() {
+        final var idleThreshold = clusterConfig.deadTimeoutMs();
+        final var view = membershipService.membershipView();
+        for (final var entry : clientTracker.txSessionsSnapshot().entrySet()) {
+            try {
+                reapIfAbandoned(entry.getKey(), entry.getValue(), view, idleThreshold);
+            } catch (Exception e) {
+                logger.warning("Failed to inspect forwarded transaction session: " + e.getMessage());
+            }
+        }
+    }
+
+    private void reapIfAbandoned(String sessionId, TxSession session, MembershipView view, long idleThreshold) {
+        if (clientTracker.millisSinceLastCommand(session.clientId()) < idleThreshold) {
+            return;
+        }
+        final var transaction = clientTracker.getActiveTransaction(session.clientId());
+        if (transaction == null) {
+            return;
+        }
+        final var dtxId = transaction.getTransactionId().toString();
+        if (TransactionOperationHelper.isFenced(dtxId)) {
+            return;
+        }
+        final var edge = session.edgeNodeId() != null ? view.find(session.edgeNodeId()) : null;
+        if (edge == null) {
+            return;
+        }
+        final var status = statusFrom(edge.address().toString(), dtxId);
+        if (status == Tx2pcLog.Status.NO_RECORD || status == Tx2pcLog.Status.ABORTED) {
+            logger.warning("Rolling back forwarded transaction " + dtxId + ": its coordinator " + edge.address()
+                    + " reports " + status + ". The collection locks it held are released.");
+            TransactionOperationHelper.abandonSession(sessionId);
         }
     }
 

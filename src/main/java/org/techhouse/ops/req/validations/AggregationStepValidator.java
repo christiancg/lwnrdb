@@ -6,11 +6,13 @@ import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.GeoDistanceComparator;
 import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.custom_types.JsonVector;
+import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.BaseOperator;
+import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.OperatorType;
 import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
 import org.techhouse.ops.req.agg.mid_operators.BaseMidOperator;
@@ -34,6 +36,7 @@ import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
 import org.techhouse.ops.req.agg.step.map.MapOperationType;
 
 public class AggregationStepValidator {
+    private static final long MAX_NEAREST_K = Integer.MAX_VALUE / 10L;
 
     public static ValidationResult validate(BaseAggregationStep step) {
         return switch (step.getType()) {
@@ -142,7 +145,7 @@ public class AggregationStepValidator {
                 return ValidationResult.fail("MAP operator requires a non-blank fieldName");
             }
             if (op.getCondition() != null) {
-                final var conditionResult = validateOperator(op.getCondition());
+                final var conditionResult = validateOperator(op.getCondition(), OperatorContext.MAP_CONDITION);
                 if (!conditionResult.isValid()) {
                     return conditionResult;
                 }
@@ -218,17 +221,39 @@ public class AggregationStepValidator {
         return ValidationResult.ok();
     }
 
+    private static ValidationResult validateMembershipOperand(FieldOperator fieldOp) {
+        final var type = fieldOp.getFieldOperatorType();
+        if (type != FieldOperatorType.IN && type != FieldOperatorType.NOT_IN) {
+            return ValidationResult.ok();
+        }
+        if (!(fieldOp.getValue() instanceof JsonArray)) {
+            return ValidationResult.fail(type + " requires an array value");
+        }
+        return ValidationResult.ok();
+    }
+
     public static ValidationResult validateOperator(BaseOperator operator) {
+        return validateOperator(operator, OperatorContext.FILTER_STEP);
+    }
+
+    private static ValidationResult validateOperator(BaseOperator operator, OperatorContext context) {
         if (operator.getType() == OperatorType.FIELD) {
             final var fieldOp = (FieldOperator) operator;
             if (fieldOp.getField() == null || fieldOp.getField().isBlank()) {
                 return ValidationResult.fail("Field operator requires a non-blank field name");
             }
+            if (fieldOp.getField().endsWith(".")) {
+                return ValidationResult.fail("Field operator field name must not end with '.'");
+            }
             if (fieldOp.getFieldOperatorType() == null) {
                 return ValidationResult.fail("Field operator requires a fieldOperatorType");
             }
+            if (fieldOp.getValue() == null) {
+                return ValidationResult.fail("Field operator requires a value");
+            }
+            return validateMembershipOperand(fieldOp);
         } else if (operator.getType() == OperatorType.CUSTOM) {
-            return validateCustomOperator((CustomOperator) operator);
+            return validateCustomOperator((CustomOperator) operator, context);
         } else if (operator.getType() == OperatorType.SCRIPT) {
             return validateScriptSource(((ScriptOperator) operator).getSource(), "Script operator");
         } else {
@@ -240,7 +265,7 @@ public class AggregationStepValidator {
                 return ValidationResult.fail("Conjunction operator requires at least one nested operator");
             }
             for (var nested : conjOp.getOperators()) {
-                final var result = validateOperator(nested);
+                final var result = validateOperator(nested, context);
                 if (!result.isValid()) {
                     return result;
                 }
@@ -249,7 +274,7 @@ public class AggregationStepValidator {
         return ValidationResult.ok();
     }
 
-    private static ValidationResult validateCustomOperator(CustomOperator operator) {
+    private static ValidationResult validateCustomOperator(CustomOperator operator, OperatorContext context) {
         if (operator.getField() == null || operator.getField().isBlank()) {
             return ValidationResult.fail("Custom operator requires a non-blank field name");
         }
@@ -259,6 +284,9 @@ public class AggregationStepValidator {
         }
         if (!CustomTypeFactory.isKnownCustomOperator(name)) {
             return ValidationResult.fail("Unknown custom operator: " + name);
+        }
+        if (context == OperatorContext.MAP_CONDITION && CustomTypeFactory.isRankingOperator(name)) {
+            return ValidationResult.fail(name + " ranks a whole stream and cannot be a MAP condition");
         }
         final var args = operator.getArgs();
         return switch (name) {
@@ -276,6 +304,9 @@ public class AggregationStepValidator {
         final var k = args.get("k");
         if (k == null || !k.isJsonNumber() || k.asJsonNumber().getValue().intValue() <= 0) {
             return ValidationResult.fail("nearest operator requires a positive integer k");
+        }
+        if (k.asJsonNumber().getValue().longValue() > MAX_NEAREST_K) {
+            return ValidationResult.fail("nearest operator k exceeds the maximum supported value");
         }
         final var exact = args.get("exact");
         if (exact != null && !exact.isJsonBoolean()) {
@@ -328,6 +359,10 @@ public class AggregationStepValidator {
         } catch (IllegalArgumentException e) {
             return null;
         }
+    }
+
+    private enum OperatorContext {
+        FILTER_STEP, MAP_CONDITION
     }
 
     public static ValidationResult validateMidOperator(BaseMidOperator midOperator) {

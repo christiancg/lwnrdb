@@ -1,8 +1,10 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.UUID;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -21,20 +23,36 @@ public final class BeforeHookHelper {
     private BeforeHookHelper() {
     }
 
-    public static OperationResponse beforeSave(SaveRequest request, EventType event, String actingUser) {
+    public static OperationResponse beforeSave(SaveRequest request, String actingUser) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
-        if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
+        if (!BeforeHookContext.hasHooksFor(dbName, collName, EventType.CREATED)
+                && !BeforeHookContext.hasHooksFor(dbName, collName, EventType.UPDATED)) {
             return null;
         }
-        try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser)) {
-            final var outcome = hooks.apply(request.getObject(), request.get_id(), OperationType.SAVE);
-            if (outcome.isRejected()) {
-                return outcome.rejection();
+        if (hasConflictingIds(request)) {
+            return null;
+        }
+        request.set_id(assignedId(request.getObject(), request.get_id()));
+        return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
+            final var event = isInsert(dbName, collName, request.get_id()) ? EventType.CREATED : EventType.UPDATED;
+            if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
+                return null;
             }
-            request.setObject(outcome.document());
-            return null;
-        }
+            try (var hooks = BeforeHookContext.open(dbName, collName, event, actingUser)) {
+                final var outcome = hooks.apply(request.getObject(), request.get_id(), OperationType.SAVE);
+                if (outcome.isRejected()) {
+                    return outcome.rejection();
+                }
+                request.setObject(outcome.document());
+                return null;
+            }
+        });
+    }
+
+    private static boolean isInsert(String dbName, String collName, String id) throws java.io.IOException {
+        return id == null || id.isBlank()
+                || Collections.binarySearch(cache.getPkIndexAndLoadIfNecessary(dbName, collName), id) < 0;
     }
 
     public static OperationResponse beforeBulkSave(BulkSaveRequest request, String actingUser) {
@@ -46,17 +64,16 @@ public final class BeforeHookHelper {
             return null;
         }
         return OperationResponse.respondOrError(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING, () -> {
-            try (var creates = BeforeHookContext.open(dbName, collName, EventType.CREATED, actingUser);
-                    var updates = BeforeHookContext.open(dbName, collName, EventType.UPDATED, actingUser)) {
+            try (var hooks = BulkBeforeHooks.open(dbName, collName, actingUser)) {
                 final var existingIds = new HashSet<String>();
                 cache.getPkIndexAndLoadIfNecessary(dbName, collName)
                         .forEach(entry -> existingIds.add(entry.getValue()));
                 final var objects = new ArrayList<>(request.getObjects());
                 for (var i = 0; i < objects.size(); i++) {
                     final var object = objects.get(i);
-                    final var id = idOf(object);
-                    final var isInsert = id == null || !existingIds.contains(id);
-                    final var outcome = (isInsert ? creates : updates).apply(object, id, OperationType.BULK_SAVE);
+                    final var id = assignedId(object, null);
+                    final var isUpdate = id != null && existingIds.contains(id);
+                    final var outcome = hooks.apply(isUpdate, object, id, OperationType.BULK_SAVE);
                     if (outcome.isRejected()) {
                         return outcome.rejection();
                     }
@@ -89,6 +106,26 @@ public final class BeforeHookHelper {
             final var outcome = hooks.apply(document, request.get_id(), OperationType.DELETE);
             return outcome.isRejected() ? outcome.rejection() : null;
         }
+    }
+
+    private static String assignedId(JsonObject object, String requestId) {
+        if (requestId != null) {
+            if (!object.has(Globals.PK_FIELD)) {
+                object.addProperty(Globals.PK_FIELD, requestId);
+            }
+            return requestId;
+        }
+        if (object.has(Globals.PK_FIELD)) {
+            return idOf(object);
+        }
+        final var generated = UUID.randomUUID().toString();
+        object.addProperty(Globals.PK_FIELD, generated);
+        return generated;
+    }
+
+    private static boolean hasConflictingIds(SaveRequest request) {
+        final var objectId = idOf(request.getObject());
+        return request.get_id() != null && objectId != null && !request.get_id().equals(objectId);
     }
 
     private static String idOf(JsonObject object) {

@@ -1,7 +1,11 @@
 package org.techhouse.unit.bckg_ops;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -14,6 +18,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.ScheduleDefinition;
 import org.techhouse.ejson.EJson;
@@ -93,6 +98,31 @@ public class ScheduleExecutorTest {
     }
 
     @Test
+    public void test_stopping_the_ticker_leaves_the_workers_able_to_drain() throws Exception {
+        final var entry = register("s", true);
+        final var seen = new CopyOnWriteArrayList<String>();
+        executor = new ScheduleExecutor();
+        executor.start(due -> seen.add(due.getName()));
+
+        executor.stopTicking();
+        entry.setNextRunAt(System.currentTimeMillis() - 1);
+        executor.tick(System.currentTimeMillis());
+
+        assertTrue(executor.drain(5000));
+        assertEquals(List.of("s"), seen);
+    }
+
+    @Test
+    public void test_stopping_the_ticker_twice_is_harmless() {
+        executor = new ScheduleExecutor();
+        executor.start(_ -> fail("should not have fired"));
+
+        executor.stopTicking();
+
+        assertDoesNotThrow(executor::stopTicking);
+    }
+
+    @Test
     public void test_does_not_fire_one_that_is_not_due() throws Exception {
         final var entry = register("s", true);
         executor = new ScheduleExecutor();
@@ -133,6 +163,43 @@ public class ScheduleExecutorTest {
         entry.setNextRunAt(System.currentTimeMillis() - 1);
         executor.tick(System.currentTimeMillis());
         assertEquals(0, executor.getQueued());
+    }
+
+    private ScheduleExecutor executorOwning(boolean hasQuorum, Consumer<ScheduleRegistry.Entry> dispatcher)
+            throws Exception {
+        final var created = new ScheduleExecutor();
+        final var ownership = mock(OwnershipManager.class);
+        when(ownership.isOwner(any(), any())).thenReturn(true);
+        when(ownership.hasQuorum()).thenReturn(hasQuorum);
+        TestUtils.setPrivateField(created, "ownershipManager", ownership);
+        created.start(dispatcher);
+        return created;
+    }
+
+    @Test
+    public void test_does_not_fire_without_a_quorum_even_when_it_owns_the_key() throws Exception {
+        TestUtils.setPrivateField(configuration, "clusterEnabled", true);
+        final var entry = register("s", true);
+        executor = executorOwning(false, _ -> fail("a partitioned minority owns every key in its own ring"));
+
+        entry.setNextRunAt(System.currentTimeMillis() - 1);
+        executor.tick(System.currentTimeMillis());
+
+        assertEquals(0, executor.getQueued(),
+                "an external call such as fetch would otherwise run on both sides of a partition");
+    }
+
+    @Test
+    public void test_fires_when_it_owns_the_key_and_holds_a_quorum() throws Exception {
+        TestUtils.setPrivateField(configuration, "clusterEnabled", true);
+        final var entry = register("s", true);
+        final var fired = new CountDownLatch(1);
+        executor = executorOwning(true, _ -> fired.countDown());
+
+        entry.setNextRunAt(System.currentTimeMillis() - 1);
+        executor.tick(System.currentTimeMillis());
+
+        assertTrue(fired.await(5, TimeUnit.SECONDS), "the quorum gate must not stop a healthy owner");
     }
 
     @Test

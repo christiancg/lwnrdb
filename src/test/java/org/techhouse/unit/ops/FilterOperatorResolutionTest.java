@@ -6,8 +6,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -29,17 +27,7 @@ import org.techhouse.ops.req.agg.operators.FieldOperator;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-public class FilterOperatorResolutionTest {
-    @BeforeEach
-    public void setUp() throws IOException, NoSuchFieldException, IllegalAccessException, InterruptedException {
-        TestUtils.standardInitialSetup();
-        TestUtils.createTestDatabaseAndCollection();
-    }
-
-    @AfterEach
-    public void tearDown() throws NoSuchFieldException, IllegalAccessException {
-        TestUtils.standardTearDown();
-    }
+public class FilterOperatorResolutionTest extends FilterResolutionSupport {
 
     @Test
     public void test_process_operator_with_index_returns_indexed_results() throws Exception {
@@ -56,8 +44,8 @@ public class FilterOperatorResolutionTest {
         e1.set_id("idx1");
         DbEntry e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
         e2.set_id("idx2");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e1);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e2);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, e1);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, e2);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         cache.putAdminCollectionEntry(adminCollEntry,
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "idx1", 0, 100, 0));
@@ -89,8 +77,8 @@ public class FilterOperatorResolutionTest {
         e1.set_id("is1");
         DbEntry e2 = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj2);
         e2.set_id("is2");
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e1);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, e2);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, e1);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, e2);
         final var adminCollEntry2 = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         cache.putAdminCollectionEntry(adminCollEntry2,
                 new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "is1", 0, 100, 0));
@@ -107,16 +95,16 @@ public class FilterOperatorResolutionTest {
         assertEquals(5, result.getFirst().get("level").asJsonNumber().asInteger());
     }
 
-    private void addIndexedDoc(Cache cache, String id, JsonBaseElement value) {
+    private void addIndexedDoc(Cache cache, String id, JsonBaseElement value) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("status", value);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void index(Cache cache, String... fields) {
+    private void index(Cache cache, String... fields) throws InterruptedException {
         for (final var field : fields) {
             org.techhouse.ops.IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, field);
         }
@@ -261,14 +249,14 @@ public class FilterOperatorResolutionTest {
         assertTrue(ids.isEmpty());
     }
 
-    private void addTwoFieldDoc(Cache cache, String id, String status, int level) {
+    private void addTwoFieldDoc(Cache cache, String id, String status, int level) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.addProperty("status", status);
         obj.addProperty("level", level);
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
     private static JsonObject objField(int n) {
@@ -288,7 +276,8 @@ public class FilterOperatorResolutionTest {
     // resolveIdsViaIndex disqualifies an object operand (hash hits are unconfirmed candidates), so the
     // index-only COUNT falls back; the document FILTER path still resolves it via the Object hash index.
     @Test
-    public void test_resolve_ids_via_index_object_equals_disqualified_but_filter_resolves() throws IOException {
+    public void test_resolve_ids_via_index_object_equals_disqualified_but_filter_resolves()
+            throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "o1", 0, 100, 0);
@@ -309,7 +298,8 @@ public class FilterOperatorResolutionTest {
     }
 
     @Test
-    public void test_resolve_ids_via_index_array_equals_disqualified_but_filter_resolves() throws IOException {
+    public void test_resolve_ids_via_index_array_equals_disqualified_but_filter_resolves()
+            throws IOException, InterruptedException {
         final var cache = IocContainer.get(Cache.class);
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "a1", 0, 100, 0);
@@ -329,21 +319,22 @@ public class FilterOperatorResolutionTest {
         assertEquals(Set.of("a1", "a2"), matched);
     }
 
-    private void addObjEntry(Cache cache, String id, int n) {
+    private void addObjEntry(Cache cache, String id, int n) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("data", objField(n));
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
 
-    private void addArrEntry(Cache cache, String id, String... items) {
+    private void addArrEntry(Cache cache, String id, String... items) throws IOException {
         final var obj = new JsonObject();
         obj.add(Globals.PK_FIELD, new JsonString(id));
         obj.add("data", arrField(items));
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, obj);
         entry.set_id(id);
-        cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
     }
+
 }

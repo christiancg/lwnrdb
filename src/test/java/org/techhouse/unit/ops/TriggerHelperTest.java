@@ -2,12 +2,14 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.IOException;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -128,6 +130,21 @@ public class TriggerHelperTest {
     }
 
     @Test
+    public void test_the_reserved_history_collection_short_circuits_the_id_path_too() {
+        cache.putTriggers(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME,
+                List.of(new TriggerDefinition("t", new LinkedHashSet<>(Set.of(EventType.CREATED)), "recalc",
+                        TriggerDefinition.MODE_DOCUMENT, false, true, "owner", 1L, 1L, 1L, "owner")));
+
+        assertTrue(
+                capture(() -> TriggerHelper.afterWriteIds(TestGlobals.DB,
+                        org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME, EventType.CREATED, List.of("a"),
+                        "alice", 0)).isEmpty(),
+                "the history sweep must not pay a document read per row for a trigger that never fires");
+
+        cache.removeTriggers(TestGlobals.DB, org.techhouse.config.Globals.SCRIPT_RUNS_COLLECTION_NAME);
+    }
+
+    @Test
     public void test_fires_only_matching_event_type() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
         assertEquals(1, capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
@@ -220,5 +237,104 @@ public class TriggerHelperTest {
     public void test_after_bulk_save_fires_nothing_for_a_failed_write() {
         assertTrue(capture(() -> TriggerHelper.afterBulkSave(TestGlobals.DB, TestGlobals.COLL,
                 new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING), "alice", 0)).isEmpty());
+    }
+
+    @Test
+    public void test_an_unreadable_trigger_file_does_not_fail_a_committed_write() {
+        install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
+        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+        final var file = new java.io.File(
+                TestGlobals.PATH + java.io.File.separator + TestGlobals.DB + java.io.File.separator + TestGlobals.COLL
+                        + java.io.File.separator + TestGlobals.COLL + "-triggers.json");
+        if (file.exists()) {
+            assertTrue(file.delete());
+        }
+        assertTrue(file.mkdirs());
+        try {
+            assertTrue(
+                    capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                            entry("a"), "alice", 0)).isEmpty(),
+                    "the write has already committed, so an unreadable trigger file must not fail it");
+        } finally {
+            assertTrue(file.delete());
+            cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+        }
+    }
+
+    private static final class FailingCache extends Cache {
+        private final int failuresBeforeSuccess;
+        private final AtomicInteger callCount = new AtomicInteger();
+
+        FailingCache(int failuresBeforeSuccess) {
+            this.failuresBeforeSuccess = failuresBeforeSuccess;
+        }
+
+        @Override
+        public List<DbEntry> getEntriesByIds(String dbName, String collName, Set<String> ids) throws IOException {
+            if (callCount.incrementAndGet() <= failuresBeforeSuccess) {
+                throw new IOException("simulated transient failure");
+            }
+            return super.getEntriesByIds(dbName, collName, ids);
+        }
+
+        int callCount() {
+            return callCount.get();
+        }
+    }
+
+    private static Cache swapCache(Cache replacement) throws Exception {
+        final var field = TriggerHelper.class.getDeclaredField("cache");
+        field.setAccessible(true);
+        final var original = (Cache) field.get(null);
+        field.set(null, replacement);
+        return original;
+    }
+
+    @Test
+    public void test_after_write_ids_retries_transient_read_failure_and_still_fires() throws Exception {
+        install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry("retry1"));
+        final var failingCache = new FailingCache(2);
+        final var original = swapCache(failingCache);
+        try {
+            final var events = capture(() -> TriggerHelper.afterWriteIds(TestGlobals.DB, TestGlobals.COLL,
+                    EventType.CREATED, List.of("retry1"), "alice", 0));
+            assertEquals(1, events.size(), "the trigger must still fire once the retried read succeeds");
+            assertEquals(3, failingCache.callCount());
+        } finally {
+            swapCache(original);
+        }
+    }
+
+    @Test
+    public void test_after_write_ids_gives_up_after_exhausting_retries() throws Exception {
+        install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry("retry2"));
+        final var failingCache = new FailingCache(Integer.MAX_VALUE);
+        final var original = swapCache(failingCache);
+        try {
+            assertTrue(
+                    capture(() -> TriggerHelper.afterWriteIds(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                            List.of("retry2"), "alice", 0)).isEmpty(),
+                    "a persistent read failure must still be dropped, not fail the already-committed write");
+        } finally {
+            swapCache(original);
+        }
+    }
+
+    @Test
+    public void test_capture_for_delete_retries_transient_read_failure_and_returns_document() throws Exception {
+        install(Set.of(EventType.DELETED), TriggerDefinition.MODE_DOCUMENT, false, true);
+        TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry("retry3"));
+        final var failingCache = new FailingCache(2);
+        final var original = swapCache(failingCache);
+        try {
+            final var captured = TriggerHelper.captureForDelete(TestGlobals.DB, TestGlobals.COLL, "retry3", 0);
+            assertNotNull(captured, "the document must still be returned once the retried read succeeds");
+            assertEquals("retry3", captured.get_id());
+            assertEquals(3, failingCache.callCount());
+        } finally {
+            swapCache(original);
+        }
     }
 }

@@ -34,7 +34,7 @@ public class SocketServer {
             while (!Thread.currentThread().isInterrupted()) {
                 Socket socket = socketForServing.accept();
                 disableNagle(socket);
-                pool.execute(new MessageProcessor(socket));
+                pool.execute(new MessageProcessor(socket, this::isStopping));
             }
         } catch (IOException ex) {
             if (stopping) {
@@ -43,6 +43,10 @@ public class SocketServer {
             }
             logger.fatal("I/O error while starting server on port " + port, ex);
         }
+    }
+
+    public boolean isStopping() {
+        return stopping;
     }
 
     public void stopAccepting() {

@@ -11,6 +11,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
+import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateCollectionRequest;
@@ -25,32 +26,68 @@ public final class CollectionOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private static final org.techhouse.cluster.HybridClock hybridClock = IocContainer
+            .get(org.techhouse.cluster.HybridClock.class);
 
     private CollectionOperationHelper() {
     }
 
     public static OperationResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
-        return OperationResponse.respondOrError(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION,
-                () -> {
-                    final var dbName = createCollectionRequest.getDatabaseName();
-                    final var collName = createCollectionRequest.getCollectionName();
-                    // A node can hold the database's admin entry without its folder (a replicated
-                    // CREATE_DATABASE returns early), and createCollectionFile only mkdirs one level.
-                    if (cache.getAdminDbEntry(dbName) != null) {
-                        fs.createDatabaseFolder(dbName);
+        final var dbName = createCollectionRequest.getDatabaseName();
+        return OperationLocks.withDatabaseShared(dbName, OperationType.CREATE_COLLECTION,
+                ErrorCode.ERROR_CREATING_COLLECTION, createCollectionRequest.isReplicated(),
+                () -> createUnderDatabaseBarrier(createCollectionRequest));
+    }
+
+    private static OperationResponse createUnderDatabaseBarrier(CreateCollectionRequest createCollectionRequest) {
+        final var dbName = createCollectionRequest.getDatabaseName();
+        final var collName = createCollectionRequest.getCollectionName();
+        if (!createCollectionRequest.isReplicated()) {
+            createCollectionRequest.setIncarnation(0);
+        }
+        return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_COLLECTION,
+                ErrorCode.ERROR_CREATING_COLLECTION, createCollectionRequest.isReplicated(), () -> {
+                    if (cache.getAdminDbEntry(dbName) == null) {
+                        return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.DATABASE_NOT_FOUND);
                     }
-                    final var result = fs.createCollectionFile(dbName, collName);
+                    fs.createDatabaseFolder(dbName);
+                    final var colliding = createCollectionRequest.isReplicated()
+                            ? null
+                            : OnDiskNameRegistry.collidingCollection(dbName, collName);
+                    if (colliding != null) {
+                        return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.NAME_COLLIDES_ON_DISK,
+                                colliding);
+                    }
+                    final var result = LeftoverFolders.moveAsideUnregisteredCollection(dbName, collName)
+                            && fs.createCollectionFile(dbName, collName);
                     if (result) {
+                        final var existingEntry = AdminOperationHelper.getCollectionEntry(dbName, collName);
+                        if (existingEntry != null) {
+                            if (createCollectionRequest.getIncarnation() == 0) {
+                                createCollectionRequest.setIncarnation(existingEntry.getIncarnation());
+                            }
+                            return OperationResponse.ok(OperationType.CREATE_COLLECTION,
+                                    "Collection created successfully");
+                        }
                         // Registration must be synchronous: a lagging background task lets CREATE_INDEX run
                         // first, find no admin PK entry and silently skip registering the index.
-                        if (AdminOperationHelper.getCollectionEntry(dbName, collName) == null) {
-                            AdminOperationHelper.createPageCollections(dbName, collName);
-                            AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(dbName, collName));
+                        if (createCollectionRequest.getIncarnation() == 0 && !createCollectionRequest.isReplicated()) {
+                            createCollectionRequest.setIncarnation(hybridClock.next());
+                        } else if (createCollectionRequest.getIncarnation() != 0) {
+                            hybridClock.observe(createCollectionRequest.getIncarnation());
                         }
+                        AdminOperationHelper.createPageCollections(dbName, collName);
+                        final var entry = new AdminCollEntry(dbName, collName);
+                        entry.setIncarnation(createCollectionRequest.getIncarnation());
+                        AdminOperationHelper.saveCollectionEntry(entry);
                         return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
                     }
                     return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
                 });
+    }
+
+    private static boolean isNotRegistered(String dbName, String collName) {
+        return cache.getAdminCollectionEntry(dbName, collName) == null;
     }
 
     public static OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
@@ -58,7 +95,13 @@ public final class CollectionOperationHelper {
         final var collName = dropCollectionRequest.getCollectionName();
         boolean dropSucceeded = false;
         try {
-            locks.lock(dbName, collName);
+            if (!locks.tryLockWrite(dbName, collName,
+                    OperationLocks.lockBudgetMillis(dropCollectionRequest.isReplicated()))) {
+                return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+            }
+            if (isNotRegistered(dbName, collName)) {
+                return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
+            }
             final var result = fs.deleteCollectionFiles(dbName, collName);
             if (result) {
                 cache.evictCollection(dbName, collName);
@@ -67,6 +110,7 @@ public final class CollectionOperationHelper {
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
                 listenManager.unregisterAllForCollection(dbName, collName);
+                GrantPruner.forDroppedCollection(dbName, collName);
                 dropSucceeded = true;
                 return OperationResponse.ok(OperationType.DROP_COLLECTION, "Collection dropped successfully");
             }

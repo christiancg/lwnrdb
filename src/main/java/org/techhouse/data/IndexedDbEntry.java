@@ -4,6 +4,7 @@ import java.util.Objects;
 
 public class IndexedDbEntry extends JsonDocumentEntry {
     private PkIndexEntry index;
+    private long version;
 
     public DbEntry toDbEntry() {
         final var entry = new DbEntry();
@@ -14,6 +15,7 @@ public class IndexedDbEntry extends JsonDocumentEntry {
         if (index != null) {
             entry.setPage(index.getPage());
         }
+        entry.setVersion(version);
         entry.setPreviousByteSize(previousByteSize);
         return entry;
     }
@@ -24,6 +26,14 @@ public class IndexedDbEntry extends JsonDocumentEntry {
 
     public void setIndex(PkIndexEntry index) {
         this.index = index;
+    }
+
+    public long getVersion() {
+        return version;
+    }
+
+    public void setVersion(long version) {
+        this.version = version;
     }
 
     @Override

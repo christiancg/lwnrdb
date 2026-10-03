@@ -9,9 +9,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -63,6 +65,38 @@ public class TriggerOperationHelperTest {
         return new SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, name, List.of("CREATED"), "recalc");
     }
 
+    @Test
+    public void test_a_client_cannot_forge_the_stamped_definer() throws Exception {
+        final var request = request("forged");
+        request.setStampedVersion(9L);
+        request.setStampedDefiner("admin");
+        request.setStampedUpdatedBy("admin");
+        request.setStampedUpdatedAt(1L);
+
+        final var response = save(request);
+
+        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        assertEquals(ACTOR, stored.getDefiner());
+        assertEquals(ACTOR, stored.getUpdatedBy());
+        assertEquals(1L, response.getVersion());
+    }
+
+    @Test
+    public void test_a_replicated_save_honours_the_stamped_definer() throws Exception {
+        final var request = request("replicated");
+        request.setStampedVersion(9L);
+        request.setStampedDefiner("admin");
+        request.setStampedUpdatedBy("admin");
+        request.setStampedUpdatedAt(5L);
+        request.setReplicated(true);
+
+        save(request);
+
+        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        assertEquals("admin", stored.getDefiner());
+        assertEquals(9L, stored.getVersion());
+    }
+
     private SaveTriggerResponse save(SaveTriggerRequest request) throws Exception {
         final var response = TriggerOperationHelper.executeSave(request, ACTOR);
         assertInstanceOf(SaveTriggerResponse.class, response, response.getMessage());
@@ -78,6 +112,20 @@ public class TriggerOperationHelperTest {
         assertEquals(1, stored.size());
         assertEquals("audit", stored.getFirst().getName());
         assertEquals("recalc", stored.getFirst().getProcedureName());
+    }
+
+    @Test
+    public void test_save_rejects_the_reserved_history_collection() throws Exception {
+        IocContainer.get(FileSystem.class).createCollectionFile(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME);
+        AdminOperationHelper.createPageCollections(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME);
+        AdminOperationHelper.saveCollectionEntry(
+                new org.techhouse.data.admin.AdminCollEntry(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME));
+
+        final var response = TriggerOperationHelper.executeSave(new SaveTriggerRequest(TestGlobals.DB,
+                Globals.SCRIPT_RUNS_COLLECTION_NAME, "t", List.of("CREATED"), "recalc"), ACTOR);
+
+        assertEquals(ErrorCode.INVALID_TRIGGER.getCode(), response.getErrorCode(),
+                "accepting it reports success for a trigger that afterWrite short-circuits and never fires");
     }
 
     @Test
@@ -179,6 +227,7 @@ public class TriggerOperationHelperTest {
         assertEquals(1L, request.getStampedVersion());
         assertTrue(request.getStampedUpdatedAt() > 0);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+        request.setReplicated(true);
         TriggerOperationHelper.executeSave(request, "peer-has-no-acting-user");
         final var replicated = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
         assertEquals(ACTOR, replicated.getDefiner());

@@ -1,7 +1,7 @@
 import sys
 
 import base_utils as bu
-from base_utils import Conn, check_status, section
+from base_utils import Conn, check_code, check_status, section
 
 HOST = "127.0.0.1"
 PORT = 8989
@@ -61,8 +61,11 @@ def setup_fixtures(c):
         {"type": "CREATE_DATABASE", "databaseName": "auth_db"},
         {"type": "CREATE_COLLECTION", "databaseName": "auth_db", "collectionName": "allowed"},
         {"type": "CREATE_COLLECTION", "databaseName": "auth_db", "collectionName": "forbidden"},
+        {"type": "CREATE_COLLECTION", "databaseName": "auth_db", "collectionName": "carved"},
         {"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
          "object": {"_id": "doc1", "value": 42}},
+        {"type": "SAVE", "databaseName": "auth_db", "collectionName": "carved",
+         "object": {"_id": "doc1", "value": 7}},
     ]:
         c.send(msg)
 
@@ -197,6 +200,48 @@ def test_collection_permission_boundary(c):
           c.send({"type": "AGGREGATE", "databaseName": "auth_db",
                       "collectionName": "forbidden", "aggregationSteps": []}),
           "FORBIDDEN")
+
+
+def test_collection_carve_out(c):
+    section("User with db READ_WRITE and a collection carved down to READ")
+
+    check_status("AUTHENTICATE as 'carve_user'",
+          c.authenticate("carve_user", "carve_user1234"),
+          "OK")
+
+    check_status("SAVE on a collection with no entry of its own (OK)",
+          c.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
+                      "object": {"_id": "carve_probe", "value": 1}}),
+          "OK")
+
+    check_code("SAVE on the carved collection (FORBIDDEN)",
+          c.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "carved",
+                      "object": {"_id": "nope", "value": 1}}),
+          "FORBIDDEN", "403-1")
+
+    check_code("DELETE on the carved collection (FORBIDDEN)",
+          c.send({"type": "DELETE", "databaseName": "auth_db",
+                      "collectionName": "carved", "_id": "doc1"}),
+          "FORBIDDEN", "403-1")
+
+    check_code("CREATE_INDEX on the carved collection (FORBIDDEN)",
+          c.send({"type": "CREATE_INDEX", "databaseName": "auth_db",
+                      "collectionName": "carved", "fieldName": "value"}),
+          "FORBIDDEN", "403-1")
+
+    check_code("DROP_COLLECTION on the carved collection (FORBIDDEN)",
+          c.send({"type": "DROP_COLLECTION", "databaseName": "auth_db", "collectionName": "carved"}),
+          "FORBIDDEN", "403-1")
+
+    check_status("FIND_BY_ID on the carved collection (OK)",
+          c.send({"type": "FIND_BY_ID", "databaseName": "auth_db",
+                      "collectionName": "carved", "_id": "doc1"}),
+          "OK")
+
+    check_status("AGGREGATE (COUNT) on the carved collection (OK)",
+          c.send({"type": "AGGREGATE", "databaseName": "auth_db",
+                      "collectionName": "carved", "aggregationSteps": [{"type": "COUNT"}]}),
+          "OK")
 
 
 def test_admin_operations(c):
@@ -555,6 +600,176 @@ def test_ownership(c):
           "FORBIDDEN")
 
 
+def test_owners_of_a_dropped_database(c):
+    section("SET_DATABASE_OWNERS on a dropped database does not bring it back")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    check_status("CREATE_DATABASE 'owners_gone_db'",
+                 c.send({"type": "CREATE_DATABASE", "databaseName": "owners_gone_db"}), "OK")
+    check_status("DROP_DATABASE 'owners_gone_db'",
+                 c.send({"type": "DROP_DATABASE", "databaseName": "owners_gone_db"}), "OK")
+    check_code("SET_DATABASE_OWNERS on the dropped database",
+               set_database_owners(c, "owners_gone_db", ["new_owner"]), "NOT_FOUND", "404-4")
+    listed = c.send({"type": "LIST_DATABASES"})
+    bu.check("the dropped database is not listed again", "owners_gone_db" not in str(listed), str(listed))
+    check_status("CREATE_DATABASE of the same name succeeds",
+                 c.send({"type": "CREATE_DATABASE", "databaseName": "owners_gone_db"}), "OK")
+    check_status("DROP_DATABASE it again",
+                 c.send({"type": "DROP_DATABASE", "databaseName": "owners_gone_db"}), "OK")
+
+
+def find_doc(c, db, coll, doc_id="doc1"):
+    return c.send({"type": "FIND_BY_ID", "databaseName": db, "collectionName": coll, "_id": doc_id})
+
+
+def test_grants_do_not_survive_a_drop_and_recreate(c):
+    section("Grants die with the database or collection they name")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    for db in ("grant_gone_db", "grant_coll_db"):
+        c.send({"type": "DROP_DATABASE", "databaseName": db})
+        check_status(f"CREATE_DATABASE '{db}'", c.send({"type": "CREATE_DATABASE", "databaseName": db}), "OK")
+        check_status(f"CREATE_COLLECTION in '{db}'",
+                     c.send({"type": "CREATE_COLLECTION", "databaseName": db, "collectionName": "items"}), "OK")
+        check_status(f"SAVE in '{db}'", c.send({"type": "SAVE", "databaseName": db, "collectionName": "items",
+                                                "object": {"_id": "doc1", "value": 1}}), "OK")
+    delete_user(c, "grant_bob")
+    delete_user(c, "grant_carol")
+    check_status("CREATE_USER 'grant_bob' with a database grant",
+                 create_user(c, "grant_bob", "grant_bob1234", db_perms={"grant_gone_db": "READ_WRITE"}), "OK")
+    check_status("CREATE_USER 'grant_carol' with a collection grant",
+                 create_user(c, "grant_carol", "grant_carol1234", coll_perms={"grant_coll_db|items": "READ"}), "OK")
+
+    with Conn() as bob:
+        check_status("AUTHENTICATE as 'grant_bob'", bob.authenticate("grant_bob", "grant_bob1234"), "OK")
+        check_status("grant_bob reads while the database exists", find_doc(bob, "grant_gone_db", "items"), "OK")
+    with Conn() as carol:
+        check_status("AUTHENTICATE as 'grant_carol'", carol.authenticate("grant_carol", "grant_carol1234"), "OK")
+        check_status("grant_carol reads while the collection exists", find_doc(carol, "grant_coll_db", "items"),
+                     "OK")
+
+    check_status("DROP_DATABASE 'grant_gone_db'",
+                 c.send({"type": "DROP_DATABASE", "databaseName": "grant_gone_db"}), "OK")
+    check_status("DROP_COLLECTION 'grant_coll_db|items'",
+                 c.send({"type": "DROP_COLLECTION", "databaseName": "grant_coll_db",
+                         "collectionName": "items"}), "OK")
+    for db, coll in (("grant_gone_db", "items"), ("grant_coll_db", "items")):
+        c.send({"type": "CREATE_DATABASE", "databaseName": db})
+        check_status(f"re-CREATE_COLLECTION '{db}|{coll}'",
+                     c.send({"type": "CREATE_COLLECTION", "databaseName": db, "collectionName": coll}), "OK")
+        check_status(f"re-SAVE in '{db}'", c.send({"type": "SAVE", "databaseName": db, "collectionName": coll,
+                                                   "object": {"_id": "doc1", "value": 2}}), "OK")
+
+    with Conn() as bob:
+        check_status("AUTHENTICATE as 'grant_bob' again", bob.authenticate("grant_bob", "grant_bob1234"), "OK")
+        check_status("grant_bob is refused on the re-created database", find_doc(bob, "grant_gone_db", "items"),
+                     "FORBIDDEN")
+    with Conn() as carol:
+        check_status("AUTHENTICATE as 'grant_carol' again", carol.authenticate("grant_carol", "grant_carol1234"),
+                     "OK")
+        check_status("grant_carol is refused on the re-created collection", find_doc(carol, "grant_coll_db", "items"),
+                     "FORBIDDEN")
+
+    for db in ("grant_gone_db", "grant_coll_db"):
+        c.send({"type": "DROP_DATABASE", "databaseName": db})
+    delete_user(c, "grant_bob")
+    delete_user(c, "grant_carol")
+
+
+def test_a_deleted_users_name_does_not_inherit_ownership(c):
+    section("A user created under a deleted name does not own the old user's databases")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    c.send({"type": "DROP_DATABASE", "databaseName": "ghost_owned_db"})
+    delete_user(c, "ghost_owner")
+    check_status("CREATE_USER 'ghost_owner' with CREATE_DATABASE",
+                 create_user(c, "ghost_owner", "ghost_owner1234", global_perms=["CREATE_DATABASE"]), "OK")
+    with Conn() as owner:
+        check_status("AUTHENTICATE as 'ghost_owner'", owner.authenticate("ghost_owner", "ghost_owner1234"), "OK")
+        check_status("CREATE_DATABASE 'ghost_owned_db' - ghost_owner becomes the owner",
+                     owner.send({"type": "CREATE_DATABASE", "databaseName": "ghost_owned_db"}), "OK")
+
+    check_status("DELETE_USER 'ghost_owner'", delete_user(c, "ghost_owner"), "OK")
+    check_status("CREATE_USER 'ghost_owner' again for someone else",
+                 create_user(c, "ghost_owner", "ghost_owner5678", global_perms=["CREATE_DATABASE"]), "OK")
+    with Conn() as impostor:
+        check_status("AUTHENTICATE as the new 'ghost_owner'",
+                     impostor.authenticate("ghost_owner", "ghost_owner5678"), "OK")
+        check_status("the new 'ghost_owner' cannot drop the old one's database",
+                     impostor.send({"type": "DROP_DATABASE", "databaseName": "ghost_owned_db"}), "FORBIDDEN")
+
+    check_status("the admin can still give the ownerless database an owner",
+                 set_database_owners(c, "ghost_owned_db", ["ghost_owner"]), "OK")
+    c.send({"type": "DROP_DATABASE", "databaseName": "ghost_owned_db"})
+    delete_user(c, "ghost_owner")
+
+
+def test_a_session_does_not_survive_its_user_being_recreated(c):
+    section("An open connection does not become the user later created under its deleted name")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    delete_user(c, "recycled_name")
+    check_status("CREATE_USER 'recycled_name' with READ on auth_db",
+                 create_user(c, "recycled_name", "recycled_old1234", db_perms={"auth_db": "READ"}), "OK")
+    find_doc1 = {"type": "FIND_BY_ID", "databaseName": "auth_db", "collectionName": "allowed", "_id": "doc1"}
+    with Conn() as old_session:
+        check_status("AUTHENTICATE as 'recycled_name'",
+                     old_session.authenticate("recycled_name", "recycled_old1234"), "OK")
+        check_status("FIND_BY_ID as 'recycled_name'", old_session.send(find_doc1), "OK")
+
+        check_status("DELETE_USER 'recycled_name'", delete_user(c, "recycled_name"), "OK")
+        check_status("CREATE_USER 'recycled_name' again for someone else, with READ_WRITE",
+                     create_user(c, "recycled_name", "recycled_new5678",
+                                 db_perms={"auth_db": "READ_WRITE"}), "OK")
+
+        check_code("the old connection must authenticate again", old_session.send(find_doc1),
+                   "UNAUTHENTICATED", "401-1")
+        check_code("and cannot write with the new user's permissions",
+                   old_session.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
+                                     "object": {"_id": "recycled_write", "value": 1}}),
+                   "UNAUTHENTICATED", "401-1")
+        check_status("the old password no longer authenticates",
+                     old_session.authenticate("recycled_name", "recycled_old1234"), "ERROR")
+        check_status("the new password authenticates the connection again",
+                     old_session.authenticate("recycled_name", "recycled_new5678"), "OK")
+        check_status("FIND_BY_ID after re-authenticating", old_session.send(find_doc1), "OK")
+
+    delete_user(c, "recycled_name")
+
+
+def test_a_deleted_user_can_still_roll_back(c):
+    section("A connection whose user was deleted mid-transaction can still roll back")
+
+    check_status("AUTHENTICATE as admin", c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD), "OK")
+    delete_user(c, "doomed_writer")
+    c.send({"type": "DELETE", "databaseName": "auth_db", "collectionName": "allowed", "_id": "held_by_doomed"})
+    check_status("CREATE_USER 'doomed_writer' with READ_WRITE on auth_db",
+                 create_user(c, "doomed_writer", "doomed_writer1234", db_perms={"auth_db": "READ_WRITE"}), "OK")
+    held_save = {"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
+                 "object": {"_id": "held_by_doomed", "value": 1}}
+    with Conn() as doomed:
+        check_status("AUTHENTICATE as 'doomed_writer'", doomed.authenticate("doomed_writer", "doomed_writer1234"),
+                     "OK")
+        check_status("START_TRANSACTION", doomed.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("SAVE inside the transaction takes the collection lock", doomed.send(held_save), "OK")
+
+        check_status("DELETE_USER 'doomed_writer'", delete_user(c, "doomed_writer"), "OK")
+
+        check_code("COMMIT is refused once the user is gone", doomed.send({"type": "COMMIT_TRANSACTION"}),
+                   "UNAUTHENTICATED", "401-1")
+        check_status("ROLLBACK still ends the transaction", doomed.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
+        check_status("the admin can write the collection without waiting for the socket to close",
+                     c.send({"type": "SAVE", "databaseName": "auth_db", "collectionName": "allowed",
+                             "object": {"_id": "after_rollback", "value": 2}}), "OK")
+        check_status("the rolled-back write never landed",
+                     c.send({"type": "FIND_BY_ID", "databaseName": "auth_db", "collectionName": "allowed",
+                             "_id": "held_by_doomed"}), "NOT_FOUND")
+        check_code("with no transaction left, ROLLBACK needs authentication again",
+                   doomed.send({"type": "ROLLBACK_TRANSACTION"}), "UNAUTHENTICATED", "401-1")
+
+    c.send({"type": "DELETE", "databaseName": "auth_db", "collectionName": "allowed", "_id": "after_rollback"})
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Main
 # ══════════════════════════════════════════════════════════════════════════
@@ -577,6 +792,9 @@ def main():
         create_user(c, "db_reader", "db_reader1234", db_perms={"auth_db": "READ"})
         create_user(c, "coll_reader", "coll_reader1234",
                     coll_perms={"auth_db|allowed": "READ"})
+        create_user(c, "carve_user", "carve_user1234",
+                    db_perms={"auth_db": "READ_WRITE"},
+                    coll_perms={"auth_db|carved": "READ"})
         create_user(c, "db_maker", "db_maker1234",
                     global_perms=["CREATE_DATABASE"])
         create_user(c, "new_owner", "new_owner1234")
@@ -598,6 +816,9 @@ def main():
         test_collection_permission_boundary(c)
 
     with Conn() as c:
+        test_collection_carve_out(c)
+
+    with Conn() as c:
         test_admin_operations(c)
 
     with Conn() as c:
@@ -612,11 +833,27 @@ def main():
     with Conn() as c:
         test_ownership(c)
 
+    with Conn() as c:
+        test_owners_of_a_dropped_database(c)
+
+    with Conn() as c:
+        test_grants_do_not_survive_a_drop_and_recreate(c)
+
+    with Conn() as c:
+        test_a_deleted_users_name_does_not_inherit_ownership(c)
+
+    with Conn() as c:
+        test_a_session_does_not_survive_its_user_being_recreated(c)
+
+    with Conn() as c:
+        test_a_deleted_user_can_still_roll_back(c)
+
     # ── cleanup ────────────────────────────────────────────────────────
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(c)
-        for u in ("no_perms", "db_reader", "coll_reader", "db_maker", "new_owner", "pwd_user"):
+        for u in ("no_perms", "db_reader", "coll_reader", "carve_user", "db_maker", "new_owner",
+                  "pwd_user"):
             delete_user(c, u)
 
     # ── summary ───────────────────────────────────────────────────────

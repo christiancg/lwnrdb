@@ -60,9 +60,9 @@ public class IndexHelperTest {
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
-        cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
-        cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
-        cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj3));
+        TestUtils.cacheEntry(cache, dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
+        TestUtils.cacheEntry(cache, dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
+        TestUtils.cacheEntry(cache, dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj3));
 
         IndexHelper.createIndex(dbName, collName, fieldName);
         final var index = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
@@ -92,8 +92,8 @@ public class IndexHelperTest {
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var adminCollPkIndexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, adminCollPkIndexEntry);
-        cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
-        cache.addEntryToCache(dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
+        TestUtils.cacheEntry(cache, dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj1));
+        TestUtils.cacheEntry(cache, dbName, collName, DbEntry.fromJsonObject(dbName, collName, obj2));
 
         IndexHelper.createIndex(dbName, collName, fieldName);
         final var index = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, Double.class);
@@ -106,7 +106,7 @@ public class IndexHelperTest {
     }
 
     @Test
-    public void test_drop_index_success() throws IOException {
+    public void test_drop_index_success() throws IOException, InterruptedException {
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
         String fieldName = "testField";
@@ -118,7 +118,7 @@ public class IndexHelperTest {
     }
 
     @Test
-    public void test_drop_index_nonexistent_collection() {
+    public void test_drop_index_nonexistent_collection() throws InterruptedException {
         String dbName = TestGlobals.DB;
         String collName = "nonExistentColl";
         String fieldName = "testField";
@@ -127,7 +127,7 @@ public class IndexHelperTest {
     }
 
     @Test
-    public void test_drop_index_existent_collection_but_no_index() {
+    public void test_drop_index_existent_collection_but_no_index() throws InterruptedException {
         String dbName = TestGlobals.DB;
         String collName = TestGlobals.COLL;
         String fieldName = "testField";
@@ -144,12 +144,12 @@ public class IndexHelperTest {
         return e;
     }
 
-    private void setupCollection(Cache cache, DbEntry... entries) {
+    private void setupCollection(Cache cache, DbEntry... entries) throws IOException {
         final var adminCollEntry = new AdminCollEntry(TestGlobals.DB, TestGlobals.COLL);
         final var pk = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "x", 0, 100, 0);
         cache.putAdminCollectionEntry(adminCollEntry, pk);
         for (var entry : entries) {
-            cache.addEntryToCache(TestGlobals.DB, TestGlobals.COLL, entry);
+            TestUtils.cacheEntry(cache, TestGlobals.DB, TestGlobals.COLL, entry);
         }
     }
 
@@ -175,7 +175,7 @@ public class IndexHelperTest {
     }
 
     @Test
-    public void test_create_index_with_object_and_array_values() throws IOException {
+    public void test_create_index_with_object_and_array_values() throws IOException, InterruptedException {
         Cache cache = IocContainer.get(Cache.class);
         setupCollection(cache, entryWith("o1", objectValue(1)), entryWith("o2", objectValue(1)),
                 entryWith("o3", objectValue(2)), entryWith("a1", arrayValue()),

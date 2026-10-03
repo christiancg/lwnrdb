@@ -6,19 +6,26 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ShutdownCoordinator;
+import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.InFlightRequests;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -94,6 +101,43 @@ public class ShutdownCoordinatorTest {
     }
 
     @Test
+    public void test_rollback_releases_locks_acquired_on_another_thread() throws Exception {
+        final var coll = "shutdown_cross_thread";
+        IocContainer.get(org.techhouse.ops.OperationProcessor.class)
+                .processMessage(new org.techhouse.ops.req.CreateCollectionRequest(TestGlobals.DB, coll));
+        final var session = clientTracker.registerTxSession("shutdown-session", "alice", "edge");
+        session.submit(() -> {
+            TransactionOperationHelper.start(session.clientId());
+            final var request = new SaveRequest(TestGlobals.DB, coll);
+            request.setObject(document("cross-thread"));
+            request.set_id("cross-thread");
+            return TransactionOperationHelper.bufferSave(request,
+                    clientTracker.getActiveTransaction(session.clientId()));
+        }).get();
+        final var held = clientTracker.getActiveTransaction(session.clientId()).getHeldLocks();
+        assertFalse(held.isEmpty(), "the buffered write should hold a lock on the session's own thread");
+
+        TransactionOperationHelper.rollbackOpenTransactionsAtShutdown();
+
+        final var locks = IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
+        final var acquired = new java.util.concurrent.atomic.AtomicBoolean();
+        final var other = new Thread(() -> {
+            try {
+                locks.lock(TestGlobals.DB, coll);
+                acquired.set(true);
+                locks.release(TestGlobals.DB, coll);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        other.start();
+        other.join(5000);
+
+        assertTrue(acquired.get(), "a lock taken on another thread must be released by that thread's own rollback");
+        clientTracker.removeTxSession("shutdown-session");
+    }
+
+    @Test
     public void test_shutdown_rolls_back_an_open_transaction_and_releases_its_lock() {
         final var clientId = clientTracker.registerForwardedClient("alice");
         TransactionOperationHelper.start(clientId);
@@ -150,5 +194,80 @@ public class ShutdownCoordinatorTest {
         coordinator().shutdown(null, null);
 
         assertNotNull(IocContainer.get(Cache.class).getUserDatabaseNames());
+    }
+
+    @Test
+    public void test_shutdown_stays_inside_its_budget_with_a_retry_pending() throws Exception {
+        final var configuration = org.techhouse.config.Configuration.getInstance();
+        final var original = configuration.getShutdownTimeoutMs();
+        TestUtils.setPrivateField(configuration, "shutdownTimeoutMs", 3_000L);
+        final var triggerExecutor = IocContainer.get(org.techhouse.bckg_ops.TriggerExecutor.class);
+        triggerExecutor.start(_ -> {
+        });
+        triggerExecutor.submitAfter(
+                new org.techhouse.bckg_ops.events.TriggerEvent(org.techhouse.bckg_ops.events.EventType.CREATED,
+                        TestGlobals.DB, TestGlobals.COLL, "t", "p", false, java.util.List.of(), "alice", 0, null),
+                60_000L);
+        try {
+            final var start = System.currentTimeMillis();
+            new ShutdownCoordinator().shutdown(null, null);
+            final var elapsed = System.currentTimeMillis() - start;
+
+            assertTrue(elapsed < 3_000L,
+                    "a retry parked on the backoff scheduler must not hold the shutdown to its full budget, but it"
+                            + " took " + elapsed + "ms");
+        } finally {
+            TestUtils.setPrivateField(configuration, "shutdownTimeoutMs", original);
+        }
+    }
+
+    @Test
+    public void test_the_schedule_ticker_stops_before_the_triggers_drain() throws Exception {
+        final var schedules = IocContainer.get(ScheduleExecutor.class);
+        schedules.start(_ -> {
+        });
+        final var tickerRunningAtTriggerDrain = new AtomicBoolean(true);
+        final var triggers = mock(TriggerExecutor.class);
+        when(triggers.drain(anyLong())).thenAnswer(_ -> {
+            tickerRunningAtTriggerDrain
+                    .set(TestUtils.getPrivateField(schedules, "scheduler", ScheduledExecutorService.class) != null);
+            return true;
+        });
+        final var coordinator = coordinator();
+        TestUtils.setPrivateField(coordinator, "triggerExecutor", triggers);
+
+        coordinator.shutdown(null, null);
+
+        assertFalse(tickerRunningAtTriggerDrain.get(),
+                "a scheduled run firing during the trigger drain would enqueue into a draining executor");
+    }
+
+    @Test
+    public void test_the_drains_wait_for_a_request_still_in_flight() throws Exception {
+        final var inFlight = IocContainer.get(InFlightRequests.class);
+        final var idleAtTriggerDrain = new AtomicBoolean(false);
+        final var triggers = mock(TriggerExecutor.class);
+        when(triggers.drain(anyLong())).thenAnswer(_ -> {
+            idleAtTriggerDrain.set(inFlight.current() == 0);
+            return true;
+        });
+        inFlight.enter();
+        final var leaving = new Thread(() -> {
+            try {
+                Thread.sleep(300);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            inFlight.exit();
+        });
+        leaving.start();
+        final var coordinator = coordinator();
+        TestUtils.setPrivateField(coordinator, "triggerExecutor", triggers);
+
+        coordinator.shutdown(null, null);
+        leaving.join();
+
+        assertTrue(idleAtTriggerDrain.get(),
+                "a write still running when the drains start submits its index events into a draining queue");
     }
 }

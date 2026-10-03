@@ -182,4 +182,60 @@ public class FileSystemIndexUnicodeTest {
         assertEquals(Set.of("id3"), index.get(CJK));
         assertEquals(Set.of("id4"), index.get(EMOJI));
     }
+
+    @Test
+    public void test_lone_surrogate_value_round_trips_through_index_file() throws Exception {
+        final var fileSystem = fs();
+        final var value = "a\ud800b";
+
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(value, "id1"), null);
+
+        final var index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
+        assertNotNull(index);
+        assertEquals(1, index.size());
+        assertEquals(value, index.getFirst().getValue());
+        assertDoesNotThrow(() -> Files.readAllLines(indexFile().toPath(), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void test_two_lone_surrogate_values_occupy_two_distinct_lines() throws Exception {
+        final var fileSystem = fs();
+
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a\ud800b", "hi"), null);
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a\udc00b", "lo"), null);
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a?b", "plain"), null);
+
+        final var index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
+        assertNotNull(index);
+        final var values = byValue(index);
+        assertEquals(3, values.size());
+        assertEquals(Set.of("hi"), values.get("a\ud800b"));
+        assertEquals(Set.of("lo"), values.get("a\udc00b"));
+        assertEquals(Set.of("plain"), values.get("a?b"));
+    }
+
+    @Test
+    public void test_updating_a_lone_surrogate_entry_leaves_siblings_intact() throws Exception {
+        final var fileSystem = fs();
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a\ud800b", "hi"), null);
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("a?b", "plain"), null);
+
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry("zzz", "hi"), entry("a\ud800b"));
+
+        final var index = fileSystem.readWholeFieldIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, String.class);
+        assertNotNull(index);
+        final var values = byValue(index);
+        assertEquals(Set.of("plain"), values.get("a?b"), "an unrelated value must survive the update");
+        assertEquals(Set.of("hi"), values.get("zzz"));
+    }
+
+    @Test
+    public void test_paired_surrogate_value_is_stored_raw() throws Exception {
+        final var fileSystem = fs();
+
+        fileSystem.updateIndexFiles(TestGlobals.DB, TestGlobals.COLL, FIELD, entry(EMOJI, "id1"), null);
+
+        final var raw = Files.readString(indexFile().toPath(), StandardCharsets.UTF_8);
+        assertTrue(raw.startsWith(EMOJI), "a paired surrogate must not be escaped");
+    }
 }

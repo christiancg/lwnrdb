@@ -168,9 +168,28 @@ public class TransactionClusterIntegrationTest {
     }
 
     @Test
+    public void test_forwarded_transaction_preserves_the_trigger_depth() throws Exception {
+        final var sessionId = "sess-depth";
+        final var request = saveRequest(TestGlobals.COLL, "depth-doc");
+        request.setTriggerDepth(2);
+
+        final var response = pool.request(cluster.serverAddress(), forwardTx(sessionId, request), 2000);
+
+        assertEquals(ClusterMessageType.FORWARD_RESPONSE, response.getType());
+        final var session = clientTracker.txSession(sessionId);
+        assertNotNull(session, "the forwarded op must have opened a session");
+        final var transaction = clientTracker.getActiveTransaction(session.clientId());
+        assertNotNull(transaction);
+        assertEquals(2, transaction.getTriggerDepth(),
+                "a slice started for a forwarded trigger write must inherit its depth, or the cascade is unbounded");
+        pool.request(cluster.serverAddress(),
+                control(ClusterMessageType.ABORT_TX, sessionId, session.clientId().toString()), 2000);
+    }
+
+    @Test
     public void test_replicate_tx_applies_batch() throws Exception {
         final var entry = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                List.of(doc("rep-tx")), null, List.of(7L));
+                List.of(doc("rep-tx")), null, List.of("7"));
         final var message = new ClusterMessage(null, ClusterMessageType.REPLICATE_TX, SECRET, node("edge", 1), null);
         message.setTxReplication(new TxReplicationPayload(List.of(entry)));
         final var response = pool.request(cluster.serverAddress(), message, 2000);
@@ -221,8 +240,8 @@ public class TransactionClusterIntegrationTest {
         final var unknown = pool.request(cluster.serverAddress(), control(ClusterMessageType.TX_STATUS, null, dtxId),
                 2000);
         assertEquals(ClusterMessageType.TX_STATUS_ACK, unknown.getType());
-        assertEquals("UNKNOWN", unknown.getTxStatus());
-        org.techhouse.ops.Tx2pcLog.recordCoordinatorCommit(dtxId, List.of("127.0.0.1:1"));
+        assertEquals("NO_RECORD", unknown.getTxStatus());
+        org.techhouse.ops.Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of("127.0.0.1:1"));
         final var committed = pool.request(cluster.serverAddress(), control(ClusterMessageType.TX_STATUS, null, dtxId),
                 2000);
         assertEquals(ClusterMessageType.TX_STATUS_ACK, committed.getType());
@@ -233,6 +252,7 @@ public class TransactionClusterIntegrationTest {
     public void test_transaction_write_binds_and_forwards_to_owner() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
+        createCollection(coll);
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
 
@@ -289,7 +309,8 @@ public class TransactionClusterIntegrationTest {
     }
 
     @Test
-    public void test_single_remote_commit_uses_fast_path() throws Exception {
+    public void test_single_remote_commit_refuses_when_the_receiving_node_does_not_own_the_collection()
+            throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
         createCollection(coll);
@@ -300,10 +321,10 @@ public class TransactionClusterIntegrationTest {
         final var commit = new CommitTransactionRequest();
         final var relayed = router.forward(commit, eJson.toJson(commit), true, "admin", clientId);
         assertNotNull(relayed);
-        assertTrue(relayed.contains("committed"), "expected committed response, got: " + relayed);
+        assertTrue(relayed.contains("421-1"), "expected NOT_COLLECTION_OWNER, got: " + relayed);
         final var find = new FindByIdRequest(TestGlobals.DB, coll);
         find.set_id("fastpath");
-        assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus());
+        assertEquals(OperationStatus.NOT_FOUND, processor.processMessage(find).getStatus());
         assertNull(clientTracker.getActiveTransaction(clientId));
     }
 
@@ -311,6 +332,7 @@ public class TransactionClusterIntegrationTest {
     public void test_transaction_read_forwarded_to_participant() throws Exception {
         configureMembership(2, node("self", 19990), node("other", cluster.serverPort()));
         final var coll = collectionOwnedByOther();
+        createCollection(coll);
         final var clientId = newClient();
         processor.processMessage(new StartTransactionRequest(), clientId);
         final var save = saveRequest(coll, "read-yw");

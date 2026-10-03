@@ -323,7 +323,14 @@ public class UserCacheEntryTest {
         final var readEntry = DbEntry.fromJsonObject("userDb", "c1", readObj);
         when(fsMock.getByIndexEntries(anyList())).thenReturn(List.of(readEntry));
 
-        final var result = cache.getEntriesByIds("userDb", "c1", new HashSet<>(Set.of("id1", "id2")));
+        final var locks = IocContainer.get(org.techhouse.concurrency.ResourceLocking.class);
+        locks.lockRead("userDb", "c1");
+        final List<DbEntry> result;
+        try {
+            result = cache.getEntriesByIds("userDb", "c1", new HashSet<>(Set.of("id1", "id2")));
+        } finally {
+            locks.releaseRead("userDb", "c1");
+        }
 
         assertEquals(2, result.size());
         final var captor = org.mockito.ArgumentCaptor.forClass(List.class);
@@ -338,5 +345,77 @@ public class UserCacheEntryTest {
         };
         final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
         assertTrue(collectionMap.get(collId).containsKey("id2"));
+    }
+
+    @Test
+    public void test_a_lockless_reader_does_not_admit_a_document() throws Exception {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        final var idxEntry = new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0);
+        final var obj = new JsonObject();
+        obj.addProperty(Globals.PK_FIELD, "id1");
+        when(fsMock.getById(any())).thenReturn(DbEntry.fromJsonObject("userDb", "c1", obj));
+
+        final var result = cache.getById("userDb", "c1", idxEntry);
+
+        assertNotNull(result);
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var inner = collectionMap.get(collId);
+        assertTrue(inner == null || !inner.containsKey("id1"),
+                "a reader holding no collection lock must not publish into the shared map: a writer can commit a"
+                        + " newer version or a delete between its disk read and the put");
+    }
+
+    @Test
+    public void test_a_locked_reader_still_admits_a_document() throws Exception {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        final var idxEntry = new PkIndexEntry("userDb", "c1", "id1", 0, 50, 0);
+        final var obj = new JsonObject();
+        obj.addProperty(Globals.PK_FIELD, "id1");
+        when(fsMock.getById(any())).thenReturn(DbEntry.fromJsonObject("userDb", "c1", obj));
+
+        final var locks = IocContainer.get(ResourceLocking.class);
+        locks.lockRead("userDb", "c1");
+        try {
+            cache.getById("userDb", "c1", idxEntry);
+        } finally {
+            locks.releaseRead("userDb", "c1");
+        }
+
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        assertTrue(collectionMap.get(collId).containsKey("id1"));
+    }
+
+    @Test
+    public void test_a_lockless_getEntriesByIds_does_not_admit_documents() throws Exception {
+        UserCache cache = new UserCache();
+        FileSystem fsMock = mock(FileSystem.class);
+        TestUtils.setPrivateField(cache, "fs", fsMock);
+
+        final var collId = Cache.getCollectionIdentifier("userDb", "c1");
+        injectPkIndex(cache, collId, List.of(new PkIndexEntry("userDb", "c1", "id2", 0, 50, 0)));
+        final var readObj = new JsonObject();
+        readObj.addProperty(Globals.PK_FIELD, "id2");
+        when(fsMock.getByIndexEntries(anyList())).thenReturn(List.of(DbEntry.fromJsonObject("userDb", "c1", readObj)));
+
+        final var result = cache.getEntriesByIds("userDb", "c1", new HashSet<>(Set.of("id2")));
+
+        assertEquals(1, result.size());
+        final var type = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
+        };
+        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", type);
+        final var inner = collectionMap.get(collId);
+        assertTrue(inner == null || !inner.containsKey("id2"));
     }
 }

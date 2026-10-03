@@ -63,10 +63,37 @@ engine itself is closed (see [docs/simplejs.md](docs/simplejs.md) → *Engine st
 
 All messages are line-delimited JSON sent over a TCP connection. Every request must include a `type` field. Responses always contain `type`, `status` (`OK`, `ERROR`, `NOT_FOUND`, `UNAUTHENTICATED`, `FORBIDDEN`), and `message`. Error responses also include an `errorCode` field (absent on success) with the format `NNN-N` — a three-digit HTTP-style range prefix and a sequential number (e.g. `401-1`). The 4xx range covers client errors; 5xx covers server errors; 503 means the server is temporarily unavailable.
 
+A request may nest objects and arrays at most 128 levels deep, counted from the request's own root object. A deeper request is refused as an invalid command, and a script's `db.save`/`db.bulkSave` refuses a document nested more than 128 levels. Documents stored before this limit existed stay readable.
+
 ### Naming rules
 
-- **Database / collection names**: 3–64 characters, alphanumeric + `_` and `-`. The name `admin` is reserved.
+- **Database / collection names**: 3–64 characters, alphanumeric + `_` and `-`. The names `admin` and
+  `admin_pages` are reserved, and the collection name `script_runs` is reserved; all three are matched
+  case-insensitively, so `Admin` is refused too.
 - **IDs (`_id`)**: 1–64 characters, alphanumeric + `_` and `-`.
+- **Index field names**: 1–64 characters from `A-Z a-z 0-9 _ . -`. A dot addresses a nested path
+  (`address.city`). A field whose name falls outside this set cannot be indexed, but stays fully
+  queryable — `FILTER` answers it with a collection scan, as it does for any unindexed field.
+- **Names must differ by more than case.** Every name above becomes a path segment or a file name on
+  disk, and a case-insensitive filesystem (macOS APFS, Windows NTFS) would give two such names one
+  file. `CREATE_DATABASE`, `CREATE_COLLECTION`, `CREATE_INDEX`, `SAVE_PROCEDURE` and `SAVE_SCHEDULE`
+  therefore answer `409-11` when a sibling name differs from the new one only by case. The refusal is
+  unconditional, including on a case-sensitive filesystem, so a data directory stays portable and
+  every node of a cluster agrees on which name is legal.
+
+> **Upgrade note.** Three refusals are new. A `CREATE_*` whose name differs from an existing sibling
+> only by case now answers `409-11` where it used to succeed; a `CREATE_INDEX` on a field name
+> outside `A-Z a-z 0-9 _ . -` now answers `400-1`; and `admin`, `admin_pages` and `script_runs` are
+> matched case-insensitively, so `Admin` is refused as reserved rather than resolving to the internal
+> `admin` database. If you already run on a case-insensitive filesystem, look for databases,
+> collections, indexed fields or procedures whose names differ only by case before upgrading: they
+> already share one set of files, and the server names them at startup with a
+> *"share one on-disk path"* warning.
+>
+> Separately, a field index written by an earlier version that holds a string containing an unpaired
+> surrogate stores that character as `?`, which collapses distinct values onto one key. Run
+> [`REINDEX`](#reindex) once on any such collection after upgrading; the rebuild now writes those
+> values escaped.
 
 ### Operations
 
@@ -108,6 +135,15 @@ All messages are line-delimited JSON sent over a TCP connection. Every request m
 ```json
 {"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","object":{"_id":"user-1","name":"Alice"}}
 ```
+The id may also be sent beside the object instead of inside it; the two forms address the same document. When both are present the object's `_id` wins.
+```json
+{"type":"SAVE","databaseName":"my_db","collectionName":"my_coll","_id":"user-1","object":{"name":"Alice"}}
+```
+Every number is stored as an IEEE-754 double, and a request carrying one outside that range —
+`1e400`, `-1e400`, or a digit string that overflows — is refused as an unparseable command rather
+than stored. Earlier versions answered `OK` and wrote `null` in its place, so the cached document and
+the stored one disagreed until the next restart. `Infinity` and `NaN` were already refused as invalid
+JSON.
 
 #### `BULK_SAVE`
 At least one object required.
@@ -150,16 +186,20 @@ Also accepts an optional top-level `"analyze": true` (default `false`); see [Exp
 
 | Step | Required fields | Notes |
 |---|---|---|
-| `FILTER` | `operator` | Field or conjunction operator |
-| `MAP` | `operators` (non-empty) | Each operator needs `fieldName` |
-| `GROUP_BY` | `fieldName` | |
-| `JOIN` | `joinCollection`, `localField`, `remoteField`, `asField` | `joinCollection` must satisfy naming rules; the user must also have `READ` on `joinCollection` |
+| `FILTER` | `operator` | Field or conjunction operator; a field operator needs `field`, `fieldOperatorType` and `value` |
+| `MAP` | `operators` (non-empty) | Each operator needs `fieldName`; a dotted `fieldName` writes or removes a nested field |
+| `GROUP_BY` | `fieldName` | A dotted `fieldName` emits its key nested: `a.b` → `{"a":{"b":…},"group":[…]}` |
+| `JOIN` | `joinCollection`, `localField`, `remoteField`, `asField` | `joinCollection` must satisfy naming rules; the user must also have `READ` on `joinCollection`; a dotted `asField` nests the joined array |
 | `COUNT` | — | Returns `{"count": N}` |
-| `DISTINCT` | — | `fieldName` is optional; omitting it deduplicates whole documents |
+| `DISTINCT` | — | `fieldName` is optional; omitting it deduplicates whole documents; a dotted `fieldName` emits its value nested |
 | `LIMIT` | `limit` (> 0) | |
 | `SKIP` | `skip` (>= 0) | |
 | `SORT` | `fieldName`, `ascending` | |
-| `REDUCE` | `script` | Folds the whole stream into one document; optional `initialValue` (default JSON null) and `resultField` (default `value`) |
+| `REDUCE` | `script` | Folds the whole stream into one document; optional `initialValue` (default JSON null) and `resultField` (default `value`, nested when dotted) |
+
+A field name a step *writes* follows the same dotted-path rule every step uses to *read* one, so a later `FILTER`, `SORT` or `GROUP_BY` on the same name finds what an earlier step wrote. A non-object value standing where the path needs an object is replaced by one in the step's output (never in the stored document).
+
+**Result order.** A pipeline that ends in `SORT` — or whose last order-determining step is a `SORT` — is fully ordered. Otherwise the order in which documents are enumerated is unspecified, so a `LIMIT` or `SKIP` used as the pipeline's source returns an unspecified subset, exactly as a SQL `LIMIT` without an `ORDER BY` does. `REDUCE` is the exception, because its *value* and not just its row order depends on the enumeration: when `REDUCE` is the pipeline's source it folds in a defined order (by page, then by `_id`), so a non-commutative fold answers the same before and after a restart or an eviction. Put a `SORT` in front of `REDUCE` to choose a different order — any other preceding step hands it the unspecified one. The arrays a step builds are ordered too: a `GROUP_BY` group and a `JOIN`'s `asField` list their documents by `_id`, so the same query answers identically whether it was resolved through an index or a full scan.
 
 `GROUP_BY`, `JOIN`, `SORT`, and `DISTINCT` use a single-field index when one exists on the step's field and the step is the first step in the pipeline; otherwise they fall back to a full scan. These steps use only the scalar/custom/null indexes, so documents whose indexed field holds a JSON object or array are not represented in index-backed `GROUP_BY`/`SORT`/`DISTINCT` results (see [Memory management → Streaming reads](#memory-management)). 
 Object- and array-valued fields are instead indexed for **element-match** (whole-value equality): a `FILTER` with `EQUALS`, `NOT_EQUALS`, `IN`, or `NOT_IN` hashes the object/array and resolves it through a dedicated per-kind hash index (`…-Object.idx` / `…-Array.idx`).
@@ -168,7 +208,26 @@ A collection may also carry a single JSON Schema stored alongside its data files
 
 **Field operator types:** `EQUALS`, `NOT_EQUALS`, `GREATER_THAN`, `GREATER_THAN_EQUALS`, `SMALLER_THAN`, `SMALLER_THAN_EQUALS`, `IN`, `NOT_IN`, `CONTAINS`
 
+`EQUALS`, `NOT_EQUALS`, `IN` and `NOT_IN` all share one notion of equality: strings compare case-insensitively, custom types compare semantically (so `#datetime(2024-01-01T10:00)` equals `#datetime(2024-01-01T10:00:00)`), numbers compare by value, and objects and arrays compare as whole values — element by element, where a nested custom value still compares semantically and a nested string compares exactly. The same holds for `CONTAINS` of a scalar in an array-valued field, except that a string element there compares exactly. An object/array hash index written before semantic hashing of nested custom values needs one `REINDEX` of that field. The primary key is the one exception — a `FILTER` on `_id` compares exactly, matching `FIND_BY_ID`, `SAVE` and `DELETE`. `CONTAINS` on a string is a case-sensitive substring test. A `null` operand is only ever an equality test: `EQUALS null` returns exactly the documents whose field is `null` and `NOT_EQUALS null` exactly those whose field is not, while the ordering operators and `CONTAINS` return nothing. Against a non-null operand, a document whose field is `null` is matched by `NOT_EQUALS` — `null` equals no other value — and by no other operator. In an `IN`/`NOT_IN` list, `null` is a value like any other: a `null` field is a member of a list holding `null` (`IN [1, null]` matches it, `NOT_IN [1, null]` does not) and of no other list. A document that lacks the field is excluded by every operator.
+
+`SORT` orders by that same comparison, so the ordering operators and the sort agree: a custom type is ordered by its own comparator (chronologically for `#datetime`/`#time`, by geohash for `#geo`, by SimHash signature for `#vector`), never by the text of its wire form. Two values the comparison calls equal — `#datetime(2024-01-01T10:00)` and `#datetime(2024-01-01T10:00:00)` — therefore tie in a `SORT` and break on `_id`, exactly as two equal numbers or strings do. On a field that holds both plain strings and custom values, every custom value sorts after every plain string; values of different types are ranked boolean, number, string, custom, and that ranking is identical on every node.
+
+Every field operator requires a `value`, including the ones whose operand is conceptually empty — omitting the member is refused with `400-1` rather than being read as a null operand. Spell a null operand as an explicit JSON `null` (`"value": null`).
+
 **Conjunction operator types:** `AND`, `OR`, `NOR`, `XOR`, `NAND`
+
+#### The `CAST` mid-operator
+
+A `MAP` `ADD_FIELD` may carry a `CAST` mid-operator (`fieldName`, `toType`, plus `customTypeName` for `JSON_CUSTOM`). A cast that cannot produce a value of the target type sets the field to `null` rather than to a manufactured one, on every target type:
+
+- `NUMBER` accepts only the number syntax the wire protocol itself accepts — digits, a leading `-`, a decimal point, and an `e`/`E` exponent. Java-only spellings (`0x1p3`, `1d`, `+1`), surrounding whitespace, `Infinity` and `NaN` all answer `null`, as does an exponent that overflows a double. An integral result narrows exactly as a wire-parsed number does, so a cast `5` and a stored `5` are indistinguishable.
+- `BOOLEAN` accepts `true` and `false` case-insensitively; every other string answers `null`. A number casts to `value != 0`.
+- `STRING` renders a number with the same formatter that writes documents, and a custom type as its data value.
+- `JSON_CUSTOM` answers `null` when the source string is not a valid value of the named type.
+
+#### The `CONCAT` mid-operator
+
+`CONCAT` joins its operands into one string. A top-level string operand is a **field path** unless it carries the string-literal prefix `-`; a string inside an array operand is always a literal. A `null` operand contributes the text `null`, and so does a top-level field path the document does not hold — in both operand positions, and whether the null was written literally or read from a null-valued field.
 
 #### Script operators (SimpleJS in the pipeline)
 
@@ -294,6 +353,7 @@ Returned even when there are no results: in analyze mode an empty result set sti
 ```json
 {"type":"CREATE_INDEX","databaseName":"my_db","collectionName":"my_coll","fieldName":"email"}
 ```
+Answers `404-11` when the collection does not exist (`503-10` on a cluster node it has not reached yet), like the write operations; `script_runs` can be indexed once the first recorded run has created it. Creating an index that already exists answers `OK` without rebuilding it.
 
 #### `DROP_INDEX`
 ```json
@@ -405,6 +465,8 @@ The connection's own reads (`FIND_BY_ID`, `AGGREGATE`) see its buffered writes (
 See [Concurrency & locking](#concurrency--locking).
 
 While a transaction is open only `SAVE`, `BULK_SAVE`, `DELETE`, `FIND_BY_ID`, `AGGREGATE`, `COMMIT_TRANSACTION`, `ROLLBACK_TRANSACTION` and `CLOSE_CONNECTION` are accepted; any other operation is rejected with `409-6`. 
+
+If a buffered write cannot take a collection's write lock within `transactionLockTimeoutMs` the transaction is aborted: that statement answers `409-5`, its buffered writes are discarded and its locks released. The transaction stays open but unusable — every further `SAVE`, `BULK_SAVE`, `DELETE`, `FIND_BY_ID` and `AGGREGATE` answers `409-9`, and so does `COMMIT_TRANSACTION`. Send `ROLLBACK_TRANSACTION` to end it and start again. This is deliberate: a retried statement must never silently commit on its own outside the transaction the client still believes it is in.
 
 If the connection closes with a transaction still open, it is automatically rolled back.
 
@@ -828,7 +890,7 @@ A collection can carry a single **JSON Schema (draft 2020-12)** that every write
 
 The reserved `_id` field is **excluded** from validation (it is a system-assigned primary key, already format-checked), so a schema with `"additionalProperties": false` does not need to declare it.
 
-**Supported keywords** (a pragmatic subset of 2020-12): `type` (incl. `integer` vs `number`), `enum`, `const`; object — `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`/`maxProperties`, `dependentRequired`, `dependentSchemas`; array — `prefixItems`, `items`, `minItems`/`maxItems`, `uniqueItems`, `contains`/`minContains`/`maxContains`; string — `minLength`/`maxLength`/`pattern`; number — `minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum`/`multipleOf`; applicators — `allOf`/`anyOf`/`oneOf`/`not`/`if`/`then`/`else`; and local `$ref` (JSON-Pointer references within the same schema, e.g. `#/$defs/foo`) with `$defs`. `format` is accepted but **non-asserting** (annotation only). Metadata keywords (`$schema`, `$id`, `title`, `description`, …) are accepted; any **unrecognized** keyword is ignored but surfaced as a non-fatal `warning` on the `SAVE_SCHEMA` response. Known-but-unimplemented keywords (`unevaluatedProperties`/`unevaluatedItems`, `$dynamicRef`, remote `$ref`, `$vocabulary`) are **rejected** by `SAVE_SCHEMA` (`400-8`) so a schema author is never misled into believing an unenforced constraint applies.
+**Supported keywords** (a pragmatic subset of 2020-12): `type` (incl. `integer` vs `number`), `enum`, `const`; object — `properties`, `required`, `additionalProperties`, `patternProperties`, `propertyNames`, `minProperties`/`maxProperties`, `dependentRequired`, `dependentSchemas`; array — `prefixItems`, `items`, `minItems`/`maxItems`, `uniqueItems`, `contains`/`minContains`/`maxContains`; string — `minLength`/`maxLength`/`pattern` (`pattern`, `patternProperties` keys and `propertyNames` patterns use ECMA-262 syntax in Unicode mode, as 2020-12 specifies — the same engine as SimpleJS's `RegExp` with the `u` flag, so `$` does not match before a trailing newline and `\s` includes Unicode whitespace; Java-only syntax such as `a++` or `(?i)` is refused with `400-8`, and a schema stored with such a pattern before this rule refuses writes with `503-11` until it is re-saved); number — `minimum`/`maximum`/`exclusiveMinimum`/`exclusiveMaximum`/`multipleOf`; applicators — `allOf`/`anyOf`/`oneOf`/`not`/`if`/`then`/`else`; and local `$ref` (JSON-Pointer references within the same schema, e.g. `#/$defs/foo`) with `$defs`. `format` is accepted but **non-asserting** (annotation only). Metadata keywords (`$schema`, `$id`, `title`, `description`, …) are accepted; any **unrecognized** keyword is ignored but surfaced as a non-fatal `warning` on the `SAVE_SCHEMA` response. Known-but-unimplemented keywords (`unevaluatedProperties`/`unevaluatedItems`, `$dynamicRef`, remote `$ref`, `$vocabulary`) are **rejected** by `SAVE_SCHEMA` (`400-8`) so a schema author is never misled into believing an unenforced constraint applies.
 
 **Custom (EJson) types.** Beyond the standard `type`, a dedicated `customType` keyword asserts one of the extended types (`geo`, `vector`, `datetime`, `time`), e.g. `{"customType":"geo"}` requires a `#geo(lat,lng)` value. Custom-typed values also satisfy `"type":"string"` (they are stored as strings), but only `customType` distinguishes a geo from an arbitrary string.
 
@@ -1028,7 +1090,9 @@ Example filters:
 | `databasePermissions`   | Grants `READ` or `READ_WRITE` to all collections in a database                        |
 | `collectionPermissions` | Grants `READ` or `READ_WRITE` to a specific `database\|collection`                    |
 
-Ownership takes precedence over `databasePermissions` and `collectionPermissions`. A collection-level grant takes precedence over a database-level one. `READ_WRITE` also covers `READ`.
+Ownership takes precedence over `databasePermissions` and `collectionPermissions`. A `collectionPermissions` entry is authoritative for the collection it names: it replaces the database-level grant for that collection, so it can widen it *or* narrow it — a database `READ_WRITE` grant next to a `db|coll` entry of `READ` leaves that one collection read-only. A collection with no entry of its own falls back to `databasePermissions`. `READ_WRITE` also covers `READ`. Because [`CREATE_COLLECTION`](#create_collection) needs `READ_WRITE` on the collection it names, a `READ` entry for a name that does not exist yet also stops that user creating it. There is no collection-level way to deny reads outright: the only levels are `READ` and `READ_WRITE`.
+
+> **Upgrade note.** Earlier versions unioned the two levels, so a `collectionPermissions` entry could only ever widen a `databasePermissions` grant and a carve-out silently had no effect. A user who holds both a database `READ_WRITE` grant and a `READ` entry for one of its collections loses write access to that collection on upgrade — which is the behaviour documented above finally taking effect. Check existing users with [`LIST_USERS`](#list_users-admin-only) before rolling out if you are unsure whether any grant pairs that way.
 
 `DROP_DATABASE` requires admin privileges or ownership — the `globalPermissions` field no longer grants the ability to drop databases.
 
@@ -1050,6 +1114,7 @@ Being allowed to start a script is separate from what it may do: every operation
 
 Operations that require `READ`: `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LISTEN`, `LIST_PROCEDURES`, `LIST_TRIGGERS`, `LIST_SCHEDULES`. A `LISTEN` or `AGGREGATE` that contains a `JOIN` step additionally requires `READ` on each joined collection (in the same database); otherwise the request is rejected with `FORBIDDEN`. An `AGGREGATE` whose pipeline carries a [script operator](#script-operators-simplejs-in-the-pipeline) additionally requires `RUN`, since running code is wider than reading.  
 Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`, `SAVE_SCHEMA`, `DELETE_SCHEMA` (the last two also being available to database owners and admins, like the other DDL operations).
+`START_TRANSACTION`, `COMMIT_TRANSACTION` and `ROLLBACK_TRANSACTION` need no grant: any authenticated user may use a transaction, and every operation inside it is authorized on its own request, so a `READ` user can open one but cannot buffer a write.
 
 ### Authentication errors
 
@@ -1102,6 +1167,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-8` | `NOT_FOUND` | Procedure not found |
 | `404-9` | `NOT_FOUND` | Trigger not found |
 | `404-10` | `NOT_FOUND` | Schedule not found |
+| `404-11` | `NOT_FOUND` | Collection not found — a write (`SAVE`, `BULK_SAVE`, `DELETE`) named a collection this node has no metadata for. Definitive only when clustering is off; a clustered node answers `503-10` instead, since it cannot tell "never existed" from "not replicated here yet" |
 | `408-1` | `ERROR` | Script exceeded its time budget |
 | `408-2` | `ERROR` | Script was cancelled |
 | `409-1` | `ERROR` | User already exists |
@@ -1112,6 +1178,8 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-6` | `ERROR` | Operation not allowed while a transaction is open |
 | `409-7` | `ERROR` | Transaction aborted: a participant could not prepare |
 | `409-8` | `ERROR` | The procedure, trigger or schedule was modified by someone else |
+| `409-9` | `ERROR` | The transaction was aborted and must be rolled back before continuing |
+| `409-11` | `ERROR` | A name that differs only by case already exists and would share storage with it |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |
@@ -1153,6 +1221,10 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-5` | `ERROR` | Admin coordinator is synchronizing, retry shortly |
 | `503-6` | `ERROR` | Too many scripts running, retry shortly *(the message names the scope that refused it: `node`, `user` or `database`)* |
 | `503-7` | `ERROR` | The node the script was placed on did not report an outcome; it was not run again in case it already had *(only raised when a placed script's outcome could not be established; it is never re-run locally, so whether to retry is the caller's decision)* |
+| `503-8` | `ERROR` | The collection's owner did not report an outcome; the write may already have been applied, so retrying is only safe for an idempotent write *(distinct from `503-4`, which means the owner was provably never reached)* |
+| `503-9` | `ERROR` | The admin coordinator could not be resolved, retry shortly *(a coordinated admin op is never applied locally when no coordinator can be reached: an unreplicated DDL answered with `OK` would diverge the cluster silently)* |
+| `503-10` | `ERROR` | The collection has not reached this node yet, retry shortly *(a write routed to the collection's owner can arrive before the `CREATE_COLLECTION` that created it, since admin replication only waits for a quorum and the owner need not be in it — retryable, not a server fault)* |
+| `503-13` | `ERROR` | The server is shutting down, retry against another node or later *(answered to every request on an already-open connection once shutdown has begun, except `ROLLBACK_TRANSACTION` and `CLOSE_CONNECTION`; a write acknowledged before this point is indexed and durable, and one refused with it was not applied)* |
 
 ### Bootstrap
 
@@ -1180,6 +1252,8 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `defaultAdminPassword` | Non-blank string, at least 8 characters |
 | `maxMemory` | Human-readable size; `0` (unlimited) and `-1` (caching disabled) are also valid |
 | `transactionLockTimeoutMs` | Valid number ≥ 1. Milliseconds a write inside a transaction waits to acquire a busy collection's write lock before the transaction is aborted (`409-5`) |
+| `deadEvictionMs` | Valid number ≥ 1, and greater than `deadTimeoutMs`. Milliseconds a node must stay DEAD before it is dropped from the membership view. Until then it still counts towards the quorum denominator, so this must comfortably exceed any outage a node is expected to return from |
+| `deadProbeIntervalMs` | Valid number ≥ 1 (default `10000`), and not smaller than `gossipIntervalMs`. How often a peer this node sees as `SUSPECT` or `DEAD` is probed with a gossip message. This is how two sides of a partition that each marked the other `DEAD` find each other again once it heals |
 | `shutdownTimeoutMs` | Valid number ≥ 1 (default `15000`). Total budget for a graceful shutdown — refusing new connections, releasing open transactions, draining the trigger and background-index queues. Work still outstanding when it expires is abandoned with a warning naming what was dropped |
 | `tlsEnabled` | `true` or `false`. When `true`, every connection is encrypted and plaintext clients are rejected |
 | `tlsKeystorePath` | Path to a PKCS12 keystore. Used only when `tlsEnabled=true`; its parent directory must be writable. If the file is absent a self-signed keystore is generated there |
@@ -1410,7 +1484,7 @@ Locking is two-tier and applies to **both reads and writes** (earlier versions l
 - **Collection-level read/write locks.** Each collection (and each field index) has a read/write lock. Reads acquire a *shared* read lock; writes (`SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COLLECTION`, `DROP_COLLECTION`, `CREATE_INDEX`, `DROP_INDEX`) acquire an *exclusive* write lock. While a writer holds a collection, nobody else may read or write it; multiple readers run concurrently. An `AGGREGATE` with `JOIN` steps read-locks the primary collection and every joined collection, acquiring them in a deterministic order so overlapping queries cannot deadlock. Cache eviction only evicts a resource it can exclusively (write) lock, so it never races an in-flight read or write.
 - **File-level read/write locks.** Below the collection tier, each physical `.dat`/`.idx` file has its own read/write lock, so a file's bytes are never read while they are being rewritten.
 
-**Dirty reads.** Read operations (`FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LIST_USERS`) accept an optional `"dirtyRead": true` (default `false` = fully locked). A dirty read **skips the collection-level read lock**, so it can proceed even while a long write holds the collection. It still goes through the file-level read locks, so every page/index file it reads is individually valid (never half-written). A dirty read may observe a mix of pre- and post-write pages across a collection; that is the trade-off for not waiting.
+**Dirty reads.** Read operations (`FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS`, `LIST_USERS`) accept an optional `"dirtyRead": true` (default `false` = fully locked). A dirty read **skips the collection-level read lock**, so it can proceed even while a long write holds the collection. It still goes through the file-level read locks, so every page/index file it reads is individually valid (never half-written). A dirty read may observe a mix of pre- and post-write pages across a collection, may see a document that a concurrent write is relocating twice in one full scan (so a dirty `COUNT` can over-count), and may fail with a retryable error when a concurrent write moves a document out from under the offset it was about to read — it never answers with a *different* document than the one asked for. That is the trade-off for not waiting.
 
 **Transactions.** A connection can open a transaction (`START_TRANSACTION`) to make several writes atomic (see [Transactions](#transactions)). Writes inside a transaction are buffered in the internal `admin/transactions` collection rather than applied, and become visible to the real collections only on `COMMIT_TRANSACTION`; `ROLLBACK_TRANSACTION` discards them. Locking is **lazy**: the first buffered write to a collection acquires that collection's exclusive write lock (waiting up to `transactionLockTimeoutMs`, then aborting the transaction with `409-5` so two concurrent transactions can never deadlock) and holds it — on the connection's own virtual thread — until commit/rollback. 
 While held, other connections cannot read or write those collections, which is what keeps the committed batch atomic. The transaction's own reads apply its buffered mutations (**read-your-writes**); there is no snapshot isolation against other connections beyond that write-exclusivity. Committing replays the buffered operations through the normal write path, so field-index maintenance, page metadata and `LISTEN` notifications behave exactly as for ordinary writes. If the connection drops with a transaction open it is auto-rolled-back, and any operation records left behind by a crash are cleared at startup.

@@ -94,6 +94,63 @@ public class TriggerRunRecoveryTest {
     }
 
     @Test
+    public void test_recovery_preserves_the_attempt_count() throws Exception {
+        saveDocument();
+        for (final var entry : TriggerRunLog.pending()) {
+            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
+        }
+        captured.clear();
+        writeRecord("run-attempts", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
+                System.currentTimeMillis());
+        TriggerRunLog.markAttempt("run-attempts", org.techhouse.data.admin.TriggerRunStatus.PENDING, 2, "boom", 0L);
+
+        TriggerRunRecovery.recoverLocal();
+        sleep();
+
+        assertEquals(1, captured.size());
+        assertEquals(3, captured.getFirst().getAttempt(),
+                "the record counts attempts consumed, so recovery must queue the next one rather than repeat the"
+                        + " last, which used to hand back an extra attempt on every restart");
+    }
+
+    @Test
+    public void test_a_fresh_record_recovers_as_its_first_attempt() throws Exception {
+        saveDocument();
+        for (final var entry : TriggerRunLog.pending()) {
+            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
+        }
+        captured.clear();
+        writeRecord("run-fresh", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
+                System.currentTimeMillis());
+
+        TriggerRunRecovery.recoverLocal();
+        sleep();
+
+        assertEquals(1, captured.size());
+        assertEquals(1, captured.getFirst().getAttempt());
+    }
+
+    @Test
+    public void test_a_replayed_dead_letter_starts_from_a_full_budget() throws Exception {
+        saveDocument();
+        for (final var entry : TriggerRunLog.pending()) {
+            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
+        }
+        captured.clear();
+        writeRecord("run-replay", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
+                System.currentTimeMillis());
+        TriggerRunLog.markAttempt("run-replay", org.techhouse.data.admin.TriggerRunStatus.DEAD, 3, "boom", 0L);
+
+        assertTrue(org.techhouse.ops.TriggerRunResolution.resolveLocal("run-replay",
+                org.techhouse.ops.req.ResolveTriggerRunRequest.DECISION_REPLAY));
+        sleep();
+
+        assertEquals(1, captured.size());
+        assertEquals(1, captured.getFirst().getAttempt(),
+                "the on-disk counter is reset to 0, so the re-queued event must not still carry the exhausted count");
+    }
+
+    @Test
     public void test_pending_run_is_resubmitted_at_startup() throws Exception {
         saveDocument();
         for (final var entry : TriggerRunLog.pending()) {
@@ -193,5 +250,30 @@ public class TriggerRunRecoveryTest {
         TriggerRunRecovery.garbageCollect();
 
         assertTrue(TriggerRunLog.pending().isEmpty(), "a record older than triggerRunRetentionMs is collected");
+    }
+
+    @Test
+    public void test_a_run_that_cannot_be_rebuilt_does_not_strand_the_runs_after_it() throws Exception {
+        saveDocument();
+        for (final var entry : TriggerRunLog.pending()) {
+            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
+        }
+        captured.clear();
+        final var firedAt = System.currentTimeMillis();
+        final var unreadable = new JsonObject();
+        unreadable.addProperty(Globals.PK_FIELD, 5);
+        writeRecord("run-broken", TriggerRunLog.currentNodeId(), EventType.DELETED, List.of(), List.of(unreadable),
+                firedAt - 1);
+        final var recoverable = List.of("run-ok-1", "run-ok-2", "run-ok-3", "run-ok-4", "run-ok-5", "run-ok-6");
+        for (final var runId : recoverable) {
+            writeRecord(runId, TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(), firedAt);
+        }
+
+        TriggerRunRecovery.recoverLocal();
+        sleep();
+
+        assertEquals(recoverable, captured.stream().map(TriggerEvent::getRunId).sorted().toList());
+        assertTrue(TriggerRunLog.pending().stream().anyMatch(entry -> entry.getRunId().equals("run-broken")),
+                "a run that could not be rebuilt stays pending for the next recovery");
     }
 }

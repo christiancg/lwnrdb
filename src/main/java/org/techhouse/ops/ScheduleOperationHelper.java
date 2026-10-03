@@ -1,6 +1,8 @@
 package org.techhouse.ops;
 
 import java.io.IOException;
+import java.time.ZoneId;
+import java.time.ZonedDateTime;
 import java.util.ArrayList;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
@@ -45,28 +47,45 @@ public final class ScheduleOperationHelper {
         }
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
-            return new OperationResponse(OperationType.SAVE_SCHEDULE, "Database '" + dbName + "' not found",
-                    ErrorCode.DATABASE_NOT_FOUND);
+            return databaseNotFound(dbName);
         }
         final var timingError = validateTiming(request);
         if (timingError != null) {
             return timingError;
         }
-        final var procedure = cache.getProcedure(dbName, request.getProcedureName());
-        if (procedure == null) {
-            return new OperationResponse(OperationType.SAVE_SCHEDULE,
-                    "Procedure '" + request.getProcedureName() + "' not found in database '" + dbName + "'",
-                    ErrorCode.PROCEDURE_NOT_FOUND);
+        if (cache.getProcedure(dbName, request.getProcedureName()) == null) {
+            return procedureNotFound(request);
+        }
+        return OperationLocks.withDatabaseShared(dbName, OperationType.SAVE_SCHEDULE, ErrorCode.ERROR_SAVING_SCHEDULE,
+                request.isReplicated(), () -> saveUnderDatabaseBarrier(request, actingUser));
+    }
+
+    private static OperationResponse saveUnderDatabaseBarrier(SaveScheduleRequest request, String actingUser)
+            throws IOException, InterruptedException {
+        final var dbName = request.getDatabaseName();
+        if (cache.getAdminDbEntry(dbName) == null) {
+            return databaseNotFound(dbName);
         }
         locks.lock(dbName, Globals.SCHEDULES_FOLDER);
+        locks.lock(dbName, Globals.PROCEDURES_FOLDER);
         try {
+            if (cache.getProcedure(dbName, request.getProcedureName()) == null) {
+                return procedureNotFound(request);
+            }
             final var existing = cache.getSchedule(dbName, request.getName());
             if (request.getIfVersion() != null
                     && request.getIfVersion() != (existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
             }
-            if (existing == null && fs.listScheduleNames(dbName).size() >= configuration.getScheduleMaxPerDatabase()) {
+            final var scheduleNames = fs.listScheduleNames(dbName);
+            if (existing == null && scheduleNames.size() >= configuration.getScheduleMaxPerDatabase()) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.TOO_MANY_SCHEDULES);
+            }
+            final var colliding = request.isReplicated()
+                    ? null
+                    : OnDiskNameRegistry.collidingDefinition(scheduleNames, request.getName());
+            if (colliding != null) {
+                return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
             }
             final var definition = stampedDefinition(request, existing, actingUser);
             fs.writeSchedule(dbName, definition.getName(), eJson.toJson(definition.toJsonObject()));
@@ -74,8 +93,19 @@ public final class ScheduleOperationHelper {
             registry.reload(dbName);
             return new SaveScheduleResponse("Schedule saved successfully", definition.getVersion());
         } finally {
+            locks.release(dbName, Globals.PROCEDURES_FOLDER);
             locks.release(dbName, Globals.SCHEDULES_FOLDER);
         }
+    }
+
+    private static OperationResponse procedureNotFound(SaveScheduleRequest request) {
+        return new OperationResponse(OperationType.SAVE_SCHEDULE, "Procedure '" + request.getProcedureName()
+                + "' not found in database '" + request.getDatabaseName() + "'", ErrorCode.PROCEDURE_NOT_FOUND);
+    }
+
+    private static OperationResponse databaseNotFound(String dbName) {
+        return new OperationResponse(OperationType.SAVE_SCHEDULE, "Database '" + dbName + "' not found",
+                ErrorCode.DATABASE_NOT_FOUND);
     }
 
     private static OperationResponse validateTiming(SaveScheduleRequest request) {
@@ -88,10 +118,14 @@ public final class ScheduleOperationHelper {
             return invalid("timeoutMs must not be negative");
         }
         if (hasCron) {
+            final CronExpression expression;
             try {
-                CronExpression.parse(request.getCron());
+                expression = CronExpression.parse(request.getCron());
             } catch (InvalidCronException e) {
                 return invalid(e.getMessage());
+            }
+            if (expression.nextAfter(ZonedDateTime.now(ZoneId.of(configuration.getScriptTimeZone()))) == null) {
+                return invalid("cron '" + request.getCron() + "' has no occurrence within the search horizon");
             }
         }
         return null;
@@ -104,7 +138,7 @@ public final class ScheduleOperationHelper {
 
     private static ScheduleDefinition stampedDefinition(SaveScheduleRequest request, ScheduleDefinition existing,
             String actingUser) {
-        final var alreadyStamped = request.getStampedVersion() > 0;
+        final var alreadyStamped = request.carriesCoordinatorStamp();
         final var version = alreadyStamped
                 ? request.getStampedVersion()
                 : (existing == null ? 1L : existing.getVersion() + 1);
@@ -115,7 +149,11 @@ public final class ScheduleOperationHelper {
         request.setStampedUpdatedAt(updatedAt);
         request.setStampedUpdatedBy(updatedBy);
         request.setStampedDefiner(definer);
-        final var createdAt = existing == null ? updatedAt : existing.getCreatedAt();
+        final var localCreatedAt = existing == null ? updatedAt : existing.getCreatedAt();
+        final var createdAt = alreadyStamped && request.getStampedCreatedAt() > 0
+                ? request.getStampedCreatedAt()
+                : localCreatedAt;
+        request.setStampedCreatedAt(createdAt);
         return new ScheduleDefinition(request.getName(), request.getProcedureName(), request.getCron(),
                 request.getIntervalMs(), request.getArgs(), request.getTimeoutMs(), request.isEnabled(), definer,
                 request.getDescription(), version, createdAt, updatedAt, updatedBy);
@@ -142,6 +180,11 @@ public final class ScheduleOperationHelper {
     }
 
     public static OperationResponse executeList(ListSchedulesRequest request) {
+        return OperationResponse.respondOrError(OperationType.LIST_SCHEDULES, ErrorCode.ERROR_RETRIEVING,
+                () -> listSchedules(request));
+    }
+
+    private static OperationResponse listSchedules(ListSchedulesRequest request) {
         if (!configuration.isSchedulesEnabled()) {
             return new OperationResponse(OperationType.LIST_SCHEDULES, ErrorCode.SCRIPTS_DISABLED);
         }
