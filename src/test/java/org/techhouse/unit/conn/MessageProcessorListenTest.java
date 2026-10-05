@@ -9,13 +9,18 @@ import java.io.OutputStream;
 import java.net.InetAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Map;
+import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.techhouse.conn.MessageProcessor;
+import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ListenManager;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.test.TestGlobals;
@@ -131,5 +136,51 @@ public class MessageProcessorListenTest {
         final var listenResponse = out.toString(StandardCharsets.UTF_8);
 
         assertTrue(listenResponse.contains("listenId"), "LISTEN response must contain listenId");
+    }
+
+    @Test
+    public void test_the_listen_is_delivered_only_after_its_response_is_written() throws Exception {
+        createListenAdmin("listen_delivery_admin");
+        final var out = new ByteArrayOutputStream();
+        final var writtenAtDelivery = new ArrayList<String>();
+        final var deliveredIds = new ArrayList<UUID>();
+        final var recording = new ListenManager() {
+            @Override
+            public void markDelivered(UUID listenId) {
+                deliveredIds.add(listenId);
+                writtenAtDelivery.add(out.toString(StandardCharsets.UTF_8));
+            }
+        };
+        final var messages = "{\"type\":\"AUTHENTICATE\",\"username\":\"listen_delivery_admin\",\"password\":\"password123\"}\n"
+                + "{\"type\":\"LISTEN\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
+                + TestGlobals.COLL + "\",\"aggregationSteps\":[]}\n";
+        final var socket = mockSocket(new ByteArrayInputStream(messages.getBytes(StandardCharsets.UTF_8)), out);
+        final var original = swapListenManager(recording);
+        final MessageProcessor processor;
+        try {
+            processor = new MessageProcessor(socket);
+        } finally {
+            swapListenManager(original);
+        }
+        final var thread = new Thread(processor);
+        thread.start();
+        thread.join(3000);
+
+        assertEquals(1, deliveredIds.size(), "only the LISTEN response delivers a listen");
+        final var listenLine = writtenAtDelivery.getFirst().lines().filter(line -> line.contains("listenId"))
+                .findFirst().orElseThrow();
+        assertTrue(listenLine.contains(deliveredIds.getFirst().toString()),
+                "the listen must be delivered after the response naming it was written");
+    }
+
+    @SuppressWarnings("unchecked")
+    private static ListenManager swapListenManager(ListenManager replacement) throws Exception {
+        final var instanceField = IocContainer.class.getDeclaredField("instance");
+        instanceField.setAccessible(true);
+        final var instance = instanceField.get(null);
+        final var dependenciesField = instance.getClass().getDeclaredField("dependencies");
+        dependenciesField.setAccessible(true);
+        final var dependencies = (Map<String, Object>) dependenciesField.get(instance);
+        return (ListenManager) dependencies.put(ListenManager.class.getName(), replacement);
     }
 }

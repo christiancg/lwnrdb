@@ -11,6 +11,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,7 +20,9 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.DbEntry;
 import org.techhouse.data.TriggerDefinition;
+import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
@@ -27,6 +30,7 @@ import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
+import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.SaveRequest;
@@ -36,6 +40,8 @@ import org.techhouse.test.TestUtils;
 public class TransactionTriggerStagingTest {
     private static final String TRIGGER = "t";
     private static final String DOC_ID = "tx-doc";
+    private static final String OTHER_COLL = "other-staging";
+    private static final String TX_ID = "staging-tx";
     private static final Configuration configuration = Configuration.getInstance();
 
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
@@ -88,7 +94,8 @@ public class TransactionTriggerStagingTest {
     }
 
     private static List<String> recordIdsOfTheRun(String txId) {
-        return TriggerRunLog.recordIdsFor(TriggerRunLog.deterministicRunId(txId, TRIGGER, EventType.CREATED, DOC_ID));
+        return TriggerRunLog.recordIdsFor(TriggerRunLog.deterministicRunId(txId, TestGlobals.DB, TestGlobals.COLL,
+                TRIGGER, EventType.CREATED, DOC_ID));
     }
 
     @Test
@@ -138,5 +145,49 @@ public class TransactionTriggerStagingTest {
 
         assertEquals(1, recordIdsOfTheRun(txId).size(), "the replay must replace the staged run, not add one");
         assertEquals(1, TriggerRunLog.pending().size());
+    }
+
+    @Test
+    public void test_same_named_triggers_in_two_collections_keep_separate_records() throws Exception {
+        cache.putTriggers(TestGlobals.DB, OTHER_COLL,
+                List.of(triggerOn(EventType.CREATED, TriggerDefinition.MODE_DOCUMENT)));
+        try {
+            TriggerHelper.stageCommitted(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                    List.of(entryOf(TestGlobals.COLL, DOC_ID)), "owner", 0, TX_ID);
+            TriggerHelper.stageCommitted(TestGlobals.DB, OTHER_COLL, EventType.CREATED,
+                    List.of(entryOf(OTHER_COLL, DOC_ID)), "owner", 0, TX_ID);
+
+            final var runs = TriggerRunLog.pending();
+            assertEquals(2, runs.size(), "each collection's run must keep its own record");
+            assertEquals(Set.of(TestGlobals.COLL, OTHER_COLL),
+                    runs.stream().map(AdminTriggerRunEntry::getCollName).collect(Collectors.toSet()));
+        } finally {
+            cache.removeTriggers(TestGlobals.DB, OTHER_COLL);
+        }
+    }
+
+    @Test
+    public void test_batch_deleted_trigger_records_one_run_for_all_deletes() throws Exception {
+        cache.putTriggers(TestGlobals.DB, TestGlobals.COLL,
+                List.of(triggerOn(EventType.DELETED, TriggerDefinition.MODE_BATCH)));
+
+        TriggerHelper.stageCommitted(TestGlobals.DB, TestGlobals.COLL, EventType.DELETED, List
+                .of(entryOf(TestGlobals.COLL, "d1"), entryOf(TestGlobals.COLL, "d2"), entryOf(TestGlobals.COLL, "d3")),
+                "owner", 0, TX_ID);
+
+        final var runs = TriggerRunLog.pending();
+        assertEquals(1, runs.size());
+        assertEquals(3, runs.getFirst().getDocuments().size());
+    }
+
+    private static TriggerDefinition triggerOn(EventType type, String mode) {
+        return new TriggerDefinition(TRIGGER, new LinkedHashSet<>(Set.of(type)), "recalc", mode, false, true, "owner",
+                1L, 1L, 1L, "owner");
+    }
+
+    private static DbEntry entryOf(String collName, String id) {
+        final var object = new JsonObject();
+        object.addProperty("_id", id);
+        return DbEntry.fromJsonObject(TestGlobals.DB, collName, object);
     }
 }

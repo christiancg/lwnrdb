@@ -617,6 +617,8 @@ not a `ThreadLocal`, so the bound survives a cluster forward — zeroed for clie
 A transaction fires each trigger for its **net effect**: several writes to one id fire once, a
 `DELETE` of an id the same transaction created fires nothing (no one outside it could ever see the
 document), and deleting a document that existed before the transaction fires `DELETED` as usual.
+A `batch`-mode trigger runs once per collection and event for the whole transaction, deletes
+included, with every affected document in `documents`.
 
 **Before-write hooks** are the veto. Returning nothing or `true` accepts the write, a plain
 object replaces the document, anything else or a `throw` refuses it (`400-21`); an abort keeps

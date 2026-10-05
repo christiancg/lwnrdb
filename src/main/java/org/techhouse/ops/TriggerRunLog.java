@@ -59,9 +59,10 @@ public final class TriggerRunLog {
         return write(descriptor, runId, null);
     }
 
-    public static String deterministicRunId(String txId, String triggerName, EventType eventType, String idOrNull) {
-        final var key = String.join(String.valueOf(Globals.COLL_IDENTIFIER_SEPARATOR), txId, triggerName,
-                eventType.name(), idOrNull == null ? BATCH_RUN_KEY : idOrNull);
+    public static String deterministicRunId(String txId, String dbName, String collName, String triggerName,
+            EventType eventType, String idOrNull) {
+        final var key = String.join(String.valueOf(Globals.COLL_IDENTIFIER_SEPARATOR), txId, dbName, collName,
+                triggerName, eventType.name(), idOrNull == null ? BATCH_RUN_KEY : idOrNull);
         return UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).toString();
     }
 

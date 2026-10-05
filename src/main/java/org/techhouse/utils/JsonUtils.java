@@ -21,6 +21,7 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonPrimitive;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.internal.JsonStrings;
 
 public final class JsonUtils {
     private static final double MAX_EXACT_LONG = 9007199254740992d;
@@ -175,6 +176,10 @@ public final class JsonUtils {
         sb.append('"');
         for (var i = 0; i < value.length(); i++) {
             final var c = value.charAt(i);
+            if (JsonStrings.isLoneSurrogate(value, i)) {
+                JsonStrings.appendUnicodeEscape(sb, c);
+                continue;
+            }
             if (c == '"' || c == '\\') {
                 sb.append('\\');
             }

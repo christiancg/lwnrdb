@@ -233,7 +233,7 @@ public final class TriggerHelper {
             List<DbEntry> entries, String actingUser, int depth, String txId) {
         return stageRuns(dbName, collName, type, entries, actingUser, depth,
                 (trigger, group, descriptor) -> TriggerRunLog.recordDeterministic(descriptor,
-                        TriggerRunLog.deterministicRunId(txId, trigger.getName(), type,
+                        TriggerRunLog.deterministicRunId(txId, dbName, collName, trigger.getName(), type,
                                 trigger.isBatchMode() ? null : group.getFirst().get_id())));
     }
 

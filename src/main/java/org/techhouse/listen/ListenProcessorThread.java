@@ -45,7 +45,7 @@ public class ListenProcessorThread implements Runnable {
 
     private void processListen(UUID listenId) {
         final var registration = authorizedRegistration(listenId);
-        if (registration == null) {
+        if (registration == null || !registration.delivered().get()) {
             return;
         }
         final List<JsonObject> results;

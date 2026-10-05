@@ -87,7 +87,7 @@ public class ListenProcessorThreadTest {
         dirtyReq.setAggregationSteps(List.of());
         dirtyReq.setDirtyRead(true);
         final var hash = ResultHasher.hash(List.of(), false);
-        final var listenId = manager.register(clientId, dirtyReq, hash);
+        final var listenId = registerDelivered(manager, clientId, dirtyReq, hash);
 
         final var queue = new LinkedBlockingQueue<UUID>();
         queue.offer(listenId);
@@ -109,7 +109,7 @@ public class ListenProcessorThreadTest {
         final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         dirtyReq.setAggregationSteps(List.of());
         dirtyReq.setDirtyRead(true);
-        final var listenId = manager.register(clientId, dirtyReq, "stale-hash-that-will-not-match");
+        final var listenId = registerDelivered(manager, clientId, dirtyReq, "stale-hash-that-will-not-match");
 
         final var queue = new LinkedBlockingQueue<UUID>();
         queue.offer(listenId);
@@ -161,7 +161,8 @@ public class ListenProcessorThreadTest {
             }
         };
         dirtyReq.setDirtyRead(true);
-        final var listenId = manager.register(authenticatedClient(), dirtyReq, "stale-hash-for-rerun-throws-test");
+        final var listenId = registerDelivered(manager, authenticatedClient(), dirtyReq,
+                "stale-hash-for-rerun-throws-test");
 
         final var queue = new LinkedBlockingQueue<UUID>();
         queue.offer(listenId);
@@ -208,7 +209,7 @@ public class ListenProcessorThreadTest {
         final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         dirtyReq.setAggregationSteps(List.of());
         dirtyReq.setDirtyRead(true);
-        final var listenId = manager.register(UUID.randomUUID(), dirtyReq, "stale-hash-for-lock-null-test");
+        final var listenId = registerDelivered(manager, UUID.randomUUID(), dirtyReq, "stale-hash-for-lock-null-test");
 
         final var stubWriter = new BufferedWriter(new StringWriter());
         final var stub = new ClientTracker() {
@@ -254,7 +255,7 @@ public class ListenProcessorThreadTest {
         final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         dirtyReq.setAggregationSteps(List.of());
         dirtyReq.setDirtyRead(true);
-        final var listenId = manager.register(UUID.randomUUID(), dirtyReq, "stale-hash-for-push-test");
+        final var listenId = registerDelivered(manager, UUID.randomUUID(), dirtyReq, "stale-hash-for-push-test");
 
         final var clientTracker = IocContainer.get(ClientTracker.class);
         final var clientId = clientTracker.registerForwardedClient(LISTENER);
@@ -263,7 +264,7 @@ public class ListenProcessorThreadTest {
         clientTracker.registerWriter(clientId, bufferedWriter);
         final var registration = manager.getRegistration(listenId);
         final var repointed = new org.techhouse.listen.ListenRegistration(listenId, clientId, dirtyReq,
-                registration.collectionKeys(), registration.lastHash());
+                registration.collectionKeys(), registration.lastHash(), registration.delivered());
         final var manager2 = new ListenManager() {
             @Override
             public org.techhouse.listen.ListenRegistration getRegistration(UUID id) {
@@ -302,7 +303,7 @@ public class ListenProcessorThreadTest {
         final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         dirtyReq.setAggregationSteps(List.of());
         dirtyReq.setDirtyRead(true);
-        final var listenId = manager.register(UUID.randomUUID(), dirtyReq, "stale-hash-for-write-fail-test");
+        final var listenId = registerDelivered(manager, UUID.randomUUID(), dirtyReq, "stale-hash-for-write-fail-test");
 
         final var clientTracker = IocContainer.get(ClientTracker.class);
         final var clientId = clientTracker.registerForwardedClient(LISTENER);
@@ -323,7 +324,7 @@ public class ListenProcessorThreadTest {
         clientTracker.registerWriter(clientId, throwingWriter);
         final var registration = manager.getRegistration(listenId);
         final var repointed = new org.techhouse.listen.ListenRegistration(listenId, clientId, dirtyReq,
-                registration.collectionKeys(), registration.lastHash());
+                registration.collectionKeys(), registration.lastHash(), registration.delivered());
         final var manager2 = new ListenManager() {
             @Override
             public org.techhouse.listen.ListenRegistration getRegistration(UUID id) {
@@ -428,8 +429,15 @@ public class ListenProcessorThreadTest {
         final var dirtyReq = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
         dirtyReq.setAggregationSteps(List.of());
         dirtyReq.setDirtyRead(true);
-        lastListenId = manager.register(clientId, dirtyReq, ResultHasher.hash(List.of(), false));
+        lastListenId = registerDelivered(manager, clientId, dirtyReq, ResultHasher.hash(List.of(), false));
         return manager;
+    }
+
+    private static UUID registerDelivered(ListenManager manager, UUID clientId, AggregateRequest request,
+            String initialHash) {
+        final var listenId = manager.register(clientId, request, initialHash);
+        manager.markDelivered(listenId);
+        return listenId;
     }
 
     private ListenManager runOnce(ListenManager manager) throws InterruptedException {

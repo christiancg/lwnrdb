@@ -781,6 +781,7 @@ AGREE_NOT_IN_CUSTOM = "idxagg_agree_notin_custom"
 AGREE_CUSTOM_SORT = "idxagg_agree_custom_sort"
 AGREE_CUSTOM_TIES = "idxagg_agree_custom_ties"
 AGREE_SURROGATE = "idxagg_agree_surrogate"
+AGREE_SURROGATE_CONTAINER = "idxagg_agree_surrogate_container"
 AGREE_ARRAY_CUSTOM = "idxagg_agree_array_custom"
 AGREE_OBJECT_CUSTOM = "idxagg_agree_object_custom"
 AGREE_CONTAINS_CUSTOM = "idxagg_agree_contains_custom"
@@ -794,7 +795,8 @@ AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, 
                      AGREE_SORT_BOOL, AGREE_SORT_BOOL_DESC, AGREE_SORT_MIXED, AGREE_SORT_TIES,
                      AGREE_SIBLING, AGREE_OBJ_SORT, AGREE_CUSTOM, AGREE_MIXED_BOX, AGREE_GEO,
                      AGREE_IN_CASE, AGREE_NOT_IN_CASE, AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM,
-                     AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES, AGREE_SURROGATE, AGREE_ARRAY_CUSTOM,
+                     AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES, AGREE_SURROGATE, AGREE_SURROGATE_CONTAINER,
+                     AGREE_ARRAY_CUSTOM,
                      AGREE_OBJECT_CUSTOM, AGREE_CONTAINS_CUSTOM, AGREE_NOT_EQUALS_MIXED,
                      AGREE_NOT_EQUALS_HOMOGENEOUS, AGREE_DOTTED_GROUP, AGREE_DOTTED_DISTINCT)
 
@@ -1153,6 +1155,25 @@ def probe_lone_surrogate_values_index_the_same_as_they_scan(c):
           after == ["plain"], f"got {after!r}")
 
 
+def probe_lone_surrogates_inside_containers_index_the_same_as_they_scan(c):
+    values = {"hi": ["\ud800"], "hi2": ["\ud801"], "plain": ["?"]}
+    for doc_id, value in values.items():
+        save_doc(c, AGREE_SURROGATE_CONTAINER, {"_id": doc_id, "x": value})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SURROGATE_CONTAINER, "fieldName": "x"})
+    wait_for_indexes(c, [(AGREE_SURROGATE_CONTAINER, "x")])
+
+    for doc_id, value in values.items():
+        for operator, operand in (("EQUALS", value), ("NOT_EQUALS", value), ("NOT_IN", [value])):
+            steps = [{"type": "FILTER", "operator": {"fieldOperatorType": operator, "field": "x", "value": operand}}]
+            indexed = agree_ids(agg(c, AGREE_SURROGATE_CONTAINER, steps))
+            scanned = agree_ids(agg(c, AGREE_SURROGATE_CONTAINER, [{"type": "SKIP", "skip": 0}] + steps))
+            check(f"an index-backed {operator} on the {doc_id} array equals the scan", indexed == scanned,
+                  f"index={indexed!r} scan={scanned!r}")
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "x", "value": ["?"]}}]
+    check("NOT_EQUALS [\"?\"] keeps both lone-surrogate arrays",
+          agree_ids(agg(c, AGREE_SURROGATE_CONTAINER, steps)) == ["hi", "hi2"])
+
+
 def not_equals_filter(value):
     return [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "x", "value": value}}]
 
@@ -1218,6 +1239,7 @@ def agreement_suite(c):
     probe_array_equals_uses_the_same_equality_as_scalar_equals(c)
     probe_mixed_number_boxes_group_the_same_either_way(c)
     probe_lone_surrogate_values_index_the_same_as_they_scan(c)
+    probe_lone_surrogates_inside_containers_index_the_same_as_they_scan(c)
     probe_not_equals_matches_every_other_kind(c)
     probe_dotted_group_by_and_distinct_agree_with_scan(c)
 

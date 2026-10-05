@@ -29,6 +29,7 @@ import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.AggregateAnalyzeResponse;
+import org.techhouse.ops.resp.ListenResponse;
 import org.techhouse.ops.resp.OperationResponse;
 
 public class MessageProcessor implements Runnable {
@@ -74,6 +75,7 @@ public class MessageProcessor implements Runnable {
                         inFlightRequests.enter();
                         try {
                             String response;
+                            UUID deliveredListen = null;
                             OperationType requestType = null;
                             try {
                                 final var parsedMessage = RequestParser.parseRequest(message);
@@ -99,7 +101,9 @@ public class MessageProcessor implements Runnable {
                                         }
                                         response = eJson.toJson(responseObj);
                                     } else if (isOwnTransactionRollback(type, clientId)) {
-                                        response = handleAuthorized(parsedMessage, message, clientId).response();
+                                        final var handled = handleAuthorized(parsedMessage, message, clientId);
+                                        response = handled.response();
+                                        deliveredListen = handled.deliveredListen();
                                     } else {
                                         final var username = clientTracker.getAuthenticatedUsername(clientId);
                                         if (username == null) {
@@ -119,6 +123,7 @@ public class MessageProcessor implements Runnable {
                                                     final var handled = handleAuthorized(parsedMessage, message,
                                                             clientId);
                                                     response = handled.response();
+                                                    deliveredListen = handled.deliveredListen();
                                                     if (handled.close()) {
                                                         close = true;
                                                     }
@@ -145,6 +150,9 @@ public class MessageProcessor implements Runnable {
                                 writer.flush();
                             } finally {
                                 writerLock.unlock();
+                            }
+                            if (deliveredListen != null) {
+                                listenManager.markDelivered(deliveredListen);
                             }
                         } finally {
                             inFlightRequests.exit();
@@ -183,7 +191,7 @@ public class MessageProcessor implements Runnable {
         }
     }
 
-    private record Handled(String response, boolean close) {
+    private record Handled(String response, boolean close, UUID deliveredListen) {
     }
 
     private boolean isRefusedDuringShutdown(OperationType type) {
@@ -219,13 +227,13 @@ public class MessageProcessor implements Runnable {
         parsedMessage.setReplicated(false);
         final var schemaError = org.techhouse.ops.SchemaValidationHelper.check(parsedMessage);
         if (schemaError != null) {
-            return new Handled(eJson.toJson(schemaError), false);
+            return new Handled(eJson.toJson(schemaError), false, null);
         }
         final var forwarded = clusterRouter.forward(parsedMessage, withoutTriggerDepth(rawMessage),
                 clientTracker.getActiveTransaction(clientId) != null, clientTracker.getAuthenticatedUsername(clientId),
                 clientId);
         if (forwarded != null) {
-            return new Handled(forwarded, false);
+            return new Handled(forwarded, false, null);
         }
         final var analyze = parsedMessage instanceof AggregateRequest aggReq && aggReq.isAnalyze();
         final var analyzeStart = analyze ? System.currentTimeMillis() : 0L;
@@ -238,6 +246,14 @@ public class MessageProcessor implements Runnable {
             analyzeResult.setEndTime(analyzeEnd);
             analyzeResult.setDurationMillis(analyzeEnd - analyzeStart);
         }
-        return new Handled(eJson.toJson(responseObj), responseObj.getType() == OperationType.CLOSE_CONNECTION);
+        return new Handled(eJson.toJson(responseObj), responseObj.getType() == OperationType.CLOSE_CONNECTION,
+                listenToDeliver(responseObj));
+    }
+
+    private static UUID listenToDeliver(OperationResponse responseObj) {
+        if (responseObj instanceof ListenResponse listen && !listen.isUpdate() && listen.getListenId() != null) {
+            return UUID.fromString(listen.getListenId());
+        }
+        return null;
     }
 }

@@ -9,6 +9,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.techhouse.bckg_ops.RestartablePool;
 import org.techhouse.log.Logger;
@@ -29,12 +30,21 @@ public class ListenManager {
         final var listenId = UUID.randomUUID();
         final var keys = collectKeys(dirtyRequest);
         final var registration = new ListenRegistration(listenId, clientId, dirtyRequest, keys,
-                new AtomicReference<>(initialHash));
+                new AtomicReference<>(initialHash), new AtomicBoolean(false));
         registrations.put(listenId, registration);
         for (var key : keys) {
             collectionToListens.computeIfAbsent(key, _ -> ConcurrentHashMap.newKeySet()).add(listenId);
         }
         return listenId;
+    }
+
+    public void markDelivered(UUID listenId) {
+        final var registration = registrations.get(listenId);
+        if (registration == null) {
+            return;
+        }
+        registration.delivered().set(true);
+        enqueue(listenId);
     }
 
     public boolean unregister(UUID listenId, UUID clientId) {
@@ -137,9 +147,13 @@ public class ListenManager {
             return;
         }
         for (var listenId : listenIds) {
-            if (queued.add(listenId)) {
-                dirtyQueue.offer(listenId);
-            }
+            enqueue(listenId);
+        }
+    }
+
+    private void enqueue(UUID listenId) {
+        if (queued.add(listenId)) {
+            dirtyQueue.offer(listenId);
         }
     }
 

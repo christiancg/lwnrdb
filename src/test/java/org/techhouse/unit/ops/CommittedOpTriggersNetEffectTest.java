@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.config.Globals;
+import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -128,5 +129,33 @@ public class CommittedOpTriggersNetEffectTest {
             triggers.verify(() -> TriggerHelper.stageCommitted(anyString(), eq(TestGlobals.COLL), eq(EventType.DELETED),
                     anyList(), anyString(), anyInt(), anyString()), never());
         }
+    }
+
+    @Test
+    public void test_deletes_in_one_transaction_are_staged_once_per_collection() {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
+            commit(removalOf(TestGlobals.COLL, "d1"), removalOf(TestGlobals.COLL, "d2"),
+                    removalOf(TestGlobals.COLL, "d3"));
+            verifyDeletedFired(triggers, TestGlobals.COLL, 1);
+            triggers.verify(() -> TriggerHelper.stageCommitted(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.DELETED), argThat(entries -> idsOf(entries).equals(List.of("d1", "d2", "d3"))),
+                    anyString(), anyInt(), anyString()));
+        }
+    }
+
+    @Test
+    public void test_deletes_across_collections_are_staged_separately() {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
+            commit(removalOf(TestGlobals.COLL, "e1"), removalOf(OTHER_COLL, "e2"), removalOf(TestGlobals.COLL, "e3"));
+            verifyDeletedFired(triggers, TestGlobals.COLL, 1);
+            verifyDeletedFired(triggers, OTHER_COLL, 1);
+            triggers.verify(() -> TriggerHelper.stageCommitted(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                    eq(EventType.DELETED), argThat(entries -> idsOf(entries).equals(List.of("e1", "e3"))), anyString(),
+                    anyInt(), anyString()));
+        }
+    }
+
+    private static List<String> idsOf(List<DbEntry> entries) {
+        return entries.stream().map(DbEntry::get_id).toList();
     }
 }

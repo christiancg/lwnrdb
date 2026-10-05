@@ -28,7 +28,7 @@ public final class CommittedOpTriggers {
     public static StagedTriggerRuns stage(List<AdminTransactionEntry> ops, String actingUser, int triggerDepth,
             Transaction transaction, Set<String> fencedIds, String txId) {
         final var saveWrites = new LinkedHashMap<TargetKey, LinkedHashMap<String, Boolean>>();
-        var staged = StagedTriggerRuns.none();
+        final var deletes = new LinkedHashMap<TargetKey, List<DbEntry>>();
         for (final var op : ops) {
             final var target = new TargetKey(op.getTargetDb(), op.getTargetColl());
             final var inserted = transaction.insertedIdsFor(op.getSeq());
@@ -46,11 +46,21 @@ public final class CommittedOpTriggers {
                         }
                     }
                 }
-                case AdminTransactionEntry.OP_TYPE_DELETE -> staged = StagedTriggerRuns.combine(staged,
-                        stageForDelete(op, target, saveWrites, actingUser, triggerDepth, fencedIds, txId));
+                case AdminTransactionEntry.OP_TYPE_DELETE -> {
+                    final var deleted = deletedEntryOf(op, target, saveWrites, fencedIds);
+                    if (deleted != null) {
+                        deletes.computeIfAbsent(target, _ -> new ArrayList<>()).add(deleted);
+                    }
+                }
                 default -> {
                 }
             }
+        }
+        var staged = StagedTriggerRuns.none();
+        for (final var entry : deletes.entrySet()) {
+            final var target = entry.getKey();
+            staged = StagedTriggerRuns.combine(staged, TriggerHelper.stageCommitted(target.dbName(), target.collName(),
+                    EventType.DELETED, entry.getValue(), actingUser, triggerDepth, txId));
         }
         for (final var entry : saveWrites.entrySet()) {
             final var target = entry.getKey();
@@ -71,28 +81,23 @@ public final class CommittedOpTriggers {
                 (existing, now) -> existing || now);
     }
 
-    private static StagedTriggerRuns stageForDelete(AdminTransactionEntry op, TargetKey target,
-            Map<TargetKey, LinkedHashMap<String, Boolean>> saveWrites, String actingUser, int triggerDepth,
-            Set<String> fencedIds, String txId) {
+    private static DbEntry deletedEntryOf(AdminTransactionEntry op, TargetKey target,
+            Map<TargetKey, LinkedHashMap<String, Boolean>> saveWrites, Set<String> fencedIds) {
         final var payload = op.getPayload();
         final var id = payload.get(Globals.PK_FIELD).asJsonString().getValue();
         final var writesToTarget = saveWrites.get(target);
         final var createdInThisTransaction = writesToTarget != null && Boolean.TRUE.equals(writesToTarget.remove(id));
         if (createdInThisTransaction || !payload.has(DELETED_DOCUMENT_FIELD)
                 || deleteDidNotApply(fencedIds, target.dbName(), target.collName(), id)) {
-            return StagedTriggerRuns.none();
+            return null;
         }
-        return TriggerHelper.stageCommitted(
-                target.dbName(), target.collName(), EventType.DELETED, List.of(DbEntry.fromJsonObject(target.dbName(),
-                        target.collName(), payload.get(DELETED_DOCUMENT_FIELD).asJsonObject())),
-                actingUser, triggerDepth, txId);
+        return DbEntry.fromJsonObject(target.dbName(), target.collName(),
+                payload.get(DELETED_DOCUMENT_FIELD).asJsonObject());
     }
 
     private record TargetKey(String dbName, String collName) {
     }
 
-    // A fenced delete provably never applied: had it, the id would be absent from pk.idx and so could not
-    // have been fenced. A fenced save is the documented version-fence residual and still fires.
     private static boolean deleteDidNotApply(Set<String> fencedIds, String dbName, String collName, String id) {
         return !fencedIds.isEmpty() && fencedIds.contains(TransactionRecovery.fenceKey(dbName, collName, id));
     }

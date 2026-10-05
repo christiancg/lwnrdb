@@ -71,6 +71,9 @@ CORRUPT_COLL = "corrupt_triggers"
 RECOVERED_COLL = "tx_recovered"
 FENCED_COLL = "tx_fenced"
 RETRY_COLL = "retry_shutdown"
+BATCH_DELETE_COLL = "batch_deletes"
+TWIN_FAILING_COLL = "twin_failing"
+TWIN_AUDITED_COLL = "twin_audited"
 
 RUNNER = "proc_runner"
 MANAGER = "proc_manager"
@@ -742,6 +745,33 @@ def test_batch_mode(conn: Conn):
                  conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL, "objects": docs}), "OK")
     row = await_doc(conn, "batch-4")
     check("batch mode fired once with the whole batch", row.get("status") == "OK", f"got {row}")
+
+
+def test_batch_deleted_trigger_fires_once_per_transaction(conn: Conn):
+    section("A batch DELETED trigger fires once for a transaction's deletes")
+    check_status("create a collection for it", conn.send(
+        {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": BATCH_DELETE_COLL}), "OK")
+    check_status("install a batch delete counter", conn.save_procedure("batch_delete_counter",
+                 "import db from 'db'; import args from 'args';"
+                 "db.save(db.name, '" + AUDIT + "', { _id: 'batchdel-' + args.documents.length,"
+                 " count: args.documents.length }); return 'ok';"), "OK")
+    check_status("watch its deletes in batch mode",
+                 conn.save_trigger("batch_deletes_watch", ["DELETED"], "batch_delete_counter",
+                                   coll=BATCH_DELETE_COLL, mode="batch"), "OK")
+    for doc_id in ("bd1", "bd2", "bd3"):
+        check_status(f"write {doc_id}", conn.save_doc({"_id": doc_id, "n": 1}, coll=BATCH_DELETE_COLL), "OK")
+
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    for doc_id in ("bd1", "bd2", "bd3"):
+        check_status(f"delete {doc_id} in it", conn.send(
+            {"type": "DELETE", "databaseName": DB, "collectionName": BATCH_DELETE_COLL, "_id": doc_id}), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+    row = await_doc(conn, "batchdel-3")
+    check("the batch run received all three deleted documents", row.get("status") == "OK", f"got {row}")
+    check("and no single-document run fired", await_absent(conn, "batchdel-1").get("status") != "OK")
+    conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": BATCH_DELETE_COLL,
+               "name": "batch_deletes_watch"})
 
 
 def test_cascade(conn: Conn):
@@ -1745,6 +1775,39 @@ def test_retry_and_dead_letters(conn: Conn):
                               ["CREATED", "UPDATED"]), "OK")
 
 
+def test_same_named_triggers_in_one_transaction_dead_letter_their_own_run(conn: Conn):
+    section("Same-named triggers on two collections keep their own run in one transaction")
+    for coll in (TWIN_FAILING_COLL, TWIN_AUDITED_COLL):
+        check_status(f"create {coll}", conn.send(
+            {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    check_status("install a procedure that always throws",
+                 conn.save_procedure("twin_boom", "throw new Error('twin boom');"), "OK")
+    check_status("install a procedure that audits",
+                 conn.save_procedure("twin_ok", "import db from 'db';"
+                                     "db.save(db.name, '" + AUDIT + "', { _id: 'twin-ok' }); return 'ok';"), "OK")
+    check_status("name the failing collection's trigger twin",
+                 conn.save_trigger("twin", ["CREATED"], "twin_boom", coll=TWIN_FAILING_COLL), "OK")
+    check_status("and the audited collection's trigger twin too",
+                 conn.save_trigger("twin", ["CREATED"], "twin_ok", coll=TWIN_AUDITED_COLL), "OK")
+
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    for coll in (TWIN_FAILING_COLL, TWIN_AUDITED_COLL):
+        check_status(f"write the same id into {coll}", conn.save_doc({"_id": "tw1", "n": 1}, coll=coll), "OK")
+    check_status("commit", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+    check("the audited collection's trigger ran", await_doc(conn, "twin-ok").get("status") == "OK")
+    deadline = time.time() + 30.0
+    dead = dead_letters_for(conn, "twin")
+    while not dead and time.time() < deadline:
+        time.sleep(0.3)
+        dead = dead_letters_for(conn, "twin")
+    check("exactly one twin run is dead-lettered", len(dead) == 1, f"runs={dead!r}")
+    check("and it is the failing collection's run",
+          [run.get("collection") for run in dead] == [TWIN_FAILING_COLL], f"runs={dead!r}")
+    for coll in (TWIN_FAILING_COLL, TWIN_AUDITED_COLL):
+        conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": coll, "name": "twin"})
+
+
 def test_a_host_call_with_too_few_arguments_dead_letters(conn: Conn):
     section("A trigger whose script calls db with too few arguments is dead-lettered")
     drop_hook(conn, "off_hook")
@@ -2085,6 +2148,7 @@ def main():
             test_run_history_failures(conn)
             test_trigger_run_operations(conn)
             test_batch_mode(conn)
+            test_batch_deleted_trigger_fires_once_per_transaction(conn)
             test_cascade(conn)
             test_stats(conn)
             test_storage_placement(work_dir)
@@ -2122,6 +2186,7 @@ def main():
             test_a_deleted_definition_stops_being_served(conn)
             test_retry_and_dead_letters(conn)
             test_a_replayed_dead_letter_gets_a_full_budget(conn)
+            test_same_named_triggers_in_one_transaction_dead_letter_their_own_run(conn)
             test_a_host_call_with_too_few_arguments_dead_letters(conn)
             test_a_retried_trigger_sees_its_original_fired_at(conn)
             test_a_dead_letter_with_a_custom_shaped_error_stays_readable(conn)
