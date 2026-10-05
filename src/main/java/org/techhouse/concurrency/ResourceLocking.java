@@ -50,13 +50,13 @@ public class ResourceLocking {
         }
     }
 
-    private boolean tryAcquireWrite(String lockName) {
+    private boolean tryAcquireNow(String lockName, Mode mode) {
         while (true) {
             final var lock = lockFor(lockName);
-            if (!lock.writeLock().tryLock()) {
+            if (!side(lock, mode).tryLock()) {
                 return false;
             }
-            if (isStillMapped(lockName, lock, Mode.WRITE)) {
+            if (isStillMapped(lockName, lock, mode)) {
                 return true;
             }
         }
@@ -125,7 +125,7 @@ public class ResourceLocking {
     }
 
     public boolean tryLockWrite(String dbName, String collName) {
-        return tryAcquireWrite(Cache.getCollectionIdentifier(dbName, collName));
+        return tryAcquireNow(Cache.getCollectionIdentifier(dbName, collName), Mode.WRITE);
     }
 
     public interface LockedAction<T> {
@@ -292,7 +292,11 @@ public class ResourceLocking {
     }
 
     public boolean tryLockIndex(String dbName, String collName, String fieldName) {
-        return tryAcquireWrite(getIndexIdentifier(dbName, collName, fieldName));
+        return tryAcquireNow(getIndexIdentifier(dbName, collName, fieldName), Mode.WRITE);
+    }
+
+    public boolean tryLockIndexRead(String dbName, String collName, String fieldName) {
+        return tryAcquireNow(getIndexIdentifier(dbName, collName, fieldName), Mode.READ);
     }
 
     public void releaseIndex(String dbName, String collName, String fieldName) {

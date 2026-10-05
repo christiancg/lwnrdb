@@ -224,7 +224,7 @@ public final class TransactionOperationHelper {
         if (transaction == null) {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
         }
-        if (isLocalCommitFenced(transaction)) {
+        if (isFenced(transaction)) {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
         }
         try {

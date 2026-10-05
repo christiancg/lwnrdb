@@ -153,6 +153,11 @@ public class TriggerClusterRetryTest {
                 "audit", false, List.of(entry(id)), DEFINER, 0, runId, 1));
     }
 
+    private static void dispatchLastAttemptFiredAt(String id, String runId, long firedAt) {
+        TriggerDispatcher.dispatch(new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "audit",
+                "audit", false, List.of(entry(id)), DEFINER, 0, runId, 1, firedAt));
+    }
+
     private static TriggerRunStatus statusOf(String runId) throws Exception {
         for (final var run : TriggerRunLog.pending()) {
             if (runId.equals(run.getRunId())) {
@@ -183,5 +188,29 @@ public class TriggerClusterRetryTest {
 
         assertEquals(TriggerRunStatus.DEAD, statusOf(runId),
                 "a node that permanently lost ownership must become actionable rather than retry forever");
+    }
+
+    @Test
+    public void test_the_cluster_wait_expires_once_the_run_is_older_than_retention() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggerRunRetentionMs", 1_000L);
+        saveDocument("expired");
+        final var runId = recordedRunFor("expired");
+
+        dispatchLastAttemptFiredAt("expired", runId, System.currentTimeMillis() - 2_000L);
+
+        assertEquals(TriggerRunStatus.DEAD, statusOf(runId),
+                "a run older than the retention must stop waiting for the cluster even after earlier retries");
+    }
+
+    @Test
+    public void test_a_run_younger_than_retention_keeps_waiting_for_the_cluster() throws Exception {
+        TestUtils.setPrivateField(configuration, "triggerRunRetentionMs", 60_000L);
+        saveDocument("young");
+        final var runId = recordedRunFor("young");
+
+        dispatchLastAttemptFiredAt("young", runId, System.currentTimeMillis() - 2_000L);
+
+        assertEquals(TriggerRunStatus.PENDING, statusOf(runId),
+                "a run still inside the retention keeps waiting without consuming its last attempt");
     }
 }

@@ -401,4 +401,41 @@ public class ResourceLockingTest {
         other.join(5000);
         assertTrue(acquiredElsewhere.get(), "another thread must be able to take the lock afterwards");
     }
+
+    @Test
+    public void test_try_lock_index_read_fails_while_another_thread_writes() throws Exception {
+        final var rl = new ResourceLocking();
+        final var held = new CountDownLatch(1);
+        final var release = new CountDownLatch(1);
+        final var writer = new Thread(() -> {
+            try {
+                rl.lockIndex("db", "coll", "field");
+                held.countDown();
+                release.await();
+                rl.releaseIndex("db", "coll", "field");
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        writer.start();
+        assertTrue(held.await(5, TimeUnit.SECONDS));
+
+        assertFalse(rl.tryLockIndexRead("db", "coll", "field"), "a reader must not wait behind an index writer");
+
+        release.countDown();
+        writer.join(5_000);
+        assertTrue(rl.tryLockIndexRead("db", "coll", "field"), "the read lock is free once the writer is done");
+        rl.releaseIndexRead("db", "coll", "field");
+    }
+
+    @Test
+    public void test_try_lock_index_read_is_reentrant_for_the_writer() throws Exception {
+        final var rl = new ResourceLocking();
+        rl.lockIndex("db", "coll", "field");
+
+        assertTrue(rl.tryLockIndexRead("db", "coll", "field"), "the index writer can still read its own index");
+
+        rl.releaseIndexRead("db", "coll", "field");
+        rl.releaseIndex("db", "coll", "field");
+    }
 }

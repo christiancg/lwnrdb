@@ -289,4 +289,18 @@ public class TriggerHelperStagingTest {
         assertEquals(1, events.size());
         assertNull(events.getFirst().getRunId());
     }
+
+    @Test
+    public void test_a_submitted_staged_run_fires_with_its_recorded_fired_at() throws Exception {
+        install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT);
+        final var request = saveRequest("stamped");
+        final var staged = TriggerHelper.stageSave(request, USER);
+        Thread.sleep(5);
+
+        final var events = dispatched(() -> runStaged(staged, () -> SaveOperationHelper.executeSave(request)));
+
+        assertEquals(1, events.size());
+        assertEquals(onlyRecord().getFiredAt(), events.getFirst().getFiredAt(),
+                "the event and the run record it replays from must agree on when the trigger fired");
+    }
 }

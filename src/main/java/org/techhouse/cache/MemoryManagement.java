@@ -12,7 +12,6 @@ import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.UsageProfileCleanupEvent;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -217,8 +216,7 @@ public class MemoryManagement {
         if (resource.kind() != AccessKind.FIELD_INDEX || resource.indexKey() == null) {
             return null;
         }
-        final var separator = resource.indexKey().lastIndexOf(Globals.COLL_IDENTIFIER_SEPARATOR);
-        return separator < 0 ? resource.indexKey() : resource.indexKey().substring(0, separator);
+        return CacheableResource.indexedFieldOf(resource.indexKey());
     }
 
     public long userCacheBytes() {

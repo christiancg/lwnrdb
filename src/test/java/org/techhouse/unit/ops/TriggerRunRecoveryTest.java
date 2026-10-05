@@ -227,6 +227,34 @@ public class TriggerRunRecoveryTest {
     }
 
     @Test
+    public void test_a_recovered_run_fires_with_its_recorded_fired_at() throws Exception {
+        final var firedAt = System.currentTimeMillis() - 10_000L;
+        writeRecord("run-fired", TriggerRunLog.currentNodeId(), EventType.DELETED, List.of(), List.of(document("gone")),
+                firedAt);
+
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
+        sleep();
+
+        assertEquals(1, captured.size());
+        assertEquals(firedAt, captured.getFirst().getFiredAt(),
+                "a restart must not restart the run's age, which bounds the cluster wait and is shown to scripts");
+    }
+
+    @Test
+    public void test_a_record_without_fired_at_is_not_treated_as_expired() throws Exception {
+        final var before = System.currentTimeMillis();
+        writeRecord("run-unstamped", TriggerRunLog.currentNodeId(), EventType.DELETED, List.of(),
+                List.of(document("unstamped")), 0L);
+
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
+        sleep();
+
+        assertEquals(1, captured.size());
+        assertTrue(captured.getFirst().getFiredAt() >= before,
+                "a record written before firedAt was stored must not read as decades old");
+    }
+
+    @Test
     public void test_a_run_whose_documents_vanished_is_consumed() throws Exception {
         writeRecord("run-d", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("no-such-doc"), List.of(),
                 System.currentTimeMillis());

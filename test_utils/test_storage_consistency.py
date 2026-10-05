@@ -762,13 +762,18 @@ def leftover_rows_folder(work_dir: str) -> str:
     return os.path.join(work_dir, "db", "admin", "pages", f"{DB}_{LEFTOVER_ROWS_COLL}")
 
 
+def page_rows_mid_compaction(work_dir: str, coll: str) -> bool:
+    folder = os.path.join(work_dir, "db", "admin", "pages", f"{DB}_{coll}")
+    return os.path.isdir(folder) and any(name.endswith(".compacting") for name in os.listdir(folder))
+
+
 def wait_for_settled_page_rows(work_dir: str, coll: str, timeout_s=15.0):
     deadline = time.time() + timeout_s
     while True:
         recorded = recorded_pages(work_dir, DB, coll)
         actual = actual_pages(work_dir, DB, coll)
-        settled = bool(recorded) and {page: (row["size"], row["entryCount"])
-                                      for page, row in recorded.items() if page in actual} == actual
+        settled = bool(recorded) and not page_rows_mid_compaction(work_dir, coll) and {
+            page: (row["size"], row["entryCount"]) for page, row in recorded.items() if page in actual} == actual
         if settled or time.time() >= deadline:
             return settled, recorded, actual
         time.sleep(0.2)
@@ -794,7 +799,7 @@ def seed_drops_a_kill_will_interrupt(conn: Conn, work_dir: str):
     check("its page rows reached disk", settled, f"recorded {recorded} actual {actual}")
     copy = os.path.join(work_dir, LEFTOVER_ROWS_COPY)
     shutil.rmtree(copy, ignore_errors=True)
-    shutil.copytree(leftover_rows_folder(work_dir), copy)
+    shutil.copytree(leftover_rows_folder(work_dir), copy, ignore=shutil.ignore_patterns("*.compacting"))
     check_status("drop it", conn.send({"type": "DROP_COLLECTION", "databaseName": DB,
                                        "collectionName": LEFTOVER_ROWS_COLL}), "OK")
 

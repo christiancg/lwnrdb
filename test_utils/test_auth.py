@@ -327,6 +327,14 @@ def test_user_management(c):
           change_permissions(c, "tmp_user", admin=False, db_perms={"auth_db": "READ"}),
           "OK")
 
+    check_status("CREATE_USER with a trailing '|' in a collection key is refused, not stored as a no-op grant",
+          create_user(c, "pipe_user", "pipe_user1234", coll_perms={"auth_db|carved|": "READ"}),
+          "ERROR")
+
+    check_status("CHANGE_PERMISSIONS with a doubled '|' in a collection key is refused",
+          change_permissions(c, "tmp_user", db_perms={"auth_db": "READ"}, coll_perms={"auth_db||carved": "READ"}),
+          "ERROR")
+
     check_status("DELETE_USER 'tmp_user'",
           delete_user(c, "tmp_user"),
           "OK")

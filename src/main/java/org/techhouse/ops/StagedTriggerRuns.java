@@ -23,7 +23,8 @@ public final class StagedTriggerRuns {
     private final List<StagedRun> runs;
 
     record StagedRun(String dbName, String collName, String triggerName, String procedureName, EventType type,
-            boolean batchMode, String actingUser, int depth, List<String> ids, List<DbEntry> entries, String runId) {
+            boolean batchMode, String actingUser, int depth, List<String> ids, List<DbEntry> entries, String runId,
+            long firedAt) {
     }
 
     private StagedTriggerRuns(List<StagedRun> runs) {
@@ -137,7 +138,8 @@ public final class StagedTriggerRuns {
         if (entries.isEmpty()) {
             return;
         }
-        triggerExecutor.submit(new TriggerEvent(run.type(), run.dbName(), run.collName(), run.triggerName(),
-                run.procedureName(), run.batchMode(), entries, run.actingUser(), run.depth(), run.runId()));
+        triggerExecutor.submit(
+                new TriggerEvent(run.type(), run.dbName(), run.collName(), run.triggerName(), run.procedureName(),
+                        run.batchMode(), entries, run.actingUser(), run.depth(), run.runId(), 1, run.firedAt()));
     }
 }

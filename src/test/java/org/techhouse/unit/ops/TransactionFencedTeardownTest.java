@@ -19,6 +19,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
@@ -65,6 +66,19 @@ public class TransactionFencedTeardownTest {
         return clientId;
     }
 
+    private UUID preparedTransaction(String id) throws Exception {
+        final var clientId = clientTracker.registerForwardedClient("preparer");
+        TransactionOperationHelper.start(clientId);
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(document(id));
+        request.set_id(id);
+        TransactionOperationHelper.bufferSave(request, transaction);
+        Tx2pcLog.recordParticipantPrepared(transaction.getTransactionId().toString(), "127.0.0.1:9000",
+                List.of("127.0.0.1:9000"), List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+        return clientId;
+    }
+
     private String txIdOf(UUID clientId) {
         return clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
     }
@@ -95,6 +109,40 @@ public class TransactionFencedTeardownTest {
         assertNotNull(clientTracker.getActiveTransaction(clientId),
                 "the transaction stays registered so recovery can still name its locks");
         discardFence(clientId);
+    }
+
+    @Test
+    public void test_rollback_refuses_to_discard_a_2pc_prepared_slice() throws Exception {
+        final var clientId = preparedTransaction("prepared");
+        final var txId = txIdOf(clientId);
+
+        final var response = TransactionOperationHelper.rollback(clientId);
+
+        assertEquals("500-33", response.getErrorCode(),
+                "a client rollback after an indeterminate 2PC commit must report the slice as half applied");
+        assertTrue(Tx2pcLog.isPrepared(txId), "the prepared marker must survive the rollback attempt");
+        assertTrue(sliceSurvives(clientId), "the slice recovery will re-drive must survive the rollback attempt");
+        assertNotNull(clientTracker.getActiveTransaction(clientId),
+                "the transaction stays registered so its write locks still have an owner");
+        Tx2pcLog.deleteParticipantMarker(txId);
+        TransactionOperationHelper.abortInPlace(clientId);
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void test_abort_still_discards_a_prepared_but_undecided_slice() throws Exception {
+        final var clientId = preparedTransaction("undecided");
+        final var txId = txIdOf(clientId);
+        final var opIds = List.copyOf(clientTracker.getActiveTransaction(clientId).getBufferedOpIds());
+
+        final var response = TransactionOperationHelper.abort(clientId);
+
+        assertEquals(OperationStatus.OK, response.getStatus(),
+                "the coordinator's abort of a prepared slice it has not decided must still succeed");
+        assertFalse(Tx2pcLog.isPrepared(txId), "the abort must resolve the prepared marker");
+        assertFalse(opIds.stream().anyMatch(id -> cache.getPkIndexTransaction(id) != null),
+                "the abort must discard the prepared slice's ops");
+        clientTracker.removeById(clientId);
     }
 
     @Test

@@ -173,6 +173,10 @@ public final class TriggerRunRecovery {
         }
         return new TriggerEvent(first.getEventType(), first.getDbName(), first.getCollName(), first.getTriggerName(),
                 first.getProcedureName(), first.isBatchMode(), entries, first.getActingUser(), first.getDepth(),
-                first.getRunId(), Math.max(1, attempt));
+                first.getRunId(), Math.max(1, attempt), recordedFiredAt(first));
+    }
+
+    private static long recordedFiredAt(AdminTriggerRunEntry run) {
+        return run.getFiredAt() > 0 ? run.getFiredAt() : System.currentTimeMillis();
     }
 }

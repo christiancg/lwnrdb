@@ -174,6 +174,24 @@ public class Tx2pcCoordinatorTest {
     }
 
     @Test
+    public void test_rollback_after_an_indeterminate_commit_keeps_the_slice() throws Exception {
+        poolReplies(ClusterMessageType.PREPARE_TX_ACK);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-indeterminate");
+        final var txId = breakLocalSlice(clientId);
+        assertEquals("409-10", coordinator.commit(clientId).getErrorCode());
+        final var opIds = List.copyOf(clientTracker.getActiveTransaction(clientId).getBufferedOpIds());
+
+        final var response = processor.processMessage(new org.techhouse.ops.req.RollbackTransactionRequest(), clientId);
+
+        assertEquals("500-33", response.getErrorCode(),
+                "a rollback after the commit decision must not report a clean rollback");
+        assertTrue(org.techhouse.ops.Tx2pcLog.isPrepared(txId), "the prepared marker must survive the rollback");
+        assertTrue(org.techhouse.ops.Tx2pcLog.isCommitted(txId), "the commit decision must survive the rollback");
+        assertTrue(org.techhouse.ops.Tx2pcLog.sliceOpIds(txId).containsAll(opIds),
+                "the slice recovery re-drives must survive the rollback");
+    }
+
+    @Test
     public void test_commit_with_unanimous_yes_commits_all() {
         poolReplies(ClusterMessageType.PREPARE_TX_ACK);
         final var clientId = clientWithLocalAndRemoteSlice("tpc-commit");

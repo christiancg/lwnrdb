@@ -161,4 +161,37 @@ public class TriggerDispatcherClusterRetryTest {
         assertNotNull(run);
         assertEquals(TriggerRunStatus.PENDING, run.getStatus());
     }
+
+    private static TriggerEvent retryOf(TriggerEvent event, int nextAttempt) throws Exception {
+        final var method = TriggerDispatcher.class.getDeclaredMethod("retryOf", TriggerEvent.class, int.class);
+        method.setAccessible(true);
+        return (TriggerEvent) method.invoke(null, event, nextAttempt);
+    }
+
+    @Test
+    public void test_a_cluster_retry_keeps_the_original_fired_at() throws Exception {
+        saveDocument("carried");
+        final var firedAt = System.currentTimeMillis() - 5_000L;
+        final var original = new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "audit", "audit",
+                false, List.of(entry("carried")), OWNER, 0, "run", 1, firedAt);
+
+        final var waiting = retryOf(original, original.getAttempt());
+
+        assertNotNull(waiting);
+        assertEquals(firedAt, waiting.getFiredAt(), "waiting for the cluster must not restart the retention window");
+    }
+
+    @Test
+    public void test_an_attempt_retry_keeps_the_original_fired_at() throws Exception {
+        saveDocument("attempted");
+        final var firedAt = System.currentTimeMillis() - 5_000L;
+        final var original = new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "audit", "audit",
+                false, List.of(entry("attempted")), OWNER, 0, "run", 1, firedAt);
+
+        final var retry = retryOf(original, 2);
+
+        assertNotNull(retry);
+        assertEquals(2, retry.getAttempt());
+        assertEquals(firedAt, retry.getFiredAt(), "a retried run must show its script the time it originally fired");
+    }
 }

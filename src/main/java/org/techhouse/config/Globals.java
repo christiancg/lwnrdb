@@ -25,6 +25,8 @@ public final class Globals {
     public static final String PROCEDURE_FILE_EXTENSION = JSON_FILE_EXTENSION;
     public static final String SCHEDULES_FOLDER = ".schedules";
     public static final String SCHEDULE_FILE_EXTENSION = JSON_FILE_EXTENSION;
+    public static final String COLLECTION_NAMES_LOCK = ".collection-names";
+    public static final String DATABASE_NAMES_LOCK = ".database-names";
     public static final String TRIGGERS_FILE_NAME = "triggers";
     public static final String TRIGGERS_FILE_EXTENSION = JSON_FILE_EXTENSION;
     public static final String RW_PERMISSIONS = "rw";

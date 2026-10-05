@@ -1783,6 +1783,38 @@ def test_a_host_call_with_too_few_arguments_dead_letters(conn: Conn):
                               ["CREATED", "UPDATED"]), "OK")
 
 
+def test_a_retried_trigger_sees_its_original_fired_at(conn: Conn):
+    section("A retried trigger sees the firedAt of its first attempt")
+    drop_hook(conn, "off_hook")
+    check_status("install a procedure that reports its firedAt in the error it throws",
+                 conn.save_procedure("fired_boom",
+                                     "import args from 'args';\n"
+                                     "throw new Error('fired at ' + args.firedAt);"), "OK")
+    check_status("point a trigger at it",
+                 conn.save_trigger("fired_at", ["CREATED", "UPDATED"], "fired_boom"), "OK")
+    check_status("write a document so it fires", conn.save_doc({"_id": "fireddoc", "n": 1}), "OK")
+
+    deadline = time.time() + 30.0
+    rows = history_rows(conn, kind="TRIGGER", name="fired_at")
+    while len(rows) < 2 and time.time() < deadline:
+        time.sleep(0.3)
+        rows = history_rows(conn, kind="TRIGGER", name="fired_at")
+    check("both attempts are recorded", len(rows) >= 2, f"rows={rows!r}")
+    messages = {row.get("errorMessage") for row in rows}
+    check("every attempt saw the same firedAt", len(messages) == 1 and None not in messages,
+          f"messages={messages!r}; a retry used to be stamped with the time it was retried")
+
+    for entry in dead_letters_for(conn, "fired_at"):
+        conn.send({"type": "RESOLVE_TRIGGER_RUN", "runId": entry.get("runId"), "decision": "discard"})
+    check_status("remove the fired_at trigger",
+                 conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
+                            "name": "fired_at"}), "OK")
+    check_status("restore the vetoing hook for the next phase",
+                 install_hook(conn, "off_hook", "offhook",
+                              "export default (doc) => { throw new Error('always refuses'); };",
+                              ["CREATED", "UPDATED"]), "OK")
+
+
 def test_a_dead_letter_with_a_custom_shaped_error_stays_readable(conn: Conn):
     section("A dead letter whose error looks like a custom type stays readable")
     drop_hook(conn, "off_hook")
@@ -2091,6 +2123,7 @@ def main():
             test_retry_and_dead_letters(conn)
             test_a_replayed_dead_letter_gets_a_full_budget(conn)
             test_a_host_call_with_too_few_arguments_dead_letters(conn)
+            test_a_retried_trigger_sees_its_original_fired_at(conn)
             test_a_dead_letter_with_a_custom_shaped_error_stays_readable(conn)
             test_a_post_commit_error_applies_its_effects_once(conn)
 

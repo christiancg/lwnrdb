@@ -51,39 +51,57 @@ public final class CollectionOperationHelper {
                         return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.DATABASE_NOT_FOUND);
                     }
                     fs.createDatabaseFolder(dbName);
-                    final var colliding = createCollectionRequest.isReplicated()
-                            ? null
-                            : OnDiskNameRegistry.collidingCollection(dbName, collName);
-                    if (colliding != null) {
-                        return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.NAME_COLLIDES_ON_DISK,
-                                colliding);
+                    if (createCollectionRequest.isReplicated()) {
+                        return register(createCollectionRequest);
                     }
-                    final var result = LeftoverFolders.moveAsideUnregisteredCollection(dbName, collName)
-                            && fs.createCollectionFile(dbName, collName);
-                    if (result) {
-                        final var existingEntry = AdminOperationHelper.getCollectionEntry(dbName, collName);
-                        if (existingEntry != null) {
-                            if (createCollectionRequest.getIncarnation() == 0) {
-                                createCollectionRequest.setIncarnation(existingEntry.getIncarnation());
-                            }
-                            return OperationResponse.ok(OperationType.CREATE_COLLECTION,
-                                    "Collection created successfully");
-                        }
-                        // Registration must be synchronous: a lagging background task lets CREATE_INDEX run
-                        // first, find no admin PK entry and silently skip registering the index.
-                        if (createCollectionRequest.getIncarnation() == 0 && !createCollectionRequest.isReplicated()) {
-                            createCollectionRequest.setIncarnation(hybridClock.next());
-                        } else if (createCollectionRequest.getIncarnation() != 0) {
-                            hybridClock.observe(createCollectionRequest.getIncarnation());
-                        }
-                        AdminOperationHelper.createPageCollections(dbName, collName);
-                        final var entry = new AdminCollEntry(dbName, collName);
-                        entry.setIncarnation(createCollectionRequest.getIncarnation());
-                        AdminOperationHelper.saveCollectionEntry(entry);
-                        return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
-                    }
-                    return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
+                    return registerUnderNameLock(createCollectionRequest);
                 });
+    }
+
+    private static OperationResponse registerUnderNameLock(CreateCollectionRequest createCollectionRequest)
+            throws Exception {
+        final var dbName = createCollectionRequest.getDatabaseName();
+        if (!locks.tryLockWrite(dbName, Globals.COLLECTION_NAMES_LOCK, OperationLocks.lockBudgetMillis(false))) {
+            return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+        }
+        try {
+            final var colliding = OnDiskNameRegistry.collidingCollection(dbName,
+                    createCollectionRequest.getCollectionName());
+            if (colliding != null) {
+                return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.NAME_COLLIDES_ON_DISK,
+                        colliding);
+            }
+            return register(createCollectionRequest);
+        } finally {
+            locks.release(dbName, Globals.COLLECTION_NAMES_LOCK);
+        }
+    }
+
+    private static OperationResponse register(CreateCollectionRequest createCollectionRequest) throws Exception {
+        final var dbName = createCollectionRequest.getDatabaseName();
+        final var collName = createCollectionRequest.getCollectionName();
+        final var result = LeftoverFolders.moveAsideUnregisteredCollection(dbName, collName)
+                && fs.createCollectionFile(dbName, collName);
+        if (!result) {
+            return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
+        }
+        final var existingEntry = AdminOperationHelper.getCollectionEntry(dbName, collName);
+        if (existingEntry != null) {
+            if (createCollectionRequest.getIncarnation() == 0) {
+                createCollectionRequest.setIncarnation(existingEntry.getIncarnation());
+            }
+            return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
+        }
+        if (createCollectionRequest.getIncarnation() == 0 && !createCollectionRequest.isReplicated()) {
+            createCollectionRequest.setIncarnation(hybridClock.next());
+        } else if (createCollectionRequest.getIncarnation() != 0) {
+            hybridClock.observe(createCollectionRequest.getIncarnation());
+        }
+        AdminOperationHelper.createPageCollections(dbName, collName);
+        final var entry = new AdminCollEntry(dbName, collName);
+        entry.setIncarnation(createCollectionRequest.getIncarnation());
+        AdminOperationHelper.saveCollectionEntry(entry);
+        return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
     }
 
     private static boolean isNotRegistered(String dbName, String collName) {

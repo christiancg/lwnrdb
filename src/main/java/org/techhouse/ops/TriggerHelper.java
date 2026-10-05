@@ -125,11 +125,11 @@ public final class TriggerHelper {
         final var runs = new ArrayList<StagedTriggerRuns.StagedRun>();
         for (final var trigger : matchingTriggers(dbName, collName, type, depth)) {
             for (final var group : runGroups(trigger, entries)) {
-                final var runId = recorder.record(trigger, group,
-                        descriptor(dbName, collName, trigger, type, group, actingUser, depth));
+                final var descriptor = descriptor(dbName, collName, trigger, type, group, actingUser, depth);
+                final var runId = recorder.record(trigger, group, descriptor);
                 runs.add(new StagedTriggerRuns.StagedRun(dbName, collName, trigger.getName(),
                         trigger.getProcedureName(), type, trigger.isBatchMode(), actingUser, depth,
-                        group.stream().map(DbEntry::get_id).toList(), group, runId));
+                        group.stream().map(DbEntry::get_id).toList(), group, runId, descriptor.firedAt()));
             }
         }
         return StagedTriggerRuns.of(runs);

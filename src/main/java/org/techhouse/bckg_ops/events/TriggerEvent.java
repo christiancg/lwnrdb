@@ -27,6 +27,13 @@ public class TriggerEvent extends CollectionScopedEvent {
 
     public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
             boolean batchMode, List<DbEntry> entries, String actingUser, int depth, String runId, int attempt) {
+        this(type, dbName, collName, triggerName, procedureName, batchMode, entries, actingUser, depth, runId, attempt,
+                System.currentTimeMillis());
+    }
+
+    public TriggerEvent(EventType type, String dbName, String collName, String triggerName, String procedureName,
+            boolean batchMode, List<DbEntry> entries, String actingUser, int depth, String runId, int attempt,
+            long firedAt) {
         super(type, dbName, collName);
         this.triggerName = triggerName;
         this.procedureName = procedureName;
@@ -34,7 +41,7 @@ public class TriggerEvent extends CollectionScopedEvent {
         this.entries = entries;
         this.actingUser = actingUser;
         this.depth = depth;
-        this.firedAt = System.currentTimeMillis();
+        this.firedAt = firedAt;
         this.runId = runId;
         this.attempt = attempt;
     }

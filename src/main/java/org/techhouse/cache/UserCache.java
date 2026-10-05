@@ -427,10 +427,23 @@ public class UserCache {
                 continue;
             for (var inner : entry.getValue().entrySet()) {
                 result.add(new CacheableResource(AccessKind.FIELD_INDEX, parts[0], parts[1], inner.getKey(),
-                        CacheSizeEstimator.estimateFieldIndexSize(inner.getValue())));
+                        estimateFieldIndexUnderLock(parts[0], parts[1], inner.getKey(), inner.getValue())));
             }
         }
         return result;
+    }
+
+    private long estimateFieldIndexUnderLock(String dbName, String collName, String indexKey,
+            List<FieldIndexEntry<?>> entries) {
+        final var fieldName = CacheableResource.indexedFieldOf(indexKey);
+        if (!rl.tryLockIndexRead(dbName, collName, fieldName)) {
+            return CacheSizeEstimator.estimateFieldIndexSizeByCount(entries.size());
+        }
+        try {
+            return CacheSizeEstimator.estimateFieldIndexSize(entries);
+        } finally {
+            rl.releaseIndexRead(dbName, collName, fieldName);
+        }
     }
 
     public boolean hasLoadedIndex(String dbName, String collName, String fieldName) {

@@ -239,7 +239,7 @@ public final class TriggerDispatcher {
         }
         return new TriggerEvent(event.getType(), event.getDbName(), event.getCollName(), event.getTriggerName(),
                 event.getProcedureName(), event.isBatchMode(), entries, event.getActingUser(), event.getDepth(),
-                event.getRunId(), nextAttempt);
+                event.getRunId(), nextAttempt, event.getFiredAt());
     }
 
     private static List<DbEntry> currentEntriesFor(TriggerEvent event) {

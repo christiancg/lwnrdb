@@ -8,6 +8,7 @@ import java.util.UUID;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
@@ -62,12 +63,32 @@ public final class DatabaseOperationHelper {
         if (cache.getAdminDbEntry(dbName) != null) {
             return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
         }
-        final var colliding = createDatabaseRequest.isReplicated()
-                ? null
-                : OnDiskNameRegistry.collidingDatabase(dbName);
-        if (colliding != null) {
-            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
+        if (createDatabaseRequest.isReplicated()) {
+            return register(createDatabaseRequest, clientId);
         }
+        return registerUnderNameLock(createDatabaseRequest, clientId);
+    }
+
+    private static OperationResponse registerUnderNameLock(CreateDatabaseRequest createDatabaseRequest, UUID clientId)
+            throws Exception {
+        if (!locks.tryLockWrite(Globals.ADMIN_DB_NAME, Globals.DATABASE_NAMES_LOCK,
+                OperationLocks.lockBudgetMillis(false))) {
+            return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+        }
+        try {
+            final var colliding = OnDiskNameRegistry.collidingDatabase(createDatabaseRequest.getDatabaseName());
+            if (colliding != null) {
+                return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
+            }
+            return register(createDatabaseRequest, clientId);
+        } finally {
+            locks.release(Globals.ADMIN_DB_NAME, Globals.DATABASE_NAMES_LOCK);
+        }
+    }
+
+    private static OperationResponse register(CreateDatabaseRequest createDatabaseRequest, UUID clientId)
+            throws Exception {
+        final var dbName = createDatabaseRequest.getDatabaseName();
         if (!LeftoverFolders.moveAsideUnregisteredDatabase(dbName)) {
             return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.ERROR_CREATING_DATABASE);
         }
