@@ -762,6 +762,18 @@ def leftover_rows_folder(work_dir: str) -> str:
     return os.path.join(work_dir, "db", "admin", "pages", f"{DB}_{LEFTOVER_ROWS_COLL}")
 
 
+def wait_for_settled_page_rows(work_dir: str, coll: str, timeout_s=15.0):
+    deadline = time.time() + timeout_s
+    while True:
+        recorded = recorded_pages(work_dir, DB, coll)
+        actual = actual_pages(work_dir, DB, coll)
+        settled = bool(recorded) and {page: (row["size"], row["entryCount"])
+                                      for page, row in recorded.items() if page in actual} == actual
+        if settled or time.time() >= deadline:
+            return settled, recorded, actual
+        time.sleep(0.2)
+
+
 def seed_drops_a_kill_will_interrupt(conn: Conn, work_dir: str):
     section("Seed a collection and a database whose drop a kill will interrupt, and a drop that leaves page rows")
     check_status("create the collection whose drop will be interrupted",
@@ -778,10 +790,8 @@ def seed_drops_a_kill_will_interrupt(conn: Conn, work_dir: str):
                             "collectionName": LEFTOVER_ROWS_COLL}), "OK")
     for i in range(3):
         conn.save({"_id": f"old{i}", "pad": "s" * 200}, coll=LEFTOVER_ROWS_COLL)
-    deadline = time.time() + 15
-    while time.time() < deadline and not recorded_pages(work_dir, DB, LEFTOVER_ROWS_COLL):
-        time.sleep(0.2)
-    check("its page rows reached disk", bool(recorded_pages(work_dir, DB, LEFTOVER_ROWS_COLL)))
+    settled, recorded, actual = wait_for_settled_page_rows(work_dir, LEFTOVER_ROWS_COLL)
+    check("its page rows reached disk", settled, f"recorded {recorded} actual {actual}")
     copy = os.path.join(work_dir, LEFTOVER_ROWS_COPY)
     shutil.rmtree(copy, ignore_errors=True)
     shutil.copytree(leftover_rows_folder(work_dir), copy)
@@ -828,14 +838,7 @@ def test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn: Conn, 
                             "collectionName": LEFTOVER_ROWS_COLL}), "OK")
     for i in range(2):
         check_status(f"save new{i}", conn.save({"_id": f"new{i}", "pad": "n"}, coll=LEFTOVER_ROWS_COLL), "OK")
-    deadline = time.time() + 15
-    while True:
-        recorded = recorded_pages(work_dir, DB, LEFTOVER_ROWS_COLL)
-        actual = actual_pages(work_dir, DB, LEFTOVER_ROWS_COLL)
-        settled = {page: (row["size"], row["entryCount"]) for page, row in recorded.items() if page in actual} == actual
-        if settled or time.time() >= deadline:
-            break
-        time.sleep(0.2)
+    settled, recorded, actual = wait_for_settled_page_rows(work_dir, LEFTOVER_ROWS_COLL)
     pages_coll = f"{DB}_{LEFTOVER_ROWS_COLL}"
     row_ids = [row[0] for row in bu.read_pk_rows(os.path.join(leftover_rows_folder(work_dir), f"{pages_coll}-pk.idx"))]
     check("the page-row index names every row once", len(row_ids) == len(set(row_ids)), f"row ids: {row_ids}")
