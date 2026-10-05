@@ -55,6 +55,9 @@ public class ShutdownCoordinator {
             if (socketServer != null) {
                 socketServer.stopAccepting();
             }
+            if (clusterServer != null) {
+                clusterServer.refuseWrites();
+            }
         });
         step("stop background sweeps", () -> {
             memoryManagement.stopSweepThread();

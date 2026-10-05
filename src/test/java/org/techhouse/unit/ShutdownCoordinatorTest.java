@@ -22,6 +22,7 @@ import org.techhouse.ShutdownCoordinator;
 import org.techhouse.bckg_ops.ScheduleExecutor;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.ClusterServer;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
@@ -269,5 +270,23 @@ public class ShutdownCoordinatorTest {
 
         assertTrue(idleAtTriggerDrain.get(),
                 "a write still running when the drains start submits its index events into a draining queue");
+    }
+
+    @Test
+    public void test_peer_writes_are_refused_before_the_drains() throws Exception {
+        final var clusterServer = new ClusterServer(0, "127.0.0.1", null);
+        final var refusingAtTriggerDrain = new AtomicBoolean(false);
+        final var triggers = mock(TriggerExecutor.class);
+        when(triggers.drain(anyLong())).thenAnswer(_ -> {
+            refusingAtTriggerDrain.set(clusterServer.isRefusingWrites());
+            return true;
+        });
+        final var coordinator = coordinator();
+        TestUtils.setPrivateField(coordinator, "triggerExecutor", triggers);
+
+        coordinator.shutdown(null, clusterServer);
+
+        assertTrue(refusingAtTriggerDrain.get(),
+                "a peer write applied during the drains submits its index events into a draining queue");
     }
 }

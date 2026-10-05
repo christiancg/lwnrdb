@@ -17,6 +17,7 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.PartialBulkSaveException;
 import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -87,10 +88,14 @@ public class BulkSaveMidBatchUpdateFailureTest {
                 "the second entry's page must be unwritable for this test to inject a failure");
     }
 
-    private void runTheFailingBulkSave() {
+    private static BulkSaveRequest failingBulk() {
         final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
         bulk.setObjects(List.of(document(KEPT_ID, "new"), document(FAILING_ID, "new")));
-        assertThrows(PartialBulkUpdateException.class, () -> SaveOperationHelper.executeBulkSave(bulk),
+        return bulk;
+    }
+
+    private void runTheFailingBulkSave() {
+        assertThrows(PartialBulkSaveException.class, () -> SaveOperationHelper.executeBulkSave(failingBulk()),
                 "a bulk save whose second update cannot write its page must surface the failure");
     }
 
@@ -152,5 +157,35 @@ public class BulkSaveMidBatchUpdateFailureTest {
 
         assertFalse(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).contains(FAILING_ID),
                 "the entry that never landed on disk must not be marked as a pending index write");
+    }
+
+    @Test
+    public void test_a_mid_batch_update_failure_throws_with_the_committed_prefix() throws Exception {
+        seedTheDocumentsTheBulkWillUpdate();
+        blockThePageTheSecondUpdateWillTarget();
+
+        final var failure = assertThrows(PartialBulkSaveException.class,
+                () -> SaveOperationHelper.executeBulkSave(failingBulk()));
+
+        assertEquals(List.of(KEPT_ID), failure.committed().getUpdated(),
+                "the caller fires triggers and replicates exactly what landed, so it must be told what that is");
+        assertEquals(List.of(), failure.committed().getInserted());
+        assertInstanceOf(PartialBulkUpdateException.class, failure.getCause(),
+                "the page failure must stay visible as the cause");
+    }
+
+    @Test
+    public void test_a_failure_before_anything_landed_throws_the_original_exception() throws Exception {
+        final var failing = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, document(FAILING_ID, "old"));
+        failing.setPage(1);
+        fileSystem.insertIntoCollection(failing);
+        blockThePageTheSecondUpdateWillTarget();
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        bulk.setObjects(List.of(document(FAILING_ID, "new")));
+
+        final var failure = assertThrows(Exception.class, () -> SaveOperationHelper.executeBulkSave(bulk));
+
+        assertFalse(failure instanceof PartialBulkSaveException,
+                "a bulk save that committed nothing has nothing to fire triggers for or replicate");
     }
 }

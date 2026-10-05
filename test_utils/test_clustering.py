@@ -2021,6 +2021,41 @@ def test_delete_of_an_unreplicated_id_does_not_destroy_it():
               all_nodes_see(DB, written, "while-down", 1, ports=all_ports(), timeout_s=45.0))
 
 
+def test_a_rejoining_node_repairs_one_change_among_many_documents():
+    section("Anti-entropy repairs one missed write among many identical documents")
+
+    coll = "pull_batches"
+    total = 1200
+    check("the collection exists on every node",
+          wait_until(lambda: create_coll(nodes[0].client_port, DB, coll).get("status") == "OK", timeout_s=30.0))
+    documents = [{"_id": f"d{i}", "v": 1} for i in range(total)]
+    check("the documents are committed",
+          wait_until(lambda: bulk_save(nodes[0].client_port, DB, coll, documents).get("status") == "OK",
+                     timeout_s=30.0, interval_s=1.0))
+    check("every node holds every document", wait_until(
+        lambda: all(len(stored_documents(n, DB, coll)) == total for n in nodes), timeout_s=60.0, interval_s=1.0))
+
+    owner = owner_of(nodes[0].client_port, DB, coll)
+    absent = next((n for n in nodes if n is not owner), None)
+    if not check("the collection has a live owner", owner is not None and absent is not None):
+        return
+    writer = next(n for n in nodes if n is not absent)
+    print(f"  Stopping node-{absent.index} ...")
+    absent.stop()
+    check("a change commits while that node is down",
+          wait_until(lambda: save(writer.client_port, DB, coll, {"_id": "d0", "v": 2}).get("status") == "OK",
+                     timeout_s=30.0, interval_s=1.0))
+    print(f"  Restarting node-{absent.index} ...")
+    absent.start()
+
+    check("the rejoined node repairs the document it missed", wait_until(
+        lambda: stored_documents(absent, DB, coll).get("d0", {}).get("v") == 2, timeout_s=60.0, interval_s=1.0))
+    held = stored_documents(absent, DB, coll)
+    check("and still holds every other document unchanged",
+          len(held) == total and all(held[f"d{i}"].get("v") == 1 for i in range(1, total)),
+          f"holds {len(held)} documents")
+
+
 def drive_to_prepared(edge, watched, frozen, buffered, victim, timeout_s=20.0):
     """Leave a cross-owner transaction durably PREPARED on `watched`, then kill `victim`.
 
@@ -2964,6 +2999,7 @@ def main():
         test_forwarded_write_ignores_a_client_supplied_trigger_depth()
         test_a_fresh_tombstone_survives_anti_entropy_sweeps()
         test_delete_of_an_unreplicated_id_does_not_destroy_it()
+        test_a_rejoining_node_repairs_one_change_among_many_documents()
         test_a_prepared_participant_resolves_without_its_coordinator()
         test_a_post_prepare_write_survives_2pc_recovery()
         test_a_trigger_fires_once_despite_a_replication_timeout()

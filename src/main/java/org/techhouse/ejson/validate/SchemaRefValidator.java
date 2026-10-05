@@ -1,9 +1,12 @@
 package org.techhouse.ejson.validate;
 
+import java.util.ArrayDeque;
 import java.util.Collections;
+import java.util.Deque;
 import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonBaseElement.JsonType;
 import org.techhouse.ejson.elements.JsonObject;
@@ -26,14 +29,30 @@ final class SchemaRefValidator {
     private final List<String> errors;
     private final Set<JsonBaseElement> expanding = Collections.newSetFromMap(new IdentityHashMap<>());
     private final Set<JsonBaseElement> settled = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Set<JsonBaseElement> walked = Collections.newSetFromMap(new IdentityHashMap<>());
+    private final Deque<RefTarget> unwalkedTargets = new ArrayDeque<>();
+    private final BiConsumer<JsonBaseElement, String> metaCheck;
 
-    SchemaRefValidator(JsonBaseElement root, List<String> errors) {
+    SchemaRefValidator(JsonBaseElement root, List<String> errors, BiConsumer<JsonBaseElement, String> metaCheck) {
         this.schema = new JsonSchema(root);
         this.errors = errors;
+        this.metaCheck = metaCheck;
     }
 
-    void validate(JsonBaseElement node, String path) {
-        if (node == null || !node.isJsonObject()) {
+    void validateAll(JsonBaseElement root) {
+        walk(root, "");
+        while (!unwalkedTargets.isEmpty()) {
+            final var target = unwalkedTargets.removeFirst();
+            if (walked.contains(target.node())) {
+                continue;
+            }
+            metaCheck.accept(target.node(), target.path());
+            walk(target.node(), target.path());
+        }
+    }
+
+    private void walk(JsonBaseElement node, String path) {
+        if (node == null || !node.isJsonObject() || !walked.add(node)) {
             return;
         }
         final var obj = node.asJsonObject();
@@ -47,15 +66,15 @@ final class SchemaRefValidator {
 
     private void visitSubschemas(String keyword, JsonBaseElement value, String path) {
         if (SINGLE_SCHEMA_KEYWORDS.contains(keyword)) {
-            validate(value, path);
+            walk(value, path);
         } else if (SCHEMA_ARRAY_KEYWORDS.contains(keyword) && value.isJsonArray()) {
             final var arr = value.asJsonArray();
             for (var i = 0; i < arr.size(); i++) {
-                validate(arr.get(i), path + "/" + i);
+                walk(arr.get(i), path + "/" + i);
             }
         } else if (SCHEMA_MAP_KEYWORDS.contains(keyword) && value.isJsonObject()) {
             for (final var entry : value.asJsonObject().entrySet()) {
-                validate(entry.getValue(), path + "/" + entry.getKey());
+                walk(entry.getValue(), path + "/" + entry.getKey());
             }
         }
     }
@@ -99,7 +118,14 @@ final class SchemaRefValidator {
                     + "' must resolve to a schema (an object or a boolean)");
             return;
         }
+        if (!walked.contains(resolved)) {
+            unwalkedTargets.addLast(new RefTarget(resolved, pointerPathOf(ref.asJsonString().getValue())));
+        }
         checkChain(resolved, refPath);
+    }
+
+    private static String pointerPathOf(String ref) {
+        return ref.substring(1);
     }
 
     private static boolean isSchemaNode(JsonBaseElement node) {
@@ -124,5 +150,8 @@ final class SchemaRefValidator {
                 }
             }
         }
+    }
+
+    private record RefTarget(JsonBaseElement node, String path) {
     }
 }

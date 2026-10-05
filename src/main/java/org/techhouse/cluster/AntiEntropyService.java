@@ -25,6 +25,7 @@ import org.techhouse.ops.ReplicatedApplyHelper;
 import org.techhouse.utils.JsonUtils;
 
 public class AntiEntropyService implements MembershipListener {
+    static final int PULL_BATCH_SIZE = 500;
     private final Logger logger = Logger.logFor(AntiEntropyService.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
@@ -197,8 +198,8 @@ public class AntiEntropyService implements MembershipListener {
 
         final var selfNodeId = selfNodeId();
         final var best = new HashMap<String, Best>();
-        localLive.forEach((id, live) -> merge(best, id, live.version(), false, null, selfNodeId));
-        localTombstones.forEach((id, version) -> merge(best, id, version, true, null, selfNodeId));
+        localLive.forEach((id, live) -> merge(best, id, live.version(), false, null, selfNodeId, live.length()));
+        localTombstones.forEach((id, version) -> merge(best, id, version, true, null, selfNodeId, 0L));
 
         final var localSummary = summaryOf(localDigest(localLive, localTombstones));
 
@@ -225,7 +226,7 @@ public class AntiEntropyService implements MembershipListener {
             }
             for (final var digestEntry : response.getDigest()) {
                 merge(best, digestEntry.getId(), digestEntry.versionValue(), digestEntry.isDeleted(), member.address(),
-                        digestEntry.getNodeId());
+                        digestEntry.getNodeId(), digestEntry.getLength());
             }
         }
 
@@ -243,8 +244,7 @@ public class AntiEntropyService implements MembershipListener {
                 }
             } else if (winner.source != null) {
                 final var local = localLive.get(id);
-                if (local == null || local.version() < winner.version
-                        || (local.version() == winner.version && outranksOnNodeId(winner.nodeId, selfNodeId))) {
+                if (local == null || local.version() < winner.version || pullsOnTieBreak(local, winner, selfNodeId)) {
                     pullByPeer.computeIfAbsent(winner.source, ignored -> new ArrayList<>()).add(id);
                 }
             }
@@ -256,14 +256,21 @@ public class AntiEntropyService implements MembershipListener {
                     clusterConfig.replicationAckTimeoutMs());
         }
         for (final var pull : pullByPeer.entrySet()) {
-            final var response = requestPull(pull.getKey(), dbName, collName, pull.getValue());
-            if (response != null && response.getDocuments() != null && !response.getDocuments().isEmpty()) {
-                ReplicatedApplyHelper.apply(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT,
-                        response.getDocuments(), null, response.getVersions()),
-                        clusterConfig.replicationAckTimeoutMs());
+            final var ids = pull.getValue();
+            for (var from = 0; from < ids.size(); from += PULL_BATCH_SIZE) {
+                final var batch = new ArrayList<>(ids.subList(from, Math.min(ids.size(), from + PULL_BATCH_SIZE)));
+                pullAndApply(pull.getKey(), dbName, collName, batch);
             }
         }
         garbageCollectTombstones(dbName, collName, everyPeerAnswered && !peers.isEmpty());
+    }
+
+    private void pullAndApply(NodeAddress peer, String dbName, String collName, List<String> ids) {
+        final var response = requestPull(peer, dbName, collName, ids);
+        if (response != null && response.getDocuments() != null && !response.getDocuments().isEmpty()) {
+            ReplicatedApplyHelper.apply(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT,
+                    response.getDocuments(), null, response.getVersions()), clusterConfig.replicationAckTimeoutMs());
+        }
     }
 
     private void garbageCollectTombstones(String dbName, String collName, boolean everyPeerAnswered)
@@ -283,16 +290,21 @@ public class AntiEntropyService implements MembershipListener {
     }
 
     private void merge(Map<String, Best> best, String id, long version, boolean deleted, NodeAddress source,
-            String nodeId) {
+            String nodeId, long length) {
         final var current = best.get(id);
         if (current == null || wins(version, deleted, nodeId, current)) {
-            best.put(id, new Best(version, deleted, source, nodeId));
+            best.put(id, new Best(version, deleted, source, nodeId, length));
         }
     }
 
     private String selfNodeId() {
         final var self = membershipService.getSelf();
         return self == null ? null : self.getNodeId();
+    }
+
+    private static boolean pullsOnTieBreak(LocalEntry local, Best winner, String selfNodeId) {
+        return local.version() == winner.version() && outranksOnNodeId(winner.nodeId(), selfNodeId)
+                && (winner.length() == 0 || winner.length() != local.length());
     }
 
     private static boolean outranksOnNodeId(String winnerNodeId, String selfNodeId) {
@@ -351,7 +363,7 @@ public class AntiEntropyService implements MembershipListener {
         return new ClusterMessage(null, type, clusterConfig.secret(), membershipService.getSelf(), null);
     }
 
-    private record Best(long version, boolean deleted, NodeAddress source, String nodeId) {
+    private record Best(long version, boolean deleted, NodeAddress source, String nodeId, long length) {
     }
 
     private record LocalEntry(long version, long length) {

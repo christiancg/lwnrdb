@@ -206,6 +206,23 @@ def test_cyclic_ref_rejected(c):
                  find_by_id(c, COLL, "rec1"), "OK")
 
 
+def test_ref_targets_are_checked(c):
+    section("$ref targets are validated as schemas wherever they live")
+    check_code("a malformed enum behind a $ref into definitions is rejected",
+               save_schema(c, COLL, {"definitions": {"role": {"enum": "admin"}},
+                                     "properties": {"role": {"$ref": "#/definitions/role"}}}),
+               "ERROR", "400-8")
+    resp = save_schema(c, COLL, {"definitions": {"role": {"enum": ["admin"]}},
+                                 "properties": {"role": {"$ref": "#/definitions/role"}}})
+    check_status("a well-formed target behind definitions is accepted", resp, "OK")
+    check("definitions itself is still only a warning",
+          any("definitions" in w for w in resp.get("warnings", [])), detail=str(resp.get("warnings")))
+    check_code("the target's enum is enforced",
+               save(c, COLL, {"_id": "ref1", "role": "guest"}), "ERROR", "400-7")
+    check_status("a value the target's enum allows saves",
+                 save(c, COLL, {"_id": "ref2", "role": "admin"}), "OK")
+
+
 def test_schema_warnings(c):
     section("SAVE_SCHEMA warnings")
     resp = save_schema(c, COLL, {"type": "object", "properties": {"name": {"type": "string"}}, "foo": 1})
@@ -282,6 +299,7 @@ def main():
         test_pattern_uses_ecma_semantics,
         test_invalid_schema_rejected,
         test_cyclic_ref_rejected,
+        test_ref_targets_are_checked,
         test_schema_warnings,
         test_custom_type_enforcement,
         test_delete_schema,

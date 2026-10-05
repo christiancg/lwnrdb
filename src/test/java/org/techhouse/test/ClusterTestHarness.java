@@ -69,6 +69,10 @@ public final class ClusterTestHarness {
         TestUtils.setPrivateField(membershipService, "self", null);
     }
 
+    public ClusterServer server() {
+        return server;
+    }
+
     public int serverPort() {
         return serverPort;
     }

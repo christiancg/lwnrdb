@@ -19,6 +19,7 @@ import org.techhouse.data.DbEntry;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.PartialBulkSaveException;
 import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.BulkUpdateResult;
 import org.techhouse.fs.FileSystem;
@@ -193,9 +194,10 @@ public final class SaveOperationHelper {
             } catch (PartialBulkUpdateException e) {
                 final var partial = e.getPartialResult();
                 partial.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
-                publishCommittedWrites(dbName, collName, toDbEntries(partial.updated()), List.of());
+                final var committedUpdates = toDbEntries(partial.updated());
+                publishCommittedWrites(dbName, collName, committedUpdates, List.of());
                 cache.userCache().evictPkIndex(dbName, collName);
-                throw e;
+                throw withCommittedPart(e, List.of(), committedUpdates);
             } catch (Exception e) {
                 cache.userCache().evictPkIndex(dbName, collName);
                 throw e;
@@ -226,9 +228,10 @@ public final class SaveOperationHelper {
             }
             primaryKeyIndex.addAll(insertedIndexEntries.stream().map(IndexedDbEntry::getIndex).toList());
         } catch (Exception e) {
-            publishCommittedWrites(dbName, collName, toDbEntries(updatedIndexEntries),
-                    toDbEntries(insertedIndexEntries));
-            throw e;
+            final var committedUpdates = toDbEntries(updatedIndexEntries);
+            final var committedInserts = toDbEntries(insertedIndexEntries);
+            publishCommittedWrites(dbName, collName, committedUpdates, committedInserts);
+            throw withCommittedPart(e, committedInserts, committedUpdates);
         } finally {
             primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
         }
@@ -248,6 +251,14 @@ public final class SaveOperationHelper {
         taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, inserted, updated,
                 CollectionIncarnation.current(dbName, collName), pendingGeneration));
         listenManager.markDirty(dbName, collName);
+    }
+
+    private static Exception withCommittedPart(Exception failure, List<DbEntry> inserted, List<DbEntry> updated) {
+        if (inserted.isEmpty() && updated.isEmpty()) {
+            return failure;
+        }
+        return new PartialBulkSaveException(
+                new BulkSaveResponse("Partially saved entries", idsOf(inserted), idsOf(updated)), failure);
     }
 
     private static List<DbEntry> toDbEntries(List<IndexedDbEntry> entries) {

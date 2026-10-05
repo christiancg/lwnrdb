@@ -146,11 +146,15 @@ public final class TriggerOperationHelper {
         final var updatedAt = alreadyStamped ? request.getStampedUpdatedAt() : System.currentTimeMillis();
         final var updatedBy = alreadyStamped ? request.getStampedUpdatedBy() : actingUser;
         final var definer = alreadyStamped ? request.getStampedDefiner() : actingUser;
+        final var localCreatedAt = existing == null ? updatedAt : existing.getCreatedAt();
+        final var createdAt = alreadyStamped && request.getStampedCreatedAt() > 0
+                ? request.getStampedCreatedAt()
+                : localCreatedAt;
         request.setStampedVersion(version);
         request.setStampedUpdatedAt(updatedAt);
         request.setStampedUpdatedBy(updatedBy);
         request.setStampedDefiner(definer);
-        final var createdAt = existing == null ? updatedAt : existing.getCreatedAt();
+        request.setStampedCreatedAt(createdAt);
         return new TriggerDefinition(request.getName(), events, request.getProcedureName(), mode, timing,
                 request.isAllowCascade(), request.isEnabled(), definer, version, createdAt, updatedAt, updatedBy);
     }

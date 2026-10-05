@@ -9,12 +9,14 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import javax.net.ssl.SSLException;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.InFlightRequests;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
@@ -42,11 +44,14 @@ public class ClusterConnectionHandler implements Runnable {
     private final TriggerRunDirectory triggerRunDirectory = IocContainer.get(TriggerRunDirectory.class);
     private final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final InFlightRequests inFlightRequests = IocContainer.get(InFlightRequests.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
     private final Socket socket;
+    private final BooleanSupplier refusingWrites;
 
-    public ClusterConnectionHandler(Socket socket) {
+    public ClusterConnectionHandler(Socket socket, BooleanSupplier refusingWrites) {
         this.socket = socket;
+        this.refusingWrites = refusingWrites;
     }
 
     @Override
@@ -120,6 +125,18 @@ public class ClusterConnectionHandler implements Runnable {
             error.setErrorMessage("Invalid cluster secret");
             return error;
         }
+        if (!PeerShutdownGate.carriesWrite(request)) {
+            return dispatch(request);
+        }
+        inFlightRequests.enter();
+        try {
+            return refusingWrites.getAsBoolean() ? PeerShutdownGate.refusal(request) : dispatch(request);
+        } finally {
+            inFlightRequests.exit();
+        }
+    }
+
+    private ClusterMessage dispatch(ClusterMessage request) {
         return switch (request.getType()) {
             case JOIN_REQUEST -> membershipService.handleJoin(request);
             case GOSSIP -> membershipService.handleGossip(request);

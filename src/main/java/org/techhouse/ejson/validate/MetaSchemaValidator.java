@@ -15,7 +15,8 @@ public class MetaSchemaValidator {
         final var warnings = new ArrayList<String>();
         checkSchemaNode(schema, "", errors, warnings);
         if (errors.isEmpty()) {
-            new SchemaRefValidator(schema, errors).validate(schema, "");
+            new SchemaRefValidator(schema, errors, (target, path) -> checkSchemaNode(target, path, errors, warnings))
+                    .validateAll(schema);
         }
         return SchemaValidationResult.of(errors, warnings);
     }

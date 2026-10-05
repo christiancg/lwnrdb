@@ -318,9 +318,7 @@ public class OperationProcessor {
                     if (hookError != null) {
                         return hookError;
                     }
-                    final var local = SaveOperationHelper.executeBulkSave(bulkSaveRequest);
-                    TriggerHelper.afterBulkSave(dbName, collName, local, actingUser, bulkSaveRequest.getTriggerDepth());
-                    return ClusterWriteHelper.afterBulkSave(dbName, collName, local);
+                    return BulkSaveEffects.executeAndPublish(bulkSaveRequest, actingUser);
                 });
     }
 

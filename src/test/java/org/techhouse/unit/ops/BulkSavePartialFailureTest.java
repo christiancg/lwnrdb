@@ -22,6 +22,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.PartialBulkSaveException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.SaveOperationHelper;
@@ -202,5 +203,21 @@ public class BulkSavePartialFailureTest {
                 events.getFirst().getInsertedEntries().stream().map(DbEntry::get_id).toList());
         assertEquals("new", cachedValueOf());
         assertTrue(pending.idsFor(TestGlobals.DB, TestGlobals.COLL).containsAll(Set.of(UPDATED_ID, INSERTED_ID)));
+    }
+
+    @Test
+    public void test_a_failed_insert_half_throws_with_the_committed_updated_ids() throws Exception {
+        saveTheDocumentTheBulkWillUpdate();
+        blockThePageTheInsertHalfWillTarget();
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        bulk.setObjects(List.of(document(UPDATED_ID, "new"), document(INSERTED_ID, "x")));
+
+        final var failure = assertThrows(PartialBulkSaveException.class,
+                () -> SaveOperationHelper.executeBulkSave(bulk));
+
+        assertEquals(List.of(UPDATED_ID), failure.committed().getUpdated(),
+                "the update half landed, so the caller must fire its triggers and replicate it");
+        assertEquals(List.of(), failure.committed().getInserted(),
+                "the insert half was truncated back, so nothing inserted may be reported as committed");
     }
 }

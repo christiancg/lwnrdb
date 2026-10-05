@@ -507,7 +507,12 @@ membership — and anti-entropy makes both the handoff and the rejoining of a pr
 node data-safe.
 
 **Shutdown and departure.** `ShutdownCoordinator` leaves the cluster last, after the queues
-have drained, so peers keep routing here only while this node can still answer. There is,
+have drained, so peers keep routing here only while this node can still answer. From its first step,
+though, it refuses every write a peer sends — a forwarded request answers `503-13`, which the edge
+relays to its client, and a `REPLICATE`, `REPLICATE_TX`, `PREPARE_TX` or `COMMIT_TX` answers an
+`ERROR` the sender treats like a peer that has already left — because the background queue is about
+to stop accepting index events. Gossip, `DIGEST`, `PULL`, `TX_STATUS`, `ABORT_TX` and a forwarded
+rollback are still answered. There is,
 however, **no graceful LEAVE message**: a departing node is detected the same way a crashed
 one is, by missed heartbeats, so peers wait out `deadTimeoutMs` (15s by default) before
 reassigning its collections. During that window writes to those collections fail with
@@ -599,7 +604,11 @@ collections against the live members:
    version would make it one, and is a disk-format change that has not been made.
 3. Where a peer holds the winning live version it pulls that document and applies it as a
    versioned upsert; where a tombstone wins it deletes locally and records the tombstone. It
-   never overwrites an id it already holds at the winning version.
+   never overwrites an id it already holds at the winning version: a copy that wins only on the
+   node-id tie-break is pulled only when its byte length differs from the local one (or the peer
+   sent no length), since two copies at one version and one length already produce the same
+   summary. Pulls go out in batches of 500 ids, each applied as it returns, so one large repair
+   cannot outlast `replicationAckTimeoutMs` and a failed batch skips only itself.
 
 **Every digest and pull carries the collection's incarnation, and a mismatch stops the exchange.**
 Without it the whole mechanism above runs happily over documents belonging to a *dropped* creation

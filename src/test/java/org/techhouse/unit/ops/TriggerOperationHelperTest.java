@@ -97,6 +97,45 @@ public class TriggerOperationHelperTest {
         assertEquals(9L, stored.getVersion());
     }
 
+    @Test
+    public void test_a_replicated_save_honours_the_stamped_created_at() throws Exception {
+        save(request("adopted"));
+        final var replicated = request("adopted");
+        replicated.setStampedVersion(9L);
+        replicated.setStampedDefiner(ACTOR);
+        replicated.setStampedUpdatedBy(ACTOR);
+        replicated.setStampedUpdatedAt(5L);
+        replicated.setStampedCreatedAt(3L);
+        replicated.setReplicated(true);
+
+        save(replicated);
+
+        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        assertEquals(3L, stored.getCreatedAt(),
+                "a replica already holding the trigger must take the coordinator's creation time, not keep its own");
+    }
+
+    @Test
+    public void test_a_client_cannot_forge_the_stamped_created_at() throws Exception {
+        final var request = request("forged-created");
+        request.setStampedCreatedAt(3L);
+
+        save(request);
+
+        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        assertEquals(stored.getUpdatedAt(), stored.getCreatedAt());
+    }
+
+    @Test
+    public void test_created_at_is_stamped_on_the_request_for_deterministic_re_execution() throws Exception {
+        final var request = request("created-audit");
+
+        save(request);
+
+        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
+        assertEquals(stored.getCreatedAt(), request.getStampedCreatedAt());
+    }
+
     private SaveTriggerResponse save(SaveTriggerRequest request) throws Exception {
         final var response = TriggerOperationHelper.executeSave(request, ACTOR);
         assertInstanceOf(SaveTriggerResponse.class, response, response.getMessage());
