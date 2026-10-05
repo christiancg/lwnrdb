@@ -2,6 +2,9 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.io.IOException;
 import java.util.LinkedHashMap;
@@ -22,12 +25,26 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.CountOperatorHelper;
+import org.techhouse.ops.CountOperatorHelper.FastCount;
 import org.techhouse.ops.IndexHelper;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.agg.BaseAggregationStep;
+import org.techhouse.ops.req.agg.BaseOperator;
+import org.techhouse.ops.req.agg.ConjunctionOperatorType;
 import org.techhouse.ops.req.agg.FieldOperatorType;
+import org.techhouse.ops.req.agg.mid_operators.ArrayParamMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.BaseMidOperator;
+import org.techhouse.ops.req.agg.mid_operators.MidOperationType;
+import org.techhouse.ops.req.agg.mid_operators.ScriptMidOperator;
+import org.techhouse.ops.req.agg.operators.ConjunctionOperator;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.ops.req.agg.operators.ScriptOperator;
 import org.techhouse.ops.req.agg.step.CountAggregationStep;
 import org.techhouse.ops.req.agg.step.FilterAggregationStep;
+import org.techhouse.ops.req.agg.step.MapAggregationStep;
+import org.techhouse.ops.req.agg.step.map.AddFieldMapOperator;
+import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -40,6 +57,7 @@ import org.techhouse.test.TestUtils;
  */
 public class FilterCountFastPathAgreementTest {
     private static final String FIELD = "score";
+    private static final String THROWING_SCRIPT = "export default () => { throw new Error('boom'); }";
     private Cache cache;
 
     @BeforeEach
@@ -231,5 +249,73 @@ public class FilterCountFastPathAgreementTest {
 
         assertEquals(0, rowsOf(step));
         assertEquals(0, countOf(step));
+    }
+
+    private static MapAggregationStep map(BaseOperator condition, BaseMidOperator operation) {
+        return new MapAggregationStep(List.of(new AddFieldMapOperator("extra", condition, operation)));
+    }
+
+    private static FilterAggregationStep indexedFilter() {
+        return filter(FieldOperatorType.EQUALS, FIELD, new JsonNumber(2));
+    }
+
+    private static FastCount fastCountOf(BaseAggregationStep... steps) throws IOException {
+        return CountOperatorHelper.tryIndexOnlyCount(List.of(steps), TestGlobals.DB, TestGlobals.COLL);
+    }
+
+    @Test
+    public void test_a_map_script_before_count_declines_the_index_only_count() throws Exception {
+        seed();
+        indexField();
+
+        assertNull(fastCountOf(indexedFilter(), map(null, new ScriptMidOperator(THROWING_SCRIPT)),
+                new CountAggregationStep()));
+    }
+
+    @Test
+    public void test_a_map_condition_script_inside_a_conjunction_declines_the_index_only_count() throws Exception {
+        seed();
+        indexField();
+        final var condition = new ConjunctionOperator(ConjunctionOperatorType.OR,
+                List.of(new FieldOperator(FieldOperatorType.EQUALS, FIELD, new JsonNumber(1)),
+                        new ScriptOperator(THROWING_SCRIPT)));
+
+        assertNull(fastCountOf(indexedFilter(), map(condition, sumOfScore()), new CountAggregationStep()));
+    }
+
+    private static ArrayParamMidOperator sumOfScore() {
+        return new ArrayParamMidOperator(MidOperationType.SUM, arrayOf(new JsonString(FIELD)));
+    }
+
+    @Test
+    public void test_a_non_script_map_keeps_the_index_only_count() throws Exception {
+        seed();
+        indexField();
+
+        final var fastCount = fastCountOf(indexedFilter(), map(null, sumOfScore()), new CountAggregationStep());
+
+        assertNotNull(fastCount);
+        assertEquals(rowsOf(indexedFilter()), fastCount.result().get("count").asJsonNumber().asInteger());
+    }
+
+    @Test
+    public void test_a_script_after_the_count_does_not_decline_it() throws Exception {
+        seed();
+        indexField();
+
+        assertNotNull(fastCountOf(indexedFilter(), new CountAggregationStep(),
+                map(null, new ScriptMidOperator(THROWING_SCRIPT))));
+    }
+
+    @Test
+    public void test_a_throwing_map_script_fails_the_count_with_or_without_an_index() throws Exception {
+        seed();
+        final var request = new AggregateRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setAggregationSteps(List.of(indexedFilter(), map(null, new ScriptMidOperator(THROWING_SCRIPT)),
+                new CountAggregationStep()));
+
+        assertThrows(ScriptCallableException.class, () -> AggregationOperationHelper.processAggregation(request));
+        indexField();
+        assertThrows(ScriptCallableException.class, () -> AggregationOperationHelper.processAggregation(request));
     }
 }

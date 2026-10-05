@@ -332,6 +332,18 @@ def probe_count_with_filter(c):
                detail=f"{bad}/{CONS_REPEATS} counts were stale")
 
 
+THROWING_MAP = {"type": "MAP", "operators": [{"fieldName": "x", "operator": {
+    "type": "SCRIPT", "script": "export default () => { throw new Error('boom'); }"}}]}
+
+
+def probe_count_after_a_failing_map_script(c):
+    countme = {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": "countme"}}
+    indexed = agg(c, CONS, [countme, THROWING_MAP, {"type": "COUNT"}])
+    scanned = agg(c, CONS, [{"type": "SKIP", "skip": 0}, countme, THROWING_MAP, {"type": "COUNT"}])
+    check_code("a COUNT whose MAP script throws fails even when an index could count", indexed, "ERROR", "400-9")
+    check_code("exactly as it fails when the filter is answered by a scan", scanned, "ERROR", "400-9")
+
+
 def probe_whole_collection_count(c):
     # The no-filter COUNT comes from the synchronously-maintained PK index, so it is exact at once.
     bad = 0
@@ -585,6 +597,7 @@ def consistency_suite(c):
     probe_filter_no_false_negative(c)
     probe_filter_no_false_positive_on_update(c)
     probe_count_with_filter(c)
+    probe_count_after_a_failing_map_script(c)
     probe_whole_collection_count(c)
     probe_distinct_new_value(c)
     probe_group_by(c)

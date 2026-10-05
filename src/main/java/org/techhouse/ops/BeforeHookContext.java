@@ -20,12 +20,14 @@ import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.req.validations.DataRequestValidator;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.simplejs.ScriptCallable;
 import org.techhouse.simplejs.SimpleJs;
 import org.techhouse.simplejs.exceptions.ScriptCallableException;
 import org.techhouse.simplejs.host.HookHostBindings;
 import org.techhouse.simplejs.host.ResourceLimits;
+import org.techhouse.utils.JsonUtils;
 
 public final class BeforeHookContext implements AutoCloseable {
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -158,6 +160,10 @@ public final class BeforeHookContext implements AutoCloseable {
         if (idError != null) {
             rejected.incrementAndGet();
             return reject(type, hook, idError);
+        }
+        if (JsonUtils.nestingExceeds(replacement, Globals.MAX_REQUEST_NESTING_DEPTH)) {
+            rejected.incrementAndGet();
+            return reject(type, hook, "the document it returned is too deep: " + DataRequestValidator.NESTING_MESSAGE);
         }
         final var schemaErrors = SchemaValidationHelper.schemaErrors(dbName, collName, replacement);
         if (schemaErrors != null) {

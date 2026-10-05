@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -104,7 +105,7 @@ public class TriggerRunRecoveryTest {
                 System.currentTimeMillis());
         TriggerRunLog.markAttempt("run-attempts", org.techhouse.data.admin.TriggerRunStatus.PENDING, 2, "boom", 0L);
 
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep();
 
         assertEquals(1, captured.size());
@@ -123,7 +124,7 @@ public class TriggerRunRecoveryTest {
         writeRecord("run-fresh", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
                 System.currentTimeMillis());
 
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep();
 
         assertEquals(1, captured.size());
@@ -160,7 +161,7 @@ public class TriggerRunRecoveryTest {
         writeRecord("run-a", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
                 System.currentTimeMillis());
 
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep();
 
         assertEquals(1, captured.size());
@@ -173,7 +174,7 @@ public class TriggerRunRecoveryTest {
         writeRecord("run-b", "some-other-node", EventType.UPDATED, List.of("live"), List.of(),
                 System.currentTimeMillis());
 
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep();
 
         assertTrue(captured.isEmpty());
@@ -181,11 +182,43 @@ public class TriggerRunRecoveryTest {
     }
 
     @Test
+    public void test_a_run_recorded_after_the_startup_snapshot_is_not_requeued() throws Exception {
+        saveDocument();
+        for (final var entry : TriggerRunLog.pending()) {
+            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
+        }
+        captured.clear();
+        final var now = System.currentTimeMillis();
+        writeRecord("run-old", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(), now);
+        final var startupRuns = TriggerRunLog.pendingRunIds();
+        writeRecord("run-live", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(), now);
+
+        TriggerRunRecovery.recoverLocal(startupRuns);
+        sleep();
+
+        assertEquals(List.of("run-old"), captured.stream().map(TriggerEvent::getRunId).toList(),
+                "a run recorded once the executor is live was already queued by its producer");
+        assertEquals(1, TriggerRunLog.recordIdsFor("run-live").size(), "and its record is left to that run");
+    }
+
+    @Test
+    public void test_an_empty_snapshot_requeues_nothing() throws Exception {
+        writeRecord("run-c", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(),
+                System.currentTimeMillis());
+
+        TriggerRunRecovery.recoverLocal(Set.of());
+        sleep();
+
+        assertTrue(captured.isEmpty());
+        assertEquals(1, TriggerRunLog.pending().size());
+    }
+
+    @Test
     public void test_deleted_event_replays_the_stored_document() throws Exception {
         writeRecord("run-c", TriggerRunLog.currentNodeId(), EventType.DELETED, List.of(), List.of(document("removed")),
                 System.currentTimeMillis());
 
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep();
 
         assertEquals(1, captured.size());
@@ -198,7 +231,7 @@ public class TriggerRunRecoveryTest {
         writeRecord("run-d", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("no-such-doc"), List.of(),
                 System.currentTimeMillis());
 
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep();
 
         assertTrue(captured.isEmpty());
@@ -211,7 +244,7 @@ public class TriggerRunRecoveryTest {
                 System.currentTimeMillis());
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
 
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep();
 
         assertTrue(captured.isEmpty());
@@ -222,7 +255,7 @@ public class TriggerRunRecoveryTest {
     public void test_recovery_is_skipped_when_the_run_log_is_disabled() throws Exception {
         TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", false);
 
-        assertDoesNotThrow(TriggerRunRecovery::recoverLocal);
+        assertDoesNotThrow(() -> TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds()));
         assertTrue(captured.isEmpty());
     }
 
@@ -269,7 +302,7 @@ public class TriggerRunRecoveryTest {
             writeRecord(runId, TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(), firedAt);
         }
 
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep();
 
         assertEquals(recoverable, captured.stream().map(TriggerEvent::getRunId).sorted().toList());

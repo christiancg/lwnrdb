@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
@@ -24,12 +25,12 @@ public final class TriggerRunRecovery {
     private TriggerRunRecovery() {
     }
 
-    public static void recoverLocal() {
+    public static void recoverLocal(Set<String> startupRunIds) {
         if (!configuration.isTriggersEnabled() || !TriggerRunLog.isEnabled()) {
             return;
         }
         try {
-            final var byRun = groupByRun(TriggerRunLog.pending(), TriggerRunLog.currentNodeId());
+            final var byRun = groupByRun(TriggerRunLog.pending(), TriggerRunLog.currentNodeId(), startupRunIds);
             var requeued = 0;
             for (final var chunks : byRun.values()) {
                 if (requeue(chunks)) {
@@ -108,10 +109,11 @@ public final class TriggerRunRecovery {
     }
 
     private static LinkedHashMap<String, List<AdminTriggerRunEntry>> groupByRun(List<AdminTriggerRunEntry> pending,
-            String nodeId) {
+            String nodeId, Set<String> startupRunIds) {
         final var byRun = new LinkedHashMap<String, List<AdminTriggerRunEntry>>();
         for (final var entry : pending) {
-            if (!nodeId.equals(entry.getNodeId()) || entry.getStatus() == TriggerRunStatus.DEAD) {
+            if (!startupRunIds.contains(entry.getRunId()) || !nodeId.equals(entry.getNodeId())
+                    || entry.getStatus() == TriggerRunStatus.DEAD) {
                 continue;
             }
             byRun.computeIfAbsent(entry.getRunId(), _ -> new ArrayList<>()).add(entry);

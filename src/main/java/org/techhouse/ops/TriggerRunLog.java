@@ -1,7 +1,9 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
@@ -95,6 +97,14 @@ public final class TriggerRunLog {
             }
         }
         return result;
+    }
+
+    public static Set<String> pendingRunIds() {
+        final var runIds = new HashSet<String>();
+        for (final var recordId : cache.getTriggerRunPkIndexes().keySet()) {
+            runIds.add(AdminTriggerRunEntry.runIdOf(recordId));
+        }
+        return runIds;
     }
 
     public static void markAttempt(String runId, TriggerRunStatus status, int attempts, String error,

@@ -86,7 +86,7 @@ public class AggregationPipelineTest {
         List<BaseAggregationStep> steps = List.of(
                 new FilterAggregationStep(
                         new FieldOperator(FieldOperatorType.EQUALS, "field1", new JsonString("value1"))),
-                new MapAggregationStep(List.of(new MapOperator(MapOperationType.ADD_FIELD, "field", null))),
+                new MapAggregationStep(List.of(new RemoveFieldMapOperator("field", null))),
                 new GroupByAggregationStep("fieldName"),
                 new JoinAggregationStep("joinCollection", "localField", "remoteField", "asField"),
                 new CountAggregationStep(), new DistinctAggregationStep("fieldName"), new LimitAggregationStep(10),

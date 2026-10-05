@@ -933,6 +933,30 @@ def test_before_hook_schema_recheck(conn: Conn):
     drop_hook(conn, "sneak", coll="guarded")
 
 
+DEEP_REPLACEMENT_HOOK = ("export default (doc) => { let o = {}; for (let i = 0; i < 200; i++) { o = { a: o }; }"
+                         " return { ...doc, deep: o }; };")
+
+
+def test_before_hook_replacement_depth(conn: Conn):
+    section("Before hooks - a replacement is held to the request nesting cap")
+    check_status("install a hook that nests its replacement 200 levels deep",
+                 install_hook(conn, "nester", "nesting", DEEP_REPLACEMENT_HOOK, ["CREATED", "UPDATED"]), "OK")
+    check_code("a plain save is refused", conn.save_doc({"_id": "deep1", "qty": 1}), "ERROR", "400-21")
+    check("and nothing was written", conn.find("deep1").get("status") != "OK")
+    check_code("a bulk save is refused", conn.send(
+        {"type": "BULK_SAVE", "databaseName": DB, "collectionName": COLL,
+         "objects": [{"_id": "deep2", "qty": 1}, {"_id": "deep3", "qty": 2}]}), "ERROR", "400-21")
+    check("and neither document was written",
+          conn.find("deep2").get("status") != "OK" and conn.find("deep3").get("status") != "OK")
+    check_status("start a transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    check_code("inside a transaction the save is refused the same way", conn.send(
+        {"type": "SAVE", "databaseName": DB, "collectionName": COLL, "object": {"_id": "deep4", "qty": 1}}),
+               "ERROR", "400-21")
+    check_status("roll back", conn.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
+    check("and nothing was written", conn.find("deep4").get("status") != "OK")
+    drop_hook(conn, "nester")
+
+
 def test_before_hook_on_delete(conn: Conn):
     section("Before hooks - delete")
     check_status("seed a locked document", conn.save_doc({"_id": "d1", "qty": 1, "locked": True}), "OK")
@@ -1946,6 +1970,7 @@ def main():
             test_before_hook_contract(conn)
             test_before_hook_sees_the_same_id_in_and_out_of_a_transaction(conn)
             test_before_hook_schema_recheck(conn)
+            test_before_hook_replacement_depth(conn)
             test_before_hook_on_delete(conn)
             test_before_hook_bulk_save(conn)
             test_before_hook_bulk_save_in_a_transaction(conn)

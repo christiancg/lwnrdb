@@ -20,7 +20,7 @@ import org.techhouse.utils.JsonUtils;
 
 public final class DataRequestValidator {
     private static final String NON_FINITE_GEO_MESSAGE = "a #geo value must have finite latitude and longitude";
-    private static final String NESTING_MESSAGE = "a document must not nest deeper than "
+    public static final String NESTING_MESSAGE = "a document must not nest deeper than "
             + Globals.MAX_REQUEST_NESTING_DEPTH + " levels";
     private static final String ID_PATTERN_MESSAGE = "_id must be 1-64 alphanumeric characters, underscores, or hyphens";
 

@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 
 public class MainStartupOrderTest {
     private static final Path MAIN_SOURCE = Path.of("src", "main", "java", "org", "techhouse", "Main.java");
+    private static final String RECOVER_LOCAL = "TriggerRunRecovery.recoverLocal(startupTriggerRuns);";
 
     private static String mainBody() throws IOException {
         final var source = Files.readString(MAIN_SOURCE);
@@ -34,9 +35,29 @@ public class MainStartupOrderTest {
     public void test_trigger_recovery_runs_after_the_node_joins_the_cluster() throws IOException {
         final var body = mainBody();
 
-        assertTrue(
-                positionOf(body, "startClusterIfEnabled();") < positionOf(body, "TriggerRunRecovery.recoverLocal();"),
+        assertTrue(positionOf(body, "startClusterIfEnabled();") < positionOf(body, RECOVER_LOCAL),
                 "every user write is refused for lack of quorum until the ownership ring is built, so a replay"
                         + " submitted before the join burns its attempts and dead-letters");
+    }
+
+    @Test
+    public void test_trigger_runs_are_snapshotted_before_any_producer_starts() throws IOException {
+        final var body = mainBody();
+        final var snapshot = positionOf(body, "TriggerRunLog.pendingRunIds();");
+
+        assertTrue(positionOf(body, "cleanupOrphanedTransactions();") < snapshot,
+                "runs recorded by startup recovery before the executor starts are exactly what must be replayed");
+        assertTrue(snapshot < positionOf(body, "triggerExecutor.start("),
+                "once the executor runs, a recorded run is also queued, and replaying it again runs it twice");
+        assertTrue(snapshot < positionOf(body, "startSchedulerIfEnabled();"),
+                "a scheduled procedure can record and queue a trigger run");
+        assertTrue(snapshot < positionOf(body, "startClusterIfEnabled();"),
+                "2PC recovery and forwarded writes can record and queue a trigger run");
+    }
+
+    @Test
+    public void test_trigger_recovery_replays_the_startup_snapshot() throws IOException {
+        assertTrue(mainBody().contains(RECOVER_LOCAL),
+                "recovery must replay only the runs pending before the executor started, not every pending run");
     }
 }

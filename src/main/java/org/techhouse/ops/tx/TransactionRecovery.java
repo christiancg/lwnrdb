@@ -93,9 +93,6 @@ public final class TransactionRecovery {
             }
             AdminOperationHelper.deleteTransactionOps(opIds);
             markerCleanup.run();
-            // Fired after the durable commit is cleared, exactly as the online commit does. At startup the
-            // executor is not running yet, so the submit is a no-op and the durable run record that
-            // TriggerRunLog writes first is what TriggerRunRecovery replays once it is.
             CommittedOpTriggers.fireForCommittedOps(ops, actingUserOf(ops), reconstructed.getTriggerDepth(),
                     reconstructed, fencedIds);
             coordinator.replicateTransaction(reconstructed, reservedTombstones);

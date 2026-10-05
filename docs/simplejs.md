@@ -547,7 +547,9 @@ when the request is a replicated apply, so a client cannot install a trigger tha
 `TriggerRunLog` persists a pending-run record in `admin/trigger_runs`; `TriggerDispatcher` then
 runs the procedure inside a transaction whose final buffered op **consumes** that record, so the
 run's effects and the evidence that would replay them commit together. `TriggerRunRecovery`
-re-queues what is still pending at startup. This rests on single-node commits being crash-atomic
+re-queues what is still pending at startup — only the runs pending when the process started,
+snapshotted before the executor, the scheduler or the cluster can record new ones, since a run
+recorded after that was already queued by whatever recorded it. This rests on single-node commits being crash-atomic
 (`ops/TxCommitLog`), and at-least-once would be unusable for the ordinary case of a trigger that
 increments a counter. Consequences: a run costs a transaction; an explicit `db.transaction(…)`
 inside a trigger is rejected (the run is already transactional); and the guarantee covers
@@ -615,7 +617,8 @@ under a held write lock would take a lock this thread owns, or make a network ro
 writer waits; the module resolver is kept so a hook can import shared code, since that takes no
 locks. A replacement may not change `_id` (that would relocate the document, turning an update
 into an insert elsewhere) and is re-validated against the collection's JSON Schema, which runs at
-the *edge*, before the hook. Several hooks chain in ascending name order and the first refusal
+the *edge*, before the hook. It is also held to the same nesting cap a client request is
+(`Globals.MAX_REQUEST_NESTING_DEPTH`). Several hooks chain in ascending name order and the first refusal
 stops the chain. Budgets are an order below `RUN_SCRIPT`'s, because a client write is blocked
 while one runs. Under clustering a hook runs on the collection's **owner** — the edge forwards
 raw request JSON, so an edge-side mutation would be lost in transit.

@@ -187,7 +187,7 @@ public class TriggerExactlyOnceTest {
                 "a run that applied must leave no record behind to replay");
 
         captured.clear();
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep(50);
         assertTrue(captured.isEmpty(), "an applied run must not be re-queued at startup");
         assertEquals(1L, counterValue(), "the counter must not advance twice");
@@ -204,7 +204,7 @@ public class TriggerExactlyOnceTest {
         assertFalse(TriggerRunLog.recordIdsFor(event.getRunId()).isEmpty());
 
         captured.clear();
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep(50);
         assertEquals(1, captured.size(), "a pending run must be re-queued at startup");
         assertEquals(event.getRunId(), captured.getFirst().getRunId());
@@ -232,7 +232,7 @@ public class TriggerExactlyOnceTest {
         assertEquals(0L, counterValue(), "a failed run's writes must roll back");
 
         captured.clear();
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep(50);
         assertTrue(captured.isEmpty(), "a dead-lettered run must not be replayed by startup recovery");
     }
@@ -267,7 +267,7 @@ public class TriggerExactlyOnceTest {
         assertEquals(0L, counterValue(), "a failed run's writes must roll back");
 
         captured.clear();
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep(50);
         assertTrue(captured.isEmpty(), "a dead-lettered run must not be replayed by startup recovery");
     }
@@ -340,7 +340,7 @@ public class TriggerExactlyOnceTest {
         captured.clear();
 
         TestUtils.setPrivateField(configuration, "triggersEnabled", false);
-        TriggerRunRecovery.recoverLocal();
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
         sleep(50);
 
         assertTrue(captured.isEmpty());

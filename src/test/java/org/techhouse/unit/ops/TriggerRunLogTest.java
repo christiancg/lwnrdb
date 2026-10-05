@@ -8,6 +8,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
+import java.util.Set;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -89,12 +91,17 @@ public class TriggerRunLogTest {
         assertEquals(List.of("a"), pending.getFirst().getIds());
     }
 
-    @Test
-    public void test_large_id_list_is_chunked() throws Exception {
+    private static List<DbEntry> entriesSpanningSeveralChunks() {
         final var entries = new ArrayList<DbEntry>();
         for (var i = 0; i < 40000; i++) {
             entries.add(entry("id-that-is-reasonably-long-" + i, 0));
         }
+        return entries;
+    }
+
+    @Test
+    public void test_large_id_list_is_chunked() throws Exception {
+        final var entries = entriesSpanningSeveralChunks();
 
         final var runId = TriggerRunLog.record(descriptor(EventType.CREATED, entries));
 
@@ -178,5 +185,21 @@ public class TriggerRunLogTest {
     @Test
     public void test_record_ids_for_an_unknown_run_is_empty() {
         assertTrue(TriggerRunLog.recordIdsFor("no-such-run").isEmpty());
+    }
+
+    @Test
+    public void test_pending_run_ids_names_a_chunked_run_once() {
+        final var chunked = Objects
+                .requireNonNull(TriggerRunLog.record(descriptor(EventType.CREATED, entriesSpanningSeveralChunks())));
+        final var single = Objects
+                .requireNonNull(TriggerRunLog.record(descriptor(EventType.CREATED, List.of(entry("a", 1)))));
+        assertTrue(TriggerRunLog.recordIdsFor(chunked).size() > 1);
+
+        assertEquals(Set.of(chunked, single), TriggerRunLog.pendingRunIds());
+    }
+
+    @Test
+    public void test_pending_run_ids_is_empty_without_records() {
+        assertTrue(TriggerRunLog.pendingRunIds().isEmpty());
     }
 }
