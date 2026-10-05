@@ -110,9 +110,9 @@ public class AdminAntiEntropyIntegrationTest {
         final var field = AdminAntiEntropyService.class.getDeclaredField("conformer");
         field.setAccessible(true);
         final var conformer = field.get(target);
-        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class);
+        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class, long.class);
         method.setAccessible(true);
-        method.invoke(conformer, snapshot);
+        method.invoke(conformer, snapshot, IocContainer.get(AdminEpoch.class).current());
     }
 
     @Test

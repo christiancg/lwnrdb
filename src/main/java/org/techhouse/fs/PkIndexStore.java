@@ -11,6 +11,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.UnaryOperator;
 import org.techhouse.config.Globals;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.log.Logger;
@@ -105,6 +106,26 @@ final class PkIndexStore {
             final var reIndexedEntries = reindexPks(oldEntry, newPkIndexEntry, others);
             final var lines = reIndexedEntries.stream().map(PkIndexEntry::toFileEntry).toList();
             FileLocks.rewriteFileAtomically(indexFile.toPath(), lines);
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    boolean rewriteRows(String dbName, String collectionName, UnaryOperator<List<PkIndexEntry>> change)
+            throws IOException {
+        final var indexFile = paths.pkIndexFile(dbName, collectionName);
+        final var lock = FileLocks.lockFor(indexFile).writeLock();
+        lock.lock();
+        try {
+            final var parsed = indexFile.exists() ? parsePkIndex(dbName, collectionName, indexFile) : EMPTY_PARSED;
+            if (parsed.unrecognised()) {
+                return false;
+            }
+            final var changed = change.apply(new ArrayList<>(parsed.entries()));
+            changed.sort(Comparator.comparing(PkIndexEntry::getValue));
+            FileLocks.rewriteFileAtomically(indexFile.toPath(),
+                    changed.stream().map(PkIndexEntry::toFileEntry).toList());
+            return true;
         } finally {
             lock.unlock();
         }

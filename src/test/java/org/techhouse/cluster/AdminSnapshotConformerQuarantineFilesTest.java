@@ -38,11 +38,16 @@ public class AdminSnapshotConformerQuarantineFilesTest {
     private static final String COLL = "leftcoll";
     private static final long INCARNATION = 100L;
     private final AdminSnapshotConformer conformer = new AdminSnapshotConformer();
+    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private Thread holder;
     private CountDownLatch release;
+
+    private boolean conform(AdminSnapshotPayload snapshot) throws Exception {
+        return conformer.conform(snapshot, adminEpoch.current());
+    }
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -89,7 +94,7 @@ public class AdminSnapshotConformerQuarantineFilesTest {
     }
 
     private void installPopulatedCollection() throws Exception {
-        conformer.conform(snapshot(List.of(dbJson()), List.of(collJson(INCARNATION))));
+        conform(snapshot(List.of(dbJson()), List.of(collJson(INCARNATION))));
         final var save = new SaveRequest(DB, COLL);
         final var doc = new JsonObject();
         doc.add(Globals.PK_FIELD, new JsonString("predrop"));
@@ -113,7 +118,7 @@ public class AdminSnapshotConformerQuarantineFilesTest {
     public void test_conform_moves_aside_a_collection_absent_from_snapshot() throws Exception {
         installPopulatedCollection();
 
-        assertTrue(conformer.conform(snapshot(List.of(dbJson()), List.of())));
+        assertTrue(conform(snapshot(List.of(dbJson()), List.of())));
 
         assertNull(cache.getAdminCollectionEntry(DB, COLL));
         assertFalse(new File(dbFolder(), COLL).exists(),
@@ -128,7 +133,7 @@ public class AdminSnapshotConformerQuarantineFilesTest {
         installPopulatedCollection();
         writeProcedureFile();
 
-        assertTrue(conformer.conform(snapshot(List.of(), List.of())));
+        assertTrue(conform(snapshot(List.of(), List.of())));
 
         assertNull(cache.getAdminDbEntry(DB));
         assertFalse(dbFolder().exists());
@@ -143,7 +148,7 @@ public class AdminSnapshotConformerQuarantineFilesTest {
         installPopulatedCollection();
         unregisterTheWayTheOldConformDid();
 
-        assertTrue(conformer.conform(snapshot(List.of(dbJson()), List.of(collJson(200L)))));
+        assertTrue(conform(snapshot(List.of(dbJson()), List.of(collJson(200L)))));
 
         assertEquals(200L, cache.getAdminCollectionEntry(DB, COLL).getIncarnation());
         assertTrue(cache.getPkIndexAndLoadIfNecessary(DB, COLL).isEmpty(),
@@ -158,7 +163,7 @@ public class AdminSnapshotConformerQuarantineFilesTest {
         cache.evictDatabase(DB);
         AdminOperationHelper.deleteDatabaseEntry(DB);
 
-        assertTrue(conformer.conform(snapshot(List.of(dbJson()), List.of(collJson(200L)))));
+        assertTrue(conform(snapshot(List.of(dbJson()), List.of(collJson(200L)))));
 
         assertNotNull(cache.getAdminDbEntry(DB));
         assertTrue(fs.listProcedureNames(DB).isEmpty(), "a dropped database's procedures must not come back");
@@ -172,7 +177,7 @@ public class AdminSnapshotConformerQuarantineFilesTest {
         AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(DB, new ArrayList<>(), List.of()));
         fs.createCollectionFile(DB, COLL);
 
-        assertTrue(conformer.conform(snapshot(List.of(dbJson()), List.of(collJson(200L)))));
+        assertTrue(conform(snapshot(List.of(dbJson()), List.of(collJson(200L)))));
 
         assertNotNull(cache.getAdminCollectionEntry(DB, COLL));
         assertEquals(0, quarantinedIn(dbFolder(), COLL).length);
@@ -185,7 +190,7 @@ public class AdminSnapshotConformerQuarantineFilesTest {
         AdminOperationHelper.deleteDatabaseEntry(DB);
         holdTheDatabaseExclusivelyElsewhere();
 
-        assertFalse(conformer.conform(snapshot(List.of(dbJson()), List.of(collJson(200L)))));
+        assertFalse(conform(snapshot(List.of(dbJson()), List.of(collJson(200L)))));
 
         assertNull(cache.getAdminDbEntry(DB));
         assertTrue(new File(dbFolder(), COLL).isDirectory(), "nothing is moved without the barrier");
@@ -216,7 +221,7 @@ public class AdminSnapshotConformerQuarantineFilesTest {
         final var dbDir = dbFolder();
         assertTrue(dbDir.setWritable(false));
         try {
-            assertFalse(conformer.conform(snapshot(List.of(dbJson()), List.of(collJson(200L)))));
+            assertFalse(conform(snapshot(List.of(dbJson()), List.of(collJson(200L)))));
             assertNull(cache.getAdminCollectionEntry(DB, COLL));
         } finally {
             assertTrue(dbDir.setWritable(true));

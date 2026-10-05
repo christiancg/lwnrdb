@@ -13,6 +13,7 @@ import java.util.function.Supplier;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cluster.AdminLane;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
@@ -219,5 +220,46 @@ public class AdminLaneTest {
             release.countDown();
             collectionHolder.join(5000);
         }
+    }
+
+    @Test
+    public void withinRunsTheOpWhenFree() {
+        final var lane = IocContainer.get(AdminLane.class);
+
+        assertEquals("ran", lane.within(SHORT_MS, () -> "ran", () -> "busy"));
+    }
+
+    @Test
+    public void withinAnswersBusyAfterItsBudget() throws Exception {
+        holdTheLaneElsewhere();
+        final var lane = IocContainer.get(AdminLane.class);
+
+        final var answer = CompletableFuture.supplyAsync(() -> lane.within(SHORT_MS, () -> "ran", () -> "busy")).get(10,
+                TimeUnit.SECONDS);
+
+        assertEquals("busy", answer);
+    }
+
+    @Test
+    public void withinRestoresTheInterruptFlag() throws Exception {
+        holdTheLaneElsewhere();
+        final var lane = IocContainer.get(AdminLane.class);
+
+        final var answer = CompletableFuture.supplyAsync(() -> {
+            Thread.currentThread().interrupt();
+            final var result = lane.within(5_000L, () -> "ran", () -> "busy");
+            return result + "/" + Thread.interrupted();
+        }).get(10, TimeUnit.SECONDS);
+
+        assertEquals("busy/true", answer);
+    }
+
+    @Test
+    public void heldByCurrentThreadIsTrueOnlyInsideWithin() {
+        final var lane = IocContainer.get(AdminLane.class);
+
+        assertFalse(lane.isHeldByCurrentThread());
+        assertTrue(lane.within(SHORT_MS, lane::isHeldByCurrentThread, () -> false));
+        assertFalse(lane.isHeldByCurrentThread());
     }
 }

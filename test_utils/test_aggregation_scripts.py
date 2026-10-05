@@ -247,6 +247,23 @@ def test_reduce(conn: Conn):
           results(after)[0].get("doubled") == DOCUMENT_COUNT * 2, f"got {results(after)}")
 
 
+def test_getters_cross_the_boundary(conn: Conn):
+    section("MAP and REDUCE: a getter on a script result is read")
+    mapped = conn.aggregate([script_map(
+        "priced", "export default (doc) => ({ get total() { return doc.price * doc.qty; } });")])
+    check_status("a MAP script returning a getter runs", mapped, "OK")
+    rows = {row["_id"]: row for row in results(mapped)}
+    check("a MAP script getter becomes a field", rows.get("o3", {}).get("priced") == {"total": 90},
+          f"got {rows.get('o3')}")
+
+    folded = conn.aggregate([reduce_step(
+        "export default (acc, doc) => { const n = acc.n + 1; return { get n() { return n; } }; };",
+        {"n": 0}, "count")])
+    check_status("a REDUCE script returning a getter runs", folded, "OK")
+    check("a REDUCE accumulator getter is kept",
+          (results(folded) or [{}])[0].get("count") == {"n": DOCUMENT_COUNT}, f"got {results(folded)}")
+
+
 # ── phase 1: permissions ─────────────────────────────────────────────────────
 
 def test_permissions(admin: Conn):
@@ -469,6 +486,7 @@ def main():
             test_computed_field(conn)
             test_script_predicate(conn)
             test_reduce(conn)
+            test_getters_cross_the_boundary(conn)
             test_permissions(conn)
             test_sandbox(conn)
             test_closed_doors(conn)

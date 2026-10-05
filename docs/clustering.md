@@ -667,6 +667,16 @@ winning epoch is adopted only when nothing was skipped: adopting it after a part
 would leave this node equal to the peer, and an equal epoch outranks only on node id, so the
 skipped work might never be retried.
 
+The conform runs inside the same **admin lane** coordinated ops take (`cluster/AdminLane`), and
+`REPLICATE_ADMIN`/`REPLICATE_USER` take it too, waiting at most `replicationAckTimeoutMs` and
+answering an error (which the coordinator counts as a missing ack) on a miss. Peer snapshots are
+fetched before the lane is entered, so the conform never holds it across a round trip. Under the
+lane, `reconcile` re-checks that the local epoch and its confirmed flag are the ones it started
+the round with, and skips the round otherwise: a snapshot built before a local admin op committed
+does not hold that op, and conforming to it deleted an acknowledged `CREATE_USER` (or reverted a
+procedure, schedule or owner change) on the coordinator, which then outranked every replica that
+held it. A round skipped on a busy lane or a moved epoch does not mark the node synced.
+
 A definition the snapshot's node could not read (a torn schema, triggers file, procedure or
 schedule) is listed under `unreadable` as `<kind>|<db>|<name>` instead of being left out. Left
 out, it read as deleted, and every peer conformed by deleting its own valid copy — one torn file

@@ -37,6 +37,7 @@ public class ClusterConnectionHandler implements Runnable {
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private final AdminAntiEntropyService adminAntiEntropyService = IocContainer.get(AdminAntiEntropyService.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
+    private final AdminLane adminLane = IocContainer.get(AdminLane.class);
     private final ScriptRunDirectory scriptRunDirectory = IocContainer.get(ScriptRunDirectory.class);
     private final TriggerRunDirectory triggerRunDirectory = IocContainer.get(TriggerRunDirectory.class);
     private final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
@@ -196,6 +197,19 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handleReplicateAdmin(ClusterMessage request) {
+        return adminLane.within(clusterConfig.replicationAckTimeoutMs(), () -> applyReplicatedAdmin(request),
+                ClusterConnectionHandler::adminLaneBusy);
+    }
+
+    private static ClusterMessage adminLaneBusy() {
+        final var response = new ClusterMessage();
+        response.setType(ClusterMessageType.ERROR);
+        response.setErrorMessage("The admin lane stayed busy past replicationAckTimeoutMs: an admin conform or another"
+                + " admin op holds it");
+        return response;
+    }
+
+    private ClusterMessage applyReplicatedAdmin(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.REPLICATE_ADMIN_ACK, "Failed to apply replicated admin op",
                 response -> {
                     final var result = executeForwarded(request, true);
@@ -229,6 +243,11 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handleReplicateUser(ClusterMessage request) {
+        return adminLane.within(clusterConfig.replicationAckTimeoutMs(), () -> applyReplicatedUser(request),
+                ClusterConnectionHandler::adminLaneBusy);
+    }
+
+    private ClusterMessage applyReplicatedUser(ClusterMessage request) {
         final var response = new ClusterMessage();
         if (ReplicatedUserApplyHelper.apply(request.getReplication())) {
             adminEpoch.adopt(request.getAdminEpoch(), false);

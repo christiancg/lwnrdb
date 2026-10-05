@@ -840,6 +840,27 @@ def test_before_hook_preserves_custom_spelling(conn: Conn):
     drop_hook(conn, "spread_hook")
 
 
+def test_a_before_hook_getter_is_stored_like_db_save_stores_it(conn: Conn):
+    section("Before hooks - a getter on the replacement is read, as db.save reads it")
+    check_status("install a hook whose replacement computes a field through a getter",
+                 install_hook(conn, "getter_hook", "gettered",
+                              "export default (doc) => ({ ...doc, get total() { return doc.qty * doc.price; } });",
+                              ["CREATED", "UPDATED"]), "OK")
+    check_status("write through the hook", conn.save_doc({"_id": "getter1", "qty": 2, "price": 10}), "OK")
+    hooked = conn.find("getter1").get("object") or {}
+    check("the hook's getter value is stored", hooked.get("total") == 20, f"got {hooked}")
+    drop_hook(conn, "getter_hook")
+    check_status("install a procedure that saves the same shape with db.save",
+                 conn.save_procedure("getter_saver", "import db from 'db';"
+                                     "const doc = { _id: 'getter2', qty: 2, price: 10 };"
+                                     "db.save(db.name, '" + AUDIT + "', { ...doc, get total() { return doc.qty * doc.price; } });"
+                                     "return 'saved';"), "OK")
+    check_status("run it", conn.call("getter_saver"), "OK")
+    saved = conn.find("getter2", coll=AUDIT).get("object") or {}
+    check("db.save stores the same getter value", saved.get("total") == hooked.get("total"),
+          f"hook stored {hooked.get('total')!r}, db.save stored {saved.get('total')!r}")
+
+
 def test_before_hook_veto(conn: Conn):
     section("Before hooks - veto")
     check_status("install a vetoing hook",
@@ -1966,6 +1987,7 @@ def main():
             test_trigger_validation(conn)
             test_before_hooks(conn)
             test_before_hook_preserves_custom_spelling(conn)
+            test_a_before_hook_getter_is_stored_like_db_save_stores_it(conn)
             test_before_hook_veto(conn)
             test_before_hook_contract(conn)
             test_before_hook_sees_the_same_id_in_and_out_of_a_transaction(conn)

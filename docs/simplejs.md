@@ -438,7 +438,9 @@ the wrong index family, though, and one `REINDEX` of the collection moves it int
   a rejection becomes the script error, and one still pending after the drain fails the run
   (`400-20`) rather than quietly contributing JSON `null`. The conversion happens *inside* the
   interpreter's lifetime, so an accessor-valued property is read through its getter and the
-  getter's work is charged to the run's budgets. The converted result is measured against
+  getter's work is charged to the run's budgets. The same holds for a before-hook replacement, a
+  MAP `SCRIPT` value and a REDUCE accumulator, which convert under their session's own stack
+  capture. The converted result is measured against
   `scriptMaxResultBytes` (`400-15`); a trigger passes `-1`, since its result is discarded.
   A **non-finite number cannot cross into a run result or a document**: `Infinity`, `-Infinity`
   and `NaN` fail the conversion with a `TypeError`, because the engine's own reader cannot parse

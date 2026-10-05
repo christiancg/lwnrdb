@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.AdminAntiEntropyService;
+import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.data.ProcedureDefinition;
 import org.techhouse.data.ScheduleDefinition;
@@ -127,9 +128,9 @@ public class AdminAntiEntropyUnreadableTest {
         final var conformerField = AdminAntiEntropyService.class.getDeclaredField("conformer");
         conformerField.setAccessible(true);
         final var conformer = conformerField.get(service);
-        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class);
+        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class, long.class);
         method.setAccessible(true);
-        return (boolean) method.invoke(conformer, snapshot);
+        return (boolean) method.invoke(conformer, snapshot, IocContainer.get(AdminEpoch.class).current());
     }
 
     private static String key(String kind, String name) {

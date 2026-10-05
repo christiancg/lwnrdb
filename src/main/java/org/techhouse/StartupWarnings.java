@@ -29,6 +29,15 @@ public final class StartupWarnings {
         }
     }
 
+    public static void warnIfCompactionsLeftUnrecovered() {
+        final var unrecovered = IocContainer.get(FileSystem.class).listCompactionMarkers();
+        if (!unrecovered.isEmpty()) {
+            logger.warning("These pages hold an interrupted compaction that startup could not recover, because"
+                    + " their pk index could not be read: " + String.join(", ", unrecovered)
+                    + ". Repair or restore the pk index; the marker is replayed at the next startup.");
+        }
+    }
+
     public static void warnIfDefaultAdminPassword() {
         if (ConfigKey.DEFAULT_ADMIN_PASSWORD.defaultValue().equals(config.getDefaultAdminPassword())) {
             logger.warning("SECURITY WARNING: defaultAdminPassword is still set to the well-known default value. "

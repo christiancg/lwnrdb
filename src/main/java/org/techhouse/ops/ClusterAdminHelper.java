@@ -1,11 +1,10 @@
 package org.techhouse.ops;
 
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.AdminEpoch;
+import org.techhouse.cluster.AdminLane;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.ReplicationOutcome;
@@ -34,8 +33,7 @@ public final class ClusterAdminHelper {
     private static final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
             .get(AdminAntiEntropyService.class);
-
-    private static final ReentrantLock adminLane = new ReentrantLock(true);
+    private static final AdminLane adminLane = IocContainer.get(AdminLane.class);
 
     private ClusterAdminHelper() {
     }
@@ -44,19 +42,8 @@ public final class ClusterAdminHelper {
         if (!needsAdminLane(request)) {
             return op.get();
         }
-        try {
-            if (!adminLane.tryLock(clusterConfig.adminLaneTimeoutMs(), TimeUnit.MILLISECONDS)) {
-                return new OperationResponse(request.getType(), ErrorCode.ADMIN_LANE_BUSY);
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return new OperationResponse(request.getType(), ErrorCode.ADMIN_LANE_BUSY);
-        }
-        try {
-            return op.get();
-        } finally {
-            adminLane.unlock();
-        }
+        return adminLane.within(clusterConfig.adminLaneTimeoutMs(), op,
+                () -> new OperationResponse(request.getType(), ErrorCode.ADMIN_LANE_BUSY));
     }
 
     public static boolean holdsAdminLane() {

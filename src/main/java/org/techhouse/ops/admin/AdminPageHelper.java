@@ -288,13 +288,52 @@ public final class AdminPageHelper {
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
         final var exclusive = lockAdminPagesForDrop(dbName, collName);
         try {
-            fs.deleteCollectionFiles(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+            if (sharesPageFolder(dbName, collName)) {
+                deleteOwnRows(dbName, collName, pagesCollName);
+            } else {
+                fs.deleteCollectionFiles(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+                cache.removeAdminPageEntries(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+            }
             cache.removeAdminPageEntries(dbName, collName);
-            cache.removeAdminPageEntries(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
         } finally {
             if (exclusive) {
                 releaseAdminPageCollection(dbName, collName);
             }
+        }
+    }
+
+    private static boolean sharesPageFolder(String dbName, String collName) {
+        final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        for (final var dbEntry : cache.getAllAdminDbEntries()) {
+            final var collections = dbEntry.getCollections();
+            for (final var otherColl : collections == null ? List.<String>of() : collections) {
+                final var isSelf = dbEntry.get_id().equals(dbName) && otherColl.equals(collName);
+                if (!isSelf && String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbEntry.get_id(), otherColl)
+                        .equals(pagesCollName)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static void deleteOwnRows(String dbName, String collName, String pagesCollName) {
+        final var ownPrefix = Cache.getCollectionIdentifier(dbName, collName) + Globals.COLL_IDENTIFIER_SEPARATOR;
+        final var pkIdxList = cache.getAdminPagePkIndexes(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+        final var ownRows = pkIdxList.stream().filter(pk -> pk.getValue().startsWith(ownPrefix)).toList();
+        for (final var row : ownRows) {
+            cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(row));
+            pkIdxList.remove(row);
+            trackInMemoryAdminPageRemoval(pagesCollName, row);
+        }
+    }
+
+    private static void trackInMemoryAdminPageRemoval(String pagesPerCollectionName, PkIndexEntry removed) {
+        final var existing = cache.getAdminPageEntry(Globals.ADMIN_PAGES_DB_NAME, pagesPerCollectionName,
+                removed.getPage());
+        if (existing != null) {
+            existing.setEntryCount(existing.getEntryCount() - 1);
+            existing.setPageSize(existing.getPageSize() - removed.getLength());
         }
     }
 

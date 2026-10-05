@@ -24,6 +24,7 @@ public class AdminAntiEntropyService implements MembershipListener {
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
+    private final AdminLane adminLane = IocContainer.get(AdminLane.class);
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private final CoalescingSweep sweep = new CoalescingSweep(logger, "cluster-admin-anti-entropy",
             "Admin anti-entropy", this::reconcile);
@@ -86,8 +87,10 @@ public class AdminAntiEntropyService implements MembershipListener {
         try {
             AdminSnapshotPayload best = null;
             final var self = membershipService.getSelf();
-            var bestEpoch = adminEpoch.current();
-            var bestConfirmed = adminEpoch.isConfirmed();
+            final var localEpoch = adminEpoch.current();
+            final var localConfirmed = adminEpoch.isConfirmed();
+            var bestEpoch = localEpoch;
+            var bestConfirmed = localConfirmed;
             var bestNodeId = self != null ? self.getNodeId() : null;
             final var peers = membershipService.membershipView().peers(self);
             answered = peers.isEmpty();
@@ -112,10 +115,7 @@ public class AdminAntiEntropyService implements MembershipListener {
                         + ": it lists no databases while this node holds some, which would unregister every one"
                         + " of them and delete every user");
             } else if (best != null) {
-                if (conformer.conform(best)) {
-                    adminEpoch.adopt(best.getEpoch(), best.isEpochConfirmed());
-                }
-                antiEntropyService.reconcileNow();
+                answered = conformInAdminLane(best, localEpoch, localConfirmed);
             }
             if (answered) {
                 adminSyncCompleted.set(true);
@@ -123,6 +123,30 @@ public class AdminAntiEntropyService implements MembershipListener {
         } finally {
             publishSyncState();
         }
+    }
+
+    private boolean conformInAdminLane(AdminSnapshotPayload best, long localEpoch, boolean localConfirmed)
+            throws Exception {
+        if (adminLane.tryEnter(clusterConfig.adminLaneTimeoutMs())) {
+            try {
+                if (adminEpoch.current() != localEpoch || adminEpoch.isConfirmed() != localConfirmed) {
+                    logger.warning("Skipping this admin conform round: a local admin op committed while the peer"
+                            + " snapshots were being fetched. The next round reconciles from the newer local state.");
+                    return false;
+                }
+                if (conformer.conform(best, localEpoch)) {
+                    adminEpoch.adopt(best.getEpoch(), best.isEpochConfirmed());
+                }
+            } finally {
+                adminLane.leave();
+            }
+        } else {
+            logger.warning("Skipping this admin conform round: the admin lane stayed busy for "
+                    + clusterConfig.adminLaneTimeoutMs() + "ms");
+            return false;
+        }
+        antiEntropyService.reconcileNow();
+        return true;
     }
 
     private boolean wouldEmptyThisNode(AdminSnapshotPayload snapshot) {

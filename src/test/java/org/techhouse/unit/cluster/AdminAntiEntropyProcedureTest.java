@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.AdminAntiEntropyService;
+import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.data.ProcedureDefinition;
 import org.techhouse.data.TriggerDefinition;
@@ -69,9 +70,9 @@ public class AdminAntiEntropyProcedureTest {
         final var conformerField = AdminAntiEntropyService.class.getDeclaredField("conformer");
         conformerField.setAccessible(true);
         final var conformer = conformerField.get(target);
-        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class);
+        final var method = conformer.getClass().getDeclaredMethod("conform", AdminSnapshotPayload.class, long.class);
         method.setAccessible(true);
-        method.invoke(conformer, snapshot);
+        method.invoke(conformer, snapshot, IocContainer.get(AdminEpoch.class).current());
     }
 
     private AdminSnapshotPayload snapshotWithout() {

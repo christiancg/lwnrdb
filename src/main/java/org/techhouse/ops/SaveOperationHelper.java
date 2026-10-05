@@ -22,6 +22,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ex.PartialBulkUpdateException;
 import org.techhouse.fs.BulkUpdateResult;
 import org.techhouse.fs.FileSystem;
+import org.techhouse.fs.PkCompaction;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
@@ -272,7 +273,17 @@ public final class SaveOperationHelper {
         final var oldEntry = cache.getById(dbName, collName, idxEntry);
         oldEntry.setPage(idxEntry.getPage());
         oldEntry.setVersion(idxEntry.getVersion());
-        final var compaction = fs.deleteFromCollection(idxEntry);
+        final var compaction = fs.deleteForRelocation(idxEntry);
+        try {
+            return insertRelocatedCopy(dbName, collName, entry, idxEntry, oldEntry, compaction, primaryKeyIndex);
+        } finally {
+            fs.endRelocation(idxEntry);
+        }
+    }
+
+    private static PkIndexEntry insertRelocatedCopy(String dbName, String collName, DbEntry entry,
+            PkIndexEntry idxEntry, DbEntry oldEntry, PkCompaction compaction, List<PkIndexEntry> primaryKeyIndex)
+            throws Exception {
         cache.shiftPkPositionsAfterCompaction(compaction);
         primaryKeyIndex.remove(idxEntry);
         cache.evictEntry(dbName, collName, entry.get_id());
@@ -283,9 +294,9 @@ public final class SaveOperationHelper {
         final PkIndexEntry relocatedPkIndexEntry;
         try {
             entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
-            relocatedPkIndexEntry = fs.insertIntoCollection(entry);
+            relocatedPkIndexEntry = fs.insertRelocated(entry, idxEntry);
         } catch (Exception e) {
-            restoreAfterFailedRelocation(dbName, collName, oldEntry, primaryKeyIndex);
+            restoreAfterFailedRelocation(dbName, collName, oldEntry, idxEntry, primaryKeyIndex);
             throw e;
         }
         cache.updatePageSizeInMemory(dbName, collName, relocatedPkIndexEntry.getPage(),
@@ -312,10 +323,10 @@ public final class SaveOperationHelper {
     }
 
     private static void restoreAfterFailedRelocation(String dbName, String collName, DbEntry oldEntry,
-            List<PkIndexEntry> primaryKeyIndex) {
+            PkIndexEntry source, List<PkIndexEntry> primaryKeyIndex) {
         try {
             oldEntry.setPage(cache.selectPageForInsert(dbName, collName, oldEntry.byteSize()));
-            final var restored = fs.insertIntoCollection(oldEntry);
+            final var restored = fs.insertRelocated(oldEntry, source);
             cache.updatePageSizeInMemory(dbName, collName, restored.getPage(), restored.getLength());
             var insertAt = Collections.binarySearch(primaryKeyIndex, restored.getValue());
             if (insertAt < 0) {

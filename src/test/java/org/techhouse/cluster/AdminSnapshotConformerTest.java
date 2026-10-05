@@ -34,7 +34,12 @@ import org.techhouse.test.TestUtils;
 // Lives in org.techhouse.cluster rather than unit/cluster because AdminSnapshotConformer is package-private.
 public class AdminSnapshotConformerTest {
     private final AdminSnapshotConformer conformer = new AdminSnapshotConformer();
+    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Cache cache = IocContainer.get(Cache.class);
+
+    private void conform(AdminSnapshotPayload snapshot) throws Exception {
+        conformer.conform(snapshot, adminEpoch.current());
+    }
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -82,8 +87,8 @@ public class AdminSnapshotConformerTest {
 
     @Test
     public void test_conform_creates_missing_database_and_collection() throws Exception {
-        conformer.conform(snapshot(List.of(dbJson("newdb", List.of("alice"))),
-                List.of(collJson("newdb", "newcoll", Set.of())), List.of()));
+        conform(snapshot(List.of(dbJson("newdb", List.of("alice"))), List.of(collJson("newdb", "newcoll", Set.of())),
+                List.of()));
 
         final var dbEntry = cache.getAdminDbEntry("newdb");
         assertNotNull(dbEntry);
@@ -96,14 +101,14 @@ public class AdminSnapshotConformerTest {
     public void test_conform_recreates_a_directory_that_went_missing_under_an_existing_admin_entry() throws Exception {
         final var snapshot = snapshot(List.of(dbJson("driftdb", List.of())),
                 List.of(collJson("driftdb", "driftcoll", Set.of())), List.of());
-        conformer.conform(snapshot);
+        conform(snapshot);
         final var collFolder = new File(TestGlobals.PATH + File.separator + "driftdb" + File.separator + "driftcoll");
         assertTrue(collFolder.isDirectory(), "the first conform must have created the collection folder");
 
         deleteRecursively(collFolder);
         assertFalse(collFolder.exists());
 
-        conformer.conform(snapshot);
+        conform(snapshot);
 
         assertTrue(collFolder.isDirectory(), "a later sweep must restore the folder under its admin entry");
     }
@@ -114,7 +119,7 @@ public class AdminSnapshotConformerTest {
         IndexHelper.createIndex(TestGlobals.DB, TestGlobals.COLL, "stale");
         AdminOperationHelper.saveNewIndex(TestGlobals.DB, TestGlobals.COLL, "stale");
 
-        conformer.conform(snapshot(List.of(dbJson(TestGlobals.DB, List.of())),
+        conform(snapshot(List.of(dbJson(TestGlobals.DB, List.of())),
                 List.of(collJson(TestGlobals.DB, TestGlobals.COLL, Set.of("wanted"))), List.of()));
 
         final var indexes = cache.getIndexesForCollection(TestGlobals.DB, TestGlobals.COLL);
@@ -129,7 +134,7 @@ public class AdminSnapshotConformerTest {
         schema.add("type", new JsonString("object"));
         final var schemas = new JsonObject();
         schemas.add(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL), schema);
-        conformer.conform(snapshot(List.of(dbJson(TestGlobals.DB, List.of())),
+        conform(snapshot(List.of(dbJson(TestGlobals.DB, List.of())),
                 List.of(collJson(TestGlobals.DB, TestGlobals.COLL, Set.of())), List.of(), schemas));
 
         assertEquals(schema, cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
@@ -145,7 +150,7 @@ public class AdminSnapshotConformerTest {
                 IocContainer.get(EJson.class).toJson(schema));
         cache.putCollectionSchema(TestGlobals.DB, TestGlobals.COLL, schema);
 
-        conformer.conform(snapshot(List.of(dbJson(TestGlobals.DB, List.of())),
+        conform(snapshot(List.of(dbJson(TestGlobals.DB, List.of())),
                 List.of(collJson(TestGlobals.DB, TestGlobals.COLL, Set.of())), List.of()));
 
         assertNull(cache.getCollectionSchema(TestGlobals.DB, TestGlobals.COLL));
@@ -155,7 +160,7 @@ public class AdminSnapshotConformerTest {
     public void test_conform_reconciles_database_owners() throws Exception {
         AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry("ownersdb", new ArrayList<>(), List.of("old")));
 
-        conformer.conform(snapshot(List.of(dbJson("ownersdb", List.of("new1", "new2"))), List.of(), List.of()));
+        conform(snapshot(List.of(dbJson("ownersdb", List.of("new1", "new2"))), List.of(), List.of()));
 
         final var owners = cache.getAdminDbEntry("ownersdb").getOwners();
         assertTrue(owners.contains("new1"));
@@ -168,7 +173,7 @@ public class AdminSnapshotConformerTest {
         TestUtils.createTestDatabaseAndCollection();
         AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry("keepdb", new ArrayList<>(), List.of()));
 
-        conformer.conform(snapshot(List.of(dbJson("keepdb", List.of())), List.of(), List.of()));
+        conform(snapshot(List.of(dbJson("keepdb", List.of())), List.of(), List.of()));
 
         assertNull(cache.getAdminDbEntry(TestGlobals.DB));
         assertNotNull(cache.getAdminDbEntry("keepdb"));
@@ -178,7 +183,7 @@ public class AdminSnapshotConformerTest {
     public void test_conform_upserts_snapshot_user_and_deletes_absent_user() throws Exception {
         AdminOperationHelper.saveUserEntry(new AdminUserEntry("stale", "h", false, Set.of(), Map.of(), Map.of()));
 
-        conformer.conform(snapshot(List.of(), List.of(), List.of(userJson())));
+        conform(snapshot(List.of(), List.of(), List.of(userJson())));
 
         assertNotNull(cache.getAdminUserEntry("alice"));
         assertNull(cache.getAdminUserEntry("stale"));
@@ -189,7 +194,7 @@ public class AdminSnapshotConformerTest {
         TestUtils.createTestDatabaseAndCollection();
         TestUtils.createTestJoinCollection();
 
-        conformer.conform(snapshot(List.of(dbJson(TestGlobals.DB, List.of())),
+        conform(snapshot(List.of(dbJson(TestGlobals.DB, List.of())),
                 List.of(collJson(TestGlobals.DB, TestGlobals.COLL, Set.of())), List.of()));
 
         assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL));
@@ -206,8 +211,8 @@ public class AdminSnapshotConformerTest {
 
     @Test
     public void test_conform_quarantines_a_collection_from_a_dropped_incarnation() throws Exception {
-        conformer.conform(snapshot(List.of(dbJson("incdb", List.of())),
-                List.of(collJson("incdb", "inccoll", Set.of(), 100L)), List.of()));
+        conform(snapshot(List.of(dbJson("incdb", List.of())), List.of(collJson("incdb", "inccoll", Set.of(), 100L)),
+                List.of()));
         assertEquals(100L, cache.getAdminCollectionEntry("incdb", "inccoll").getIncarnation());
         final var save = new org.techhouse.ops.req.SaveRequest("incdb", "inccoll");
         final var doc = new JsonObject();
@@ -216,8 +221,8 @@ public class AdminSnapshotConformerTest {
         save.set_id("stale");
         IocContainer.get(org.techhouse.ops.OperationProcessor.class).processMessage(save);
 
-        conformer.conform(snapshot(List.of(dbJson("incdb", List.of())),
-                List.of(collJson("incdb", "inccoll", Set.of(), 200L)), List.of()));
+        conform(snapshot(List.of(dbJson("incdb", List.of())), List.of(collJson("incdb", "inccoll", Set.of(), 200L)),
+                List.of()));
 
         final var entry = cache.getAdminCollectionEntry("incdb", "inccoll");
         assertNotNull(entry, "the live incarnation must stay registered, or the collection is unwritable here"
@@ -235,11 +240,11 @@ public class AdminSnapshotConformerTest {
 
     @Test
     public void test_conform_keeps_a_collection_whose_incarnation_matches() throws Exception {
-        conformer.conform(snapshot(List.of(dbJson("samedb", List.of())),
-                List.of(collJson("samedb", "samecoll", Set.of(), 100L)), List.of()));
+        conform(snapshot(List.of(dbJson("samedb", List.of())), List.of(collJson("samedb", "samecoll", Set.of(), 100L)),
+                List.of()));
 
-        conformer.conform(snapshot(List.of(dbJson("samedb", List.of())),
-                List.of(collJson("samedb", "samecoll", Set.of(), 100L)), List.of()));
+        conform(snapshot(List.of(dbJson("samedb", List.of())), List.of(collJson("samedb", "samecoll", Set.of(), 100L)),
+                List.of()));
 
         assertNotNull(cache.getAdminCollectionEntry("samedb", "samecoll"),
                 "an unchanged incarnation is the normal case and must never quarantine");
@@ -247,11 +252,11 @@ public class AdminSnapshotConformerTest {
 
     @Test
     public void test_conform_adopts_the_snapshot_incarnation_for_an_unstamped_local_entry() throws Exception {
-        conformer.conform(snapshot(List.of(dbJson("legacydb", List.of())),
-                List.of(collJson("legacydb", "legacycoll", Set.of())), List.of()));
+        conform(snapshot(List.of(dbJson("legacydb", List.of())), List.of(collJson("legacydb", "legacycoll", Set.of())),
+                List.of()));
         assertEquals(0L, cache.getAdminCollectionEntry("legacydb", "legacycoll").getIncarnation());
 
-        conformer.conform(snapshot(List.of(dbJson("legacydb", List.of())),
+        conform(snapshot(List.of(dbJson("legacydb", List.of())),
                 List.of(collJson("legacydb", "legacycoll", Set.of(), 300L)), List.of()));
 
         assertNotNull(cache.getAdminCollectionEntry("legacydb", "legacycoll"),
@@ -264,7 +269,7 @@ public class AdminSnapshotConformerTest {
         final var clock = IocContainer.get(org.techhouse.cluster.HybridClock.class);
         final var ahead = clock.next() + 1_000_000_000L;
 
-        conformer.conform(snapshot(List.of(dbJson("clockdb", List.of())),
+        conform(snapshot(List.of(dbJson("clockdb", List.of())),
                 List.of(collJson("clockdb", "clockcoll", Set.of(), ahead)), List.of()));
 
         assertTrue(clock.next() > ahead,

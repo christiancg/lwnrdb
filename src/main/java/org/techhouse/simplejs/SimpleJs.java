@@ -230,7 +230,7 @@ public final class SimpleJs {
             try {
                 return nonFinite == NonFiniteResult.NULLED && isNonFinite(returned)
                         ? JsonNull.INSTANCE
-                        : EJsonInterop.toHostEjson(returned);
+                        : session.toHostEjson(returned);
             } catch (RuntimeException | OutOfMemoryError | StackOverflowError failure) {
                 throw asCallableException(failure);
             }

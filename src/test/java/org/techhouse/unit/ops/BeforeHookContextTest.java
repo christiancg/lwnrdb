@@ -122,6 +122,15 @@ public class BeforeHookContextTest {
     }
 
     @Test
+    public void aHookReplacementWithAGetterStoresTheGetterValue() throws Exception {
+        installHook("v", "getter", "export default (doc) => ({ ...doc, get total() { return doc.qty * doc.price; } });",
+                EventType.CREATED);
+        final var outcome = run(document("a"), EventType.CREATED);
+        assertFalse(outcome.isRejected());
+        assertEquals(20.0, outcome.document().get("total").asJsonNumber().getValue().doubleValue());
+    }
+
+    @Test
     public void test_rejects_when_the_hook_throws() throws Exception {
         installHook("v", "boom", "export default function (doc) { throw new Error('customerId is required'); };",
                 EventType.CREATED);

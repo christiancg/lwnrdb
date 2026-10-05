@@ -32,10 +32,15 @@ public class ConformDatabaseBarrierTest {
     private static final String COLL = "barriercoll";
     private static final String OTHER_DB = "otherbarrierdb";
     private final AdminSnapshotConformer conformer = new AdminSnapshotConformer();
+    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private Thread holder;
     private CountDownLatch release;
+
+    private boolean conform(AdminSnapshotPayload snapshot) throws Exception {
+        return conformer.conform(snapshot, adminEpoch.current());
+    }
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -124,13 +129,13 @@ public class ConformDatabaseBarrierTest {
     public void test_conform_skips_a_collection_while_its_database_is_being_dropped() throws Exception {
         holdTheDatabaseExclusivelyElsewhere();
 
-        assertFalse(conformer.conform(snapshot()), "a round that skipped a collection is not a complete conform");
+        assertFalse(conform(snapshot()), "a round that skipped a collection is not a complete conform");
 
         assertNull(cache.getAdminCollectionEntry(DB, COLL),
                 "a collection registered under a running drop would be deleted with no lock held on it");
 
         releaseHolder();
-        assertTrue(conformer.conform(snapshot()));
+        assertTrue(conform(snapshot()));
 
         assertNotNull(cache.getAdminCollectionEntry(DB, COLL), "the next round must register it");
     }
@@ -140,12 +145,12 @@ public class ConformDatabaseBarrierTest {
         registerTheDatabaseLocally();
         holdTheDatabaseSharedElsewhere();
 
-        conformer.conform(snapshotWithoutTheDatabase());
+        conform(snapshotWithoutTheDatabase());
 
         assertStillRegistered("a collection registered during the quarantine would be deleted with no lock held on it");
 
         releaseHolder();
-        conformer.conform(snapshotWithoutTheDatabase());
+        conform(snapshotWithoutTheDatabase());
 
         assertQuarantined();
     }
@@ -155,12 +160,12 @@ public class ConformDatabaseBarrierTest {
         registerTheDatabaseLocally();
         holdTheDatabaseExclusivelyElsewhere();
 
-        assertFalse(conformer.conform(snapshotWithoutTheDatabase()));
+        assertFalse(conform(snapshotWithoutTheDatabase()));
 
         assertStillRegistered("the quarantine must wait for the drop holding the database barrier");
 
         releaseHolder();
-        assertTrue(conformer.conform(snapshotWithoutTheDatabase()));
+        assertTrue(conform(snapshotWithoutTheDatabase()));
 
         assertQuarantined();
     }
@@ -169,7 +174,7 @@ public class ConformDatabaseBarrierTest {
     public void test_quarantine_releases_the_database_barrier() throws Exception {
         registerTheDatabaseLocally();
 
-        conformer.conform(snapshotWithoutTheDatabase());
+        conform(snapshotWithoutTheDatabase());
 
         assertQuarantined();
         final var acquired = new boolean[1];

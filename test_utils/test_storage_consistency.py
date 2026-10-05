@@ -627,6 +627,98 @@ def leave_an_unindexed_record(work_dir: str):
         page.write(record.encode("utf-8"))
 
 
+KILLED_UPDATE_COLL = "killed_update_docs"
+KILLED_DELETE_COLL = "killed_delete_docs"
+KILLED_RELOCATE_COLL = "killed_relocate_docs"
+KILLED_DOCS = 5
+KILLED_ID = "killed1"
+
+
+def killed_doc(i: int, value: str = "acknowledged") -> dict:
+    return {"_id": f"killed{i}", "v": f"{value}-{i}"}
+
+
+def seed_collections_whose_compactions_a_kill_will_interrupt(conn: Conn):
+    section("Seed collections whose in-place update, delete and relocation a kill will interrupt")
+    for coll in (KILLED_UPDATE_COLL, KILLED_DELETE_COLL, KILLED_RELOCATE_COLL):
+        check_status(f"create {coll}",
+                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+        for i in range(KILLED_DOCS):
+            check_status(f"save killed{i} into {coll}", conn.save(killed_doc(i), coll=coll), "OK")
+
+
+def interrupt_a_compaction(work_dir: str, coll: str, kind: str):
+    folder = os.path.join(work_dir, "db", DB, coll)
+    pk_path = pk_index_file(work_dir, DB, coll)
+    rows = bu.read_pk_rows(pk_path)
+    row = next(r for r in rows if r[0] == KILLED_ID)
+    _, position, length, page, _ = row
+    page_path = os.path.join(folder, f"{coll}-{page}.dat")
+    with open(page_path, "rb") as fp:
+        page_bytes = fp.read()
+    bu.write_compaction_marker(folder, kind, DB, coll, row, page_bytes)
+    shifted = page_bytes[:position] + page_bytes[position + length:]
+    if kind == "UPDATE":
+        shifted += (json.dumps(killed_doc(1, "unacknowledged"), separators=(",", ":")) + "\n").encode("utf-8")
+    with open(page_path, "wb") as fp:
+        fp.write(shifted)
+    if kind == "RELOCATE":
+        kept = [r for r in rows if r[0] != KILLED_ID]
+        for r in kept:
+            if r[3] == page and r[1] > position:
+                r[1] -= length
+        bu.write_pk_rows(pk_path, kept)
+
+
+def interrupt_the_compactions(work_dir: str):
+    interrupt_a_compaction(work_dir, KILLED_UPDATE_COLL, "UPDATE")
+    interrupt_a_compaction(work_dir, KILLED_DELETE_COLL, "DELETE")
+    interrupt_a_compaction(work_dir, KILLED_RELOCATE_COLL, "RELOCATE")
+
+
+def found_value(conn: Conn, coll: str, doc_id: str):
+    response = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": coll, "_id": doc_id})
+    return (response.get("object") or {}).get("v") if response.get("status") == "OK" else None
+
+
+def compaction_markers_left(work_dir: str, coll: str) -> list:
+    folder = os.path.join(work_dir, "db", DB, coll)
+    return [name for name in os.listdir(folder) if name.endswith(".compacting")]
+
+
+def check_every_document_is_acknowledged(conn: Conn, work_dir: str, coll: str, expected_ids: list):
+    values = {f"killed{i}": found_value(conn, coll, f"killed{i}") for i in range(KILLED_DOCS)}
+    expected = {f"killed{i}": (f"acknowledged-{i}" if f"killed{i}" in expected_ids else None)
+                for i in range(KILLED_DOCS)}
+    check("FIND_BY_ID answers every document with its last acknowledged value", values == expected,
+          f"expected {expected} got {values}")
+    scanned = ids_in_a_full_scan(conn, coll)
+    check("a full scan lists exactly the same documents", scanned == sorted(expected_ids),
+          f"expected {sorted(expected_ids)} got {scanned}")
+    pk = conn.count_via_pk(coll=coll)
+    check("the index-only COUNT agrees with the scan", pk == len(expected_ids), f"count={pk}")
+    check("the compaction marker is gone", not compaction_markers_left(work_dir, coll),
+          f"left: {compaction_markers_left(work_dir, coll)}")
+
+
+def test_an_update_killed_mid_compaction_is_undone_at_startup(conn: Conn, work_dir: str):
+    section("An in-place update a kill interrupted mid-compaction is undone at startup")
+    check_every_document_is_acknowledged(conn, work_dir, KILLED_UPDATE_COLL,
+                                         [f"killed{i}" for i in range(KILLED_DOCS)])
+
+
+def test_a_delete_killed_mid_compaction_is_completed_at_startup(conn: Conn, work_dir: str):
+    section("A delete a kill interrupted mid-compaction is completed at startup")
+    check_every_document_is_acknowledged(conn, work_dir, KILLED_DELETE_COLL,
+                                         [f"killed{i}" for i in range(KILLED_DOCS) if f"killed{i}" != KILLED_ID])
+
+
+def test_a_relocation_killed_between_delete_and_insert_keeps_the_document(conn: Conn, work_dir: str):
+    section("A grow-relocation a kill interrupted between its delete and its insert keeps the document")
+    check_every_document_is_acknowledged(conn, work_dir, KILLED_RELOCATE_COLL,
+                                         [f"killed{i}" for i in range(KILLED_DOCS)])
+
+
 def index_backed_ids(conn: Conn, coll: str, field: str, value: str) -> list:
     response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": coll,
                           "aggregationSteps": [{"type": "FILTER", "operator": {
@@ -844,6 +936,48 @@ def test_page_metadata_follows_dropped_databases(conn: Conn, work_dir: str):
                if page not in recorded or recorded[page]["size"] != actual[page][0]]
     check("the recorded admin/databases page size still matches the page on disk", not drifted,
           "; ".join(drifted))
+
+
+COLLIDING_DB_LONG, COLLIDING_COLL_SHORT = "pgfold_one", "two"
+COLLIDING_DB_SHORT, COLLIDING_COLL_LONG = "pgfold", "one_two"
+COLLIDING_DOCS = 30
+
+
+def rows_agree_with_pages(work_dir: str, db: str, coll: str) -> bool:
+    recorded = recorded_pages(work_dir, db, coll)
+    actual = actual_pages(work_dir, db, coll)
+    return bool(actual) and all(page in recorded and recorded[page]["size"] == actual[page][0] for page in actual)
+
+
+def test_dropping_a_colliding_collection_keeps_the_others_page_rows(conn: Conn, work_dir: str):
+    section("Dropping a collection whose page-metadata folder another collection shares")
+    for db, coll in ((COLLIDING_DB_LONG, COLLIDING_COLL_SHORT), (COLLIDING_DB_SHORT, COLLIDING_COLL_LONG)):
+        conn.send({"type": "CREATE_DATABASE", "databaseName": db})
+        check_status(f"create {db}|{coll}",
+                     conn.send({"type": "CREATE_COLLECTION", "databaseName": db, "collectionName": coll}), "OK")
+    check_status("write the collection that is dropped",
+                 conn.save({"_id": "gone", "pad": PAD}, db=COLLIDING_DB_LONG, coll=COLLIDING_COLL_SHORT), "OK")
+    for i in range(COLLIDING_DOCS):
+        conn.save({"_id": f"kept{i:02d}", "pad": PAD}, db=COLLIDING_DB_SHORT, coll=COLLIDING_COLL_LONG)
+    deadline = time.time() + 10
+    while time.time() < deadline and not rows_agree_with_pages(work_dir, COLLIDING_DB_SHORT, COLLIDING_COLL_LONG):
+        time.sleep(0.1)
+    check("the surviving collection's rows reached the shared folder",
+          rows_agree_with_pages(work_dir, COLLIDING_DB_SHORT, COLLIDING_COLL_LONG),
+          f"recorded={recorded_pages(work_dir, COLLIDING_DB_SHORT, COLLIDING_COLL_LONG)}")
+
+    check_status("drop the colliding collection",
+                 conn.send({"type": "DROP_COLLECTION", "databaseName": COLLIDING_DB_LONG,
+                            "collectionName": COLLIDING_COLL_SHORT}), "OK")
+    check("the surviving collection still has a row matching every page on disk",
+          rows_agree_with_pages(work_dir, COLLIDING_DB_SHORT, COLLIDING_COLL_LONG),
+          f"recorded={recorded_pages(work_dir, COLLIDING_DB_SHORT, COLLIDING_COLL_LONG)} "
+          f"actual={actual_pages(work_dir, COLLIDING_DB_SHORT, COLLIDING_COLL_LONG)}")
+    check("the dropped collection left no rows behind",
+          not recorded_pages(work_dir, COLLIDING_DB_LONG, COLLIDING_COLL_SHORT),
+          f"got {recorded_pages(work_dir, COLLIDING_DB_LONG, COLLIDING_COLL_SHORT)}")
+    pk = conn.count_via_pk(db=COLLIDING_DB_SHORT, coll=COLLIDING_COLL_LONG)
+    check("every surviving document is still there", pk == COLLIDING_DOCS, f"pk={pk}")
 
 
 def test_drop_database_does_not_strand_a_collection_lock(conn: Conn):
@@ -1725,6 +1859,7 @@ def main():
             test_page_cap_is_enforced_after_restart(conn, work_dir)
             test_page_metadata_follows_an_admin_row_that_grows_on_update(conn, work_dir)
             test_page_metadata_follows_dropped_databases(conn, work_dir)
+            test_dropping_a_colliding_collection_keeps_the_others_page_rows(conn, work_dir)
             test_a_transaction_of_in_place_growths_respects_max_page_size(conn, work_dir)
             test_an_index_with_no_entries_left_is_removed(conn, work_dir)
             test_drop_database_does_not_strand_a_collection_lock(conn)
@@ -1752,6 +1887,7 @@ def main():
             seed_a_collection_whose_page_tail_will_tear(conn)
             seed_collections_for_a_lost_line_end_and_a_half_built_index(conn)
             seed_a_collection_that_will_hold_an_unindexed_record(conn)
+            seed_collections_whose_compactions_a_kill_will_interrupt(conn)
 
             print("\n  Killing the server without a drain ...")
             check("the unclean stop left an index-dirty marker on disk",
@@ -1767,6 +1903,7 @@ def main():
         lose_the_last_line_end(work_dir)
         leave_the_index_half_built(work_dir)
         leave_an_unindexed_record(work_dir)
+        interrupt_the_compactions(work_dir)
         tear_an_admin_page_tail(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
@@ -1778,6 +1915,9 @@ def main():
             test_a_torn_page_tail_is_healed_at_startup(conn, work_dir)
             test_a_lost_line_end_is_restored_at_startup(conn, work_dir)
             test_an_unindexed_record_is_adopted_at_startup(conn)
+            test_an_update_killed_mid_compaction_is_undone_at_startup(conn, work_dir)
+            test_a_delete_killed_mid_compaction_is_completed_at_startup(conn, work_dir)
+            test_a_relocation_killed_between_delete_and_insert_keeps_the_document(conn, work_dir)
             test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn, work_dir, log_path, log_offset)
             test_the_committed_transaction_is_all_there_after_the_restart(conn)
             test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)

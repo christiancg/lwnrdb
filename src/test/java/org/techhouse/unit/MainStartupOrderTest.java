@@ -32,6 +32,19 @@ public class MainStartupOrderTest {
     }
 
     @Test
+    public void interruptedCompactionsAreRecoveredBeforeAdminDataIsLoaded() throws IOException {
+        final var body = mainBody();
+        final var recovery = positionOf(body, "fs.recoverInterruptedCompactions();");
+
+        assertTrue(positionOf(body, "fs.createAdminDatabase();") < recovery,
+                "recovery walks the folders the admin database creates");
+        assertTrue(recovery < positionOf(body, "cache.loadAdminData();"),
+                "admin collections are journaled too, and loading them first would cache their stale pk index");
+        assertTrue(recovery < positionOf(body, "seedHybridClock();"),
+                "the clock must be seeded from the versions recovery leaves in pk.idx");
+    }
+
+    @Test
     public void test_trigger_recovery_runs_after_the_node_joins_the_cluster() throws IOException {
         final var body = mainBody();
 

@@ -42,8 +42,7 @@ final class AdminSnapshotConformer {
     private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
     private final AdminQuarantine quarantine = new AdminQuarantine();
 
-    boolean conform(AdminSnapshotPayload snapshot) throws Exception {
-        final var epochAtStart = adminEpoch.current();
+    boolean conform(AdminSnapshotPayload snapshot, long epochAtStart) throws Exception {
         final var snapshotUsers = conformUsers(snapshot);
         removeAbsentUsers(snapshotUsers);
         final var outcome = new ConformOutcome();

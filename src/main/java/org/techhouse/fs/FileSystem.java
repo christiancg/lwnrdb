@@ -4,7 +4,6 @@ import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
-import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -21,7 +20,6 @@ import org.techhouse.data.IndexKind;
 import org.techhouse.data.IndexedDbEntry;
 import org.techhouse.data.PkIndexEntry;
 import org.techhouse.ex.DirectoryNotFoundException;
-import org.techhouse.ex.PartialBulkUpdateException;
 
 public class FileSystem {
     private final FilePaths paths = new FilePaths();
@@ -33,6 +31,10 @@ public class FileSystem {
     private final FieldIndexLoader fieldIndexLoader = new FieldIndexLoader(paths);
     private final DocumentPageStore documentPageStore = new DocumentPageStore(paths);
     private final PkIndexStore pkIndexStore = new PkIndexStore(paths);
+    private final CompactionJournal compactionJournal = new CompactionJournal(paths);
+    private final PageCompactor pageCompactor = new PageCompactor(paths, pkIndexStore, compactionJournal);
+    private final CompactionRecovery compactionRecovery = new CompactionRecovery(paths, pkIndexStore,
+            compactionJournal);
 
     public void createBaseDbPath() {
         paths.useDbPath(Configuration.getInstance().getFilePath());
@@ -311,117 +313,41 @@ public class FileSystem {
     }
 
     public PkCompaction deleteFromCollection(PkIndexEntry pkIndexEntry) {
-        final var dbName = pkIndexEntry.getDatabaseName();
-        final var collName = pkIndexEntry.getCollectionName();
-        final var page = pkIndexEntry.getPage();
-        final var file = paths.collectionPage(dbName, collName, page);
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
-        try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            final long totalFileLength = file.length();
-            final var tail = PageRegions.readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
-            try {
-                final var compacted = PageRegions.shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
-                writer.setLength(totalFileLength - pkIndexEntry.getLength());
-                pkIndexStore.deleteIndexValue(pkIndexEntry);
-                return compacted ? compactionFor(pkIndexEntry) : null;
-            } catch (IOException e) {
-                PageRegions.restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
-                throw e;
-            }
+        return pageCompactor.delete(pkIndexEntry);
+    }
+
+    public PkCompaction deleteForRelocation(PkIndexEntry source) {
+        return pageCompactor.deleteForRelocation(source);
+    }
+
+    public PkIndexEntry insertRelocated(DbEntry entry, PkIndexEntry source) throws IOException {
+        pageCompactor.retargetRelocation(source, entry.getPage());
+        return insertIntoCollection(entry);
+    }
+
+    public void endRelocation(PkIndexEntry source) {
+        pageCompactor.endRelocation(source);
+    }
+
+    public List<String> recoverInterruptedCompactions() throws IOException {
+        return compactionRecovery.recoverAll();
+    }
+
+    public List<String> listCompactionMarkers() {
+        try {
+            return compactionJournal.findMarkerFiles().stream().map(File::getPath).toList();
         } catch (IOException e) {
-            throw new RuntimeException(e);
-        } finally {
-            lock.unlock();
-        }
-    }
-
-    private static PkCompaction compactionFor(PkIndexEntry pkIndexEntry) {
-        return new PkCompaction(pkIndexEntry.getDatabaseName(), pkIndexEntry.getCollectionName(),
-                pkIndexEntry.getPage(), pkIndexEntry.getPosition(), pkIndexEntry.getLength());
-    }
-
-    private static void shiftIfAfter(PkIndexEntry entry, PkCompaction compaction) {
-        if (entry.getPage() == compaction.page() && entry.getPosition() > compaction.removedPosition()) {
-            entry.setPosition(entry.getPosition() - compaction.removedLength());
+            return List.of(paths.dbPath() + " (could not be searched: " + e.getMessage() + ")");
         }
     }
 
     public BulkUpdateResult bulkUpdateFromCollection(String dbName, String collName, List<IndexedDbEntry> entries)
             throws IOException {
-        final var updated = new ArrayList<IndexedDbEntry>();
-        final var compactions = new ArrayList<PkCompaction>();
-        // Private copies: earlier updates compact the page, so these positions are adjusted as we go
-        // rather than mutating the caller's cached entries.
-        final var working = new ArrayList<PkIndexEntry>(entries.size());
-        for (final var entry : entries) {
-            final var idx = entry.getIndex();
-            working.add(new PkIndexEntry(idx.getDatabaseName(), idx.getCollectionName(), idx.getValue(),
-                    idx.getPosition(), idx.getLength(), idx.getPage(), idx.getVersion()));
-        }
-        for (int i = 0; i < entries.size(); i++) {
-            final var entry = entries.get(i);
-            final var target = working.get(i);
-            final UpdateResult result;
-            try {
-                result = updateFromCollection(entry.toDbEntry(), target);
-            } catch (IOException e) {
-                throw new PartialBulkUpdateException(new BulkUpdateResult(updated, compactions), e);
-            }
-            final var updatedIndexEntry = new IndexedDbEntry();
-            updatedIndexEntry.setIndex(result.indexEntry());
-            updatedIndexEntry.set_id(entry.get_id());
-            updatedIndexEntry.setCollectionName(collName);
-            updatedIndexEntry.setDatabaseName(dbName);
-            updatedIndexEntry.setData(entry.getData());
-            updatedIndexEntry.setVersion(result.indexEntry().getVersion());
-            updatedIndexEntry.setPreviousByteSize(target.getLength());
-            updated.add(updatedIndexEntry);
-            final var compaction = result.compaction();
-            if (compaction != null) {
-                compactions.add(compaction);
-                // Apply the shift to the pending working copies and to the entries relocated by earlier
-                // iterations, but never to the row this iteration just relocated.
-                for (int j = i + 1; j < working.size(); j++) {
-                    shiftIfAfter(working.get(j), compaction);
-                }
-                for (int k = 0; k < i; k++) {
-                    shiftIfAfter(updated.get(k).getIndex(), compaction);
-                }
-            }
-        }
-        return new BulkUpdateResult(updated, compactions);
+        return pageCompactor.bulkUpdate(dbName, collName, entries);
     }
 
     public UpdateResult updateFromCollection(DbEntry entry, PkIndexEntry pkIndexEntry) throws IOException {
-        final var dbName = entry.getDatabaseName();
-        final var collName = entry.getCollectionName();
-        final var page = entry.getPage();
-        final var file = paths.collectionPage(dbName, collName, page);
-        final var lock = FileLocks.lockFor(file).writeLock();
-        lock.lock();
-        try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
-            final long totalFileLength = file.length();
-            final var tail = PageRegions.readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
-            try {
-                final var compacted = PageRegions.shiftOtherEntriesToStart(writer, pkIndexEntry, totalFileLength);
-                writer.seek(totalFileLength - pkIndexEntry.getLength());
-                final var strData = entry.toFileEntry() + Globals.NEWLINE;
-                final var bytes = strData.getBytes(StandardCharsets.UTF_8);
-                final var length = bytes.length;
-                writer.write(bytes, 0, length);
-                writer.setLength(totalFileLength - pkIndexEntry.getLength() + length);
-                entry.setPreviousByteSize(pkIndexEntry.getLength());
-                final var updated = pkIndexStore.updateIndexValues(entry.getDatabaseName(), entry.getCollectionName(),
-                        entry.get_id(), totalFileLength, length, page, entry.getVersion());
-                return new UpdateResult(updated, compacted ? compactionFor(pkIndexEntry) : null);
-            } catch (IOException e) {
-                PageRegions.restoreRegion(writer, pkIndexEntry.getPosition(), tail, totalFileLength);
-                throw e;
-            }
-        } finally {
-            lock.unlock();
-        }
+        return pageCompactor.update(entry, pkIndexEntry);
     }
 
     public void writeIndexFile(String dbName, String collName, String fieldName,
