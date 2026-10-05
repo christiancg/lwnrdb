@@ -86,6 +86,7 @@ public class Main {
         fs.createBaseDbPath();
         fs.createAdminDatabase();
         fs.recoverInterruptedCompactions();
+        StartupWarnings.warnIfCompactionsLeftUnrecovered();
         cache.loadAdminData();
         seedHybridClock();
         PageOccupancyReconciler.reconcileAll();
@@ -108,7 +109,6 @@ public class Main {
         StartupWarnings.warnIfDefaultAdminPassword();
         StartupWarnings.warnIfScriptFetchEnabled();
         StartupWarnings.warnIfIndexesLeftDirty();
-        StartupWarnings.warnIfCompactionsLeftUnrecovered();
         StartupWarnings.warnIfNamesShareAnOnDiskKey();
         StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
         startClusterIfEnabled();

@@ -829,16 +829,17 @@ def test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn: Conn, 
     for i in range(2):
         check_status(f"save new{i}", conn.save({"_id": f"new{i}", "pad": "n"}, coll=LEFTOVER_ROWS_COLL), "OK")
     deadline = time.time() + 15
-    while time.time() < deadline and not recorded_pages(work_dir, DB, LEFTOVER_ROWS_COLL):
+    while True:
+        recorded = recorded_pages(work_dir, DB, LEFTOVER_ROWS_COLL)
+        actual = actual_pages(work_dir, DB, LEFTOVER_ROWS_COLL)
+        settled = {page: (row["size"], row["entryCount"]) for page, row in recorded.items() if page in actual} == actual
+        if settled or time.time() >= deadline:
+            break
         time.sleep(0.2)
     pages_coll = f"{DB}_{LEFTOVER_ROWS_COLL}"
     row_ids = [row[0] for row in bu.read_pk_rows(os.path.join(leftover_rows_folder(work_dir), f"{pages_coll}-pk.idx"))]
     check("the page-row index names every row once", len(row_ids) == len(set(row_ids)), f"row ids: {row_ids}")
-    recorded = recorded_pages(work_dir, DB, LEFTOVER_ROWS_COLL)
-    actual = actual_pages(work_dir, DB, LEFTOVER_ROWS_COLL)
-    check("the recorded page occupancy matches the pages on disk",
-          {page: (row["size"], row["entryCount"]) for page, row in recorded.items() if page in actual}
-          == actual, f"recorded {recorded} actual {actual}")
+    check("the recorded page occupancy matches the pages on disk", settled, f"recorded {recorded} actual {actual}")
 
 
 def index_backed_ids(conn: Conn, coll: str, field: str, value: str) -> list:
