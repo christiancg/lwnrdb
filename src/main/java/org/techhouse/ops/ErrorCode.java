@@ -59,6 +59,8 @@ public enum ErrorCode {
             OperationStatus.ERROR),
     NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection", OperationStatus.ERROR),
     CROSS_OWNER_TRANSACTION("421-2", "A transaction may only touch collections owned by a single node", OperationStatus.ERROR),
+    TRANSACTION_READ_SPANS_NODES("421-3",
+            "This read joins collections the transaction wrote on different nodes", OperationStatus.ERROR),
     AUTHENTICATION_ERROR("500-1", "Error during authentication", OperationStatus.ERROR),
     ERROR_CREATING_USER("500-2", "Error creating user", OperationStatus.ERROR),
     ERROR_DELETING_USER("500-3", "Error deleting user", OperationStatus.ERROR),

@@ -31,6 +31,9 @@ import org.techhouse.simplejs.values.JsValue;
 public final class DbModule {
     private static final int PAYLOAD_INDEX = 2;
     private static final String PK_FIELD = "_id";
+    private static final String DATABASE_NAME = "database name";
+    private static final String COLLECTION_NAME = "collection name";
+    private static final String ID = "id";
 
     private DbModule() {
     }
@@ -44,11 +47,12 @@ public final class DbModule {
         db.set("bulkSave", new JsNativeFunction("bulkSave", (_, args) -> bulkSave(database, ops, args)));
         db.set("cursor", new JsNativeFunction("cursor", (_, args) -> cursor(database, ops, intrinsics, limits, args)));
         db.set("delete", new JsNativeFunction("delete", (_, args) -> {
-            database.delete(arg(args, 0), arg(args, 1), arg(args, 2));
+            database.delete(requireString(args, 0, "delete", DATABASE_NAME),
+                    requireString(args, 1, "delete", COLLECTION_NAME), requireString(args, 2, "delete", ID));
             return JsUndefined.getInstance();
         }));
-        db.set("listCollections", new JsNativeFunction("listCollections",
-                (_, args) -> toStringArray(database.listCollections(arg(args, 0)))));
+        db.set("listCollections", new JsNativeFunction("listCollections", (_, args) -> toStringArray(
+                database.listCollections(requireString(args, 0, "listCollections", DATABASE_NAME)))));
         db.set("listDatabases",
                 new JsNativeFunction("listDatabases", (_, _) -> toStringArray(database.listDatabases())));
         db.set("transaction", new JsNativeFunction("transaction", (_, args) -> transaction(database, ops, args)));
@@ -60,14 +64,17 @@ public final class DbModule {
     }
 
     private static JsValue findById(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
-        final var document = database.findById(arg(args, 0), arg(args, 1), arg(args, 2));
+        final var document = database.findById(requireString(args, 0, "findById", DATABASE_NAME),
+                requireString(args, 1, "findById", COLLECTION_NAME), requireString(args, 2, "findById", ID));
         InterpreterOps.charge(ops, EJsonInterop.estimatedBytes(document));
         return EJsonInterop.fromEjson(document);
     }
 
     private static JsValue aggregate(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
+        final var dbName = requireString(args, 0, "aggregate", DATABASE_NAME);
+        final var collName = requireString(args, 1, "aggregate", COLLECTION_NAME);
         final var pipeline = requireArray(payloadArg(args, ops), "db.aggregate expects an array of aggregation steps");
-        final var results = database.aggregate(arg(args, 0), arg(args, 1), pipeline);
+        final var results = database.aggregate(dbName, collName, pipeline);
         final var array = new JsArray();
         for (final var result : results) {
             InterpreterOps.charge(ops, EJsonInterop.estimatedBytes(result));
@@ -77,13 +84,17 @@ public final class DbModule {
     }
 
     private static JsValue save(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
+        final var dbName = requireString(args, 0, "save", DATABASE_NAME);
+        final var collName = requireString(args, 1, "save", COLLECTION_NAME);
         final var document = requireDocument(payloadArg(args, ops));
-        final var saved = database.save(arg(args, 0), arg(args, 1), document);
+        final var saved = database.save(dbName, collName, document);
         InterpreterOps.charge(ops, EJsonInterop.estimatedBytes(saved));
         return EJsonInterop.fromEjson(saved);
     }
 
     private static JsValue bulkSave(DatabaseAccess database, InterpreterOps ops, List<JsValue> args) {
+        final var dbName = requireString(args, 0, "bulkSave", DATABASE_NAME);
+        final var collName = requireString(args, 1, "bulkSave", COLLECTION_NAME);
         final var array = requireArray(payloadArg(args, ops), "db.bulkSave expects an array of documents");
         final var documents = new ArrayList<JsonObject>();
         for (final var element : array) {
@@ -92,19 +103,21 @@ public final class DbModule {
             }
             documents.add(document);
         }
-        final var result = database.bulkSave(arg(args, 0), arg(args, 1), documents);
+        final var result = database.bulkSave(dbName, collName, documents);
         InterpreterOps.chargeElements(ops, (long) result.inserted().size() + result.updated().size());
         return outcome(result);
     }
 
     private static JsValue cursor(DatabaseAccess database, InterpreterOps ops, Intrinsics intrinsics,
             ResourceLimits limits, List<JsValue> args) {
+        final var dbName = requireString(args, 0, "cursor", DATABASE_NAME);
+        final var collName = requireString(args, 1, "cursor", COLLECTION_NAME);
         final var converted = args.size() > 2 ? EJsonInterop.toHostEjson(args.get(2), ops) : null;
         if (!(converted instanceof JsonArray steps)) {
             throw new TypeErrorException("db.cursor expects an array of aggregation steps");
         }
         final var iterator = JsIterators
-                .of(new BatchIterator(database, ops, arg(args, 0), arg(args, 1), steps, batchSize(args, limits)));
+                .of(new BatchIterator(database, ops, dbName, collName, steps, batchSize(args, limits)));
         return JsIterators.linkPrototype(iterator, intrinsics == null ? null : intrinsics.dbCursorProto);
     }
 
@@ -254,8 +267,11 @@ public final class DbModule {
         return array;
     }
 
-    private static String arg(List<JsValue> args, int index) {
-        return index < args.size() ? JsCoercion.toStr(args.get(index)) : "undefined";
+    private static String requireString(List<JsValue> args, int index, String method, String role) {
+        if (index < args.size() && args.get(index) instanceof JsString string) {
+            return string.getValue();
+        }
+        throw new TypeErrorException("db." + method + " expects a string " + role);
     }
 
     private static JsonBaseElement payloadArg(List<JsValue> args, InterpreterOps ops) {

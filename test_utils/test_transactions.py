@@ -211,6 +211,20 @@ def test_reduce_inside_a_transaction_folds_in_scan_order(c):
     check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
 
 
+def test_reduce_after_a_filter_inside_a_transaction_folds_in_id_order(c):
+    section("A REDUCE after a FILTER inside a transaction folds the overlay and the committed rows in _id order")
+    fold = [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "_id", "value": "zzz"}},
+            {"type": "REDUCE", "script": "export default (acc, doc) => acc + '|' + doc._id;",
+             "initialValue": "", "resultField": "folded"}]
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    save(c, {"_id": "aardvark"}, coll=REDUCE_COLL)
+    save(c, {"_id": "golf"}, coll=REDUCE_COLL)
+    inside = ((aggregate(c, fold, coll=REDUCE_COLL).get("results") or [{}])[0]).get("folded")
+    check("buffered inserts take their _id place among the committed rows",
+          inside == "|aardvark|alpha|bravo|charlie|delta|echo|foxtrot|golf", f"got {inside!r}")
+    check_status("ROLLBACK_TRANSACTION", rollback_txn(c), "OK")
+
+
 def test_buffered_delete_reads_as_not_found(c):
     section("Buffered DELETE reads as not-found within the transaction")
 
@@ -572,6 +586,7 @@ def main():
         test_read_your_writes_aggregate(c)
     with authed_conn() as (c):
         test_reduce_inside_a_transaction_folds_in_scan_order(c)
+        test_reduce_after_a_filter_inside_a_transaction_folds_in_id_order(c)
     with authed_conn() as (c):
         test_buffered_delete_reads_as_not_found(c)
     with authed_conn() as (c):

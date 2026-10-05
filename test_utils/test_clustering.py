@@ -1133,6 +1133,81 @@ def test_multi_collection_transaction():
     check("rolled-back multi-collection write appears nowhere", wait_until(_none_have_y, timeout_s=10.0))
 
 
+def _edge_and_remote_collections(prefix):
+    owners = collections_by_owner(nodes[0].client_port, DB, prefix)
+    remote = [index for index in owners if index != 0]
+    if not check("found a collection owned by the edge and one owned by another node",
+                 0 in owners and bool(remote), f"owners={owners}"):
+        return None, None
+    return owners[0][0], owners[remote[0]][0]
+
+
+def _joined_ids(response):
+    rows = response.get("results") or []
+    return sorted(doc.get("_id") for row in rows for doc in (row.get("j") or []))
+
+
+def test_a_transactional_join_sees_a_participants_buffered_writes():
+    section("A transactional JOIN reads the join target's buffered writes from the node holding them")
+    local, remote = _edge_and_remote_collections("txjoin")
+    if local is None:
+        return
+    check_status("seed the primary row", save(nodes[0].client_port, DB, local, {"_id": "a1", "ref": 1, "v": 1}),
+                 "OK")
+    check_status("seed a committed join row", save(nodes[0].client_port, DB, remote, {"_id": "b_old", "k": 1, "v": 1}),
+                 "OK")
+    check("the seeds reached every node",
+          all_nodes_see(DB, local, "a1", 1) and all_nodes_see(DB, remote, "b_old", 1))
+    join = [{"type": "JOIN", "joinCollection": remote, "localField": "ref", "remoteField": "k", "asField": "j"}]
+
+    conn = authed(nodes[0].client_port)
+    try:
+        check_status("START_TRANSACTION", conn.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("buffer a new join row on its owner", conn.send({
+            "type": "SAVE", "databaseName": DB, "collectionName": remote,
+            "object": {"_id": "b_new", "k": 1, "v": 2}}), "OK")
+        check_status("buffer the delete of the committed join row", conn.send({
+            "type": "DELETE", "databaseName": DB, "collectionName": remote, "_id": "b_old"}), "OK")
+        inside = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": local,
+                            "aggregationSteps": join})
+        check("the join lists the buffered row and not the buffered delete",
+              _joined_ids(inside) == ["b_new"], f"got {inside}")
+        check_status("ROLLBACK_TRANSACTION", conn.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
+    finally:
+        conn.close()
+
+    outside = aggregate(nodes[0].client_port, DB, local, join)
+    check("after the rollback the join sees only the committed row", _joined_ids(outside) == ["b_old"],
+          f"got {outside}")
+
+
+def test_a_transactional_join_across_two_written_nodes_is_refused():
+    section("A transactional JOIN over writes buffered on two nodes is refused rather than answered partially")
+    local, remote = _edge_and_remote_collections("txjoinsplit")
+    if local is None:
+        return
+    join = [{"type": "JOIN", "joinCollection": remote, "localField": "ref", "remoteField": "k", "asField": "j"}]
+
+    conn = authed(nodes[0].client_port)
+    try:
+        check_status("START_TRANSACTION", conn.send({"type": "START_TRANSACTION"}), "OK")
+        check_status("buffer a primary row on the edge", conn.send({
+            "type": "SAVE", "databaseName": DB, "collectionName": local,
+            "object": {"_id": "a2", "ref": 2, "v": 2}}), "OK")
+        check_status("buffer a join row on its owner", conn.send({
+            "type": "SAVE", "databaseName": DB, "collectionName": remote,
+            "object": {"_id": "b2", "k": 2, "v": 2}}), "OK")
+        refused = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": local,
+                             "aggregationSteps": join})
+        check_code("the join is refused with 421-3", refused, "ERROR", "421-3")
+        check_status("the transaction still commits", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+    finally:
+        conn.close()
+
+    check("both committed rows reached every node",
+          all_nodes_see(DB, local, "a2", 2) and all_nodes_see(DB, remote, "b2", 2))
+
+
 def test_a_replica_listener_never_sees_a_partial_transaction():
     section("A listener attached to a replica is notified once the whole transaction applied (5a/5b)")
 
@@ -2975,6 +3050,8 @@ def main():
         test_a_forged_stamp_is_ignored_and_a_real_one_still_replicates()
         test_single_node_transaction()
         test_multi_collection_transaction()
+        test_a_transactional_join_sees_a_participants_buffered_writes()
+        test_a_transactional_join_across_two_written_nodes_is_refused()
         test_a_replica_listener_never_sees_a_partial_transaction()
         test_admin_transaction_ops()
         test_lock_timeout_aborts_the_whole_transaction()

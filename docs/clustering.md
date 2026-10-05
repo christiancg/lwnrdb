@@ -425,6 +425,15 @@ a `FORWARD_TX_REQUEST` (carrying a stable `txSessionId` and the distributed-tran
 not-yet-written collection run locally; a read of a written collection is forwarded to its
 participant for read-your-writes.
 
+Read-your-writes is decided over **every** collection a read touches — an `AGGREGATE`'s primary
+collection and each `JOIN` target — because a JOIN merges only the overlay held on the node that runs
+it. The edge records which node holds each written collection's buffered writes: when none of the
+touched collections was written the read routes as above, when one node holds them all the read runs
+there (reading the unwritten ones from its replica, as in [Joins across
+collections](#joins-across-collections)), and when the writes sit on two nodes the read answers
+`421-3 TRANSACTION_READ_SPANS_NODES` rather than join a partial view. The refusal leaves the
+transaction usable; commit or roll back as usual.
+
 Each participant runs its forwarded session on its **own single-thread executor** under a
 persistent synthetic client. This matters: the transaction holds the collection write lock
 from its first write until commit, and a `ReentrantReadWriteLock` write lock is

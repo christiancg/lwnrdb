@@ -232,6 +232,21 @@ def test_reduce(conn: Conn):
           results(folded)[0].get("folded") == expected_order,
           f"got {results(folded)[0].get('folded')!r}, expected {expected_order!r}")
 
+    priced = [{"type": "FILTER", "operator": {"fieldOperatorType": "GREATER_THAN", "field": "price", "value": 0}},
+              reduce_step("export default (acc, doc) => acc + '|' + doc._id;", "", "folded")]
+    after_filter = conn.aggregate(priced)
+    check("a fold after an index-backed FILTER enumerates in _id order",
+          results(after_filter)[0].get("folded") == expected_order,
+          f"got {results(after_filter)[0].get('folded')!r}, expected {expected_order!r}")
+    scanned = conn.aggregate([{"type": "SKIP", "skip": 0}] + priced)
+    check("the same fold answered by a scan agrees with the index",
+          results(scanned)[0].get("folded") == expected_order, f"got {results(scanned)[0].get('folded')!r}")
+
+    distinct = conn.aggregate([{"type": "DISTINCT", "fieldName": "sku"},
+                               reduce_step("export default (acc, row) => acc + '|' + row.sku;", "", "skus")])
+    check("a fold after DISTINCT enumerates its rows in a defined order",
+          results(distinct)[0].get("skus") == "|sku-0|sku-1|sku-2", f"got {results(distinct)}")
+
     defaulted = conn.aggregate([reduce_step("export default (acc, doc) => (acc ?? 0) + 1;")])
     check("default result field is 'value'", results(defaulted)[0].get("value") == DOCUMENT_COUNT,
           f"got {results(defaulted)}")

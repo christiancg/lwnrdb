@@ -19,6 +19,7 @@ import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.BaseAggregationStep;
 import org.techhouse.ops.req.agg.step.DistinctAggregationStep;
@@ -105,7 +106,11 @@ public final class AggregationOperationHelper {
                 case SKIP -> processSkipStep(step, resultStream, dbName, collName);
                 case SORT -> SortOperatorHelper.processSortStep((SortAggregationStep) step, resultStream, dbName,
                         collName, sortBound(steps, i));
-                case REDUCE -> processReduceStep(step, resultStream, dbName, collName, context);
+                case REDUCE -> processReduceStep(step,
+                        resultStream != null && needsFoldOrder(steps, i)
+                                ? ReduceOperatorHelper.inFoldOrder(resultStream)
+                                : resultStream,
+                        dbName, collName, context);
             };
         }
         try {
@@ -121,6 +126,10 @@ public final class AggregationOperationHelper {
         } catch (java.io.UncheckedIOException e) {
             throw e.getCause();
         }
+    }
+
+    private static boolean needsFoldOrder(List<BaseAggregationStep> steps, int reduceIndex) {
+        return reduceIndex > 0 && !ResultHasher.ordersResults(steps.subList(0, reduceIndex));
     }
 
     private static long sortBound(List<BaseAggregationStep> steps, int sortIndex) {

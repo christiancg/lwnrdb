@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.net.Socket;
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
@@ -113,6 +114,18 @@ public class ClientTracker {
     public Set<String> transactionParticipants(UUID clientId) {
         final var client = clientId != null ? clients.get(clientId) : null;
         return client != null ? client.getTransactionParticipants() : Set.of();
+    }
+
+    public void recordTransactionWrite(UUID clientId, String collectionId, String holder) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        if (client != null) {
+            client.recordTransactionWrite(collectionId, holder);
+        }
+    }
+
+    public Set<String> transactionWriteHolders(UUID clientId, Collection<String> collectionIds) {
+        final var client = clientId != null ? clients.get(clientId) : null;
+        return client != null ? client.transactionWriteHolders(collectionIds) : Set.of();
     }
 
     public void clearTransactionState(UUID clientId) {

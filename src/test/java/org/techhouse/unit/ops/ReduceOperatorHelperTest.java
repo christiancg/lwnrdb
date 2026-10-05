@@ -11,6 +11,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
+import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
@@ -237,5 +238,47 @@ public class ReduceOperatorHelperTest {
         } finally {
             processor.processMessage(new org.techhouse.ops.req.RollbackTransactionRequest(), client);
         }
+    }
+
+    private static String idsInFoldOrder(Stream<JsonObject> rows) {
+        return ReduceOperatorHelper.inFoldOrder(rows).map(row -> IocContainer.get(EJson.class).toJson(row)).reduce("",
+                (acc, text) -> acc + text);
+    }
+
+    private static JsonObject parsed(String json) {
+        return IocContainer.get(EJson.class).fromJson(json, JsonObject.class);
+    }
+
+    @Test
+    public void test_in_fold_order_sorts_rows_by_id_exactly() {
+        final var ordered = idsInFoldOrder(Stream.of(document("b", 1), document("B", 2), document("a", 3)));
+
+        assertEquals("{\"_id\":\"B\",\"price\":2}{\"_id\":\"a\",\"price\":3}{\"_id\":\"b\",\"price\":1}", ordered);
+    }
+
+    @Test
+    public void test_in_fold_order_treats_a_non_string_id_as_absent() {
+        final var ordered = idsInFoldOrder(Stream.of(parsed("{\"_id\":1,\"v\":1}"), document("z", 1)));
+
+        assertEquals("{\"_id\":\"z\",\"price\":1}{\"_id\":1,\"v\":1}", ordered);
+    }
+
+    @Test
+    public void test_in_fold_order_breaks_a_canonical_tie_by_wire_text() {
+        final var longForm = parsed("{\"d\":\"#datetime(2024-01-01T10:00:00)\"}");
+        final var shortForm = parsed("{\"d\":\"#datetime(2024-01-01T10:00)\"}");
+
+        assertEquals(idsInFoldOrder(Stream.of(longForm, shortForm)), idsInFoldOrder(Stream.of(shortForm, longForm)));
+    }
+
+    @Test
+    public void test_in_fold_order_closes_its_source() {
+        final var closed = new java.util.concurrent.atomic.AtomicBoolean();
+
+        final var ordered = ReduceOperatorHelper.inFoldOrder(documents().onClose(() -> closed.set(true))).toList();
+
+        assertEquals(3, ordered.size());
+
+        assertTrue(closed.get());
     }
 }

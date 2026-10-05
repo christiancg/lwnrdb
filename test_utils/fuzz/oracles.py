@@ -34,6 +34,7 @@ FILTER_QUERY = "FILTER"
 SORT_QUERY = "SORT"
 RESHAPING_QUERY = "RESHAPING"
 REDUCE_QUERY = "REDUCE"
+REDUCE_AFTER_QUERY = "REDUCE_AFTER"
 
 GEO_TARGET = "#geo(0,0)"
 GEO_POLYGON = ["#geo(-10,-10)", "#geo(-10,10)", "#geo(10,10)", "#geo(10,-10)"]
@@ -41,6 +42,7 @@ GEO_DATELINE_POLYGON = ["#geo(-10,179)", "#geo(-10,-179)", "#geo(10,-179)", "#ge
 VECTOR_TARGET = "#vector(1.0,0.0,0.0)"
 
 NON_COMMUTATIVE_REDUCE_SCRIPT = "export default (acc, doc) => acc + '|' + doc._id;"
+ROW_FOLD_SCRIPT = "export default (acc, row) => acc + '|' + JSON.stringify(row);"
 
 Query = namedtuple("Query", "label steps ordered kind")
 
@@ -131,6 +133,33 @@ def fold_order_query() -> Query:
                  [{"type": "REDUCE", "script": NON_COMMUTATIVE_REDUCE_SCRIPT,
                    "initialValue": "", "resultField": "folded"}],
                  True, REDUCE_QUERY)
+
+
+def fold_step(script: str) -> dict:
+    return {"type": "REDUCE", "script": script, "initialValue": "", "resultField": "folded"}
+
+
+def _filtered_field(query):
+    if query.kind != FILTER_QUERY or len(query.steps) != 1:
+        return None
+    return query.steps[0].get("operator", {}).get("field")
+
+
+def fold_after_queries(queries: list, fields: list) -> list:
+    folds = []
+    seen = set()
+    for query in queries:
+        field = _filtered_field(query)
+        if field is None or field in seen:
+            continue
+        seen.add(field)
+        folds.append(Query(f"{query.label} then REDUCE fold of _id",
+                           query.steps + [fold_step(NON_COMMUTATIVE_REDUCE_SCRIPT)], True, REDUCE_AFTER_QUERY))
+    for field in fields:
+        folds.append(Query(f"DISTINCT {field} then REDUCE fold of rows",
+                           [{"type": "DISTINCT", "fieldName": field}, fold_step(ROW_FOLD_SCRIPT)],
+                           True, REDUCE_AFTER_QUERY))
+    return folds
 
 
 def leaf_operator(rng, field: str) -> dict:
@@ -272,6 +301,7 @@ def queries_for(rng, fields: list, operands_per_operator: int = 2) -> list:
     queries.extend(conjunction_queries(rng, fields))
     queries.extend(map_queries(rng, fields))
     queries.extend(custom_operator_queries(fields))
+    queries.extend(fold_after_queries(queries, fields))
     return queries
 
 

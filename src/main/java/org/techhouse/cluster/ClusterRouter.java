@@ -1,7 +1,9 @@
 package org.techhouse.cluster;
 
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.cluster.ownership.OwnershipManager;
@@ -11,13 +13,16 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.ClusterAdminHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.resp.OperationResponse;
 
 public class ClusterRouter {
+    public static final String LOCAL_HOLDER = "local";
     private static final Set<OperationType> ROUTABLE = Set.of(OperationType.SAVE, OperationType.BULK_SAVE,
             OperationType.DELETE, OperationType.FIND_BY_ID, OperationType.AGGREGATE);
     private static final Set<OperationType> READS = Set.of(OperationType.FIND_BY_ID, OperationType.AGGREGATE);
@@ -85,21 +90,35 @@ public class ClusterRouter {
             String actingUser, UUID clientId) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
+        final var collectionId = Cache.getCollectionIdentifier(dbName, collName);
         if (Globals.ADMIN_DB_NAME.equals(dbName) || ownershipManager.isOwner(dbName, collName)) {
-            clientTracker.markLocalSlice(clientId);
-            return null;
+            return bufferLocally(clientId, collectionId);
         }
         final var ownerAddress = ownershipManager.ownerAddress(dbName, collName);
         if (ownerAddress == null) {
-            clientTracker.markLocalSlice(clientId);
-            return null;
+            return bufferLocally(clientId, collectionId);
         }
         clientTracker.addTransactionParticipant(clientId, ownerAddress);
+        clientTracker.recordTransactionWrite(clientId, collectionId, ownerAddress);
         return forwardTx(rawJson, ownerAddress, type, actingUser, clientId);
+    }
+
+    private String bufferLocally(UUID clientId, String collectionId) {
+        clientTracker.markLocalSlice(clientId);
+        clientTracker.recordTransactionWrite(clientId, collectionId, LOCAL_HOLDER);
+        return null;
     }
 
     private String routeTransactionRead(OperationRequest request, String rawJson, OperationType type, String actingUser,
             UUID clientId) {
+        final var holders = clientTracker.transactionWriteHolders(clientId, touchedCollections(request));
+        if (holders.size() > 1) {
+            return eJson.toJson(new OperationResponse(type, ErrorCode.TRANSACTION_READ_SPANS_NODES));
+        }
+        if (holders.size() == 1) {
+            final var holder = holders.iterator().next();
+            return LOCAL_HOLDER.equals(holder) ? null : forwardTx(rawJson, holder, type, actingUser, clientId);
+        }
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         if (Globals.ADMIN_DB_NAME.equals(dbName) || ownershipManager.isOwner(dbName, collName)) {
@@ -110,6 +129,13 @@ public class ClusterRouter {
             return forwardTx(rawJson, ownerAddress, type, actingUser, clientId);
         }
         return null;
+    }
+
+    private static List<String> touchedCollections(OperationRequest request) {
+        if (request instanceof AggregateRequest aggregateRequest) {
+            return AggregationOperationHelper.aggregateLockSet(aggregateRequest);
+        }
+        return List.of(Cache.getCollectionIdentifier(request.getDatabaseName(), request.getCollectionName()));
     }
 
     private String routeCommit(String rawJson, String actingUser, UUID clientId) {

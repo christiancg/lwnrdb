@@ -868,7 +868,9 @@ def test_db_module_arity(conn: Conn):
     for label, call in (("db.save", f'db.save("{COLL}", {{ _id: "arity" }})'),
                         ("db.aggregate", f'db.aggregate(db.name, "{COLL}")'),
                         ("db.bulkSave", f'db.bulkSave("{COLL}", [{{ _id: "arity" }}])'),
-                        ("db.cursor", f'db.cursor(db.name, "{COLL}")')):
+                        ("db.cursor", f'db.cursor(db.name, "{COLL}")'),
+                        ("db.delete", f'db.delete(db.name, "{COLL}")'),
+                        ("db.findById", f'db.findById(db.name, "{COLL}")')):
         check_failed_script(f"{label} with too few arguments is a TypeError",
                             conn.run(f'import db from "db";\n{call};'), "400-9", "TypeError")
         check_status(f"the connection still answers after {label} was refused",
@@ -915,6 +917,34 @@ def test_db_save_rejects_a_non_string_id(conn: Conn):
                         conn.run('import db from "db";\n'
                                  f'db.save(db.name, "{COLL}", {{ _id: "not valid!", v: 1 }});'),
                         "400-9", "")
+
+
+def test_db_delete_refuses_a_non_string_id(conn: Conn):
+    section("Host interface - db.delete and db.findById with an id that is not a string")
+    for doc_id in ("undefined", "5"):
+        check_status(f"save a document whose _id is {doc_id!r} over the wire",
+                     conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                                "object": {"_id": doc_id, "v": 1}}), "OK")
+    for label, call in (("db.delete with no id", f'db.delete(db.name, "{COLL}")'),
+                        ("db.delete with a number id", f'db.delete(db.name, "{COLL}", 5)'),
+                        ("db.findById with a number id", f'db.findById(db.name, "{COLL}", 5)'),
+                        ("db.delete with a number collection", f'db.delete(db.name, 7, "5")')):
+        check_failed_script(f"{label} is a TypeError", conn.run(f'import db from "db";\n{call};'),
+                            "400-9", "TypeError")
+    for doc_id in ("undefined", "5"):
+        check_status(f"the document whose _id is {doc_id!r} survived the refused deletes",
+                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                                "_id": doc_id}), "OK")
+    check_result("the refusal is catchable inside the script", conn.run(
+        'import db from "db";\n'
+        f'try {{ db.delete(db.name, "{COLL}", 5); return "deleted"; }}\n'
+        "catch (e) { return e.name; }"), "TypeError")
+    check_result("a string id that happens to read 'undefined' is still deletable", conn.run(
+        'import db from "db";\n'
+        f'db.delete(db.name, "{COLL}", "undefined");\n'
+        f'return db.findById(db.name, "{COLL}", "undefined");'), None)
+    check_status("clean up the numeric-looking id", conn.send({"type": "DELETE", "databaseName": DB,
+                                                               "collectionName": COLL, "_id": "5"}), "OK")
 
 
 def test_db_aggregate_refuses_an_unparseable_pipeline(conn: Conn):
@@ -1646,6 +1676,7 @@ def main():
             test_value_guards(conn)
             test_db_module_arity(conn)
             test_db_save_rejects_a_non_string_id(conn)
+            test_db_delete_refuses_a_non_string_id(conn)
             test_db_aggregate_refuses_an_unparseable_pipeline(conn)
             test_capabilities(conn)
             test_procedure_imports(conn)

@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.net.InetAddress;
 import java.net.Socket;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
@@ -234,5 +236,40 @@ public class ClientTrackerTest {
         } finally {
             clientTracker.removeTxSession("session-1");
         }
+    }
+
+    @Test
+    public void test_transaction_write_holders_union_across_collections() {
+        final var clientTracker = new ClientTracker();
+        final var clientId = clientTracker.registerForwardedClient("u");
+        clientTracker.recordTransactionWrite(clientId, "db|a", "local");
+        clientTracker.recordTransactionWrite(clientId, "db|b", "10.0.0.2:9000");
+        clientTracker.recordTransactionWrite(clientId, "db|b", "10.0.0.3:9000");
+
+        assertEquals(Set.of("local", "10.0.0.2:9000", "10.0.0.3:9000"),
+                clientTracker.transactionWriteHolders(clientId, List.of("db|a", "db|b", "db|c")));
+        assertEquals(Set.of("local"), clientTracker.transactionWriteHolders(clientId, List.of("db|a")));
+        assertTrue(clientTracker.transactionWriteHolders(clientId, List.of("db|c")).isEmpty());
+    }
+
+    @Test
+    public void test_clear_transaction_state_forgets_write_holders() {
+        final var clientTracker = new ClientTracker();
+        final var clientId = clientTracker.registerForwardedClient("u");
+        clientTracker.recordTransactionWrite(clientId, "db|a", "local");
+
+        clientTracker.clearTransactionState(clientId);
+
+        assertTrue(clientTracker.transactionWriteHolders(clientId, List.of("db|a")).isEmpty());
+    }
+
+    @Test
+    public void test_unknown_client_has_no_write_holders() {
+        final var clientTracker = new ClientTracker();
+        clientTracker.recordTransactionWrite(UUID.randomUUID(), "db|a", "local");
+        clientTracker.recordTransactionWrite(null, "db|a", "local");
+
+        assertTrue(clientTracker.transactionWriteHolders(null, List.of("db|a")).isEmpty());
+        assertTrue(clientTracker.transactionWriteHolders(UUID.randomUUID(), List.of("db|a")).isEmpty());
     }
 }
