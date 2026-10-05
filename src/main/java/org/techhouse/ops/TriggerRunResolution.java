@@ -26,10 +26,10 @@ public final class TriggerRunResolution {
         try {
             for (final var chunks : byRun().values()) {
                 final var first = chunks.getFirst();
-                if (filter != null && first.getStatus() != filter) {
+                if (filter != null && first.getStatus().reported() != filter) {
                     continue;
                 }
-                rows.add(new TriggerRunRow(first.getRunId(), first.getStatus().name(), first.getDbName(),
+                rows.add(new TriggerRunRow(first.getRunId(), first.getStatus().reported().name(), first.getDbName(),
                         first.getCollName(), first.getTriggerName(), first.getProcedureName(),
                         first.getEventType().name(), first.getAttempts(), first.getLastError(), first.getFiredAt(),
                         first.getNextAttemptAt()));

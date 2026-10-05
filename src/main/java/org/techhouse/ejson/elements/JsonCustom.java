@@ -67,6 +67,10 @@ public abstract class JsonCustom<T> extends JsonString {
         return matchesCustomFormat(str.get());
     }
 
+    public static String asPlainText(String value) {
+        return matchesCustomFormat(value) ? "\\" + value : value;
+    }
+
     private static boolean matchesCustomFormat(String value) {
         return value != null && !value.isEmpty() && value.charAt(0) == '#' && CUSTOM_JSON.matcher(value).matches();
     }

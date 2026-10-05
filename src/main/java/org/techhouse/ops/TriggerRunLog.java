@@ -1,8 +1,11 @@
 package org.techhouse.ops;
 
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import org.techhouse.bckg_ops.events.EventType;
@@ -19,6 +22,8 @@ import org.techhouse.log.Logger;
 
 public final class TriggerRunLog {
     private static final int CHUNK_OVERHEAD_BYTES = 2048;
+    private static final int STAGED_VERSION_OVERHEAD_BYTES = 28;
+    private static final String BATCH_RUN_KEY = "*";
 
     private static final Logger logger = Logger.logFor(TriggerRunLog.class);
     private static final Cache cache = IocContainer.get(Cache.class);
@@ -39,14 +44,68 @@ public final class TriggerRunLog {
     }
 
     public static String record(TriggerRunDescriptor descriptor) {
+        return write(descriptor, UUID.randomUUID().toString(), null);
+    }
+
+    public static String recordStaged(TriggerRunDescriptor descriptor, Map<String, Long> priorVersions) {
+        return write(descriptor, UUID.randomUUID().toString(), priorVersions);
+    }
+
+    public static String recordDeterministic(TriggerRunDescriptor descriptor, String runId) {
         if (!isEnabled()) {
             return null;
         }
-        final var runId = UUID.randomUUID().toString();
+        discard(runId);
+        return write(descriptor, runId, null);
+    }
+
+    public static String deterministicRunId(String txId, String triggerName, EventType eventType, String idOrNull) {
+        final var key = String.join(String.valueOf(Globals.COLL_IDENTIFIER_SEPARATOR), txId, triggerName,
+                eventType.name(), idOrNull == null ? BATCH_RUN_KEY : idOrNull);
+        return UUID.nameUUIDFromBytes(key.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
+    public static List<AdminTriggerRunEntry> confirmStaged(String runId, Set<String> landedIds) throws Exception {
+        final var remaining = new ArrayList<AdminTriggerRunEntry>();
+        final var emptied = new ArrayList<String>();
+        for (final var chunk : AdminOperationHelper.readTriggerRuns(recordIdsFor(runId))) {
+            chunk.narrowTo(landedIds);
+            if (chunk.isEmpty()) {
+                emptied.add(chunk.get_id());
+            } else {
+                AdminOperationHelper.saveTriggerRun(chunk);
+                remaining.add(chunk);
+            }
+        }
+        if (!emptied.isEmpty()) {
+            AdminOperationHelper.deleteTriggerRuns(emptied);
+        }
+        return remaining;
+    }
+
+    public static void discard(String runId) {
+        if (runId == null || !isEnabled()) {
+            return;
+        }
+        try {
+            final var recordIds = recordIdsFor(runId);
+            if (!recordIds.isEmpty()) {
+                AdminOperationHelper.deleteTriggerRuns(recordIds);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to discard the trigger run '" + runId + "'; it may replay at the next startup", e);
+        }
+    }
+
+    private static String write(TriggerRunDescriptor descriptor, String runId, Map<String, Long> priorVersions) {
+        if (!isEnabled()) {
+            return null;
+        }
+        final var staged = priorVersions != null;
         try {
             final var chunks = descriptor.eventType() == EventType.DELETED
-                    ? documentChunks(descriptor.entries())
-                    : idChunks(descriptor.entries());
+                    ? documentChunks(descriptor.entries(), staged)
+                    : idChunks(descriptor.entries(), staged);
             if (chunks == null) {
                 logger.warning("Trigger '" + descriptor.triggerName() + "' on " + descriptor.dbName() + "|"
                         + descriptor.collName()
@@ -57,8 +116,12 @@ public final class TriggerRunLog {
             var written = 0;
             try {
                 for (var chunkSeq = 0; chunkSeq < chunks.size(); chunkSeq++) {
-                    AdminOperationHelper
-                            .saveTriggerRun(chunks.get(chunkSeq).toEntry(runId, chunkSeq, currentNodeId(), descriptor));
+                    final var chunk = chunks.get(chunkSeq);
+                    final var entry = chunk.toEntry(runId, chunkSeq, currentNodeId(), descriptor);
+                    if (staged) {
+                        entry.stage(chunk.versionsFrom(priorVersions));
+                    }
+                    AdminOperationHelper.saveTriggerRun(entry);
                     written++;
                 }
             } catch (Exception e) {
@@ -158,6 +221,18 @@ public final class TriggerRunLog {
     }
 
     private record Chunk(List<String> ids, List<JsonObject> documents) {
+        Map<String, Long> versionsFrom(Map<String, Long> priorVersions) {
+            final var versions = new LinkedHashMap<String, Long>();
+            for (final var id : ids) {
+                versions.put(id, priorVersions.getOrDefault(id, AdminTriggerRunEntry.ABSENT_VERSION));
+            }
+            for (final var document : documents) {
+                final var id = document.get(Globals.PK_FIELD).asJsonString().getValue();
+                versions.put(id, priorVersions.getOrDefault(id, AdminTriggerRunEntry.ABSENT_VERSION));
+            }
+            return versions;
+        }
+
         AdminTriggerRunEntry toEntry(String runId, long chunkSeq, String nodeId, TriggerRunDescriptor descriptor) {
             return new AdminTriggerRunEntry(runId, chunkSeq, nodeId, descriptor.dbName(), descriptor.collName(),
                     descriptor.triggerName(), descriptor.procedureName(), descriptor.eventType(),
@@ -166,13 +241,13 @@ public final class TriggerRunLog {
         }
     }
 
-    private static List<Chunk> idChunks(List<DbEntry> entries) {
+    private static List<Chunk> idChunks(List<DbEntry> entries, boolean staged) {
         final var budget = chunkBudget();
         final var chunks = new ArrayList<Chunk>();
         var current = new ArrayList<String>();
         var currentBytes = 0L;
         for (final var entry : entries) {
-            final var size = (long) entry.get_id().length() + 4L;
+            final var size = (long) entry.get_id().length() + 4L + stagedOverhead(entry, staged);
             if (!current.isEmpty() && currentBytes + size > budget) {
                 chunks.add(new Chunk(current, List.of()));
                 current = new ArrayList<>();
@@ -185,13 +260,13 @@ public final class TriggerRunLog {
         return chunks;
     }
 
-    private static List<Chunk> documentChunks(List<DbEntry> entries) {
+    private static List<Chunk> documentChunks(List<DbEntry> entries, boolean staged) {
         final var budget = chunkBudget();
         final var chunks = new ArrayList<Chunk>();
         var current = new ArrayList<JsonObject>();
         var currentBytes = 0L;
         for (final var entry : entries) {
-            final var size = (long) entry.byteSize();
+            final var size = (long) entry.byteSize() + stagedOverhead(entry, staged);
             if (size > budget) {
                 return null;
             }
@@ -205,6 +280,10 @@ public final class TriggerRunLog {
         }
         chunks.add(new Chunk(List.of(), current));
         return chunks;
+    }
+
+    private static long stagedOverhead(DbEntry entry, boolean staged) {
+        return staged ? entry.get_id().length() + STAGED_VERSION_OVERHEAD_BYTES : 0L;
     }
 
     private static long chunkBudget() {

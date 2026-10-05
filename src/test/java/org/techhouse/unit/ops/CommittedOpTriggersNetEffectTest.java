@@ -1,11 +1,10 @@
 package org.techhouse.unit.ops;
 
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 
@@ -16,7 +15,6 @@ import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.config.Globals;
-import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -25,6 +23,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.tx.CommittedOpTriggers;
 import org.techhouse.test.TestGlobals;
+import org.techhouse.test.TriggerStagingMocks;
 
 public class CommittedOpTriggersNetEffectTest {
     private static final String OTHER_COLL = "otherColl";
@@ -71,22 +70,22 @@ public class CommittedOpTriggersNetEffectTest {
     }
 
     private void commit(AdminTransactionEntry... ops) {
-        CommittedOpTriggers.fireForCommittedOps(List.of(ops), "user", 0, transaction);
+        CommittedOpTriggers.stage(List.of(ops), "user", 0, transaction, transaction.getTransactionId().toString());
     }
 
     private static void verifyDeletedFired(MockedStatic<TriggerHelper> triggers, String coll, int count) {
-        triggers.verify(() -> TriggerHelper.afterWrite(eq(TestGlobals.DB), eq(coll), eq(EventType.DELETED),
-                any(DbEntry.class), anyString(), anyInt()), times(count));
+        triggers.verify(() -> TriggerHelper.stageCommitted(eq(TestGlobals.DB), eq(coll), eq(EventType.DELETED),
+                anyList(), anyString(), anyInt(), anyString()), times(count));
     }
 
     private static void verifyCreatedFor(MockedStatic<TriggerHelper> triggers, List<String> ids) {
-        triggers.verify(() -> TriggerHelper.afterWriteIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                eq(EventType.CREATED), argThat(list -> list.equals(ids)), anyString(), anyInt()));
+        triggers.verify(() -> TriggerHelper.stageCommittedIds(eq(TestGlobals.DB), eq(TestGlobals.COLL),
+                eq(EventType.CREATED), argThat(list -> list.equals(ids)), anyString(), anyInt(), anyString()));
     }
 
     @Test
     public void test_save_new_then_delete_fires_nothing() {
-        try (var triggers = mockStatic(TriggerHelper.class)) {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             commit(insertOf("x"), removalOf(TestGlobals.COLL, "x"));
             verifyDeletedFired(triggers, TestGlobals.COLL, 0);
             verifyCreatedFor(triggers, List.of());
@@ -95,7 +94,7 @@ public class CommittedOpTriggersNetEffectTest {
 
     @Test
     public void test_save_new_then_delete_then_save_fires_one_created() {
-        try (var triggers = mockStatic(TriggerHelper.class)) {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             commit(insertOf("x2"), removalOf(TestGlobals.COLL, "x2"), insertOf("x2"));
             verifyDeletedFired(triggers, TestGlobals.COLL, 0);
             verifyCreatedFor(triggers, List.of("x2"));
@@ -104,7 +103,7 @@ public class CommittedOpTriggersNetEffectTest {
 
     @Test
     public void test_save_existing_then_delete_fires_deleted() {
-        try (var triggers = mockStatic(TriggerHelper.class)) {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             commit(entry(TestGlobals.COLL, AdminTransactionEntry.OP_TYPE_SAVE, doc("y"), List.of()),
                     removalOf(TestGlobals.COLL, "y"));
             verifyDeletedFired(triggers, TestGlobals.COLL, 1);
@@ -113,7 +112,7 @@ public class CommittedOpTriggersNetEffectTest {
 
     @Test
     public void test_bulk_save_new_then_delete_fires_nothing() {
-        try (var triggers = mockStatic(TriggerHelper.class)) {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             commit(bulkInsertOfAAndB(), removalOf(TestGlobals.COLL, "a"));
             verifyDeletedFired(triggers, TestGlobals.COLL, 0);
             verifyCreatedFor(triggers, List.of("b"));
@@ -122,12 +121,12 @@ public class CommittedOpTriggersNetEffectTest {
 
     @Test
     public void test_create_and_delete_in_different_collections_are_independent() {
-        try (var triggers = mockStatic(TriggerHelper.class)) {
+        try (var triggers = TriggerStagingMocks.mockTriggerHelper()) {
             commit(insertOf("z"), removalOf(OTHER_COLL, "z"));
             verifyDeletedFired(triggers, OTHER_COLL, 1);
             verifyCreatedFor(triggers, List.of("z"));
-            triggers.verify(() -> TriggerHelper.afterWrite(anyString(), eq(TestGlobals.COLL), eq(EventType.DELETED),
-                    any(DbEntry.class), anyString(), anyInt()), never());
+            triggers.verify(() -> TriggerHelper.stageCommitted(anyString(), eq(TestGlobals.COLL), eq(EventType.DELETED),
+                    anyList(), anyString(), anyInt(), anyString()), never());
         }
     }
 }

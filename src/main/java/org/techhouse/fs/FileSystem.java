@@ -93,7 +93,7 @@ public class FileSystem {
 
     public boolean deleteDatabase(String dbName) {
         final var dbFolder = paths.rawDatabaseFolder(dbName);
-        return dbFolder.exists() && FileTreeDeleter.delete(dbFolder);
+        return !dbFolder.exists() || FileTreeDeleter.delete(dbFolder);
     }
 
     public boolean createCollectionFile(String dbName, String collectionName) throws IOException {
@@ -116,7 +116,7 @@ public class FileSystem {
     public boolean deleteCollectionFiles(String dbName, String collectionName) {
         final var collectionFile = paths.collectionPage(dbName, collectionName, 0);
         final var collectionFolder = new File(collectionFile.getParent());
-        return collectionFolder.exists() && FileTreeDeleter.delete(collectionFolder);
+        return !collectionFolder.exists() || FileTreeDeleter.delete(collectionFolder);
     }
 
     public void writeCollectionSchema(String dbName, String collName, String schemaJson) throws IOException {

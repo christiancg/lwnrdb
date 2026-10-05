@@ -194,6 +194,7 @@ public final class SaveOperationHelper {
             } catch (PartialBulkUpdateException e) {
                 final var partial = e.getPartialResult();
                 partial.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
+                applyUpdateSizeDeltas(dbName, collName, partial.updated());
                 final var committedUpdates = toDbEntries(partial.updated());
                 publishCommittedWrites(dbName, collName, committedUpdates, List.of());
                 cache.userCache().evictPkIndex(dbName, collName);
@@ -205,6 +206,7 @@ public final class SaveOperationHelper {
             updatedIndexEntries.addAll(bulkResult.updated());
             // Fix the in-memory positions of survivors shifted by the batch before replacing the updated ones.
             bulkResult.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
+            applyUpdateSizeDeltas(dbName, collName, bulkResult.updated());
             primaryKeyIndex.removeIf(pkIndexEntry -> updatedIndexEntries.stream()
                     .anyMatch(pkIndexEntry1 -> pkIndexEntry1.get_id().equals(pkIndexEntry.getValue())));
         }
@@ -240,6 +242,14 @@ public final class SaveOperationHelper {
         publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries);
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
         return new BulkSaveResponse("Successfully saved entries", idsOf(insertedDbEntries), idsOf(updatedDbEntries));
+    }
+
+    private static void applyUpdateSizeDeltas(String dbName, String collName, List<IndexedDbEntry> updated) {
+        for (final var updatedEntry : updated) {
+            final var index = updatedEntry.getIndex();
+            cache.updatePageSizeForUpdateInMemory(dbName, collName, index.getPage(),
+                    index.getLength() - updatedEntry.getPreviousByteSize());
+        }
     }
 
     private static void publishCommittedWrites(String dbName, String collName, List<DbEntry> updated,

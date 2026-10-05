@@ -2,7 +2,6 @@ package org.techhouse.ops;
 
 import java.util.List;
 import java.util.UUID;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
@@ -56,10 +55,8 @@ import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.req.TestTriggerRequest;
 import org.techhouse.ops.resp.CloseConnectionResponse;
-import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.OperationResponse;
-import org.techhouse.ops.resp.SaveResponse;
 
 public class OperationProcessor {
     private final Cache cache = IocContainer.get(Cache.class);
@@ -318,7 +315,8 @@ public class OperationProcessor {
                     if (hookError != null) {
                         return hookError;
                     }
-                    return BulkSaveEffects.executeAndPublish(bulkSaveRequest, actingUser);
+                    return BulkSaveEffects.executeAndPublish(bulkSaveRequest, actingUser,
+                            TriggerHelper.stageBulkSave(bulkSaveRequest, actingUser));
                 });
     }
 
@@ -346,12 +344,9 @@ public class OperationProcessor {
             if (hookError != null) {
                 return hookError;
             }
-            final var local = SaveOperationHelper.executeSave(saveRequest);
-            if (local instanceof SaveResponse saveResponse) {
-                TriggerHelper.afterWriteIds(dbName, collName,
-                        saveResponse.isInserted() ? EventType.CREATED : EventType.UPDATED,
-                        List.of(saveResponse.get_id()), actingUser, saveRequest.getTriggerDepth());
-            }
+            final var local = TriggerHelper.runStaged(TriggerHelper.stageSave(saveRequest, actingUser), dbName,
+                    collName, actingUser, saveRequest.getTriggerDepth(),
+                    () -> SaveOperationHelper.executeSave(saveRequest));
             return ClusterWriteHelper.afterSave(dbName, collName, local);
         });
     }
@@ -385,13 +380,12 @@ public class OperationProcessor {
                     if (hookError != null) {
                         return hookError;
                     }
+                    final var staged = TriggerHelper.stageDelete(deleteRequest, deleted, actingUser);
                     final var reservedVersion = ClusterWriteHelper.reserveDelete(dbName, collName,
                             deleteRequest.get_id());
-                    final var local = ClusterWriteHelper.deleteOrRetract(deleteRequest, reservedVersion);
-                    if (local instanceof DeleteResponse) {
-                        TriggerHelper.afterWrite(dbName, collName, EventType.DELETED, deleted, actingUser,
-                                deleteRequest.getTriggerDepth());
-                    }
+                    final var local = TriggerHelper.runStaged(staged, dbName, collName, actingUser,
+                            deleteRequest.getTriggerDepth(),
+                            () -> ClusterWriteHelper.deleteOrRetract(deleteRequest, reservedVersion));
                     return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(), reservedVersion,
                             local);
                 });

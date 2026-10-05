@@ -1783,6 +1783,44 @@ def test_a_host_call_with_too_few_arguments_dead_letters(conn: Conn):
                               ["CREATED", "UPDATED"]), "OK")
 
 
+def test_a_dead_letter_with_a_custom_shaped_error_stays_readable(conn: Conn):
+    section("A dead letter whose error looks like a custom type stays readable")
+    drop_hook(conn, "off_hook")
+    check_status("install a trigger whose procedure throws an error named like a custom type",
+                 conn.save_procedure("shaped_boom", "throw Object.assign(new Error('x)'), { name: '#abc(' });"),
+                 "OK")
+    check_status("point a trigger at it",
+                 conn.save_trigger("shaped", ["CREATED", "UPDATED"], "shaped_boom"), "OK")
+    check_status("write a document so it fires", conn.save_doc({"_id": "shapeddoc", "n": 1}), "OK")
+
+    deadline = time.time() + 30.0
+    dead = dead_letters_for(conn, "shaped")
+    while not dead and time.time() < deadline:
+        time.sleep(0.3)
+        dead = dead_letters_for(conn, "shaped")
+    check("the run is dead-lettered and still listed", len(dead) == 1, f"runs={dead!r}")
+    if dead:
+        entry = dead[0]
+        check("its error is stored as plain text", entry.get("lastError") == "\\#abc(: x)", f"entry={entry!r}")
+        check_status("listing every run still works",
+                     conn.send({"type": "LIST_TRIGGER_RUNS"}), "OK")
+        check_status("listing pending runs still works",
+                     conn.send({"type": "LIST_TRIGGER_RUNS", "status": "PENDING"}), "OK")
+        check_status("and it can be discarded like any other dead letter",
+                     conn.send({"type": "RESOLVE_TRIGGER_RUN", "runId": entry.get("runId"),
+                                "decision": "discard"}), "OK")
+    check("its dead letter is gone", not dead_letters_for(conn, "shaped"),
+          f"runs={dead_letters_for(conn, 'shaped')!r}")
+
+    check_status("remove the shaped trigger",
+                 conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL,
+                            "name": "shaped"}), "OK")
+    check_status("restore the vetoing hook for the next phase",
+                 install_hook(conn, "off_hook", "offhook",
+                              "export default (doc) => { throw new Error('always refuses'); };",
+                              ["CREATED", "UPDATED"]), "OK")
+
+
 def test_a_post_commit_error_applies_its_effects_once(conn: Conn):
     section("An error raised after the commit is not retried")
     drop_hook(conn, "off_hook")
@@ -2053,6 +2091,7 @@ def main():
             test_retry_and_dead_letters(conn)
             test_a_replayed_dead_letter_gets_a_full_budget(conn)
             test_a_host_call_with_too_few_arguments_dead_letters(conn)
+            test_a_dead_letter_with_a_custom_shaped_error_stays_readable(conn)
             test_a_post_commit_error_applies_its_effects_once(conn)
 
         # Phase 3: a retry backoff far beyond the shutdown budget, so the stop below is timed with a

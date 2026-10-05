@@ -1,6 +1,8 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -11,6 +13,7 @@ import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ioc.IocContainer;
@@ -45,9 +48,14 @@ public final class TriggerRunRecovery {
         }
     }
 
-    private static boolean requeue(List<AdminTriggerRunEntry> chunks) {
-        final var first = chunks.getFirst();
+    private static boolean requeue(List<AdminTriggerRunEntry> stored) {
+        final var first = stored.getFirst();
         try {
+            final var chunks = first.getStatus() == TriggerRunStatus.STAGED ? confirmLanded(stored) : stored;
+            if (chunks.isEmpty()) {
+                TriggerDispatcher.consumeQuietly(first.getRunId(), first.getTriggerName());
+                return false;
+            }
             final var event = toEvent(chunks);
             if (event == null) {
                 TriggerDispatcher.consumeQuietly(first.getRunId(), first.getTriggerName());
@@ -59,6 +67,25 @@ public final class TriggerRunRecovery {
             logger.error("Failed to recover pending trigger run " + first.getRunId() + "; it stays pending", e);
             return false;
         }
+    }
+
+    private static List<AdminTriggerRunEntry> confirmLanded(List<AdminTriggerRunEntry> chunks) throws Exception {
+        final var first = chunks.getFirst();
+        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(first.getDbName(), first.getCollName());
+        final var landed = new HashSet<String>();
+        for (final var chunk : chunks) {
+            chunk.getPriorVersions().forEach((id, priorVersion) -> {
+                if (currentVersion(primaryKeyIndex, id) != priorVersion) {
+                    landed.add(id);
+                }
+            });
+        }
+        return landed.isEmpty() ? List.of() : TriggerRunLog.confirmStaged(first.getRunId(), landed);
+    }
+
+    private static long currentVersion(List<PkIndexEntry> primaryKeyIndex, String id) {
+        final var position = Collections.binarySearch(primaryKeyIndex, id);
+        return position >= 0 ? primaryKeyIndex.get(position).getVersion() : AdminTriggerRunEntry.ABSENT_VERSION;
     }
 
     public static void warnAboutStrandedRuns() {

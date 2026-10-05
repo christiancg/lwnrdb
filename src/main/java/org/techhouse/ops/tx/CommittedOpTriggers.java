@@ -10,6 +10,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
+import org.techhouse.ops.StagedTriggerRuns;
 import org.techhouse.ops.TriggerHelper;
 
 public final class CommittedOpTriggers {
@@ -19,14 +20,15 @@ public final class CommittedOpTriggers {
     private CommittedOpTriggers() {
     }
 
-    public static void fireForCommittedOps(List<AdminTransactionEntry> ops, String actingUser, int triggerDepth,
-            Transaction transaction) {
-        fireForCommittedOps(ops, actingUser, triggerDepth, transaction, Set.of());
+    public static StagedTriggerRuns stage(List<AdminTransactionEntry> ops, String actingUser, int triggerDepth,
+            Transaction transaction, String txId) {
+        return stage(ops, actingUser, triggerDepth, transaction, Set.of(), txId);
     }
 
-    public static void fireForCommittedOps(List<AdminTransactionEntry> ops, String actingUser, int triggerDepth,
-            Transaction transaction, Set<String> fencedIds) {
+    public static StagedTriggerRuns stage(List<AdminTransactionEntry> ops, String actingUser, int triggerDepth,
+            Transaction transaction, Set<String> fencedIds, String txId) {
         final var saveWrites = new LinkedHashMap<TargetKey, LinkedHashMap<String, Boolean>>();
+        var staged = StagedTriggerRuns.none();
         for (final var op : ops) {
             final var target = new TargetKey(op.getTargetDb(), op.getTargetColl());
             final var inserted = transaction.insertedIdsFor(op.getSeq());
@@ -44,8 +46,8 @@ public final class CommittedOpTriggers {
                         }
                     }
                 }
-                case AdminTransactionEntry.OP_TYPE_DELETE ->
-                    fireForDelete(op, target, saveWrites, actingUser, triggerDepth, fencedIds);
+                case AdminTransactionEntry.OP_TYPE_DELETE -> staged = StagedTriggerRuns.combine(staged,
+                        stageForDelete(op, target, saveWrites, actingUser, triggerDepth, fencedIds, txId));
                 default -> {
                 }
             }
@@ -55,11 +57,12 @@ public final class CommittedOpTriggers {
             final var createdIds = new ArrayList<String>();
             final var updatedIds = new ArrayList<String>();
             entry.getValue().forEach((id, wasInserted) -> (wasInserted ? createdIds : updatedIds).add(id));
-            TriggerHelper.afterWriteIds(target.dbName(), target.collName(), EventType.CREATED, createdIds, actingUser,
-                    triggerDepth);
-            TriggerHelper.afterWriteIds(target.dbName(), target.collName(), EventType.UPDATED, updatedIds, actingUser,
-                    triggerDepth);
+            staged = StagedTriggerRuns.combine(staged, TriggerHelper.stageCommittedIds(target.dbName(),
+                    target.collName(), EventType.CREATED, createdIds, actingUser, triggerDepth, txId));
+            staged = StagedTriggerRuns.combine(staged, TriggerHelper.stageCommittedIds(target.dbName(),
+                    target.collName(), EventType.UPDATED, updatedIds, actingUser, triggerDepth, txId));
         }
+        return staged;
     }
 
     private static void recordSaveWrite(Map<TargetKey, LinkedHashMap<String, Boolean>> saveWrites, TargetKey target,
@@ -68,21 +71,21 @@ public final class CommittedOpTriggers {
                 (existing, now) -> existing || now);
     }
 
-    private static void fireForDelete(AdminTransactionEntry op, TargetKey target,
+    private static StagedTriggerRuns stageForDelete(AdminTransactionEntry op, TargetKey target,
             Map<TargetKey, LinkedHashMap<String, Boolean>> saveWrites, String actingUser, int triggerDepth,
-            Set<String> fencedIds) {
+            Set<String> fencedIds, String txId) {
         final var payload = op.getPayload();
         final var id = payload.get(Globals.PK_FIELD).asJsonString().getValue();
         final var writesToTarget = saveWrites.get(target);
         final var createdInThisTransaction = writesToTarget != null && Boolean.TRUE.equals(writesToTarget.remove(id));
         if (createdInThisTransaction || !payload.has(DELETED_DOCUMENT_FIELD)
                 || deleteDidNotApply(fencedIds, target.dbName(), target.collName(), id)) {
-            return;
+            return StagedTriggerRuns.none();
         }
-        TriggerHelper.afterWrite(
-                target.dbName(), target.collName(), EventType.DELETED, DbEntry.fromJsonObject(target.dbName(),
-                        target.collName(), payload.get(DELETED_DOCUMENT_FIELD).asJsonObject()),
-                actingUser, triggerDepth);
+        return TriggerHelper.stageCommitted(
+                target.dbName(), target.collName(), EventType.DELETED, List.of(DbEntry.fromJsonObject(target.dbName(),
+                        target.collName(), payload.get(DELETED_DOCUMENT_FIELD).asJsonObject())),
+                actingUser, triggerDepth, txId);
     }
 
     private record TargetKey(String dbName, String collName) {

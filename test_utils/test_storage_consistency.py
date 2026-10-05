@@ -50,6 +50,7 @@ What is covered:
 
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -89,6 +90,12 @@ ORPHAN_DOCS = 4
 ORPHAN_FIELD = "k"
 ORPHAN_ID = "orphan"
 DROPPED_DBS = 6
+KILLED_DROP_COLL = "drop_killed_docs"
+KILLED_DROP_DB = "drop_killed_db"
+LEFTOVER_ROWS_COLL = "leftover_row_docs"
+LEFTOVER_ROWS_COPY = "leftover_rows_copy"
+BULK_GROWTH_COLL = "bulk_growth_docs"
+BULK_GROWTH_DOCS = 10
 DROPPED_DB_COLLECTIONS = 4
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
@@ -472,6 +479,38 @@ def test_a_transaction_of_in_place_growths_respects_max_page_size(conn: Conn, wo
     check("every grown document is still there", pk == GROWTH_DOCS, f"pk={pk}")
 
 
+def test_a_bulk_save_does_not_place_inserts_against_a_stale_page_size(conn: Conn, work_dir: str):
+    section("A bulk save's inserts are placed against the size its own updates just grew to")
+    check_status("create the collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                            "collectionName": BULK_GROWTH_COLL}), "OK")
+    for i in range(BULK_GROWTH_DOCS):
+        check_status(f"seed bg{i}", conn.save({"_id": f"bg{i}", "pad": "s" * 250}, coll=BULK_GROWTH_COLL), "OK")
+    seeded_pages = {row[3] for row in bu.read_pk_rows(pk_index_file(work_dir, DB, BULK_GROWTH_COLL))}
+    check("the seed fills a single page", seeded_pages == {0}, f"pages: {seeded_pages}")
+
+    grown = [{"_id": f"bg{i}", "pad": "g" * 350} for i in range(BULK_GROWTH_DOCS)]
+    check_status("one BULK_SAVE grows every seeded document and inserts one more",
+                 conn.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": BULK_GROWTH_COLL,
+                            "objects": grown + [{"_id": "bg_fresh", "pad": "f" * 600}]}), "OK")
+
+    rows = {row[0]: row for row in bu.read_pk_rows(pk_index_file(work_dir, DB, BULK_GROWTH_COLL))}
+    check("the insert did not land on the page its own updates grew past the cap",
+          "bg_fresh" in rows and rows["bg_fresh"][3] != 0, f"bg_fresh row: {rows.get('bg_fresh')}")
+
+    deadline = time.time() + 15
+    drifted = ["unchecked"]
+    while drifted and time.time() < deadline:
+        recorded = recorded_pages(work_dir, DB, BULK_GROWTH_COLL)
+        actual = actual_pages(work_dir, DB, BULK_GROWTH_COLL)
+        drifted = [page for page in actual
+                   if page not in recorded or recorded[page]["size"] != actual[page][0]
+                   or recorded[page]["entryCount"] != actual[page][1]]
+        if drifted:
+            time.sleep(0.2)
+    check("the recorded page occupancy matches the pages on disk", not drifted, f"drifted pages: {drifted}")
+
+
 def seed_a_collection_whose_page_rows_will_be_lost(conn: Conn, work_dir: str):
     section("Seed a collection whose page-occupancy rows a crash will lose")
     check_status("create the collection",
@@ -717,6 +756,89 @@ def test_a_relocation_killed_between_delete_and_insert_keeps_the_document(conn: 
     section("A grow-relocation a kill interrupted between its delete and its insert keeps the document")
     check_every_document_is_acknowledged(conn, work_dir, KILLED_RELOCATE_COLL,
                                          [f"killed{i}" for i in range(KILLED_DOCS)])
+
+
+def leftover_rows_folder(work_dir: str) -> str:
+    return os.path.join(work_dir, "db", "admin", "pages", f"{DB}_{LEFTOVER_ROWS_COLL}")
+
+
+def seed_drops_a_kill_will_interrupt(conn: Conn, work_dir: str):
+    section("Seed a collection and a database whose drop a kill will interrupt, and a drop that leaves page rows")
+    check_status("create the collection whose drop will be interrupted",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                            "collectionName": KILLED_DROP_COLL}), "OK")
+    check_status("write into it", conn.save({"_id": "doomed", "pad": "s"}, coll=KILLED_DROP_COLL), "OK")
+    check_status("create the database whose drop will be interrupted",
+                 conn.send({"type": "CREATE_DATABASE", "databaseName": KILLED_DROP_DB}), "OK")
+    check_status("create a collection in it",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": KILLED_DROP_DB, "collectionName": COLL}),
+                 "OK")
+    check_status("create the collection whose page rows a kill will leave behind",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                            "collectionName": LEFTOVER_ROWS_COLL}), "OK")
+    for i in range(3):
+        conn.save({"_id": f"old{i}", "pad": "s" * 200}, coll=LEFTOVER_ROWS_COLL)
+    deadline = time.time() + 15
+    while time.time() < deadline and not recorded_pages(work_dir, DB, LEFTOVER_ROWS_COLL):
+        time.sleep(0.2)
+    check("its page rows reached disk", bool(recorded_pages(work_dir, DB, LEFTOVER_ROWS_COLL)))
+    copy = os.path.join(work_dir, LEFTOVER_ROWS_COPY)
+    shutil.rmtree(copy, ignore_errors=True)
+    shutil.copytree(leftover_rows_folder(work_dir), copy)
+    check_status("drop it", conn.send({"type": "DROP_COLLECTION", "databaseName": DB,
+                                       "collectionName": LEFTOVER_ROWS_COLL}), "OK")
+
+
+def interrupt_the_drops(work_dir: str):
+    shutil.rmtree(os.path.join(work_dir, "db", DB, KILLED_DROP_COLL))
+    shutil.rmtree(os.path.join(work_dir, "db", KILLED_DROP_DB))
+    shutil.copytree(os.path.join(work_dir, LEFTOVER_ROWS_COPY), leftover_rows_folder(work_dir))
+
+
+def collection_names(conn: Conn, db: str) -> list:
+    return conn.send({"type": "LIST_COLLECTIONS", "databaseName": db}).get("collections") or []
+
+
+def test_a_drop_interrupted_after_its_folder_was_deleted_can_be_retried(conn: Conn):
+    section("A drop a kill interrupted after its folder was deleted can be retried")
+    check("the interrupted collection is still registered", KILLED_DROP_COLL in collection_names(conn, DB),
+          f"collections: {collection_names(conn, DB)}")
+    check_status("DROP_COLLECTION of it succeeds",
+                 conn.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": KILLED_DROP_COLL}),
+                 "OK")
+    check("it is no longer listed", KILLED_DROP_COLL not in collection_names(conn, DB),
+          f"collections: {collection_names(conn, DB)}")
+    check_status("CREATE_COLLECTION of the name succeeds",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": KILLED_DROP_COLL}),
+                 "OK")
+    old = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": KILLED_DROP_COLL,
+                     "_id": "doomed"})
+    check("the re-created collection is empty", old.get("status") != "OK", f"response: {old}")
+    check_status("DROP_DATABASE of the interrupted database succeeds",
+                 conn.send({"type": "DROP_DATABASE", "databaseName": KILLED_DROP_DB}), "OK")
+    check_status("CREATE_DATABASE of the name succeeds",
+                 conn.send({"type": "CREATE_DATABASE", "databaseName": KILLED_DROP_DB}), "OK")
+
+
+def test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn: Conn, work_dir: str):
+    section("A re-created collection starts from empty page rows")
+    check("the kill left the dropped collection's page rows on disk", os.path.isdir(leftover_rows_folder(work_dir)))
+    check_status("re-create the collection",
+                 conn.send({"type": "CREATE_COLLECTION", "databaseName": DB,
+                            "collectionName": LEFTOVER_ROWS_COLL}), "OK")
+    for i in range(2):
+        check_status(f"save new{i}", conn.save({"_id": f"new{i}", "pad": "n"}, coll=LEFTOVER_ROWS_COLL), "OK")
+    deadline = time.time() + 15
+    while time.time() < deadline and not recorded_pages(work_dir, DB, LEFTOVER_ROWS_COLL):
+        time.sleep(0.2)
+    pages_coll = f"{DB}_{LEFTOVER_ROWS_COLL}"
+    row_ids = [row[0] for row in bu.read_pk_rows(os.path.join(leftover_rows_folder(work_dir), f"{pages_coll}-pk.idx"))]
+    check("the page-row index names every row once", len(row_ids) == len(set(row_ids)), f"row ids: {row_ids}")
+    recorded = recorded_pages(work_dir, DB, LEFTOVER_ROWS_COLL)
+    actual = actual_pages(work_dir, DB, LEFTOVER_ROWS_COLL)
+    check("the recorded page occupancy matches the pages on disk",
+          {page: (row["size"], row["entryCount"]) for page, row in recorded.items() if page in actual}
+          == actual, f"recorded {recorded} actual {actual}")
 
 
 def index_backed_ids(conn: Conn, coll: str, field: str, value: str) -> list:
@@ -1861,6 +1983,7 @@ def main():
             test_page_metadata_follows_dropped_databases(conn, work_dir)
             test_dropping_a_colliding_collection_keeps_the_others_page_rows(conn, work_dir)
             test_a_transaction_of_in_place_growths_respects_max_page_size(conn, work_dir)
+            test_a_bulk_save_does_not_place_inserts_against_a_stale_page_size(conn, work_dir)
             test_an_index_with_no_entries_left_is_removed(conn, work_dir)
             test_drop_database_does_not_strand_a_collection_lock(conn)
             test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
@@ -1888,6 +2011,7 @@ def main():
             seed_collections_for_a_lost_line_end_and_a_half_built_index(conn)
             seed_a_collection_that_will_hold_an_unindexed_record(conn)
             seed_collections_whose_compactions_a_kill_will_interrupt(conn)
+            seed_drops_a_kill_will_interrupt(conn, work_dir)
 
             print("\n  Killing the server without a drain ...")
             check("the unclean stop left an index-dirty marker on disk",
@@ -1904,6 +2028,7 @@ def main():
         leave_the_index_half_built(work_dir)
         leave_an_unindexed_record(work_dir)
         interrupt_the_compactions(work_dir)
+        interrupt_the_drops(work_dir)
         tear_an_admin_page_tail(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
@@ -1918,6 +2043,8 @@ def main():
             test_an_update_killed_mid_compaction_is_undone_at_startup(conn, work_dir)
             test_a_delete_killed_mid_compaction_is_completed_at_startup(conn, work_dir)
             test_a_relocation_killed_between_delete_and_insert_keeps_the_document(conn, work_dir)
+            test_a_drop_interrupted_after_its_folder_was_deleted_can_be_retried(conn)
+            test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn, work_dir)
             test_a_half_built_index_is_answered_by_a_scan_until_rebuilt(conn, work_dir, log_path, log_offset)
             test_the_committed_transaction_is_all_there_after_the_restart(conn)
             test_a_bulk_insert_leaves_no_document_the_pk_index_cannot_reach(conn)

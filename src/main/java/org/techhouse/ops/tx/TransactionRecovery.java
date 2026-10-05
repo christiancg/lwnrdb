@@ -91,10 +91,11 @@ public final class TransactionRecovery {
                         + " could not finish its durable replay; its collections stay locked pending a retry");
                 return false;
             }
+            final var stagedTriggers = CommittedOpTriggers.stage(ops, actingUserOf(ops),
+                    reconstructed.getTriggerDepth(), reconstructed, fencedIds, txId);
             AdminOperationHelper.deleteTransactionOps(opIds);
             markerCleanup.run();
-            CommittedOpTriggers.fireForCommittedOps(ops, actingUserOf(ops), reconstructed.getTriggerDepth(),
-                    reconstructed, fencedIds);
+            stagedTriggers.submitAll();
             coordinator.replicateTransaction(reconstructed, reservedTombstones);
             return true;
         } catch (Exception e) {

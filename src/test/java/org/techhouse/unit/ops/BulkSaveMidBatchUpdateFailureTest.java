@@ -16,6 +16,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.PartialBulkSaveException;
 import org.techhouse.ex.PartialBulkUpdateException;
@@ -187,5 +188,30 @@ public class BulkSaveMidBatchUpdateFailureTest {
 
         assertFalse(failure instanceof PartialBulkSaveException,
                 "a bulk save that committed nothing has nothing to fire triggers for or replicate");
+    }
+
+    private File pageZeroFile() {
+        return new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator + TestGlobals.COLL,
+                TestGlobals.COLL + Globals.FILE_PAGE_SEPARATOR + 0L + Globals.DB_FILE_EXTENSION);
+    }
+
+    private long inMemorySizeOfPageZero() {
+        return cache.getAdminPageEntries(TestGlobals.DB, TestGlobals.COLL).stream().filter(p -> p.getPage() == 0)
+                .mapToLong(AdminPageEntry::getPageSize).sum();
+    }
+
+    @Test
+    public void test_a_mid_batch_update_failure_applies_the_size_delta_of_its_committed_prefix() throws Exception {
+        seedTheDocumentsTheBulkWillUpdate();
+        cache.updatePageSizeInMemory(TestGlobals.DB, TestGlobals.COLL, 0, pageZeroFile().length());
+        blockThePageTheSecondUpdateWillTarget();
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        bulk.setObjects(
+                List.of(document(KEPT_ID, "a value long enough to grow the page"), document(FAILING_ID, "new")));
+
+        assertThrows(PartialBulkSaveException.class, () -> SaveOperationHelper.executeBulkSave(bulk));
+
+        assertEquals(pageZeroFile().length(), inMemorySizeOfPageZero(),
+                "the committed growth must reach the in-memory page size before any later placement");
     }
 }

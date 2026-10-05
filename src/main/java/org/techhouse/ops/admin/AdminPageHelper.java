@@ -56,7 +56,8 @@ public final class AdminPageHelper {
 
     public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<DbEntry> inserted,
             long incarnation) throws IOException, InterruptedException {
-        baseUpdateEntryCount(dbName, collName, type, inserted, type == EventType.CREATED, false, incarnation);
+        baseUpdateEntryCount(dbName, collName, type, inserted, type == EventType.CREATED, type == EventType.UPDATED,
+                incarnation);
     }
 
     public static void updateEntryCount(String dbName, String collName, EventType type, DbEntry dbEntry,
@@ -281,6 +282,7 @@ public final class AdminPageHelper {
 
     public static void createPageCollections(String dbName, String collName) throws IOException {
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
+        deletePageCollections(dbName, collName);
         fs.createCollectionFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
     }
 

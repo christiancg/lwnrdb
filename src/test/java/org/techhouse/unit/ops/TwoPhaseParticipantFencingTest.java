@@ -10,14 +10,22 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mockStatic;
 
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.stubbing.Answer;
+import org.techhouse.bckg_ops.events.EventType;
+import org.techhouse.cache.Cache;
+import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -25,6 +33,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.TransactionOperationHelper;
+import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.SaveRequest;
@@ -229,5 +238,38 @@ public class TwoPhaseParticipantFencingTest {
     @Test
     public void test_prepare_votes_yes_when_still_owner() throws Exception {
         assertTrue(prepareWithOwnership("kept", true));
+    }
+
+    @Test
+    public void test_a_prepared_commit_records_trigger_runs_before_deleting_its_ops() throws Exception {
+        final var configuration = Configuration.getInstance();
+        final var cache = IocContainer.get(Cache.class);
+        TestUtils.setPrivateField(configuration, "triggersEnabled", true);
+        cache.putTriggers(TestGlobals.DB, TestGlobals.COLL,
+                List.of(new TriggerDefinition("t", new LinkedHashSet<>(Set.of(EventType.CREATED)), "recalc",
+                        TriggerDefinition.MODE_DOCUMENT, false, true, "owner", 1L, 1L, 1L, "owner")));
+        final var clientId = clientTracker.registerForwardedClient("participant");
+        TransactionOperationHelper.start(clientId);
+        final var request = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.setObject(document("staged-2pc"));
+        request.set_id("staged-2pc");
+        TransactionOperationHelper.bufferSave(request, clientTracker.getActiveTransaction(clientId));
+        final var calls = new CopyOnWriteArrayList<String>();
+        final Answer<Object> recording = invocation -> {
+            calls.add(invocation.getMethod().getName());
+            return invocation.callRealMethod();
+        };
+        try (var ignoredAdmin = mockStatic(AdminOperationHelper.class, recording);
+                var ignoredRunLog = mockStatic(TriggerRunLog.class, recording)) {
+            TwoPhaseParticipant.commitPrepared(clientId);
+        } finally {
+            cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
+            TestUtils.setPrivateField(configuration, "triggersEnabled", false);
+            clientTracker.removeById(clientId);
+        }
+
+        final var recorded = calls.indexOf("recordDeterministic");
+        assertTrue(recorded >= 0, "the prepared commit recorded no trigger run: " + calls);
+        assertTrue(recorded < calls.lastIndexOf("deleteTransactionOps"), "recorded after its ops were gone: " + calls);
     }
 }

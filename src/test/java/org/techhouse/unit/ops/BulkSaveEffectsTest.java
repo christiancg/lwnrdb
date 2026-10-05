@@ -9,13 +9,18 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.PartialBulkSaveException;
@@ -25,6 +30,7 @@ import org.techhouse.ops.ClusterWriteHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.SaveOperationHelper;
+import org.techhouse.ops.StagedTriggerRuns;
 import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
@@ -38,6 +44,10 @@ public class BulkSaveEffectsTest {
     private static final List<String> COMMITTED_INSERTS = List.of("inserted");
     private static final List<String> COMMITTED_UPDATES = List.of("updated");
 
+    private static final Map<EventType, Set<String>> COMMITTED_IDS = Map.of(EventType.CREATED,
+            Set.copyOf(COMMITTED_INSERTS), EventType.UPDATED, Set.copyOf(COMMITTED_UPDATES));
+
+    private final StagedTriggerRuns staged = mock(StagedTriggerRuns.class);
     private final BulkSaveResponse committed = new BulkSaveResponse("Partially saved entries", COMMITTED_INSERTS,
             COMMITTED_UPDATES);
 
@@ -75,14 +85,13 @@ public class BulkSaveEffectsTest {
     public void test_triggers_fire_for_the_committed_part_of_a_failed_bulk_save() {
         final var request = bulkRequest();
         try (var save = mockStatic(SaveOperationHelper.class, CALLS_REAL_METHODS);
-                var triggers = mockStatic(TriggerHelper.class);
                 var ignored = mockStatic(ClusterWriteHelper.class)) {
             save.when(() -> SaveOperationHelper.executeBulkSave(request)).thenThrow(partialFailure());
 
-            assertThrows(PartialBulkSaveException.class, () -> BulkSaveEffects.executeAndPublish(request, ACTING_USER));
+            assertThrows(PartialBulkSaveException.class,
+                    () -> BulkSaveEffects.executeAndPublish(request, ACTING_USER, staged));
 
-            triggers.verify(() -> TriggerHelper.afterBulkSave(eq(TestGlobals.DB), eq(TestGlobals.COLL),
-                    argThat(BulkSaveEffectsTest::isTheCommittedPart), eq(ACTING_USER), eq(DEPTH)));
+            verify(staged).submitLanded(COMMITTED_IDS, TestGlobals.DB, TestGlobals.COLL, ACTING_USER, DEPTH);
         }
     }
 
@@ -90,11 +99,11 @@ public class BulkSaveEffectsTest {
     public void test_the_committed_part_is_replicated() {
         final var request = bulkRequest();
         try (var save = mockStatic(SaveOperationHelper.class, CALLS_REAL_METHODS);
-                var ignored = mockStatic(TriggerHelper.class);
                 var cluster = mockStatic(ClusterWriteHelper.class)) {
             save.when(() -> SaveOperationHelper.executeBulkSave(request)).thenThrow(partialFailure());
 
-            assertThrows(PartialBulkSaveException.class, () -> BulkSaveEffects.executeAndPublish(request, ACTING_USER));
+            assertThrows(PartialBulkSaveException.class,
+                    () -> BulkSaveEffects.executeAndPublish(request, ACTING_USER, staged));
 
             cluster.verify(() -> ClusterWriteHelper.afterBulkSave(eq(TestGlobals.DB), eq(TestGlobals.COLL),
                     argThat(BulkSaveEffectsTest::isTheCommittedPart)));
@@ -106,16 +115,14 @@ public class BulkSaveEffectsTest {
         final var request = bulkRequest();
         final var replicated = new OperationResponse(null, ErrorCode.ERROR_BULK_SAVING);
         try (var save = mockStatic(SaveOperationHelper.class, CALLS_REAL_METHODS);
-                var triggers = mockStatic(TriggerHelper.class);
                 var cluster = mockStatic(ClusterWriteHelper.class)) {
             save.when(() -> SaveOperationHelper.executeBulkSave(request)).thenReturn(committed);
             cluster.when(() -> ClusterWriteHelper.afterBulkSave(TestGlobals.DB, TestGlobals.COLL, committed))
                     .thenReturn(replicated);
 
-            assertSame(replicated, BulkSaveEffects.executeAndPublish(request, ACTING_USER),
+            assertSame(replicated, BulkSaveEffects.executeAndPublish(request, ACTING_USER, staged),
                     "a successful bulk save answers with whatever replication made of it");
-            triggers.verify(
-                    () -> TriggerHelper.afterBulkSave(TestGlobals.DB, TestGlobals.COLL, committed, ACTING_USER, DEPTH));
+            verify(staged).submitLanded(COMMITTED_IDS, TestGlobals.DB, TestGlobals.COLL, ACTING_USER, DEPTH);
         }
     }
 
@@ -131,8 +138,10 @@ public class BulkSaveEffectsTest {
 
             assertEquals(ErrorCode.ERROR_BULK_SAVING.getCode(), response.getErrorCode(),
                     "publishing the committed part must not turn the failed request into a success");
-            triggers.verify(() -> TriggerHelper.afterBulkSave(anyString(), anyString(),
-                    argThat(BulkSaveEffectsTest::isTheCommittedPart), any(), anyInt()));
+            triggers.verify(() -> TriggerHelper.afterWriteIds(anyString(), anyString(), eq(EventType.CREATED),
+                    eq(COMMITTED_INSERTS), any(), anyInt()));
+            triggers.verify(() -> TriggerHelper.afterWriteIds(anyString(), anyString(), eq(EventType.UPDATED),
+                    eq(COMMITTED_UPDATES), any(), anyInt()));
         }
     }
 }

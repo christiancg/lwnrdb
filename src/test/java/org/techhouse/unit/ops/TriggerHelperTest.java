@@ -26,6 +26,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.StagedTriggerRuns;
 import org.techhouse.ops.TriggerHelper;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
@@ -234,9 +235,19 @@ public class TriggerHelperTest {
     }
 
     @Test
-    public void test_after_bulk_save_fires_nothing_for_a_failed_write() {
-        assertTrue(capture(() -> TriggerHelper.afterBulkSave(TestGlobals.DB, TestGlobals.COLL,
-                new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING), "alice", 0)).isEmpty());
+    public void test_a_failed_bulk_save_fires_nothing() {
+        assertTrue(capture(
+                () -> runStagedQuietly(new OperationResponse(OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING)))
+                .isEmpty());
+    }
+
+    private static void runStagedQuietly(OperationResponse response) {
+        try {
+            TriggerHelper.runStaged(StagedTriggerRuns.none(), TestGlobals.DB, TestGlobals.COLL, "alice", 0,
+                    () -> response);
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test

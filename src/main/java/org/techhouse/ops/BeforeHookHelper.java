@@ -33,7 +33,7 @@ public final class BeforeHookHelper {
         if (hasConflictingIds(request)) {
             return null;
         }
-        request.set_id(assignedId(request.getObject(), request.get_id()));
+        resolveIdForWrite(request);
         return OperationResponse.respondOrError(OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
             final var event = isInsert(dbName, collName, request.get_id()) ? EventType.CREATED : EventType.UPDATED;
             if (!BeforeHookContext.hasHooksFor(dbName, collName, event)) {
@@ -71,7 +71,7 @@ public final class BeforeHookHelper {
                 final var objects = new ArrayList<>(request.getObjects());
                 for (var i = 0; i < objects.size(); i++) {
                     final var object = objects.get(i);
-                    final var id = assignedId(object, null);
+                    final var id = resolveIdForWrite(object);
                     final var isUpdate = id != null && existingIds.contains(id);
                     final var outcome = hooks.apply(isUpdate, object, id, OperationType.BULK_SAVE);
                     if (outcome.isRejected()) {
@@ -106,6 +106,19 @@ public final class BeforeHookHelper {
             final var outcome = hooks.apply(document, request.get_id(), OperationType.DELETE);
             return outcome.isRejected() ? outcome.rejection() : null;
         }
+    }
+
+    public static String resolveIdForWrite(SaveRequest request) {
+        if (hasConflictingIds(request)) {
+            return null;
+        }
+        final var id = assignedId(request.getObject(), request.get_id());
+        request.set_id(id);
+        return id;
+    }
+
+    public static String resolveIdForWrite(JsonObject object) {
+        return assignedId(object, null);
     }
 
     private static String assignedId(JsonObject object, String requestId) {

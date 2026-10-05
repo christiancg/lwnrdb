@@ -174,13 +174,14 @@ public final class TransactionOperationHelper {
                 fenced = true;
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
             }
+            final var stagedTriggers = CommittedOpTriggers.stage(ops, clientTracker.getAuthenticatedUsername(clientId),
+                    transaction.getTriggerDepth(), transaction, txId);
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             TxCommitLog.clearLocalCommit(txId);
             pastCommitPoint = false;
             // After the durable commit, so a trigger never observes a transaction that later rolled back. The
             // transaction's own depth is used, not zero, or allowCascade=true would cascade forever.
-            CommittedOpTriggers.fireForCommittedOps(ops, clientTracker.getAuthenticatedUsername(clientId),
-                    transaction.getTriggerDepth(), transaction);
+            stagedTriggers.submitAll();
             // The local commit stands even on a replication timeout; anti-entropy reconciles the replicas.
             if (coordinator.replicateTransaction(transaction, reservedTombstones) == ReplicationOutcome.TIMEOUT) {
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT);

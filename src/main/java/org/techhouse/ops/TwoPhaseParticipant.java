@@ -70,10 +70,11 @@ public final class TwoPhaseParticipant {
                 fenced = true;
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
             }
+            final var stagedTriggers = CommittedOpTriggers.stage(ops, clientTracker.getAuthenticatedUsername(clientId),
+                    transaction.getTriggerDepth(), transaction, transaction.getTransactionId().toString());
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             // After the durable commit, so a trigger never observes a transaction that later rolled back.
-            CommittedOpTriggers.fireForCommittedOps(ops, clientTracker.getAuthenticatedUsername(clientId),
-                    transaction.getTriggerDepth(), transaction);
+            stagedTriggers.submitAll();
             TransactionRecovery.resolveMarkers(transaction.getTransactionId().toString(), true);
             // A replication timeout does not fail the commit; anti-entropy reconciles the lagging replicas.
             coordinator.replicateTransaction(transaction, reservedTombstones);

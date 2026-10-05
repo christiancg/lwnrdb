@@ -557,6 +557,19 @@ increments a counter. Consequences: a run costs a transaction; an explicit `db.t
 inside a trigger is rejected (the run is already transactional); and the guarantee covers
 *database effects*, so a replayed run's console output can repeat.
 
+The record is written **before the evidence of the triggering write can be lost**, never after it.
+A transaction stages its runs once its ops have applied and before its commit marker and buffered
+ops are cleared, under a run id derived from the transaction id, the trigger, the event and the
+document, so a startup replay of that commit re-stages the same records instead of adding new ones;
+the events are queued only after the marker is gone, so a trigger still never sees a transaction
+that could roll back. A standalone `SAVE`/`BULK_SAVE`/`DELETE` stages its runs under the collection
+lock *before* the write, as `STAGED` records carrying each document's prior version (or "absent").
+If the write lands, the in-process event is queued under that run id; if it is refused or fails, the
+records are discarded; a partially applied `BULK_SAVE` keeps only what committed. A `STAGED` run
+found at startup fires for exactly the documents whose version has changed since it was staged —
+every save stamps a fresh version and a delete removes the document — and is otherwise discarded.
+`LIST_TRIGGER_RUNS` reports a staged run as `PENDING`.
+
 A failed run is **retried** — the state machine lives on the pending-run record itself, which is
 what keeps exactly-once intact (a record still present is still un-applied). An error raised
 *after* the run's transaction committed is the exception: the module body is wrapped in that

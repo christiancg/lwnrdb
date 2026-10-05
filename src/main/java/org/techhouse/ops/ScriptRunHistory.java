@@ -264,8 +264,8 @@ public class ScriptRunHistory {
         document.addProperty("durationMs", runRecord.durationMs());
         document.addProperty("attempt", runRecord.attempt());
         document.addProperty("outcome", runRecord.outcome());
-        document.addProperty("errorName", storedText(runRecord.errorName()));
-        document.addProperty("errorMessage", storedText(clip(runRecord.errorMessage())));
+        document.addProperty("errorName", JsonCustom.asPlainText(runRecord.errorName()));
+        document.addProperty("errorMessage", JsonCustom.asPlainText(clip(runRecord.errorMessage())));
         document.add("stack", strings(runRecord.stack()));
         document.add("metrics", runRecord.metrics().toJson());
         document.add("logs",
@@ -277,13 +277,9 @@ public class ScriptRunHistory {
     private static JsonArray strings(Iterable<String> values) {
         final var array = new JsonArray();
         for (final var value : values) {
-            array.add(new JsonString(storedText(value)));
+            array.add(new JsonString(JsonCustom.asPlainText(value)));
         }
         return array;
-    }
-
-    private static String storedText(String value) {
-        return value != null && JsonCustom.isJsonCustom(new JsonString(value)) ? "\\" + value : value;
     }
 
     private static String clip(String message) {
