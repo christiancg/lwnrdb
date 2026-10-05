@@ -127,9 +127,9 @@ final class AdminQuarantine {
             cache.evictDatabase(dbName);
             AdminOperationHelper.deleteDatabaseEntry(dbName);
             compiledProcedures.invalidateDatabase(dbName);
-            scheduleRegistry.removeDatabase(dbName);
             listenManager.unregisterAllForDatabase(dbName);
             final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
+            scheduleRegistry.removeDatabase(dbName);
             logger.warning("Quarantined database " + dbName + ": it is absent from the winning admin snapshot. Its"
                     + " documents were " + movedOrLeft(moved) + " and it no longer serves reads or writes until an"
                     + " operator reinstates or removes it.");

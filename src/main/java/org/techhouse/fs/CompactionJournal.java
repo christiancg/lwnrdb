@@ -2,6 +2,7 @@ package org.techhouse.fs;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardOpenOption;
@@ -62,9 +63,20 @@ final class CompactionJournal {
         final var file = markerFile(marker);
         try {
             Files.deleteIfExists(file.toPath());
-        } catch (IOException e) {
-            logger.error("Could not remove the compaction marker " + file.getName() + "; the next startup replays"
-                    + " it, which lands on the same consistent state", e);
+        } catch (IOException deleteFailure) {
+            emptyInPlace(file, deleteFailure);
+        }
+    }
+
+    private static void emptyInPlace(File file, IOException deleteFailure) {
+        try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
+            writer.setLength(0);
+            logger.warning("Could not remove the compaction marker " + file.getName()
+                    + "; emptied it instead, which the next startup discards: " + deleteFailure.getMessage());
+        } catch (IOException emptyFailure) {
+            deleteFailure.addSuppressed(emptyFailure);
+            logger.error("Could not remove or empty the compaction marker " + file.getName() + "; the next startup"
+                    + " replays it and truncates every record appended to that page since", deleteFailure);
         }
     }
 

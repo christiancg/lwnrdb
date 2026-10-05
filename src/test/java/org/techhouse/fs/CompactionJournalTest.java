@@ -1,12 +1,18 @@
 package org.techhouse.fs;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.mockStatic;
+import static org.techhouse.fs.CompactionFixture.NEW_VERSION;
 import static org.techhouse.fs.CompactionFixture.OLD_VERSION;
 import static org.techhouse.fs.CompactionFixture.record;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 import org.junit.jupiter.api.BeforeEach;
@@ -206,5 +212,50 @@ public class CompactionJournalTest {
         }));
 
         assertEquals(List.of("a", "b", "d", "e"), fx.indexedRows().stream().map(PkIndexEntry::getValue).toList());
+    }
+
+    private CompactionJournal.Marker applyAnUpdateOfB() throws IOException {
+        final var marker = fx.begin(Kind.UPDATE, "b");
+        fx.shiftAndCut("b");
+        fx.indexUpdatedCopy("b", fx.appendUpdatedCopy("b", 0));
+        return marker;
+    }
+
+    private void endWithAFailingDelete(CompactionJournal.Marker marker) {
+        try (var files = mockStatic(Files.class, CALLS_REAL_METHODS)) {
+            files.when(() -> Files.deleteIfExists(any(Path.class))).thenThrow(new IOException("unlink refused"));
+            assertDoesNotThrow(() -> fx.journal.end(marker));
+        }
+    }
+
+    @Test
+    public void aMarkerThatCannotBeDeletedIsEmptiedAndNeverRevertsLaterWrites() throws Exception {
+        final var marker = applyAnUpdateOfB();
+        endWithAFailingDelete(marker);
+        fx.seed(0, "f");
+        final var pageBeforeRestart = fx.pageText(0);
+
+        assertEquals(List.of(), fx.recovery.recoverAll());
+
+        assertEquals(pageBeforeRestart, fx.pageText(0), "a completed compaction must not be replayed at startup");
+        assertEquals(NEW_VERSION, fx.indexed("b").getVersion(), "the acknowledged update must survive");
+        assertNotNull(fx.indexed("f"));
+        assertTrue(fx.everyRowReadsItsOwnRecord());
+        assertEquals(0, fx.markers().length);
+    }
+
+    @Test
+    public void aMarkerThatCanBeNeitherDeletedNorEmptiedIsLeftAsItWas() throws Exception {
+        final var marker = applyAnUpdateOfB();
+        final var file = fx.journal.markerFile(marker);
+        final var bytes = Files.readAllBytes(file.toPath());
+        assertTrue(file.setWritable(false));
+        try {
+            endWithAFailingDelete(marker);
+        } finally {
+            assertTrue(file.setWritable(true));
+        }
+
+        assertArrayEquals(bytes, Files.readAllBytes(file.toPath()));
     }
 }

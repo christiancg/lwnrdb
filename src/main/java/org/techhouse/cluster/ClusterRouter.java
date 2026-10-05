@@ -75,7 +75,7 @@ public class ClusterRouter {
             return routeCommit(rawJson, actingUser, clientId);
         }
         if (type == OperationType.ROLLBACK_TRANSACTION) {
-            return routeRollback(clientId);
+            return routeRollback(rawJson, actingUser, clientId);
         }
         if (WRITES.contains(type)) {
             return routeTransactionWrite(request, rawJson, type, actingUser, clientId);
@@ -140,25 +140,49 @@ public class ClusterRouter {
 
     private String routeCommit(String rawJson, String actingUser, UUID clientId) {
         final var remotes = clientTracker.transactionParticipants(clientId);
-        final var local = clientTracker.hasLocalSlice(clientId);
         if (remotes.isEmpty()) {
             return null;
         }
-        if (!local && remotes.size() == 1) {
-            final var response = forwardTx(rawJson, remotes.iterator().next(), OperationType.COMMIT_TRANSACTION,
+        if (!clientTracker.hasLocalSlice(clientId) && remotes.size() == 1) {
+            return finishSoleRemoteSlice(rawJson, remotes.iterator().next(), OperationType.COMMIT_TRANSACTION,
                     actingUser, clientId);
-            clientTracker.clearActiveTransaction(clientId);
-            clientTracker.clearTransactionState(clientId);
-            return response;
         }
         return eJson.toJson(tx2pcCoordinator.commit(clientId));
     }
 
-    private String routeRollback(UUID clientId) {
-        if (clientTracker.transactionParticipants(clientId).isEmpty()) {
+    private String routeRollback(String rawJson, String actingUser, UUID clientId) {
+        final var remotes = clientTracker.transactionParticipants(clientId);
+        if (remotes.isEmpty()) {
             return null;
         }
+        if (!clientTracker.hasLocalSlice(clientId) && remotes.size() == 1) {
+            return finishSoleRemoteSlice(rawJson, remotes.iterator().next(), OperationType.ROLLBACK_TRANSACTION,
+                    actingUser, clientId);
+        }
         return eJson.toJson(tx2pcCoordinator.rollback(clientId));
+    }
+
+    private String finishSoleRemoteSlice(String rawJson, String owner, OperationType type, String actingUser,
+            UUID clientId) {
+        final var response = forwardTx(rawJson, owner, type, actingUser, clientId);
+        if (!ownerStillHoldsTheSlice(response)) {
+            clientTracker.clearActiveTransaction(clientId);
+            clientTracker.clearTransactionState(clientId);
+        }
+        return response;
+    }
+
+    private boolean ownerStillHoldsTheSlice(String response) {
+        final String errorCode;
+        try {
+            errorCode = eJson.fromJson(response, OperationResponse.class).getErrorCode();
+        } catch (RuntimeException e) {
+            logger.warning("Could not read the owner's answer to a transaction commit or rollback; keeping the "
+                    + "transaction open so it can be re-sent: " + e.getMessage());
+            return true;
+        }
+        return ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(errorCode)
+                || ErrorCode.TRANSACTION_INDETERMINATE.getCode().equals(errorCode);
     }
 
     public boolean teardownTransaction(UUID clientId) {

@@ -107,4 +107,15 @@ public class DbTimeBuiltinsTest {
         assertThrows(RangeErrorException.class, () -> Interpreter.run("new DbTime(NaN)"));
         assertThrows(RangeErrorException.class, () -> Interpreter.run("DbTime.from({ hour: Infinity })"));
     }
+
+    @Test
+    public void test_from_a_plain_time_keeps_its_fraction_of_a_second() {
+        assertEquals("#time(10:00:00.123456789)",
+                str("String(DbTime.from(Temporal.PlainTime.from('10:00:00.123456789')))"));
+    }
+
+    @Test
+    public void test_a_round_trip_through_to_temporal_is_lossless() {
+        assertEquals("#time(10:00:00.500)", str("String(DbTime.from(DbTime.from('10:00:00.5').toTemporal()))"));
+    }
 }

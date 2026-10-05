@@ -446,7 +446,9 @@ non-transactional write routed there is properly serialized against the transact
 owner replays its buffered ops, checks quorum (else `503-2`), and replicates them to a
 majority as **one atomic batch** (`REPLICATE_TX`, applied inside one multi-collection lock
 window so no other writer interleaves). A replication timeout returns `503-3` but the local
-commit stands.
+commit stands. A `500-33` (half applied) or `409-10` (outcome unknown) from the owner leaves the
+transaction open on the edge, so re-sending COMMIT finishes the slice the owner is still holding; a ROLLBACK in
+that state is forwarded to the owner too and answers `500-33` rather than claiming a rollback.
 
 **Cross-owner two-phase commit.** When a transaction spans multiple owners the edge runs
 2PC: `PREPARE_TX` to every participant (each votes yes only after confirming quorum, confirming

@@ -1274,6 +1274,7 @@ REG_COMPLEMENT_NULL = "idxagg_reg_complnull"
 REG_CONJ_ORDER = "idxagg_reg_conjorder"
 REG_NOID_DUP = "idxagg_reg_noiddup"
 REG_NEAREST_TIES = "idxagg_reg_nearestties"
+REG_NEAREST_SCALE = "idxagg_reg_nearestscale"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -1817,6 +1818,28 @@ def probe_nearest_ties_are_broken_on_id(c):
           detail=f"got {agree_ordered_ids(agg(c, REG_NEAREST_TIES, nearest(3)))}")
 
 
+def probe_nearest_scores_huge_and_tiny_vectors(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NEAREST_SCALE})
+    for doc_id, vector in (("huge", "#vector(1e200,1e200)"), ("tiny", "#vector(1e-200,1e-200)"),
+                           ("axis", "#vector(1.0,0.0)")):
+        save_doc(c, REG_NEAREST_SCALE, {"_id": doc_id, "embedding": vector})
+    wait_for_background()
+
+    def nearest(exact_scan):
+        return [{"type": "FILTER", "operator": {"customOperatorName": "nearest", "field": "embedding",
+                                                "value": "#vector(1.0,1.0)", "k": 2, "exact": exact_scan}}]
+
+    exact = agree_ids(agg(c, REG_NEAREST_SCALE, nearest(True)))
+    check("exact nearest scores vectors whose squared norm overflows or underflows by their true cosine",
+          exact == ["huge", "tiny"], detail=f"got {exact}")
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_NEAREST_SCALE,
+            "fieldName": "embedding"})
+    wait_for_indexes(c, [(REG_NEAREST_SCALE, "embedding")])
+    indexed = agree_ids(agg(c, REG_NEAREST_SCALE, nearest(False)))
+    check("index-backed nearest agrees with the exact scan on huge and tiny vectors",
+          indexed == exact, detail=f"exact={exact}  indexed={indexed}")
+
+
 def probe_a_field_operator_without_a_value_is_refused(c):
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_VALUELESS})
     save_doc(c, REG_VALUELESS, {"_id": "v1", "name": "alice"})
@@ -2042,6 +2065,7 @@ def regression_suite(c):
     probe_a_sorted_conjunction_keeps_its_order(c)
     probe_a_conjunction_keeps_equal_rows_without_an_id(c)
     probe_nearest_ties_are_broken_on_id(c)
+    probe_nearest_scores_huge_and_tiny_vectors(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════

@@ -74,7 +74,7 @@ public class ScheduleRegistry {
         }
     }
 
-    public void reload(String dbName) {
+    public synchronized void reload(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
         final var seen = new ArrayList<String>();
         for (final var name : fs.listScheduleNames(dbName)) {
@@ -96,13 +96,13 @@ public class ScheduleRegistry {
         entries.keySet().removeIf(key -> key.startsWith(prefix) && !seen.contains(key));
     }
 
-    public void removeDatabase(String dbName) {
+    public synchronized void removeDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
         entries.keySet().removeIf(key -> key.startsWith(prefix));
         warned.keySet().removeIf(key -> key.startsWith(prefix));
     }
 
-    public void clear() {
+    public synchronized void clear() {
         entries.clear();
         warned.clear();
     }

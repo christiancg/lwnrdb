@@ -694,6 +694,25 @@ def test_host_round_trip_keeps_custom_spelling(conn: Conn):
                   f"expected {spelling!r}, got {stored.get(field)!r}")
 
 
+def test_temporal_bridge_keeps_fractions(conn: Conn):
+    section("Host interface — a value rebuilt from Temporal keeps its fraction of a second")
+    written = {"at": "#datetime(2024-01-01T10:00:00.123)", "time": "#time(10:00:00.123)"}
+    check_status("write sub-second custom values over the wire",
+                 conn.send({"type": "SAVE", "databaseName": DB, "collectionName": COLL,
+                            "object": {"_id": "fraction", **written}}), "OK")
+    check_result("re-save them rebuilt through toTemporal()",
+                 conn.run('import db from "db";\n'
+                          f'const doc = db.findById(db.name, "{COLL}", "fraction");\n'
+                          f'db.save(db.name, "{COLL}", {{ _id: "fraction", '
+                          "at: DbDateTime.from(doc.at.toTemporal()), time: DbTime.from(doc.time.toTemporal()) });\n"
+                          'return "saved";'), "saved")
+    stored = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL,
+                        "_id": "fraction"}).get("object") or {}
+    for field, spelling in written.items():
+        check(f"{field} keeps its milliseconds through the Temporal bridge", stored.get(field) == spelling,
+              f"expected {spelling!r}, got {stored.get(field)!r}")
+
+
 def test_transactions(conn: Conn):
     section("Host interface — transactions")
     check_result("a transaction commits both collections",
@@ -1667,6 +1686,7 @@ def main():
             test_host_reads(conn)
             test_host_writes(conn)
             test_host_round_trip_keeps_custom_spelling(conn)
+            test_temporal_bridge_keeps_fractions(conn)
             test_transactions(conn)
             test_a_script_transaction_releases_its_locks_when_its_user_is_deleted_mid_run(conn)
             test_scope_and_failures(conn)
