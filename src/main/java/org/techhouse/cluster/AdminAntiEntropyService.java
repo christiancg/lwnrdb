@@ -181,6 +181,7 @@ public class AdminAntiEntropyService implements MembershipListener {
     }
 
     public AdminSnapshotPayload buildSnapshot() {
+        final var epochState = adminEpoch.state();
         final var databases = new ArrayList<JsonObject>();
         for (final var dbEntry : cache.getAllAdminDbEntries()) {
             databases.add(dbEntry.getData());
@@ -229,9 +230,9 @@ public class AdminAntiEntropyService implements MembershipListener {
         for (final var userEntry : cache.getAllAdminUserEntries()) {
             users.add(userEntry.getData());
         }
-        final var payload = new AdminSnapshotPayload(adminEpoch.current(), databases, collections, users, schemas,
+        final var payload = new AdminSnapshotPayload(epochState.epoch(), databases, collections, users, schemas,
                 procedures, triggers, schedules);
-        payload.setEpochConfirmed(adminEpoch.isConfirmed());
+        payload.setEpochConfirmed(epochState.confirmed());
         payload.setUnreadable(unreadable);
         final var self = membershipService.getSelf();
         payload.setNodeId(self != null ? self.getNodeId() : null);

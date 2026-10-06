@@ -8,7 +8,9 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.when;
 
 import java.util.ArrayList;
@@ -345,6 +347,32 @@ public class AdminAntiEntropyServiceTest {
             release.countDown();
             holder.join(5000);
             TestUtils.setPrivateField(conformer, "clusterConfig", realConformConfig);
+        }
+    }
+
+    @Test
+    public void test_snapshot_epoch_never_runs_ahead_of_its_data() throws Exception {
+        TestUtils.createTestDatabaseAndCollection();
+        final var wasConfirmed = adminEpoch.isConfirmed();
+        TestUtils.setPrivateField(adminEpoch, "epoch", 4L);
+        TestUtils.setPrivateField(adminEpoch, "confirmed", false);
+        final var realCache = TestUtils.getPrivateField(service, "cache", Cache.class);
+        final var concurrentOp = spy(realCache);
+        doAnswer(invocation -> {
+            adminEpoch.bump();
+            adminEpoch.confirm();
+            return invocation.callRealMethod();
+        }).when(concurrentOp).getAllAdminUserEntries();
+        TestUtils.setPrivateField(service, "cache", concurrentOp);
+        try {
+            final var snapshot = service.buildSnapshot();
+
+            assertEquals(4L, snapshot.getEpoch(), "an op landing mid-build must not lend its epoch to older data");
+            assertFalse(snapshot.isEpochConfirmed(), "nor its confirmed flag");
+            assertEquals(5L, adminEpoch.current());
+        } finally {
+            TestUtils.setPrivateField(service, "cache", realCache);
+            TestUtils.setPrivateField(adminEpoch, "confirmed", wasConfirmed);
         }
     }
 }

@@ -287,4 +287,16 @@ public class AdminEpochTest {
         assertTrue(adminEpoch.isConfirmed());
         assertEquals(persisted, Files.readString(epochPath(), StandardCharsets.UTF_8).trim());
     }
+
+    @Test
+    public void test_state_reports_epoch_and_confirmed_together() throws Exception {
+        TestUtils.setPrivateField(adminEpoch, "epoch", 7L);
+        TestUtils.setPrivateField(adminEpoch, "confirmed", false);
+
+        assertEquals(new AdminEpoch.State(7L, false), adminEpoch.state());
+
+        adminEpoch.confirm();
+
+        assertEquals(new AdminEpoch.State(7L, true), adminEpoch.state());
+    }
 }

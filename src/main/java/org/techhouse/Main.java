@@ -38,7 +38,6 @@ import org.techhouse.ops.ScheduleDispatcher;
 import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
-import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
 
@@ -96,7 +95,7 @@ public class Main {
         bootstrapDefaultAdmin();
         final var port = getPort(args);
         backgroundTaskManager.startBackgroundWorkers();
-        final var startupTriggerRuns = TriggerRunLog.pendingRunIds();
+        final var startupTriggerRuns = TriggerRunRecovery.startupRunIds();
         triggerExecutor.start(TriggerDispatcher::dispatch);
         // Must run after cleanupOrphanedTransactions: the records left are runs that never applied.
         TriggerRunRecovery.garbageCollect();

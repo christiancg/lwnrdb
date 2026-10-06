@@ -56,7 +56,7 @@ public class MainStartupOrderTest {
     @Test
     public void test_trigger_runs_are_snapshotted_before_any_producer_starts() throws IOException {
         final var body = mainBody();
-        final var snapshot = positionOf(body, "TriggerRunLog.pendingRunIds();");
+        final var snapshot = positionOf(body, "TriggerRunRecovery.startupRunIds();");
 
         assertTrue(positionOf(body, "cleanupOrphanedTransactions();") < snapshot,
                 "runs recorded by startup recovery before the executor starts are exactly what must be replayed");

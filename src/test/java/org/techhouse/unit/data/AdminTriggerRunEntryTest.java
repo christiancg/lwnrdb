@@ -213,4 +213,36 @@ public class AdminTriggerRunEntryTest {
         assertEquals(TriggerRunStatus.PENDING, TriggerRunStatus.STAGED.reported());
         assertEquals(TriggerRunStatus.DEAD, TriggerRunStatus.DEAD.reported());
     }
+
+    @Test
+    public void test_tx_id_round_trips() {
+        final var original = entry("run-tx", 0, EventType.CREATED, List.of("a"), List.of());
+        original.setTxId("tx-1");
+        final var data = original.getData();
+        data.addProperty(Globals.PK_FIELD, original.get_id());
+
+        final var parsed = AdminTriggerRunEntry.fromJsonObject(data);
+
+        assertEquals("tx-1", parsed.getTxId());
+    }
+
+    @Test
+    public void test_tx_id_absent_reads_as_null() {
+        final var original = entry("run-plain", 0, EventType.CREATED, List.of("a"), List.of());
+        final var data = original.getData();
+        data.addProperty(Globals.PK_FIELD, original.get_id());
+
+        final var parsed = AdminTriggerRunEntry.fromJsonObject(data);
+
+        assertNull(parsed.getTxId());
+    }
+
+    @Test
+    public void test_null_tx_id_is_not_serialised() {
+        final var original = entry("run-cleared", 0, EventType.CREATED, List.of("a"), List.of());
+        original.setTxId("tx-2");
+        original.setTxId(null);
+
+        assertFalse(original.getData().has("txId"), "a run with no transaction must not carry the field");
+    }
 }

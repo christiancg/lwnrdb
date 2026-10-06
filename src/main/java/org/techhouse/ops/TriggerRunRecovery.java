@@ -28,6 +28,27 @@ public final class TriggerRunRecovery {
     private TriggerRunRecovery() {
     }
 
+    public static Set<String> startupRunIds() {
+        try {
+            final var ownedByReplay = new HashSet<String>();
+            final var startup = new HashSet<String>();
+            for (final var entry : TriggerRunLog.pending()) {
+                final var txId = entry.getTxId();
+                if (txId != null && TransactionOperationHelper.isFenced(txId)) {
+                    ownedByReplay.add(entry.getRunId());
+                } else {
+                    startup.add(entry.getRunId());
+                }
+            }
+            startup.removeAll(ownedByReplay);
+            return startup;
+        } catch (Exception e) {
+            logger.error("Failed to read the pending trigger runs to decide which ones startup recovery replays;"
+                    + " falling back to every pending run", e);
+            return TriggerRunLog.pendingRunIds();
+        }
+    }
+
     public static void recoverLocal(Set<String> startupRunIds) {
         if (!configuration.isTriggersEnabled() || !TriggerRunLog.isEnabled()) {
             return;

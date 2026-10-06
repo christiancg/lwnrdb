@@ -62,16 +62,21 @@ public final class AggregationOperationHelper {
 
     public static List<String> aggregateLockSet(AggregateRequest request) {
         final var dbName = request.getDatabaseName();
-        final var identifiers = new ArrayList<String>();
-        identifiers.add(Cache.getCollectionIdentifier(dbName, request.getCollectionName()));
+        return aggregateCollections(request).stream().map(collName -> Cache.getCollectionIdentifier(dbName, collName))
+                .toList();
+    }
+
+    public static List<String> aggregateCollections(AggregateRequest request) {
+        final var collections = new ArrayList<String>();
+        collections.add(request.getCollectionName());
         if (request.getAggregationSteps() != null) {
             for (var step : request.getAggregationSteps()) {
                 if (step instanceof JoinAggregationStep joinStep) {
-                    identifiers.add(Cache.getCollectionIdentifier(dbName, joinStep.getJoinCollection()));
+                    collections.add(joinStep.getJoinCollection());
                 }
             }
         }
-        return identifiers;
+        return collections;
     }
 
     // A Stream is lazy, so a SCRIPT callable runs during toList(): the context must wrap the terminal op too.

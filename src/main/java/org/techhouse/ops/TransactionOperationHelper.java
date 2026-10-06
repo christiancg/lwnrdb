@@ -91,6 +91,13 @@ public final class TransactionOperationHelper {
         return TxCommitLog.isLocallyCommitted(transaction.getTransactionId().toString());
     }
 
+    private static ErrorCode preApplyRefusal(Transaction transaction) {
+        if (coordinator.hasNotTransactionQuorum()) {
+            return ErrorCode.NO_QUORUM;
+        }
+        return ownershipMoved(transaction) ? ErrorCode.NOT_COLLECTION_OWNER : null;
+    }
+
     private static boolean isFenced(Transaction transaction) {
         return isFenced(transaction.getTransactionId().toString());
     }
@@ -141,14 +148,15 @@ public final class TransactionOperationHelper {
         var fenced = false;
         var pastCommitPoint = false;
         try {
-            // A clustered commit must still hold a write quorum: abort before applying if it was lost.
-            if (coordinator.hasNotTransactionQuorum()) {
-                AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
-                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_QUORUM);
+            final var decided = isLocalCommitFenced(transaction);
+            final var refusal = preApplyRefusal(transaction);
+            if (refusal != null && decided) {
+                fenced = true;
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
             }
-            if (ownershipMoved(transaction)) {
+            if (refusal != null) {
                 AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
-                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NOT_COLLECTION_OWNER);
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION, refusal);
             }
             final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
             if (ops.size() != transaction.getBufferedOpIds().size()) {

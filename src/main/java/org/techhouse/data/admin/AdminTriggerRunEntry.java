@@ -34,6 +34,7 @@ public class AdminTriggerRunEntry extends DbEntry {
     private static final String LAST_ERROR_AT_FIELD = "lastErrorAt";
     private static final String NEXT_ATTEMPT_AT_FIELD = "nextAttemptAt";
     private static final String PRIOR_VERSIONS_FIELD = "priorVersions";
+    private static final String TX_ID_FIELD = "txId";
 
     public static final long ABSENT_VERSION = -1L;
 
@@ -56,6 +57,7 @@ public class AdminTriggerRunEntry extends DbEntry {
     private long lastErrorAt;
     private long nextAttemptAt;
     private Map<String, Long> priorVersions = new LinkedHashMap<>();
+    private String txId;
 
     private AdminTriggerRunEntry() {
         setDatabaseName(Globals.ADMIN_DB_NAME);
@@ -130,6 +132,7 @@ public class AdminTriggerRunEntry extends DbEntry {
         result.lastErrorAt = longOrZero(readString(object, LAST_ERROR_AT_FIELD));
         result.nextAttemptAt = longOrZero(readString(object, NEXT_ATTEMPT_AT_FIELD));
         result.priorVersions = readPriorVersions(object);
+        result.txId = readString(object, TX_ID_FIELD);
         return result;
     }
 
@@ -203,6 +206,7 @@ public class AdminTriggerRunEntry extends DbEntry {
         data.addProperty(LAST_ERROR_AT_FIELD, Long.toString(lastErrorAt));
         data.addProperty(NEXT_ATTEMPT_AT_FIELD, Long.toString(nextAttemptAt));
         writePriorVersions(data);
+        writeTxId(data);
         setData(data);
     }
 
@@ -214,6 +218,14 @@ public class AdminTriggerRunEntry extends DbEntry {
         final var versions = new JsonObject();
         priorVersions.forEach((id, version) -> versions.addProperty(id, Long.toString(version)));
         data.add(PRIOR_VERSIONS_FIELD, versions);
+    }
+
+    private void writeTxId(JsonObject data) {
+        if (txId == null) {
+            data.remove(TX_ID_FIELD);
+            return;
+        }
+        data.addProperty(TX_ID_FIELD, txId);
     }
 
     public void stage(Map<String, Long> versionsBeforeTheWrite) {
@@ -262,6 +274,15 @@ public class AdminTriggerRunEntry extends DbEntry {
 
     public Map<String, Long> getPriorVersions() {
         return priorVersions;
+    }
+
+    public String getTxId() {
+        return txId;
+    }
+
+    public void setTxId(String txId) {
+        this.txId = txId;
+        syncData();
     }
 
     public int getAttempts() {

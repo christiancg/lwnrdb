@@ -6,6 +6,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.CollectionAccessHelper;
+import org.techhouse.ops.CollectionReadinessGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
@@ -29,6 +30,11 @@ public final class ListenOperationHelper {
         aggReq.setAggregationSteps(listenRequest.getAggregationSteps());
         return OperationLocks.withReadLocks(false, AggregationOperationHelper.aggregateLockSet(aggReq),
                 OperationType.LISTEN, ErrorCode.ERROR_LISTEN, () -> {
+                    final var unregistered = CollectionReadinessGuard.checkRead(OperationType.LISTEN, dbName,
+                            AggregationOperationHelper.aggregateCollections(aggReq));
+                    if (unregistered != null) {
+                        return unregistered;
+                    }
                     final var results = AggregationOperationHelper.processAggregation(aggReq);
                     final var ordered = ResultHasher.ordersResults(listenRequest.getAggregationSteps());
                     final var initialHash = ResultHasher.hash(results, ordered);

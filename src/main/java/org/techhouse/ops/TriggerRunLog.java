@@ -44,19 +44,19 @@ public final class TriggerRunLog {
     }
 
     public static String record(TriggerRunDescriptor descriptor) {
-        return write(descriptor, UUID.randomUUID().toString(), null);
+        return write(descriptor, UUID.randomUUID().toString(), null, null);
     }
 
     public static String recordStaged(TriggerRunDescriptor descriptor, Map<String, Long> priorVersions) {
-        return write(descriptor, UUID.randomUUID().toString(), priorVersions);
+        return write(descriptor, UUID.randomUUID().toString(), priorVersions, null);
     }
 
-    public static String recordDeterministic(TriggerRunDescriptor descriptor, String runId) {
+    public static String recordDeterministic(TriggerRunDescriptor descriptor, String txId, String runId) {
         if (!isEnabled()) {
             return null;
         }
         discard(runId);
-        return write(descriptor, runId, null);
+        return write(descriptor, runId, null, txId);
     }
 
     public static String deterministicRunId(String txId, String dbName, String collName, String triggerName,
@@ -98,7 +98,8 @@ public final class TriggerRunLog {
         }
     }
 
-    private static String write(TriggerRunDescriptor descriptor, String runId, Map<String, Long> priorVersions) {
+    private static String write(TriggerRunDescriptor descriptor, String runId, Map<String, Long> priorVersions,
+            String txId) {
         if (!isEnabled()) {
             return null;
         }
@@ -121,6 +122,9 @@ public final class TriggerRunLog {
                     final var entry = chunk.toEntry(runId, chunkSeq, currentNodeId(), descriptor);
                     if (staged) {
                         entry.stage(chunk.versionsFrom(priorVersions));
+                    }
+                    if (txId != null) {
+                        entry.setTxId(txId);
                     }
                     AdminOperationHelper.saveTriggerRun(entry);
                     written++;

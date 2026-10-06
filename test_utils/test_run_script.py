@@ -636,6 +636,14 @@ def test_host_reads(conn: Conn):
                  sorted([COLL, COLL2, BIG_COLL, EMPTY_COLL]))
     check_result("listDatabases answers only the scope",
                  conn.run('import db from "db";\nreturn db.listDatabases();'), [DB])
+    check_result("findById in a collection that was never created throws, as a write there does",
+                 conn.run('import db from "db";\n'
+                          'try { db.findById(db.name, "never_created", "x"); return "read"; }\n'
+                          'catch (e) { return e.message; }'), "Collection not found")
+    check_result("aggregate over a collection that was never created throws too",
+                 conn.run('import db from "db";\n'
+                          'try { db.aggregate(db.name, "never_created", [{ type: "COUNT" }]); return "read"; }\n'
+                          'catch (e) { return e.message; }'), "Collection not found")
 
 
 def test_host_writes(conn: Conn):
@@ -1460,11 +1468,10 @@ def test_cursor(conn: Conn):
     check_result("a cursor over a collection with no documents yields nothing",
                  conn.run('import db from "db";\n'
                           f'return [...db.cursor(db.name, "{EMPTY_COLL}", {sort})].length;'), 0)
-    # Absence stays a value on this surface: an empty batch simply ends the walk, exactly as
-    # db.aggregate answers [] for a collection with no results.
-    check_result("a cursor over an unknown collection ends the walk instead of throwing",
+    check_result("a cursor over an unknown collection throws, as db.aggregate does",
                  conn.run('import db from "db";\n'
-                          f'return [...db.cursor(db.name, "neverCreated", {sort})].length;'), 0)
+                          f'try {{ [...db.cursor(db.name, "neverCreated", {sort})]; return "walked"; }}\n'
+                          'catch (e) { return e.message; }'), "Collection not found")
     check_result("abandoning a cursor mid-walk leaves nothing to release",
                  conn.run('import db from "db";\n'
                           f'for (const doc of db.cursor(db.name, "{BIG_COLL}", {sort}, {{ batchSize: 20 }})) '

@@ -69,7 +69,7 @@ public class OperationProcessorReadTest {
     }
 
     @Test
-    public void test_find_by_id_returns_not_found_for_nonexistent_entry() {
+    public void test_find_by_id_in_an_unregistered_collection_is_collection_not_found() {
         FindByIdRequest request = new FindByIdRequest("nonexistentDb", "nonexistentColl");
         request.set_id("123");
 
@@ -77,7 +77,7 @@ public class OperationProcessorReadTest {
 
         assertNotNull(response);
         assertEquals(OperationStatus.NOT_FOUND, response.getStatus());
-        assertEquals("404-2", response.getErrorCode());
+        assertEquals("404-11", response.getErrorCode());
     }
 
     @Test

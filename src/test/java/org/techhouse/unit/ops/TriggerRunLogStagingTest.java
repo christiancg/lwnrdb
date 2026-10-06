@@ -110,11 +110,11 @@ public class TriggerRunLogStagingTest {
     public void test_record_deterministic_replaces_existing_chunks_of_that_run() throws Exception {
         final var runId = TriggerRunLog.deterministicRunId(TX_ID, TestGlobals.DB, TestGlobals.COLL, "audit",
                 EventType.CREATED, null);
-        TriggerRunLog.recordDeterministic(descriptor(EventType.CREATED, entriesSpanningSeveralChunks()), runId);
+        TriggerRunLog.recordDeterministic(descriptor(EventType.CREATED, entriesSpanningSeveralChunks()), TX_ID, runId);
         assertTrue(TriggerRunLog.recordIdsFor(runId).size() > 1);
 
         assertEquals(runId,
-                TriggerRunLog.recordDeterministic(descriptor(EventType.CREATED, List.of(idEntry("a"))), runId));
+                TriggerRunLog.recordDeterministic(descriptor(EventType.CREATED, List.of(idEntry("a"))), TX_ID, runId));
 
         assertEquals(1, TriggerRunLog.recordIdsFor(runId).size(), "a second stage must replace, not duplicate");
         assertEquals(List.of("a"), TriggerRunLog.pending().getFirst().getIds());
@@ -190,5 +190,17 @@ public class TriggerRunLogStagingTest {
         assertEquals("\\#abc(: x)", pending.getFirst().getLastError());
         assertDoesNotThrow(() -> TriggerRunLog.garbageCollect(-1L));
         assertTrue(TriggerRunLog.pending().isEmpty());
+    }
+
+    @Test
+    public void test_record_deterministic_stamps_tx_id_on_every_chunk() throws Exception {
+        final var runId = TriggerRunLog.deterministicRunId(TX_ID, TestGlobals.DB, TestGlobals.COLL, "stamped",
+                EventType.CREATED, null);
+        TriggerRunLog.recordDeterministic(descriptor(EventType.CREATED, entriesSpanningSeveralChunks()), TX_ID, runId);
+
+        final var chunks = TriggerRunLog.pending().stream().filter(entry -> runId.equals(entry.getRunId())).toList();
+        assertTrue(chunks.size() > 1);
+        assertTrue(chunks.stream().allMatch(entry -> TX_ID.equals(entry.getTxId())),
+                "every chunk of a deterministic run must name the transaction that staged it");
     }
 }

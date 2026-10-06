@@ -457,7 +457,9 @@ majority as **one atomic batch** (`REPLICATE_TX`, applied inside one multi-colle
 window so no other writer interleaves). A replication timeout returns `503-3` but the local
 commit stands. A `500-33` (half applied) or `409-10` (outcome unknown) from the owner leaves the
 transaction open on the edge, so re-sending COMMIT finishes the slice the owner is still holding; a ROLLBACK in
-that state is forwarded to the owner too and answers `500-33` rather than claiming a rollback.
+that state is forwarded to the owner too and answers `500-33` rather than claiming a rollback. A re-sent COMMIT
+that finds quorum or ownership lost since the first attempt answers `500-33` again and keeps the slice and its
+locks: the commit was already decided, so the re-send is refused for now rather than discarding the ops.
 
 **Cross-owner two-phase commit.** When a transaction spans multiple owners the edge runs
 2PC: `PREPARE_TX` to every participant (each votes yes only after confirming quorum, confirming
@@ -681,7 +683,8 @@ behind.
 
 On a membership change and on the same periodic sweep, `cluster/AdminAntiEntropyService`
 pulls each live peer's `ADMIN_SNAPSHOT` (`{epoch, epochUnconfirmed, databases, collections, users, schemas,
-procedures, triggers, schedules, unreadable}`, built from disk) and keeps the winner under the
+procedures, triggers, schedules, unreadable}`, built from disk after reading the epoch, so a snapshot never
+claims an epoch newer than its content) and keeps the winner under the
 `(epoch, nodeId)` order — a higher epoch wins, and at an **equal** epoch the higher node id
 does, so two nodes at the same epoch converge instead of conforming to each other forever.
 When that winner is a peer rather than this node, it **conforms** local state to it: upsert

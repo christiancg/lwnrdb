@@ -323,10 +323,15 @@ public class ScriptOperationHelperTest {
     }
 
     @Test
-    public void test_missing_collection_reads_as_null() {
+    public void test_missing_collection_read_throws_a_catchable_error() {
         final var response = run("""
                 import db from "db";
-                return db.findById(db.name, "goneCollection", "x") === null;
+                try {
+                    db.findById(db.name, "goneCollection", "x");
+                    return false;
+                } catch (e) {
+                    return e.message.includes("Collection not found");
+                }
                 """);
         assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
         assertTrue(response.getResult().asJsonBoolean().getValue());

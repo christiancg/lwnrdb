@@ -13,6 +13,7 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.AggregationOperationHelper;
 import org.techhouse.ops.AnalyzeHelper;
 import org.techhouse.ops.CollectionAccessHelper;
+import org.techhouse.ops.CollectionReadinessGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationLocks;
 import org.techhouse.ops.OperationType;
@@ -54,6 +55,11 @@ public final class ReadPathHelper {
         final var lockSet = List.of(Cache.getCollectionIdentifier(dbName, collName));
         return OperationLocks.withReadLocks(findbyIdRequest.isDirtyRead(), lockSet, OperationType.FIND_BY_ID,
                 ErrorCode.ERROR_RETRIEVING, activeTransaction != null, () -> {
+                    final var unregistered = CollectionReadinessGuard.checkRead(OperationType.FIND_BY_ID, dbName,
+                            List.of(collName));
+                    if (unregistered != null) {
+                        return unregistered;
+                    }
                     final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
                     final var foundIndexEntry = Collections.binarySearch(primaryKeyIndex, id);
                     if (foundIndexEntry < 0) {
@@ -80,6 +86,11 @@ public final class ReadPathHelper {
                 ? activeTransaction.overlayFor(Cache.getCollectionIdentifier(dbName, collName))
                 : null;
         try {
+            final var unregistered = CollectionReadinessGuard.checkRead(OperationType.AGGREGATE, dbName,
+                    AggregationOperationHelper.aggregateCollections(aggregateRequest));
+            if (unregistered != null) {
+                return unregistered;
+            }
             final var lockSet = AggregationOperationHelper.aggregateLockSet(aggregateRequest);
             final var acquired = activeTransaction != null
                     ? locks.acquireReadLocks(aggregateRequest.isDirtyRead(), lockSet,

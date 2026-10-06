@@ -337,4 +337,14 @@ public class ScheduleOperationHelperTest {
         assertEquals(ErrorCode.SCRIPTS_DISABLED.getCode(),
                 ScheduleOperationHelper.executeList(new ListSchedulesRequest(TestGlobals.DB)).getErrorCode());
     }
+
+    @Test
+    public void test_replicated_save_ignores_a_stale_if_version() throws Exception {
+        save(intervalRequest("s"));
+        final var replicated = intervalRequest("s");
+        replicated.setIfVersion(5L);
+        replicated.setReplicated(true);
+
+        assertEquals(2L, save(replicated).getVersion(), "a replica applies what the coordinator decided");
+    }
 }

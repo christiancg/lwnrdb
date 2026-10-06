@@ -267,4 +267,32 @@ public class ProcedureOperationHelperTest {
         ProcedureOperationHelper.executeSave(request, ACTOR);
         assertEquals("recalculates the totals", cache.getProcedure(TestGlobals.DB, "p").getDescription());
     }
+
+    @Test
+    public void test_replicated_save_ignores_a_stale_if_version() throws Exception {
+        save("return 1;");
+        final var request = saveRequest("return 2;");
+        request.setIfVersion(5L);
+        request.setReplicated(true);
+        request.setStampedVersion(6L);
+        request.setStampedUpdatedBy(ACTOR);
+        request.setStampedUpdatedAt(42L);
+
+        assertInstanceOf(SaveProcedureResponse.class, ProcedureOperationHelper.executeSave(request, ACTOR));
+
+        final var stored = cache.getProcedure(TestGlobals.DB, "p");
+        assertEquals("return 2;", stored.getSource(), "a replica applies what the coordinator decided");
+        assertEquals(6L, stored.getVersion());
+    }
+
+    @Test
+    public void test_replicated_save_without_a_stamp_is_not_refused_by_if_version() throws Exception {
+        save("return 1;");
+        final var request = saveRequest("return 2;");
+        request.setIfVersion(5L);
+        request.setReplicated(true);
+
+        assertInstanceOf(SaveProcedureResponse.class, ProcedureOperationHelper.executeSave(request, ACTOR));
+        assertEquals("return 2;", cache.getProcedure(TestGlobals.DB, "p").getSource());
+    }
 }

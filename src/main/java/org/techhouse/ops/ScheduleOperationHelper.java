@@ -73,8 +73,7 @@ public final class ScheduleOperationHelper {
                 return procedureNotFound(request);
             }
             final var existing = cache.getSchedule(dbName, request.getName());
-            if (request.getIfVersion() != null
-                    && request.getIfVersion() != (existing == null ? 0L : existing.getVersion())) {
+            if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
             }
             final var scheduleNames = fs.listScheduleNames(dbName);

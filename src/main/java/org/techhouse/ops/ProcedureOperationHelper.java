@@ -84,8 +84,7 @@ public final class ProcedureOperationHelper {
         locks.lock(dbName, Globals.PROCEDURES_FOLDER);
         try {
             final var existing = cache.getProcedure(dbName, request.getName());
-            if (request.getIfVersion() != null
-                    && request.getIfVersion() != (existing == null ? 0L : existing.getVersion())) {
+            if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
                 return new OperationResponse(OperationType.SAVE_PROCEDURE, ErrorCode.PROCEDURE_VERSION_CONFLICT);
             }
             final var colliding = request.isReplicated()

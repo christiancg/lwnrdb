@@ -345,4 +345,17 @@ public class TriggerOperationHelperTest {
     public void test_save_response_type_is_save_trigger() throws Exception {
         assertEquals(OperationType.SAVE_TRIGGER, save(request("audit")).getType());
     }
+
+    @Test
+    public void test_replicated_save_ignores_a_stale_if_version() throws Exception {
+        save(request("audit"));
+        final var request = request("audit");
+        request.setIfVersion(99L);
+        request.setReplicated(true);
+
+        final var response = TriggerOperationHelper.executeSave(request, ACTOR);
+
+        assertEquals(OperationStatus.OK, response.getStatus(), "a replica applies what the coordinator decided");
+        assertEquals(2L, cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst().getVersion());
+    }
 }

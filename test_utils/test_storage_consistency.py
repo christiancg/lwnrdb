@@ -1317,6 +1317,32 @@ def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
 
 
 
+def test_reads_of_an_unknown_collection_are_refused_cleanly(conn: Conn):
+    section("reads naming a collection that does not exist")
+    mis_cased = COLL.upper() if COLL != COLL.upper() else COLL.lower()
+    for label, request in (
+        ("FIND_BY_ID", {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": "ghost", "_id": "a"}),
+        ("AGGREGATE", {"type": "AGGREGATE", "databaseName": DB, "collectionName": "ghost",
+                       "aggregationSteps": [{"type": "COUNT"}]}),
+        ("AGGREGATE with a JOIN into it", {"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL,
+                                           "aggregationSteps": [{"type": "JOIN", "joinCollection": "ghost",
+                                                                 "localField": "_id", "remoteField": "_id",
+                                                                 "asField": "joined"}]}),
+        ("LISTEN", {"type": "LISTEN", "databaseName": DB, "collectionName": "ghost",
+                    "aggregationSteps": [{"type": "COUNT"}]}),
+        ("FIND_BY_ID under a spelling that differs only in case",
+         {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": mis_cased, "_id": "a"}),
+        ("AGGREGATE under a spelling that differs only in case",
+         {"type": "AGGREGATE", "databaseName": DB, "collectionName": mis_cased,
+          "aggregationSteps": [{"type": "COUNT"}]}),
+    ):
+        bu.check_code(f"{label} answers 404-11 instead of reading files no registered collection owns",
+                      conn.send(request), "NOT_FOUND", "404-11")
+    check_status("the registered spelling still reads",
+                 conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": COLL,
+                            "aggregationSteps": [{"type": "COUNT"}]}), "OK")
+
+
 def test_blocking_steps_over_an_unwritten_collection_do_not_exhaust_descriptors(conn: Conn):
     section("repeated blocking aggregations over a collection with no page metadata")
     check_status("the collection is created",
@@ -2022,6 +2048,7 @@ def main():
             test_drop_database_does_not_strand_a_collection_lock(conn)
             test_drop_and_recreate_a_database_does_not_serve_stale_documents(conn)
             test_writes_to_an_unknown_collection_are_refused_cleanly(conn)
+            test_reads_of_an_unknown_collection_are_refused_cleanly(conn)
             test_a_conjunction_counts_exactly_the_rows_it_returns(conn)
             test_a_buffered_write_to_a_missing_collection_is_refused_at_buffer_time(conn)
             test_a_script_predicate_returning_infinity_keeps_its_document(conn)

@@ -361,7 +361,8 @@ data half.
 realm `Error.prototype`) whenever the underlying `OperationResponse` is not OK — a denial, a
 schema violation, an entry-too-large, a cluster rejection, an internal error. Only genuine
 absence stays a value: `findById` answers `null`, `aggregate` answers `[]`, and `delete` of an
-absent id is a no-op. A call that omits a required argument, or passes one of the wrong shape, is a
+absent id is a no-op. A collection that is not registered is not absence: reads of it throw
+(`404-11`) exactly as writes do, and so does a JOIN into one. A call that omits a required argument, or passes one of the wrong shape, is a
 catchable `TypeError` too — `db.save` needs a document and `db.aggregate`, `db.bulkSave` and
 `db.cursor` each need an array, and every database name, collection name and id must be a string:
 nothing is coerced, so `db.delete(db.name, "c")` or `db.findById(db.name, "c", 5)` throws rather

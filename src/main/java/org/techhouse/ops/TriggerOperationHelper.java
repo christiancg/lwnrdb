@@ -103,8 +103,7 @@ public final class TriggerOperationHelper {
         final var collName = request.getCollectionName();
         final var existingList = new ArrayList<>(cache.getTriggersFor(dbName, collName));
         final var existing = findByName(existingList, request.getName());
-        if (request.getIfVersion() != null
-                && request.getIfVersion() != (existing == null ? 0L : existing.getVersion())) {
+        if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
             return new OperationResponse(OperationType.SAVE_TRIGGER, ErrorCode.PROCEDURE_VERSION_CONFLICT);
         }
         final var definition = stampedDefinition(request, existing, actingUser, mode, timing, events);

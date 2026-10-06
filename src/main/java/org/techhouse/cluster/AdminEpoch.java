@@ -65,6 +65,10 @@ public class AdminEpoch {
         return confirmed;
     }
 
+    public synchronized State state() {
+        return new State(epoch, confirmed);
+    }
+
     public synchronized long bump() {
         epoch++;
         confirmed = false;
@@ -139,5 +143,8 @@ public class AdminEpoch {
     private Path epochFilePath() {
         return Paths.get(Configuration.getInstance().getFilePath(), Globals.CLUSTER_FOLDER,
                 Globals.CLUSTER_ADMIN_EPOCH_FILE);
+    }
+
+    public record State(long epoch, boolean confirmed) {
     }
 }
