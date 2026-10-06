@@ -244,6 +244,36 @@ def test_collection_carve_out(c):
           "OK")
 
 
+def save_trigger_on(c, coll: str, name: str) -> dict:
+    return c.send({"type": "SAVE_TRIGGER", "databaseName": "auth_db", "collectionName": coll,
+                   "name": name, "events": ["CREATED"], "procedureName": "carve_proc"})
+
+
+def test_a_collection_carve_out_bounds_trigger_installation(c):
+    section("A MANAGE user carved down to READ on a collection cannot install a trigger there")
+
+    check_status("AUTHENTICATE as 'carve_manager'", c.authenticate("carve_manager", "carve_manager1234"), "OK")
+
+    check_code("SAVE_TRIGGER on the carved collection (FORBIDDEN)",
+               save_trigger_on(c, "carved", "carved_hook"), "FORBIDDEN", "403-1")
+
+    check_code("DELETE_TRIGGER on the carved collection (FORBIDDEN)",
+               c.send({"type": "DELETE_TRIGGER", "databaseName": "auth_db", "collectionName": "carved",
+                       "name": "admin_hook"}),
+               "FORBIDDEN", "403-1")
+
+    check_status("SAVE_TRIGGER on a collection with no entry of its own (OK)",
+                 save_trigger_on(c, "allowed", "allowed_hook"), "OK")
+
+    check_status("SAVE_TRIGGER on a collection granted READ_WRITE (OK)",
+                 save_trigger_on(c, "forbidden", "granted_hook"), "OK")
+
+    check_status("SAVE_PROCEDURE is not bounded by any collection entry (OK)",
+                 c.send({"type": "SAVE_PROCEDURE", "databaseName": "auth_db", "name": "carve_proc_two",
+                         "script": "return 2;"}),
+                 "OK")
+
+
 def test_admin_operations(c):
     section("Admin user — all operations must succeed")
 
@@ -805,6 +835,13 @@ def main():
                     coll_perms={"auth_db|carved": "READ"})
         create_user(c, "db_maker", "db_maker1234",
                     global_perms=["CREATE_DATABASE"])
+        c.send({"type": "SAVE_PROCEDURE", "databaseName": "auth_db", "name": "carve_proc", "script": "return 1;"})
+        c.send({"type": "SAVE_TRIGGER", "databaseName": "auth_db", "collectionName": "carved",
+                "name": "admin_hook", "events": ["CREATED"], "procedureName": "carve_proc"})
+        c.send({"type": "CREATE_USER", "username": "carve_manager", "password": "carve_manager1234",
+                "admin": False, "globalPermissions": [], "databasePermissions": {},
+                "collectionPermissions": {"auth_db|carved": "READ", "auth_db|forbidden": "READ_WRITE"},
+                "scriptPermissions": {"auth_db": "MANAGE"}})
         create_user(c, "new_owner", "new_owner1234")
 
     # ── run each test group on a fresh connection ──────────────────────
@@ -825,6 +862,9 @@ def main():
 
     with Conn() as c:
         test_collection_carve_out(c)
+
+    with Conn() as c:
+        test_a_collection_carve_out_bounds_trigger_installation(c)
 
     with Conn() as c:
         test_admin_operations(c)
@@ -860,7 +900,7 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         teardown_fixtures(c)
-        for u in ("no_perms", "db_reader", "coll_reader", "carve_user", "db_maker", "new_owner",
+        for u in ("no_perms", "db_reader", "coll_reader", "carve_user", "carve_manager", "db_maker", "new_owner",
                   "pwd_user"):
             delete_user(c, u)
 

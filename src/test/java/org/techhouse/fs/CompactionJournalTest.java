@@ -47,8 +47,10 @@ public class CompactionJournalTest {
         fx.begin(Kind.DELETE, "b");
         fx.shiftAndCut("b");
 
-        assertEquals(List.of(), fx.recovery.recoverAll());
+        final var outcome = fx.recovery.recoverAll();
 
+        assertEquals(List.of(), outcome.refused());
+        assertEquals(List.of("b"), outcome.completedDeletes().stream().map(PkIndexEntry::getValue).toList());
         assertEquals(originalWithoutB(), fx.pageText(0));
         assertNull(fx.indexed("b"));
         assertEquals(List.of("a", "c", "d", "e"), fx.indexedRows().stream().map(PkIndexEntry::getValue).toList());
@@ -75,7 +77,10 @@ public class CompactionJournalTest {
         fx.store.deleteIndexValue(removed);
         final var rowsAfterTheDelete = fx.indexedRows().stream().map(PkIndexEntry::toFileEntry).toList();
 
-        fx.recovery.recoverAll();
+        final var outcome = fx.recovery.recoverAll();
+
+        assertEquals(List.of("b"), outcome.completedDeletes().stream().map(PkIndexEntry::getValue).toList(),
+                "the kill still landed before the pending mark, so the index cleanup is still owed");
 
         assertEquals(originalWithoutB(), fx.pageText(0));
         assertEquals(rowsAfterTheDelete, fx.indexedRows().stream().map(PkIndexEntry::toFileEntry).toList());
@@ -89,7 +94,7 @@ public class CompactionJournalTest {
         fx.shiftAndCut("b");
         fx.appendUpdatedCopy("b", 0);
 
-        fx.recovery.recoverAll();
+        assertEquals(List.of(), fx.recovery.recoverAll().completedDeletes());
 
         assertEquals(original, fx.pageText(0));
         assertEquals(before.toFileEntry(), fx.indexed("b").toFileEntry());
@@ -176,9 +181,10 @@ public class CompactionJournalTest {
         final var pkFile = fx.paths.pkIndexFile(DB, COLL);
         Files.writeString(pkFile.toPath(), "garbage\nmore garbage\n", StandardCharsets.UTF_8);
 
-        final var refused = fx.recovery.recoverAll();
+        final var outcome = fx.recovery.recoverAll();
 
-        assertEquals(1, refused.size());
+        assertEquals(1, outcome.refused().size());
+        assertEquals(List.of(), outcome.completedDeletes(), "a refused delete was not completed");
         assertEquals(shifted, fx.pageText(0));
         assertEquals("garbage\nmore garbage\n", Files.readString(pkFile.toPath(), StandardCharsets.UTF_8));
         assertEquals(1, fx.markers().length);
@@ -189,7 +195,7 @@ public class CompactionJournalTest {
         fx.begin(Kind.DELETE, "b");
         assertTrue(fx.page(0).delete());
 
-        assertEquals(List.of(), fx.recovery.recoverAll());
+        assertEquals(List.of(), fx.recovery.recoverAll().refused());
 
         assertEquals(0, fx.markers().length);
     }
@@ -235,7 +241,7 @@ public class CompactionJournalTest {
         fx.seed(0, "f");
         final var pageBeforeRestart = fx.pageText(0);
 
-        assertEquals(List.of(), fx.recovery.recoverAll());
+        assertEquals(List.of(), fx.recovery.recoverAll().refused());
 
         assertEquals(pageBeforeRestart, fx.pageText(0), "a completed compaction must not be replayed at startup");
         assertEquals(NEW_VERSION, fx.indexed("b").getVersion(), "the acknowledged update must survive");

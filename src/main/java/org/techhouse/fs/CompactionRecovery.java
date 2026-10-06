@@ -25,19 +25,26 @@ final class CompactionRecovery {
         this.journal = journal;
     }
 
-    List<String> recoverAll() throws IOException {
+    record Outcome(List<String> refused, List<PkIndexEntry> completedDeletes) {
+    }
+
+    Outcome recoverAll() throws IOException {
         final var refused = new ArrayList<String>();
+        final var completedDeletes = new ArrayList<PkIndexEntry>();
         for (final var file : journal.findMarkerFiles()) {
             final var marker = CompactionJournal.decode(Files.readAllBytes(file.toPath()));
             if (marker == null) {
                 discardTornMarker(file);
             } else if (recover(marker)) {
                 journal.end(marker);
+                if (marker.kind() == Kind.DELETE) {
+                    completedDeletes.add(marker.preOpEntry());
+                }
             } else {
                 refused.add(file.getPath());
             }
         }
-        return refused;
+        return new Outcome(refused, completedDeletes);
     }
 
     private static void discardTornMarker(File file) throws IOException {

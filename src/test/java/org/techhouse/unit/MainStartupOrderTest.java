@@ -69,6 +69,31 @@ public class MainStartupOrderTest {
     }
 
     @Test
+    public void test_dirty_indexes_are_reported_before_startup_marks_anything() throws IOException {
+        final var body = mainBody();
+        final var warning = positionOf(body, "StartupWarnings.warnIfIndexesLeftDirty();");
+
+        assertTrue(positionOf(body, "cache.loadAdminData();") < warning);
+        assertTrue(warning < positionOf(body, "PageOccupancyReconciler.reconcileAll();"),
+                "adopting an orphaned record marks it pending, and its event clears the marker of the unclean stop");
+        assertTrue(warning < positionOf(body, "cleanupOrphanedTransactions();"),
+                "a replayed commit marks and clears pending ids too");
+        assertTrue(warning < positionOf(body, "backgroundTaskManager.startBackgroundWorkers();"),
+                "a running worker drains the pending map and deletes the marker before it is reported");
+    }
+
+    @Test
+    public void test_recovered_deletes_are_cleaned_after_page_rows_are_reconciled() throws IOException {
+        final var body = mainBody();
+        final var cleanup = positionOf(body, "PageOccupancyReconciler.scheduleIndexCleanupFor(recoveredDeletes);");
+
+        assertTrue(positionOf(body, "fs.recoverInterruptedCompactions();") < cleanup);
+        assertTrue(positionOf(body, "PageOccupancyReconciler.reconcileAll();") < cleanup,
+                "the cleanup events carry no page delta because the rows were just rebuilt from the page files");
+        assertTrue(cleanup < positionOf(body, "backgroundTaskManager.startBackgroundWorkers();"));
+    }
+
+    @Test
     public void test_trigger_recovery_replays_the_startup_snapshot() throws IOException {
         assertTrue(mainBody().contains(RECOVER_LOCAL),
                 "recovery must replay only the runs pending before the executor started, not every pending run");

@@ -421,8 +421,9 @@ value the script builds itself (`new Geo(...)`, `Geo.from(...)`) takes the deriv
 `RangeError` either way, and a `'#geo(NaN,…)'` string is refused when it is promoted into a document.
 
 A **plain string in custom wire format is promoted on the way into a document**, so
-`'#geo(1,2)'` and `Geo.from('#geo(1,2)')` store exactly the same thing and a script-written
-value is indexed in the same family as the identical bytes arriving over the wire. The promotion
+`'#geo(1,2)'` stores the same custom value as the identical bytes arriving over the wire and is
+indexed in the same family. `Geo.from('#geo(1,2)')` is the same point in the same family, but as a
+value the script built it takes the derived spelling `#geo(1.0,2.0)`. The promotion
 keeps the raw text verbatim — `#geo(1,2)` is stored as `#geo(1,2)`, not normalised to
 `#geo(1.0,2.0)` — so it changes the value's *type* and never its bytes. An unregistered or
 malformed one (`#nosuch(1)`, `#geo(bad)`) fails the write with a `TypeError` naming the member,
@@ -442,7 +443,10 @@ the wrong index family, though, and one `REINDEX` of the collection moves it int
   interpreter's lifetime, so an accessor-valued property is read through its getter and the
   getter's work is charged to the run's budgets. The same holds for a before-hook replacement, a
   MAP `SCRIPT` value and a REDUCE accumulator, which convert under their session's own stack
-  capture. The converted result is measured against
+  capture. An array is read by its length the way `JSON.stringify` reads it — an index getter
+  through the getter, a hole or a sparse slot as `null` — and a `Proxy` through its `get` and
+  `ownKeys` traps; an array longer than 2^24 elements fails with a `TypeError`, since no document
+  could hold it. The converted result is measured against
   `scriptMaxResultBytes` (`400-15`); a trigger passes `-1`, since its result is discarded.
   A **non-finite number cannot cross into a run result or a document**: `Infinity`, `-Infinity`
   and `NaN` fail the conversion with a `TypeError`, because the engine's own reader cannot parse
@@ -521,7 +525,10 @@ runtime state lives in the per-run `Interpreter`/`Environment`/`Intrinsics`.
 
 `scriptPermissions` is a per-database `ScriptPermissionLevel` — `NONE`/`RUN`/`MANAGE`, where
 `MANAGE` additionally allows installing procedures, triggers and schedules; admins and database
-owners have an implicit `MANAGE`. A legacy boolean reads as `RUN`/`NONE`.
+owners have an implicit `MANAGE`. A legacy boolean reads as `RUN`/`NONE`. For a trigger,
+`MANAGE` is bounded by the collection: a `collectionPermissions` entry that does not grant
+`READ_WRITE` on that collection refuses `SAVE_TRIGGER`, `DELETE_TRIGGER` and `TEST_TRIGGER` there,
+because a before hook rewrites or vetoes every write to it.
 
 **Errors** map to: `403-2` scripting disabled, `404-4` unknown database, `400-10` source too
 large, `400-9` threw or would not parse, `400-11` budget/depth, `400-12` memory, `400-15` result

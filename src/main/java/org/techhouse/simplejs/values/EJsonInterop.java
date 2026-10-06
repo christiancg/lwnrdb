@@ -21,7 +21,9 @@ import org.techhouse.ejson.exceptions.BadImplementationCustomTypeException;
 import org.techhouse.ejson.exceptions.NonRegisteredCustomTypeException;
 import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.builtins.JsonBuiltins;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.JsCoercion;
 
 public final class EJsonInterop {
     private static final long BYTES_PER_ELEMENT = 32L;
@@ -80,7 +82,7 @@ public final class EJsonInterop {
             case JsTypedArray typed -> typedArrayToEjson(typed, mode, path);
             case JsArrayBuffer ignored -> new JsonObject();
             case JsDataView ignored -> new JsonObject();
-            case JsProxy proxy -> convert(proxy.getTarget(), mode, path);
+            case JsProxy proxy -> proxyToEjson(proxy, mode, path);
             default -> null;
         };
     }
@@ -158,15 +160,75 @@ public final class EJsonInterop {
     }
 
     private static JsonBaseElement arrayToEjson(JsArray array, Conversion mode, String path) {
+        refuseUnstorableLength(array.length(), mode, path);
         guardCycle(array, mode.visited());
         final var result = new JsonArray();
-        final var elements = array.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            final var converted = convert(elements.get(i), mode, indexPath(path, i));
+        final var length = (int) array.length();
+        for (var i = 0; i < length; i++) {
+            final var converted = convert(elementOf(array, i, mode.ops()), mode, indexPath(path, i));
             result.add(converted == null ? JsonNull.INSTANCE : converted);
         }
         mode.visited().remove(array);
         return result;
+    }
+
+    private static JsValue elementOf(JsArray array, int index, InterpreterOps ops) {
+        if (ops != null && array.hasIndexAccessor(index)) {
+            return ops.getMember(array, new JsString(Integer.toString(index)));
+        }
+        return array.get(index);
+    }
+
+    private static void refuseUnstorableLength(long length, Conversion mode, String path) {
+        if (mode.hostMode() && length > JsArray.MAX_DENSE_LENGTH) {
+            throw new TypeErrorException("Cannot store an array of length " + length + at(path) + ": it exceeds "
+                    + JsArray.MAX_DENSE_LENGTH + " elements");
+        }
+    }
+
+    private static JsonBaseElement proxyToEjson(JsProxy proxy, Conversion mode, String path) {
+        final var ops = mode.ops();
+        if (ops == null || isCallable(proxy.getTarget())) {
+            return convert(proxy.getTarget(), mode, path);
+        }
+        return JsonBuiltins.isArray(proxy)
+                ? proxyArrayToEjson(proxy, mode, path, ops)
+                : proxyObjectToEjson(proxy, mode, path, ops);
+    }
+
+    private static JsonBaseElement proxyArrayToEjson(JsProxy proxy, Conversion mode, String path, InterpreterOps ops) {
+        final var length = (long) JsCoercion.toNumber(ops.getMember(proxy, new JsString("length")), ops);
+        refuseUnstorableLength(length, mode, path);
+        guardCycle(proxy, mode.visited());
+        final var result = new JsonArray();
+        for (var i = 0; i < (int) length; i++) {
+            final var element = ops.getMember(proxy, new JsString(Integer.toString(i)));
+            final var converted = convert(element, mode, indexPath(path, i));
+            result.add(converted == null ? JsonNull.INSTANCE : converted);
+        }
+        mode.visited().remove(proxy);
+        return result;
+    }
+
+    private static JsonBaseElement proxyObjectToEjson(JsProxy proxy, Conversion mode, String path, InterpreterOps ops) {
+        guardCycle(proxy, mode.visited());
+        final var result = new JsonObject();
+        for (final var key : ops.ownKeys(proxy)) {
+            if (!(key instanceof JsString name)) {
+                continue;
+            }
+            refuseUnreadableKey(name.getValue(), mode, memberPath(path, name.getValue()));
+            final var converted = convert(ops.getMember(proxy, name), mode, memberPath(path, name.getValue()));
+            if (converted != null) {
+                result.add(name.getValue(), converted);
+            }
+        }
+        mode.visited().remove(proxy);
+        return result;
+    }
+
+    private static boolean isCallable(JsValue value) {
+        return value instanceof JsFunction || value instanceof JsNativeFunction || value instanceof JsClass;
     }
 
     private static JsonBaseElement objectToEjson(JsObject object, Conversion mode, String path) {

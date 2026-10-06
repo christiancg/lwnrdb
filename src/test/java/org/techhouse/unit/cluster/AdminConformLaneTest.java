@@ -30,7 +30,9 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
@@ -50,12 +52,14 @@ public class AdminConformLaneTest {
     private final AdminLane adminLane = IocContainer.get(AdminLane.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final Configuration config = Configuration.getInstance();
     private PeerConnectionPool realPool;
     private PeerConnectionPool realDocPool;
     private PeerConnectionPool mockPool;
     private boolean origEnabled;
     private long origLaneTimeout;
+    private long origAckTimeout;
     private Thread laneHolder;
     private CountDownLatch releaseLane;
 
@@ -68,8 +72,10 @@ public class AdminConformLaneTest {
         TestUtils.standardInitialSetup();
         origEnabled = config.isClusterEnabled();
         origLaneTimeout = config.getAdminLaneTimeoutMs();
+        origAckTimeout = config.getReplicationAckTimeoutMs();
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "adminLaneTimeoutMs", SHORT_MS);
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", SHORT_MS);
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
         TestUtils.setPrivateField(adminEpoch, "confirmed", true);
         realPool = TestUtils.getPrivateField(service, "pool", PeerConnectionPool.class);
@@ -104,6 +110,7 @@ public class AdminConformLaneTest {
         TestUtils.setPrivateField(membershipService, "self", null);
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "adminLaneTimeoutMs", origLaneTimeout);
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origAckTimeout);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
@@ -133,6 +140,23 @@ public class AdminConformLaneTest {
             }
             return null;
         }, () -> null), "admin-lane-holder");
+        laneHolder.start();
+        assertTrue(entered.await(5, TimeUnit.SECONDS));
+    }
+
+    private void holdTheSnapshotProceduresElsewhere() throws Exception {
+        final var entered = new CountDownLatch(1);
+        releaseLane = new CountDownLatch(1);
+        laneHolder = new Thread(() -> {
+            try {
+                assertTrue(locks.tryLockWrite(SNAPSHOT_DB, Globals.PROCEDURES_FOLDER, 5_000L));
+                entered.countDown();
+                releaseLane.await();
+                locks.releaseWrite(SNAPSHOT_DB, Globals.PROCEDURES_FOLDER);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }, "procedures-holder");
         laneHolder.start();
         assertTrue(entered.await(5, TimeUnit.SECONDS));
     }
@@ -205,5 +229,32 @@ public class AdminConformLaneTest {
 
         assertNotNull(cache.getAdminUserEntry(LATE_USER),
                 "a user acknowledged after the peer built its snapshot must not be deleted by conforming to it");
+    }
+
+    @Test
+    public void anIncompleteConformDoesNotMarkTheNodeSynced() throws Exception {
+        answerSnapshot(_ -> snapshotAck());
+        holdTheSnapshotProceduresElsewhere();
+
+        service.reconcile();
+
+        assertNotEquals(SNAPSHOT_EPOCH, adminEpoch.current(), "an incomplete round must not adopt the epoch");
+        assertFalse(service.hasCompletedAdminSync(),
+                "a coordinator still behind its peers must keep refusing admin ops with ADMIN_SYNCING");
+    }
+
+    @Test
+    public void aLaterCompleteRoundMarksTheNodeSynced() throws Exception {
+        answerSnapshot(_ -> snapshotAck());
+        holdTheSnapshotProceduresElsewhere();
+        service.reconcile();
+        releaseLane.countDown();
+        laneHolder.join(5000);
+        releaseLane = null;
+
+        service.reconcile();
+
+        assertEquals(SNAPSHOT_EPOCH, adminEpoch.current());
+        assertTrue(service.hasCompletedAdminSync());
     }
 }

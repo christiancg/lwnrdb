@@ -26,6 +26,8 @@ public final class AuthorizationChecker {
     private static final Set<OperationType> SCRIPT_MANAGEMENT_OPERATIONS = Set.of(OperationType.SAVE_PROCEDURE,
             OperationType.DELETE_PROCEDURE, OperationType.SAVE_TRIGGER, OperationType.DELETE_TRIGGER,
             OperationType.SAVE_SCHEDULE, OperationType.DELETE_SCHEDULE, OperationType.TEST_TRIGGER);
+    private static final Set<OperationType> TRIGGER_OPERATIONS = Set.of(OperationType.SAVE_TRIGGER,
+            OperationType.DELETE_TRIGGER, OperationType.TEST_TRIGGER);
 
     private AuthorizationChecker() {
     }
@@ -89,13 +91,11 @@ public final class AuthorizationChecker {
                     : AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
-        // Installing is its own level: a procedure runs with the caller's authority and a trigger with the
-        // installer's, so it must not follow from READ_WRITE. Not in ADMIN_ONLY_OPERATIONS, which is tested
-        // before the ownership short-circuit above and would lock out database owners.
         if (isScriptManagementOperation(type)) {
-            return user.canManageScripts(dbName)
-                    ? AuthorizationResult.allow()
-                    : AuthorizationResult.deny("action is forbidden, no permissions");
+            return user.canManageScripts(dbName) && !(TRIGGER_OPERATIONS.contains(type)
+                    && carvesOutOfCollection(user, dbName, req.getCollectionName()))
+                            ? AuthorizationResult.allow()
+                            : AuthorizationResult.deny("action is forbidden, no permissions");
         }
 
         final var requiredLevel = getRequiredPermissionLevel(type);
@@ -127,6 +127,14 @@ public final class AuthorizationChecker {
         }
 
         return AuthorizationResult.allow();
+    }
+
+    private static boolean carvesOutOfCollection(AdminUserEntry user, String dbName, String collName) {
+        if (collName == null || collName.isBlank()) {
+            return false;
+        }
+        final var collPerm = user.getCollectionPermissions().get(dbName + "|" + collName);
+        return collPerm != null && !collPerm.covers(PermissionLevel.READ_WRITE);
     }
 
     private static boolean lacksCollectionAccess(AdminUserEntry user, String dbName, String collName,

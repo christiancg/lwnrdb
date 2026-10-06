@@ -673,6 +673,30 @@ def test_host_writes(conn: Conn):
                  conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": COLL, "_id": "visible"}), "OK")
 
 
+def test_a_script_array_is_stored_as_the_script_sees_it(conn: Conn):
+    section("Host interface — a stored array matches what the script sees")
+    check_result("an index getter, a getter-only slot and a proxy are stored by their values",
+                 conn.run('import db from "db";\n'
+                          "const a = [1, 2, 3];\n"
+                          "Object.defineProperty(a, 1, { get() { return 42; }, enumerable: true });\n"
+                          "const c = [];\n"
+                          "Object.defineProperty(c, 0, { get() { return 7; }, enumerable: true });\n"
+                          "const p = new Proxy({ v: 1 }, { get(t, k) { return k === 'v' ? 99 : t[k]; } });\n"
+                          f'db.save(db.name, "{COLL}", {{ _id: "arr1", a, c, p }});\n'
+                          f'const back = db.findById(db.name, "{COLL}", "arr1");\n'
+                          "return { a: back.a, c: back.c, p: back.p };"),
+                 {"a": [1, 42, 3], "c": [7], "p": {"v": 99}})
+    check_result("an array past the dense limit is refused with a catchable TypeError and nothing is stored",
+                 conn.run('import db from "db";\n'
+                          "const b = [];\n"
+                          "b[20000000] = 1;\n"
+                          "let refused = null;\n"
+                          f'try {{ db.save(db.name, "{COLL}", {{ _id: "arr2", b }}); }} '
+                          "catch (e) { refused = e.name; }\n"
+                          f'return {{ refused, stored: db.findById(db.name, "{COLL}", "arr2") !== null }};'),
+                 {"refused": "TypeError", "stored": False})
+
+
 def test_host_round_trip_keeps_custom_spelling(conn: Conn):
     section("Host interface — a re-saved document keeps its custom spellings")
     spellings = {"loc": "#geo(45,-122)", "at": "#datetime(2024-01-01T10:00:00)",
@@ -1685,6 +1709,7 @@ def main():
             test_request_validation(conn)
             test_host_reads(conn)
             test_host_writes(conn)
+            test_a_script_array_is_stored_as_the_script_sees_it(conn)
             test_host_round_trip_keeps_custom_spelling(conn)
             test_temporal_bridge_keeps_fractions(conn)
             test_transactions(conn)

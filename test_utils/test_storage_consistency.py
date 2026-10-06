@@ -684,6 +684,9 @@ def seed_collections_whose_compactions_a_kill_will_interrupt(conn: Conn):
                      conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
         for i in range(KILLED_DOCS):
             check_status(f"save killed{i} into {coll}", conn.save(killed_doc(i), coll=coll), "OK")
+    check_status(f"index v in {KILLED_DELETE_COLL}",
+                 conn.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": KILLED_DELETE_COLL,
+                            "fieldName": "v"}), "OK")
 
 
 def interrupt_a_compaction(work_dir: str, coll: str, kind: str):
@@ -750,6 +753,28 @@ def test_a_delete_killed_mid_compaction_is_completed_at_startup(conn: Conn, work
     section("A delete a kill interrupted mid-compaction is completed at startup")
     check_every_document_is_acknowledged(conn, work_dir, KILLED_DELETE_COLL,
                                          [f"killed{i}" for i in range(KILLED_DOCS) if f"killed{i}" != KILLED_ID])
+
+
+def killed_value_count(conn: Conn, prefix: list) -> int:
+    response = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": KILLED_DELETE_COLL,
+                          "aggregationSteps": prefix + [
+                              {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "v",
+                                                              "value": killed_doc(1)["v"]}},
+                              {"type": "COUNT"}]})
+    return ((response.get("results") or [{}])[0]).get("count", 0)
+
+
+def test_a_delete_killed_mid_compaction_leaves_no_index_entry(conn: Conn):
+    section("A delete a kill interrupted mid-compaction leaves no field-index entry behind")
+    scanned = killed_value_count(conn, [{"type": "SKIP", "skip": 0}])
+    deadline = time.time() + 15
+    indexed = killed_value_count(conn, [])
+    while indexed != 0 and time.time() < deadline:
+        time.sleep(0.2)
+        indexed = killed_value_count(conn, [])
+    check("the scan no longer finds the deleted document", scanned == 0, f"scan={scanned}")
+    check("the index-only COUNT agrees with the scan once startup removed the deleted id",
+          indexed == scanned, f"indexed={indexed} scan={scanned}")
 
 
 def test_a_relocation_killed_between_delete_and_insert_keeps_the_document(conn: Conn, work_dir: str):
@@ -2051,6 +2076,7 @@ def main():
             test_an_unindexed_record_is_adopted_at_startup(conn)
             test_an_update_killed_mid_compaction_is_undone_at_startup(conn, work_dir)
             test_a_delete_killed_mid_compaction_is_completed_at_startup(conn, work_dir)
+            test_a_delete_killed_mid_compaction_leaves_no_index_entry(conn)
             test_a_relocation_killed_between_delete_and_insert_keeps_the_document(conn, work_dir)
             test_a_drop_interrupted_after_its_folder_was_deleted_can_be_retried(conn)
             test_a_recreated_collection_does_not_inherit_leftover_page_rows(conn, work_dir)

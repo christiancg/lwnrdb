@@ -147,6 +147,14 @@ public class ClusterAdminHelperTest {
         assertNull(ClusterAdminHelper.guard(adminOp()));
     }
 
+    @Test
+    public void test_a_coordinator_whose_conform_was_incomplete_answers_admin_syncing() throws Exception {
+        enable(1);
+        armAdminSync(false);
+
+        assertEquals("503-5", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode());
+    }
+
     private void becomeNonCoordinator(int expectedSize) throws Exception {
         enable(expectedSize);
         armAdminSync(true);

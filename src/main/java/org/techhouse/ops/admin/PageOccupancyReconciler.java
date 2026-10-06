@@ -2,6 +2,7 @@ package org.techhouse.ops.admin;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
@@ -11,7 +12,9 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminPageEntry;
+import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -34,6 +37,31 @@ public final class PageOccupancyReconciler {
                 reconcileQuietly(dbEntry.get_id(), collName);
             }
         }
+    }
+
+    public static void scheduleIndexCleanupFor(List<PkIndexEntry> completedDeletes) {
+        final var byCollection = new LinkedHashMap<String, List<DbEntry>>();
+        for (final var deleted : completedDeletes) {
+            final var dbName = deleted.getDatabaseName();
+            final var collName = deleted.getCollectionName();
+            if (isAdminDatabase(dbName) || cache.getAdminCollectionEntry(dbName, collName) == null) {
+                continue;
+            }
+            final var data = new JsonObject();
+            data.addProperty(Globals.PK_FIELD, deleted.getValue());
+            final var entry = DbEntry.fromJsonObject(dbName, collName, data);
+            entry.setPage(deleted.getPage());
+            byCollection.computeIfAbsent(Cache.getCollectionIdentifier(dbName, collName), _ -> new ArrayList<>())
+                    .add(entry);
+        }
+        for (final var entries : byCollection.values()) {
+            final var first = entries.getFirst();
+            scheduleIndexMaintenanceFor(first.getDatabaseName(), first.getCollectionName(), entries);
+        }
+    }
+
+    private static boolean isAdminDatabase(String dbName) {
+        return Globals.ADMIN_DB_NAME.equals(dbName) || Globals.ADMIN_PAGES_DB_NAME.equals(dbName);
     }
 
     private static void healAdminPageTails() {

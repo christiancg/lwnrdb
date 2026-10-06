@@ -329,8 +329,8 @@ public class FileSystem {
         pageCompactor.endRelocation(source);
     }
 
-    public List<String> recoverInterruptedCompactions() throws IOException {
-        return compactionRecovery.recoverAll();
+    public List<PkIndexEntry> recoverInterruptedCompactions() throws IOException {
+        return compactionRecovery.recoverAll().completedDeletes();
     }
 
     public List<String> listCompactionMarkers() {

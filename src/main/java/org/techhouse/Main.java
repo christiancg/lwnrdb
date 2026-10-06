@@ -85,11 +85,13 @@ public class Main {
         LogWriter.createLogPathAndRemoveOldFiles();
         fs.createBaseDbPath();
         fs.createAdminDatabase();
-        fs.recoverInterruptedCompactions();
+        final var recoveredDeletes = fs.recoverInterruptedCompactions();
         StartupWarnings.warnIfCompactionsLeftUnrecovered();
         cache.loadAdminData();
         seedHybridClock();
+        StartupWarnings.warnIfIndexesLeftDirty();
         PageOccupancyReconciler.reconcileAll();
+        PageOccupancyReconciler.scheduleIndexCleanupFor(recoveredDeletes);
         cleanupOrphanedTransactions();
         bootstrapDefaultAdmin();
         final var port = getPort(args);
@@ -108,7 +110,6 @@ public class Main {
         StartupWarnings.warnIfCachesExceedHeap();
         StartupWarnings.warnIfDefaultAdminPassword();
         StartupWarnings.warnIfScriptFetchEnabled();
-        StartupWarnings.warnIfIndexesLeftDirty();
         StartupWarnings.warnIfNamesShareAnOnDiskKey();
         StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
         startClusterIfEnabled();

@@ -36,6 +36,21 @@ public class PendingIndexWrites {
         }
     }
 
+    @FunctionalInterface
+    public interface PendingWrite<T> {
+        T write() throws Exception;
+    }
+
+    public <T> T writeWhilePending(String dbName, String collName, Iterable<String> ids, long generation,
+            PendingWrite<T> write) throws Exception {
+        try {
+            return write.write();
+        } catch (Exception e) {
+            clear(dbName, collName, ids, generation);
+            throw e;
+        }
+    }
+
     public long mark(String dbName, String collName, Iterable<String> ids) {
         var generation = currentGeneration(dbName, collName);
         for (var id : ids) {

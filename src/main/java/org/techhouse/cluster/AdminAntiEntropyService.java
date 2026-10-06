@@ -127,6 +127,7 @@ public class AdminAntiEntropyService implements MembershipListener {
 
     private boolean conformInAdminLane(AdminSnapshotPayload best, long localEpoch, boolean localConfirmed)
             throws Exception {
+        final boolean complete;
         if (adminLane.tryEnter(clusterConfig.adminLaneTimeoutMs())) {
             try {
                 if (adminEpoch.current() != localEpoch || adminEpoch.isConfirmed() != localConfirmed) {
@@ -134,7 +135,8 @@ public class AdminAntiEntropyService implements MembershipListener {
                             + " snapshots were being fetched. The next round reconciles from the newer local state.");
                     return false;
                 }
-                if (conformer.conform(best, localEpoch)) {
+                complete = conformer.conform(best, localEpoch);
+                if (complete) {
                     adminEpoch.adopt(best.getEpoch(), best.isEpochConfirmed());
                 }
             } finally {
@@ -146,7 +148,7 @@ public class AdminAntiEntropyService implements MembershipListener {
             return false;
         }
         antiEntropyService.reconcileNow();
-        return true;
+        return complete;
     }
 
     private boolean wouldEmptyThisNode(AdminSnapshotPayload snapshot) {

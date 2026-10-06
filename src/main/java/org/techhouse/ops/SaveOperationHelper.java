@@ -89,6 +89,7 @@ public final class SaveOperationHelper {
         }
         var eventType = EventType.CREATED;
         PkIndexEntry savedPkIndexEntry;
+        final long pendingGeneration;
         if (foundIndexEntry >= 0) {
             final var idxEntry = primaryKeyIndex.get(foundIndexEntry);
             if (wouldOverflowPage(dbName, collName, idxEntry, entry)) {
@@ -102,7 +103,9 @@ public final class SaveOperationHelper {
             }
             entry.setPage(idxEntry.getPage());
             final var previousLength = idxEntry.getLength();
-            final var updateResult = fs.updateFromCollection(entry, idxEntry);
+            pendingGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
+            final var updateResult = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
+                    pendingGeneration, () -> fs.updateFromCollection(entry, idxEntry));
             savedPkIndexEntry = updateResult.indexEntry();
             cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
             primaryKeyIndex.remove(idxEntry);
@@ -111,7 +114,9 @@ public final class SaveOperationHelper {
             eventType = EventType.UPDATED;
         } else {
             entry.setPage(cache.selectPageForInsert(dbName, collName, entry.byteSize()));
-            savedPkIndexEntry = fs.insertIntoCollection(entry);
+            pendingGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
+            savedPkIndexEntry = pendingIndexWrites.writeWhilePending(dbName, collName, List.of(entry.get_id()),
+                    pendingGeneration, () -> fs.insertIntoCollection(entry));
             cache.updatePageSizeInMemory(dbName, collName, savedPkIndexEntry.getPage(), savedPkIndexEntry.getLength());
         }
         int insertAt = Collections.binarySearch(primaryKeyIndex, savedPkIndexEntry.getValue());
@@ -120,8 +125,6 @@ public final class SaveOperationHelper {
         }
         primaryKeyIndex.add(insertAt, savedPkIndexEntry);
         cache.addEntryToCache(dbName, collName, entry);
-        // Mark pending before releasing the write lock, so index-backed reads reconcile it until indexed.
-        final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entry.get_id());
         taskManager.submitBackgroundTask(new EntityEvent(eventType, dbName, collName, entry,
                 CollectionIncarnation.current(dbName, collName), pendingGeneration));
         listenManager.markDirty(dbName, collName);
@@ -166,6 +169,7 @@ public final class SaveOperationHelper {
             }
         }
         final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
+        final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, idsOf(entries));
         final var indexedDbEntriesToUpdate = new ArrayList<IndexedDbEntry>();
         for (var i : entries) {
             final var data = i.getData();
@@ -196,10 +200,12 @@ public final class SaveOperationHelper {
                 partial.compactions().forEach(cache::shiftPkPositionsAfterCompaction);
                 applyUpdateSizeDeltas(dbName, collName, partial.updated());
                 final var committedUpdates = toDbEntries(partial.updated());
-                publishCommittedWrites(dbName, collName, committedUpdates, List.of());
+                publishCommittedWrites(dbName, collName, committedUpdates, List.of(), pendingGeneration);
+                clearUncommitted(dbName, collName, entries, committedUpdates, pendingGeneration);
                 cache.userCache().evictPkIndex(dbName, collName);
                 throw withCommittedPart(e, List.of(), committedUpdates);
             } catch (Exception e) {
+                clearUncommitted(dbName, collName, entries, List.of(), pendingGeneration);
                 cache.userCache().evictPkIndex(dbName, collName);
                 throw e;
             }
@@ -232,14 +238,17 @@ public final class SaveOperationHelper {
         } catch (Exception e) {
             final var committedUpdates = toDbEntries(updatedIndexEntries);
             final var committedInserts = toDbEntries(insertedIndexEntries);
-            publishCommittedWrites(dbName, collName, committedUpdates, committedInserts);
+            publishCommittedWrites(dbName, collName, committedUpdates, committedInserts, pendingGeneration);
+            final var committed = new ArrayList<>(committedUpdates);
+            committed.addAll(committedInserts);
+            clearUncommitted(dbName, collName, entries, committed, pendingGeneration);
             throw withCommittedPart(e, committedInserts, committedUpdates);
         } finally {
             primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
         }
         final var updatedDbEntries = toDbEntries(updatedIndexEntries);
         final var insertedDbEntries = toDbEntries(insertedIndexEntries);
-        publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries);
+        publishCommittedWrites(dbName, collName, updatedDbEntries, insertedDbEntries, pendingGeneration);
         CollectionAccessHelper.recordCollectionAccess(dbName, collName);
         return new BulkSaveResponse("Successfully saved entries", idsOf(insertedDbEntries), idsOf(updatedDbEntries));
     }
@@ -253,14 +262,19 @@ public final class SaveOperationHelper {
     }
 
     private static void publishCommittedWrites(String dbName, String collName, List<DbEntry> updated,
-            List<DbEntry> inserted) {
+            List<DbEntry> inserted, long pendingGeneration) {
         cache.addEntriesToCache(dbName, collName, updated);
         cache.addEntriesToCache(dbName, collName, inserted);
-        pendingIndexWrites.mark(dbName, collName, idsOf(updated));
-        final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, idsOf(inserted));
         taskManager.submitBackgroundTask(new BulkEntityEvent(dbName, collName, inserted, updated,
                 CollectionIncarnation.current(dbName, collName), pendingGeneration));
         listenManager.markDirty(dbName, collName);
+    }
+
+    private static void clearUncommitted(String dbName, String collName, List<DbEntry> entries, List<DbEntry> committed,
+            long pendingGeneration) {
+        final var committedIds = new HashSet<>(idsOf(committed));
+        final var uncommitted = idsOf(entries).stream().filter(id -> !committedIds.contains(id)).toList();
+        pendingIndexWrites.clear(dbName, collName, uncommitted, pendingGeneration);
     }
 
     private static Exception withCommittedPart(Exception failure, List<DbEntry> inserted, List<DbEntry> updated) {

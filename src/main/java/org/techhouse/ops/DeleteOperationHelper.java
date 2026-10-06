@@ -1,6 +1,7 @@
 package org.techhouse.ops;
 
 import java.util.Comparator;
+import java.util.List;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.events.EntityEvent;
@@ -36,14 +37,13 @@ public final class DeleteOperationHelper {
             final var idxEntry = foundIndexEntry.get();
             final var entryToBeDeleted = cache.getById(dbName, collName, idxEntry);
             entryToBeDeleted.setPage(idxEntry.getPage());
-            final var compaction = fs.deleteFromCollection(idxEntry);
+            final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
+            final var compaction = pendingIndexWrites.writeWhilePending(dbName, collName,
+                    List.of(entryToBeDeleted.get_id()), pendingGeneration, () -> fs.deleteFromCollection(idxEntry));
             cache.shiftPkPositionsAfterCompaction(compaction);
             primaryKeyIndex.remove(idxEntry);
             primaryKeyIndex.sort(Comparator.comparing(PkIndexEntry::getValue));
             cache.evictEntry(dbName, collName, entryToBeDeleted.get_id());
-            // Pending until the async DELETED event clears it: the field index still maps the value to
-            // this id, so index-only reads (COUNT, DISTINCT) would otherwise surface the deleted doc.
-            final var pendingGeneration = pendingIndexWrites.mark(dbName, collName, entryToBeDeleted.get_id());
             taskManager.submitBackgroundTask(new EntityEvent(EventType.DELETED, dbName, collName, entryToBeDeleted,
                     CollectionIncarnation.current(dbName, collName), pendingGeneration));
             listenManager.markDirty(dbName, collName);

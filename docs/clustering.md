@@ -695,7 +695,10 @@ lane, `reconcile` re-checks that the local epoch and its confirmed flag are the 
 the round with, and skips the round otherwise: a snapshot built before a local admin op committed
 does not hold that op, and conforming to it deleted an acknowledged `CREATE_USER` (or reverted a
 procedure, schedule or owner change) on the coordinator, which then outranked every replica that
-held it. A round skipped on a busy lane or a moved epoch does not mark the node synced.
+held it. A round skipped on a busy lane or a moved epoch does not mark the node synced, and
+neither does a round whose conform was incomplete (an unreadable peer definition, a lock or
+barrier that stayed held): its epoch was not adopted, so admin ops committed on it would carry
+epochs below its peers' and could be erased by the next round.
 
 A definition the snapshot's node could not read (a torn schema, triggers file, procedure or
 schedule) is listed under `unreadable` as `<kind>|<db>|<name>` instead of being left out. Left
@@ -746,7 +749,9 @@ never moves the epoch number on equality.
 
 To close the window where a stale node becomes the admin coordinator before it has caught
 up, a coordinator rejects coordinated admin ops with a retryable `503-5 ADMIN_SYNCING`
-until it has completed one admin reconciliation since starting.
+until it has completed one admin reconciliation since starting. A peer definition that stays
+unreadable keeps a coordinator conforming to that peer refusing admin ops until the file is
+repaired; the conform's warning names the key.
 
 ## Listenable queries in a cluster
 
