@@ -25,7 +25,7 @@ public final class ScheduleDispatcher {
     public static void dispatch(ScheduleRegistry.Entry entry) {
         final var definition = entry.getDefinition();
         final var dbName = entry.getDbName();
-        if (!definition.isEnabled()) {
+        if (registry.get(dbName, entry.getName()) != entry || !definition.isEnabled()) {
             scheduleExecutor.countSkip();
             return;
         }

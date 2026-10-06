@@ -4,9 +4,12 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,6 +25,7 @@ import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TriggerDispatcher;
@@ -35,16 +39,19 @@ import org.techhouse.test.TestUtils;
 public class TriggerRunRecoveryStagedTest {
     private static final Configuration configuration = Configuration.getInstance();
     private static final long ABSENT = AdminTriggerRunEntry.ABSENT_VERSION;
+    private static final long ONE_ID_PER_CHUNK_MAX_ENTRY_SIZE = 2049L;
 
     private final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final CopyOnWriteArrayList<TriggerEvent> requeued = new CopyOnWriteArrayList<>();
+    private static long defaultMaxEntrySize;
 
     @BeforeAll
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
         TestUtils.createTestDatabaseAndCollection();
+        defaultMaxEntrySize = configuration.getMaxEntrySize();
     }
 
     @AfterAll
@@ -59,6 +66,7 @@ public class TriggerRunRecoveryStagedTest {
     void reset() throws Exception {
         TestUtils.setPrivateField(configuration, "triggersEnabled", true);
         TestUtils.setPrivateField(configuration, "triggerRunLogEnabled", true);
+        TestUtils.setPrivateField(configuration, "maxEntrySize", defaultMaxEntrySize);
         requeued.clear();
         triggerExecutor.stop();
         triggerExecutor.start(requeued::add);
@@ -183,5 +191,72 @@ public class TriggerRunRecoveryStagedTest {
         assertEquals(1, requeued.size());
         assertEquals(List.of("landed"), idsOf(requeued.getFirst()));
         assertEquals(List.of("landed"), TriggerRunLog.pending().getFirst().getIds());
+    }
+
+    private String stageOneChunkPerId(List<String> ids) throws Exception {
+        final var versions = new HashMap<String, Long>();
+        for (final var id : ids) {
+            versions.put(id, versionOf(id));
+        }
+        TestUtils.setPrivateField(configuration, "maxEntrySize", ONE_ID_PER_CHUNK_MAX_ENTRY_SIZE);
+        stage(EventType.UPDATED, true, ids.stream().map(TriggerRunRecoveryStagedTest::entry).toList(), versions);
+        TestUtils.setPrivateField(configuration, "maxEntrySize", defaultMaxEntrySize);
+        final var runId = TriggerRunLog.pending().getFirst().getRunId();
+        assertEquals(ids.size(), TriggerRunLog.recordIdsFor(runId).size());
+        return runId;
+    }
+
+    private static void confirmOnlyTheChunkHolding(String runId, String id) throws Exception {
+        for (final var chunk : AdminOperationHelper.readTriggerRuns(TriggerRunLog.recordIdsFor(runId))) {
+            if (chunk.getIds().contains(id)) {
+                chunk.narrowTo(Set.of(id));
+                AdminOperationHelper.saveTriggerRun(chunk);
+            }
+        }
+    }
+
+    private Set<String> requeuedIds() {
+        return requeued.stream().flatMap(event -> idsOf(event).stream()).collect(Collectors.toSet());
+    }
+
+    @Test
+    public void test_a_run_whose_first_chunk_was_confirmed_still_narrows_the_rest() throws Exception {
+        save("first-landed", "before");
+        save("second-lost", "before");
+        final var runId = stageOneChunkPerId(List.of("first-landed", "second-lost"));
+        save("first-landed", "after");
+        confirmOnlyTheChunkHolding(runId, "first-landed");
+
+        recover();
+
+        assertEquals(Set.of("first-landed"), requeuedIds(), "a write that never landed must not fire its trigger");
+    }
+
+    @Test
+    public void test_a_run_whose_later_chunk_was_confirmed_keeps_its_ids() throws Exception {
+        save("early-landed", "before");
+        save("late-landed", "before");
+        final var runId = stageOneChunkPerId(List.of("early-landed", "late-landed"));
+        save("early-landed", "after");
+        save("late-landed", "after");
+        confirmOnlyTheChunkHolding(runId, "late-landed");
+
+        recover();
+
+        assertEquals(Set.of("early-landed", "late-landed"), requeuedIds());
+    }
+
+    @Test
+    public void test_a_run_with_no_landed_staged_ids_keeps_its_confirmed_chunks() throws Exception {
+        save("never-landed", "before");
+        save("confirmed-landed", "before");
+        final var runId = stageOneChunkPerId(List.of("never-landed", "confirmed-landed"));
+        save("confirmed-landed", "after");
+        confirmOnlyTheChunkHolding(runId, "confirmed-landed");
+
+        recover();
+
+        assertEquals(Set.of("confirmed-landed"), requeuedIds());
+        assertEquals(1, TriggerRunLog.recordIdsFor(runId).size(), "the unlanded staged chunk is deleted");
     }
 }

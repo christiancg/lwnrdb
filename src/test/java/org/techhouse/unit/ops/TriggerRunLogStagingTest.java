@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -23,6 +24,7 @@ import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.test.TestGlobals;
@@ -164,6 +166,25 @@ public class TriggerRunLogStagingTest {
         assertEquals(List.of(entries.getFirst().get_id()), confirmed.getIds());
         assertEquals(TriggerRunStatus.PENDING, confirmed.getStatus());
         assertTrue(confirmed.getPriorVersions().isEmpty());
+    }
+
+    @Test
+    public void test_confirm_staged_leaves_already_confirmed_chunks_untouched() throws Exception {
+        final var entries = entriesSpanningSeveralChunks();
+        final var runId = TriggerRunLog.recordStaged(descriptor(EventType.UPDATED, entries), versionsOf(entries, 9L));
+        final var chunks = AdminOperationHelper.readTriggerRuns(TriggerRunLog.recordIdsFor(runId));
+        final var confirmedChunk = chunks.getFirst();
+        final var confirmedId = confirmedChunk.getIds().getFirst();
+        confirmedChunk.narrowTo(Set.of(confirmedId));
+        AdminOperationHelper.saveTriggerRun(confirmedChunk);
+        final var landedId = chunks.get(1).getIds().getFirst();
+
+        final var remaining = TriggerRunLog.confirmStaged(runId, Set.of(landedId));
+
+        assertEquals(Set.of(confirmedId, landedId),
+                remaining.stream().flatMap(chunk -> chunk.getIds().stream()).collect(Collectors.toSet()));
+        assertEquals(2, TriggerRunLog.recordIdsFor(runId).size());
+        assertTrue(TriggerRunLog.pending().stream().allMatch(chunk -> chunk.getStatus() == TriggerRunStatus.PENDING));
     }
 
     @Test

@@ -20,6 +20,7 @@ import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.AdminPageHelper;
 import org.techhouse.ops.admin.AdminRecordStore;
 import org.techhouse.ops.admin.AdminUsageHelper;
@@ -32,16 +33,17 @@ public final class AdminOperationHelper {
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private static final Logger logger = Logger.logFor(AdminOperationHelper.class);
 
     private static final AdminRecordStore<AdminTransactionEntry> TRANSACTION_OPS = new AdminRecordStore<>(
             Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, "transaction op", cache::getPkIndexTransaction,
-            cache::removePkIndexTransaction, AdminTransactionEntry::fromJsonObject, (dbName, collName, type,
-                    entries) -> AdminPageHelper.baseUpdateEntryCount(dbName, collName, type, entries, false));
+            cache::removePkIndexTransaction, AdminTransactionEntry::fromJsonObject,
+            (_, collName, type, entries) -> applyAdminPageDelta(collName, type, entries));
 
     private static final AdminRecordStore<AdminTriggerRunEntry> TRIGGER_RUNS = new AdminRecordStore<>(
             Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME, "trigger run", cache::getPkIndexTriggerRun,
-            cache::removePkIndexTriggerRun, AdminTriggerRunEntry::fromJsonObject, (dbName, collName, type,
-                    entries) -> AdminPageHelper.baseUpdateEntryCount(dbName, collName, type, entries, false));
+            cache::removePkIndexTriggerRun, AdminTriggerRunEntry::fromJsonObject,
+            (_, collName, type, entries) -> applyAdminPageDelta(collName, type, entries));
 
     public static void bulkUpdateEntryCount(String dbName, String collName, EventType type, List<DbEntry> inserted)
             throws InterruptedException, IOException {
@@ -81,19 +83,33 @@ public final class AdminOperationHelper {
 
     // The caller owns the lock: policy differs per collection (saveCollectionEntry also holds databases).
     private static PkIndexEntry writeAdminEntry(String collName, DbEntry entry, PkIndexEntry existingPk)
-            throws IOException, InterruptedException {
+            throws IOException {
         if (existingPk != null) {
             entry.setPage(existingPk.getPage());
             final var updateResult = fs.updateFromCollection(entry, existingPk);
             cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
-            AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, collName, EventType.UPDATED, List.of(entry),
-                    false);
+            applyAdminPageDelta(collName, EventType.UPDATED, entry);
             return updateResult.indexEntry();
         }
         entry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, collName, entry.byteSize()));
         final var pk = fs.insertIntoCollection(entry);
-        AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, collName, EventType.CREATED, List.of(entry), false);
+        applyAdminPageDelta(collName, EventType.CREATED, entry);
         return pk;
+    }
+
+    private static void applyAdminPageDelta(String collName, EventType type, DbEntry entry) {
+        applyAdminPageDelta(collName, type, List.of(entry));
+    }
+
+    private static void applyAdminPageDelta(String collName, EventType type, List<DbEntry> entries) {
+        try {
+            AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, collName, type, entries, false);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.error("Interrupted recording the page row of a landed admin/" + collName + " write", e);
+        } catch (IOException e) {
+            logger.error("Failed to record the page row of a landed admin/" + collName + " write", e);
+        }
     }
 
     // The caller owns the lock and the cache eviction, which differ per collection.
@@ -102,7 +118,7 @@ public final class AdminOperationHelper {
         entry.setPreviousByteSize(pk.getLength());
         entry.setPage(pk.getPage());
         cache.shiftPkPositionsAfterCompaction(fs.deleteFromCollection(pk));
-        AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, collName, EventType.DELETED, List.of(entry), false);
+        applyAdminPageDelta(collName, EventType.DELETED, entry);
     }
 
     public static void saveDatabaseEntry(AdminDbEntry dbEntry) throws IOException, InterruptedException {
@@ -199,7 +215,7 @@ public final class AdminOperationHelper {
         }
     }
 
-    private static void publishDatabaseEntry(AdminDbEntry updated) throws IOException, InterruptedException {
+    private static void publishDatabaseEntry(AdminDbEntry updated) throws IOException {
         final var pk = cache.getPkIndexAdminDbEntry(updated.get_id());
         cache.putAdminDbEntry(updated, writeAdminEntry(Globals.ADMIN_DATABASES_COLLECTION_NAME, updated, pk));
     }
@@ -218,8 +234,7 @@ public final class AdminOperationHelper {
                 final var compaction = fs.deleteFromCollection(adminIndexPkCollEntry);
                 cache.shiftPkPositionsAfterCompaction(compaction);
                 cache.removeAdminCollEntry(collIdentifier);
-                AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
-                        EventType.DELETED, List.of(adminCollEntry), false);
+                applyAdminPageDelta(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, EventType.DELETED, adminCollEntry);
                 final var adminDbEntry = cache.getAdminDbEntry(dbName);
                 final var remaining = new ArrayList<>(adminDbEntry.getCollections());
                 remaining.remove(collName);
@@ -267,8 +282,7 @@ public final class AdminOperationHelper {
                 cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
                 cache.putAdminCollectionEntry(adminCollEntry, adminIndexPkCollEntry);
                 cache.putPkIndexAdminCollEntry(adminIndexPkCollEntry);
-                AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
-                        EventType.UPDATED, List.of(adminCollEntry), false);
+                applyAdminPageDelta(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, EventType.UPDATED, adminCollEntry);
             } finally {
                 releaseAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
             }

@@ -70,6 +70,10 @@ public final class TriggerRunLog {
         final var remaining = new ArrayList<AdminTriggerRunEntry>();
         final var emptied = new ArrayList<String>();
         for (final var chunk : AdminOperationHelper.readTriggerRuns(recordIdsFor(runId))) {
+            if (chunk.getStatus() != TriggerRunStatus.STAGED) {
+                remaining.add(chunk);
+                continue;
+            }
             chunk.narrowTo(landedIds);
             if (chunk.isEmpty()) {
                 emptied.add(chunk.get_id());

@@ -89,7 +89,7 @@ public final class TriggerRunRecovery {
     private static boolean requeue(List<AdminTriggerRunEntry> stored) {
         final var first = stored.getFirst();
         try {
-            final var chunks = first.getStatus() == TriggerRunStatus.STAGED ? confirmLanded(stored) : stored;
+            final var chunks = stored.stream().anyMatch(TriggerRunRecovery::isStaged) ? confirmLanded(stored) : stored;
             if (chunks.isEmpty()) {
                 TriggerDispatcher.consumeQuietly(first.getRunId(), first.getTriggerName());
                 return false;
@@ -112,13 +112,20 @@ public final class TriggerRunRecovery {
         final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(first.getDbName(), first.getCollName());
         final var landed = new HashSet<String>();
         for (final var chunk : chunks) {
+            if (!isStaged(chunk)) {
+                continue;
+            }
             chunk.getPriorVersions().forEach((id, priorVersion) -> {
                 if (currentVersion(primaryKeyIndex, id) != priorVersion) {
                     landed.add(id);
                 }
             });
         }
-        return landed.isEmpty() ? List.of() : TriggerRunLog.confirmStaged(first.getRunId(), landed);
+        return TriggerRunLog.confirmStaged(first.getRunId(), landed);
+    }
+
+    private static boolean isStaged(AdminTriggerRunEntry chunk) {
+        return chunk.getStatus() == TriggerRunStatus.STAGED;
     }
 
     private static long currentVersion(List<PkIndexEntry> primaryKeyIndex, String id) {

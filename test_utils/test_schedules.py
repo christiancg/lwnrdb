@@ -232,6 +232,40 @@ def test_interval_schedule_holds_its_rate(conn: Conn):
           f"{fired} fires in {elapsed:.1f}s")
 
 
+SLEEPER_SOURCE = (
+    "import db from 'db'; import args from 'args';"
+    " db.save(db.name, '" + COLL + "', { _id: args.id, n: 1 });"
+    " return new Promise(function (resolve) { setTimeout(function () { resolve(1); }, 4000); });"
+)
+
+
+def test_a_queued_run_does_not_outlive_its_delete(conn: Conn):
+    section("A run still queued when its schedule is deleted does not fire")
+    clear_schedules(conn)
+    check_status("store a procedure that holds a worker for four seconds",
+                 conn.save_procedure("sleeper", SLEEPER_SOURCE), "OK")
+    check_status("occupy the first worker",
+                 conn.save_schedule("sleeper_a", "sleeper", intervalMs=500, args={"id": "sleep-a"}), "OK")
+    check_status("occupy the second worker",
+                 conn.save_schedule("sleeper_b", "sleeper", intervalMs=500, args={"id": "sleep-b"}), "OK")
+    both_busy = await_counter(conn, "sleep-a", 1) >= 1 and await_counter(conn, "sleep-b", 1) >= 1
+    check("both workers are busy", both_busy, "a sleeper never started")
+
+    check_status("schedule the victim behind them",
+                 conn.save_schedule("victim", "counter", intervalMs=300, args={"id": "victim"}), "OK")
+    time.sleep(1.0)
+    check_status("delete the victim while its run is queued", conn.delete_schedule("victim"), "OK")
+    conn.delete_schedule("sleeper_a")
+    conn.delete_schedule("sleeper_b")
+    time.sleep(5.0)
+
+    check("the queued run did not fire after the delete", counter_value(conn, "victim") == 0,
+          f"counter reached {counter_value(conn, 'victim')}")
+    check("and left no run history", not history_rows(conn, kind="SCHEDULE", name="victim"),
+          f"rows={history_rows(conn, kind='SCHEDULE', name='victim')!r}")
+    check_status("delete the sleeper procedure", conn.delete_procedure("sleeper"), "OK")
+
+
 def test_cron_schedule(conn: Conn):
     section("Cron schedule")
     # A cron for the minute after next, so the test never races the current minute rolling over.
@@ -560,6 +594,7 @@ def main():
             setup_data(conn)
             test_interval_schedule(conn)
             test_interval_schedule_holds_its_rate(conn)
+            test_a_queued_run_does_not_outlive_its_delete(conn)
             test_cron_schedule(conn)
             test_listing(conn)
             test_validation(conn)

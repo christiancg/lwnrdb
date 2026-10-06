@@ -695,7 +695,9 @@ not miss an occurrence should be idempotent and driven off data rather than off 
 is deliberately **not** transactional (there is no run record to consume atomically); a job
 wanting atomicity opens its own `db.transaction(…)`, which — unlike inside a trigger — is
 permitted. `bckg_ops/ScheduleExecutor` owns the ticker plus its own queue and workers, skipping
-anything this node does not own or that is still running.
+anything this node does not own or that is still running. A run still waiting in that queue when its
+schedule is deleted, disabled or changed is skipped: the dispatcher runs it only while it is still the
+registered entry, so an acknowledged `DELETE_SCHEDULE` never fires a stale definition afterwards.
 
 ### Pipeline scripts
 
