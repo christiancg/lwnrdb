@@ -176,9 +176,9 @@ public final class TransactionOperationHelper {
             }
             final var stagedTriggers = CommittedOpTriggers.stage(ops, clientTracker.getAuthenticatedUsername(clientId),
                     transaction.getTriggerDepth(), transaction, txId);
-            AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
             TxCommitLog.clearLocalCommit(txId);
             pastCommitPoint = false;
+            TransactionRecovery.discardAppliedOps(txId, transaction.getBufferedOpIds());
             // After the durable commit, so a trigger never observes a transaction that later rolled back. The
             // transaction's own depth is used, not zero, or allowCascade=true would cascade forever.
             stagedTriggers.submitAll();

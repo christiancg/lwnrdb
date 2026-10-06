@@ -742,7 +742,10 @@ a `REPLICATE_ADMIN`/`REPLICATE_USER` has no quorum evidence — the coordinator 
 have it yet at broadcast time — so it adopts the epoch **unconfirmed**. Without that, a replica
 reached by a broadcast whose quorum later timed out reported `confirmed` at E while the
 coordinator that minted E reported unconfirmed, and a genuinely conflicting E from the majority
-side lost the tie to a node-id comparison again. A node is promoted to `confirmed` at an
+side lost the tie to a node-id comparison again. A receiving node also moves only to the epoch
+directly after its own: one that skipped an op keeps the op it just applied but not the epoch, so it
+stays behind every node that holds the missed op until the conform catches it up, rather than
+tying with them and possibly winning on node id. A node is promoted to `confirmed` at an
 **equal** epoch only by conforming to a confirmed snapshot in `reconcile`, which is sound
 because it has just taken that snapshot's content; `adopt` never demotes a confirmed epoch and
 never moves the epoch number on equality.

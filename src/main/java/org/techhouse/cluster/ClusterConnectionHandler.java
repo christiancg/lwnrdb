@@ -231,7 +231,7 @@ public class ClusterConnectionHandler implements Runnable {
                 response -> {
                     final var result = executeForwarded(request, true);
                     if (result.getStatus() == OperationStatus.OK) {
-                        adminEpoch.adopt(request.getAdminEpoch(), false);
+                        adoptReplicatedEpoch(request.getAdminEpoch());
                     } else {
                         response.setType(ClusterMessageType.ERROR);
                         response.setErrorMessage("Replicated admin op failed: " + result.getMessage());
@@ -267,13 +267,24 @@ public class ClusterConnectionHandler implements Runnable {
     private ClusterMessage applyReplicatedUser(ClusterMessage request) {
         final var response = new ClusterMessage();
         if (ReplicatedUserApplyHelper.apply(request.getReplication())) {
-            adminEpoch.adopt(request.getAdminEpoch(), false);
+            adoptReplicatedEpoch(request.getAdminEpoch());
             response.setType(ClusterMessageType.REPLICATE_USER_ACK);
         } else {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to apply replicated user mutation");
         }
         return response;
+    }
+
+    private void adoptReplicatedEpoch(long candidate) {
+        if (adminEpoch.adoptNext(candidate)) {
+            return;
+        }
+        final var current = adminEpoch.current();
+        if (candidate > current + 1) {
+            logger.warning("Replicated admin op at epoch " + candidate + " skipped " + (candidate - current - 1)
+                    + " epoch(s) on this node; keeping epoch " + current + " until the admin conform catches up");
+        }
     }
 
     private ClusterMessage handleReplicate(ClusterMessage request) {

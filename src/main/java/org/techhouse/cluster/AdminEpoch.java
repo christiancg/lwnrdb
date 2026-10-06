@@ -101,6 +101,16 @@ public class AdminEpoch {
         }
     }
 
+    public synchronized boolean adoptNext(long candidate) {
+        if (candidate != epoch + 1) {
+            return false;
+        }
+        epoch = candidate;
+        confirmed = false;
+        persist();
+        return true;
+    }
+
     private void persist() {
         final var path = epochFilePath();
         try {

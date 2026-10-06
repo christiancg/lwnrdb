@@ -32,6 +32,7 @@ import org.techhouse.test.TestUtils;
 public class ReplicatedAdminLaneTest {
     private static final long ACK_TIMEOUT_MS = 1_000L;
     private static final long REQUEST_TIMEOUT_MS = 10_000L;
+    private static final long NEXT_EPOCH = 1L;
     private final ClusterTestHarness cluster = new ClusterTestHarness();
     private final PeerConnectionPool pool = new PeerConnectionPool();
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
@@ -86,16 +87,16 @@ public class ReplicatedAdminLaneTest {
         }
     }
 
-    private static ClusterMessage envelope(ClusterMessageType type, long epoch) {
+    private static ClusterMessage envelope(ClusterMessageType type) {
         final var message = new ClusterMessage();
         message.setType(type);
         message.setSecret(ClusterTestHarness.SECRET);
-        message.setAdminEpoch(epoch);
+        message.setAdminEpoch(NEXT_EPOCH);
         return message;
     }
 
     private static ClusterMessage replicatedCreate(String collName) {
-        final var message = envelope(ClusterMessageType.REPLICATE_ADMIN, 7L);
+        final var message = envelope(ClusterMessageType.REPLICATE_ADMIN);
         message.setForwardBody(ForwardBody.encode("{\"type\":\"CREATE_COLLECTION\",\"databaseName\":\"" + TestGlobals.DB
                 + "\",\"collectionName\":\"" + collName + "\"}"));
         return message;
@@ -103,7 +104,7 @@ public class ReplicatedAdminLaneTest {
 
     private static ClusterMessage replicatedUser() {
         final var user = new AdminUserEntry("laneuser", "hash", false, Set.of(), Map.of(), Map.of());
-        final var message = envelope(ClusterMessageType.REPLICATE_USER, 9L);
+        final var message = envelope(ClusterMessageType.REPLICATE_USER);
         message.setReplication(new ReplicationPayload(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
                 ReplicationOp.UPSERT, List.of(user.getData()), null));
         return message;
@@ -122,7 +123,7 @@ public class ReplicatedAdminLaneTest {
 
         assertEquals(ClusterMessageType.REPLICATE_ADMIN_ACK, ack.getType(), ack.getErrorMessage());
         assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, "afterconform"));
-        assertEquals(7L, adminEpoch.current());
+        assertEquals(NEXT_EPOCH, adminEpoch.current());
     }
 
     @Test

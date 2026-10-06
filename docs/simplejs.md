@@ -567,9 +567,10 @@ inside a trigger is rejected (the run is already transactional); and the guarant
 *database effects*, so a replayed run's console output can repeat.
 
 The record is written **before the evidence of the triggering write can be lost**, never after it.
-A transaction stages its runs once its ops have applied and before its commit marker and buffered
-ops are cleared, under a run id derived from the transaction id, the trigger, the event and the
-document, so a startup replay of that commit re-stages the same records instead of adding new ones;
+A transaction stages its runs once its ops have applied and before its commit marker is cleared,
+under a run id derived from the transaction id, the trigger, the event and the document, so a
+startup replay of that commit re-stages the same records instead of adding new ones. Its buffered
+ops are deleted only after the marker, so a replay always sees the whole transaction;
 the events are queued only after the marker is gone, so a trigger still never sees a transaction
 that could roll back. A standalone `SAVE`/`BULK_SAVE`/`DELETE` stages its runs under the collection
 lock *before* the write, as `STAGED` records carrying each document's prior version (or "absent").

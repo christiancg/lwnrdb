@@ -86,10 +86,10 @@ public class AdminAntiEntropyIntegrationTest {
         final var raw = eJson.toJson(new CreateCollectionRequest(TestGlobals.DB, "epoch-coll"));
         final var message = message(ClusterMessageType.REPLICATE_ADMIN);
         message.setForwardBody(ForwardBody.encode(raw));
-        message.setAdminEpoch(7L);
+        message.setAdminEpoch(1L);
         final var ack = pool.request(cluster.serverAddress(), message, 3000);
         assertEquals(ClusterMessageType.REPLICATE_ADMIN_ACK, ack.getType());
-        assertEquals(7L, adminEpoch.current());
+        assertEquals(1L, adminEpoch.current());
     }
 
     @Test
@@ -99,10 +99,10 @@ public class AdminAntiEntropyIntegrationTest {
                 ReplicationOp.UPSERT, List.of(user.getData()), null);
         final var message = message(ClusterMessageType.REPLICATE_USER);
         message.setReplication(payload);
-        message.setAdminEpoch(9L);
+        message.setAdminEpoch(1L);
         final var ack = pool.request(cluster.serverAddress(), message, 3000);
         assertEquals(ClusterMessageType.REPLICATE_USER_ACK, ack.getType());
-        assertEquals(9L, adminEpoch.current());
+        assertEquals(1L, adminEpoch.current());
         assertNotNull(cache.getAdminUserEntry("wireuser"));
     }
 

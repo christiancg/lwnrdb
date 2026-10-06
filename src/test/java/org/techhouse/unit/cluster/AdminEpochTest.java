@@ -260,4 +260,31 @@ public class AdminEpochTest {
         assertEquals(9L, adminEpoch.current());
         assertTrue(adminEpoch.isConfirmed(), "an existing deployment must behave exactly as it did before");
     }
+
+    @Test
+    public void test_adopt_next_moves_only_to_the_following_epoch() {
+        adminEpoch.adopt(5L, true);
+
+        assertTrue(adminEpoch.adoptNext(6L));
+        assertEquals(6L, adminEpoch.current());
+        assertFalse(adminEpoch.isConfirmed(), "a node that merely received the op has no quorum evidence");
+
+        assertFalse(adminEpoch.adoptNext(8L), "a node that skipped epoch 7 does not hold its op");
+        assertFalse(adminEpoch.adoptNext(6L));
+        assertFalse(adminEpoch.adoptNext(3L));
+        assertEquals(6L, adminEpoch.current());
+    }
+
+    @Test
+    public void test_a_refused_adopt_next_leaves_the_confirmed_flag_and_the_file_alone() throws Exception {
+        adminEpoch.adopt(5L, false);
+        adminEpoch.adopt(5L, true);
+        final var persisted = Files.readString(epochPath(), StandardCharsets.UTF_8).trim();
+
+        assertFalse(adminEpoch.adoptNext(7L));
+
+        assertEquals(5L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed());
+        assertEquals(persisted, Files.readString(epochPath(), StandardCharsets.UTF_8).trim());
+    }
 }

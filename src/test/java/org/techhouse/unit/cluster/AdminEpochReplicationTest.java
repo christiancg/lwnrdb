@@ -10,6 +10,7 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.Cache;
 import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.NodeInfo;
@@ -33,6 +34,7 @@ public class AdminEpochReplicationTest {
     private final ClusterTestHarness cluster = new ClusterTestHarness();
     private final PeerConnectionPool pool = new PeerConnectionPool();
     private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
+    private final Cache cache = IocContainer.get(Cache.class);
 
     @BeforeEach
     public void setUp() throws Exception {
@@ -64,27 +66,18 @@ public class AdminEpochReplicationTest {
         return message;
     }
 
-    @Test
-    public void test_a_replicated_admin_op_adopts_the_epoch_unconfirmed() throws Exception {
+    private ClusterMessage createCollectionAt(String collName, long epoch) {
         final var raw = "{\"type\":\"CREATE_COLLECTION\",\"databaseName\":\"" + TestGlobals.DB
-                + "\",\"collectionName\":\"replicated_coll\"}";
+                + "\",\"collectionName\":\"" + collName + "\"}";
         final var message = envelope(ClusterMessageType.REPLICATE_ADMIN);
         message.setForwardBody(ForwardBody.encode(raw));
-        message.setAdminEpoch(7L);
-
-        final var ack = pool.request(cluster.serverAddress(), message, ACK_TIMEOUT_MS);
-
-        assertNotNull(ack);
-        assertEquals(ClusterMessageType.REPLICATE_ADMIN_ACK, ack.getType(), ack.getErrorMessage());
-        assertEquals(7L, adminEpoch.current());
-        assertFalse(adminEpoch.isConfirmed(),
-                "a node that merely received the op has no quorum evidence; only the coordinator counted acks");
+        message.setAdminEpoch(epoch);
+        return message;
     }
 
-    @Test
-    public void test_a_replicated_user_op_adopts_the_epoch_unconfirmed() throws Exception {
+    private ClusterMessage userUpsertAt(String username, long epoch) {
         final var user = new JsonObject();
-        user.add("_id", new JsonString("replicated-user"));
+        user.add("_id", new JsonString(username));
         user.add("passwordHash", new JsonString("hashed"));
         user.addProperty("admin", false);
         user.add("globalPermissions", new JsonArray());
@@ -93,13 +86,29 @@ public class AdminEpochReplicationTest {
         user.add("scriptPermissions", new JsonObject());
         final var message = envelope(ClusterMessageType.REPLICATE_USER);
         message.setReplication(new ReplicationPayload(null, null, ReplicationOp.UPSERT, List.of(user), null));
-        message.setAdminEpoch(9L);
+        message.setAdminEpoch(epoch);
+        return message;
+    }
 
-        final var ack = pool.request(cluster.serverAddress(), message, ACK_TIMEOUT_MS);
+    @Test
+    public void test_a_replicated_admin_op_adopts_the_epoch_unconfirmed() throws Exception {
+        final var ack = pool.request(cluster.serverAddress(), createCollectionAt("replicated_coll", 1L),
+                ACK_TIMEOUT_MS);
+
+        assertNotNull(ack);
+        assertEquals(ClusterMessageType.REPLICATE_ADMIN_ACK, ack.getType(), ack.getErrorMessage());
+        assertEquals(1L, adminEpoch.current());
+        assertFalse(adminEpoch.isConfirmed(),
+                "a node that merely received the op has no quorum evidence; only the coordinator counted acks");
+    }
+
+    @Test
+    public void test_a_replicated_user_op_adopts_the_epoch_unconfirmed() throws Exception {
+        final var ack = pool.request(cluster.serverAddress(), userUpsertAt("replicated-user", 1L), ACK_TIMEOUT_MS);
 
         assertNotNull(ack);
         assertEquals(ClusterMessageType.REPLICATE_USER_ACK, ack.getType(), ack.getErrorMessage());
-        assertEquals(9L, adminEpoch.current());
+        assertEquals(1L, adminEpoch.current());
         assertFalse(adminEpoch.isConfirmed());
     }
 
@@ -132,5 +141,34 @@ public class AdminEpochReplicationTest {
         assertFalse(outranks(4L, true, "z", 5L, false, "a"));
         assertTrue(outranks(10L, false, "a", 2L, true, "z"));
         assertFalse(outranks(1L, true, "z", 9L, false, "a"));
+    }
+
+    @Test
+    public void test_a_replicated_admin_op_past_a_gap_applies_but_keeps_the_epoch() throws Exception {
+        final var ack = pool.request(cluster.serverAddress(), createCollectionAt("gap_coll", 3L), ACK_TIMEOUT_MS);
+
+        assertNotNull(ack);
+        assertEquals(ClusterMessageType.REPLICATE_ADMIN_ACK, ack.getType(), ack.getErrorMessage());
+        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, "gap_coll"), "the op itself still applies");
+        assertEquals(0L, adminEpoch.current(),
+                "a node that skipped epochs 1 and 2 must not report the epoch of a node holding them");
+        assertTrue(adminEpoch.isConfirmed());
+    }
+
+    @Test
+    public void test_a_replicated_user_op_past_a_gap_applies_but_keeps_the_epoch() throws Exception {
+        final var ack = pool.request(cluster.serverAddress(), userUpsertAt("gap-user", 2L), ACK_TIMEOUT_MS);
+
+        assertNotNull(ack);
+        assertEquals(ClusterMessageType.REPLICATE_USER_ACK, ack.getType(), ack.getErrorMessage());
+        assertNotNull(cache.getAdminUserEntry("gap-user"));
+        assertEquals(0L, adminEpoch.current());
+        assertTrue(adminEpoch.isConfirmed());
+    }
+
+    @Test
+    public void test_a_replica_that_skipped_an_op_loses_the_tie_to_one_that_holds_it() throws Exception {
+        assertTrue(outranks(2L, false, "a", 0L, false, "z"),
+                "the complete replica must win on epoch instead of a node-id coin flip");
     }
 }

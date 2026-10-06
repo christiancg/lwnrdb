@@ -93,8 +93,8 @@ public final class TransactionRecovery {
             }
             final var stagedTriggers = CommittedOpTriggers.stage(ops, actingUserOf(ops),
                     reconstructed.getTriggerDepth(), reconstructed, fencedIds, txId);
-            AdminOperationHelper.deleteTransactionOps(opIds);
             markerCleanup.run();
+            discardAppliedOps(txId, opIds);
             stagedTriggers.submitAll();
             coordinator.replicateTransaction(reconstructed, reservedTombstones);
             return true;
@@ -121,6 +121,22 @@ public final class TransactionRecovery {
 
     private interface ThrowingRunnable {
         void run() throws Exception;
+    }
+
+    public static void discardAppliedOps(String txId, List<String> opIds) {
+        try {
+            AdminOperationHelper.deleteTransactionOps(opIds);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.warning(leftoverOpsMessage(txId));
+        } catch (Exception e) {
+            logger.warning(leftoverOpsMessage(txId) + ": " + e.getMessage());
+        }
+    }
+
+    private static String leftoverOpsMessage(String txId) {
+        return "Transaction " + txId
+                + " committed but some of its buffered op records were not deleted; the startup orphan sweep removes them";
     }
 
     public static void abortFromDurable(String dtxId) throws Exception {

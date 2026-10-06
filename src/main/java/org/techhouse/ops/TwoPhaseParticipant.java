@@ -58,11 +58,12 @@ public final class TwoPhaseParticipant {
                         + (transaction.getBufferedOpIds().size() - ops.size()) + " buffered op(s) before commit");
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
             }
+            final var txId = transaction.getTransactionId().toString();
             final var reservedTombstones = coordinator.reserveTransactionTombstones(transaction);
             listenManager.deferNotifications();
             final boolean applied;
             try {
-                applied = TransactionRecovery.applyAllWithRetry(ops, transaction.getTransactionId().toString());
+                applied = TransactionRecovery.applyAllWithRetry(ops, txId);
             } finally {
                 listenManager.flushDeferredNotifications();
             }
@@ -71,11 +72,11 @@ public final class TwoPhaseParticipant {
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
             }
             final var stagedTriggers = CommittedOpTriggers.stage(ops, clientTracker.getAuthenticatedUsername(clientId),
-                    transaction.getTriggerDepth(), transaction, transaction.getTransactionId().toString());
-            AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
+                    transaction.getTriggerDepth(), transaction, txId);
+            TransactionRecovery.resolveMarkers(txId, true);
+            TransactionRecovery.discardAppliedOps(txId, transaction.getBufferedOpIds());
             // After the durable commit, so a trigger never observes a transaction that later rolled back.
             stagedTriggers.submitAll();
-            TransactionRecovery.resolveMarkers(transaction.getTransactionId().toString(), true);
             // A replication timeout does not fail the commit; anti-entropy reconciles the lagging replicas.
             coordinator.replicateTransaction(transaction, reservedTombstones);
             return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");

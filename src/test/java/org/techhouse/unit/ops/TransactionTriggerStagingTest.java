@@ -25,7 +25,6 @@ import org.techhouse.data.TriggerDefinition;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
@@ -130,8 +129,8 @@ public class TransactionTriggerStagingTest {
         final var txId = transactionIdOf(clientId);
         final var failuresLeft = new AtomicInteger(1);
 
-        try (var ignored = mockStatic(AdminOperationHelper.class, invocation -> {
-            if ("deleteTransactionOps".equals(invocation.getMethod().getName()) && failuresLeft.getAndDecrement() > 0) {
+        try (var ignored = mockStatic(TxCommitLog.class, invocation -> {
+            if ("clearLocalCommit".equals(invocation.getMethod().getName()) && failuresLeft.getAndDecrement() > 0) {
                 throw new IOException("killed after staging");
             }
             return invocation.callRealMethod();
