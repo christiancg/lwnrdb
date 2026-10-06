@@ -99,10 +99,11 @@ public final class TriggerHelper {
         }
         for (final var trigger : matchingTriggers(dbName, collName, type, depth)) {
             for (final var group : runGroups(trigger, entries)) {
-                final var runId = TriggerRunLog
-                        .record(descriptor(dbName, collName, trigger, type, group, actingUser, depth));
-                triggerExecutor.submit(new TriggerEvent(type, dbName, collName, trigger.getName(),
-                        trigger.getProcedureName(), trigger.isBatchMode(), group, actingUser, depth, runId));
+                final var descriptor = descriptor(dbName, collName, trigger, type, group, actingUser, depth);
+                final var runId = TriggerRunLog.record(descriptor);
+                triggerExecutor
+                        .submit(new TriggerEvent(type, dbName, collName, trigger.getName(), trigger.getProcedureName(),
+                                trigger.isBatchMode(), group, actingUser, depth, runId, 1, descriptor.firedAt()));
             }
         }
     }

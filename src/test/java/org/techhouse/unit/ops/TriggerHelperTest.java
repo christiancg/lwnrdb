@@ -157,6 +157,25 @@ public class TriggerHelperTest {
     }
 
     @Test
+    public void test_a_recorded_run_and_its_first_event_share_one_firedAt() throws Exception {
+        install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
+        final var entries = java.util.stream.IntStream.range(0, 20).mapToObj(i -> entry("fired-" + i)).toList();
+
+        final var events = capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,
+                entries, "alice", 0));
+
+        final var recorded = new java.util.HashMap<String, Long>();
+        for (final var run : org.techhouse.ops.TriggerRunLog.pending()) {
+            recorded.put(run.getRunId(), run.getFiredAt());
+        }
+        assertEquals(20, events.size());
+        for (final var event : events) {
+            assertEquals(recorded.get(event.getRunId()), event.getFiredAt(),
+                    "a retry after a restart reads the record's firedAt, so the first attempt must see the same one");
+        }
+    }
+
+    @Test
     public void test_document_mode_fires_once_per_document() {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT, false, true);
         final var events = capture(() -> TriggerHelper.afterWrite(TestGlobals.DB, TestGlobals.COLL, EventType.CREATED,

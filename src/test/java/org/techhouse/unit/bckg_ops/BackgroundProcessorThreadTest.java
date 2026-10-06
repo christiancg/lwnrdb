@@ -28,6 +28,28 @@ public class BackgroundProcessorThreadTest {
     }
 
     @Test
+    public void test_a_failed_batch_still_settles_the_count_the_producer_took() throws InterruptedException {
+        final var queue = new LinkedBlockingQueue<Event>();
+        final var inFlight = new AtomicInteger(1);
+        queue.add(new Event(EventType.CREATED) {
+        });
+
+        final var idleSignal = new IdleSignal();
+        final var thread = new Thread(
+                new BackgroundProcessorThread(queue, inFlight, new AtomicInteger(), new AtomicInteger(1), idleSignal));
+        thread.start();
+        try {
+            assertTrue(idleSignal.awaitIdle(() -> inFlight.get() <= 0, 5000L));
+            assertFalse(idleSignal.awaitIdle(() -> inFlight.get() != 0, 100L));
+            assertEquals(0, inFlight.get(),
+                    "an event counted at submit is settled exactly once, even when its batch throws");
+        } finally {
+            thread.interrupt();
+            thread.join(5000);
+        }
+    }
+
+    @Test
     public void testRunWhenQueueIsEmpty() {
         LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
 

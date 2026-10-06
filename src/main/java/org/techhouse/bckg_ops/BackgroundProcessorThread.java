@@ -48,7 +48,6 @@ public class BackgroundProcessorThread implements Runnable {
             } finally {
                 parked.decrementAndGet();
             }
-            inFlight.incrementAndGet();
             batch.clear();
             batch.add(first);
             while (batch.size() < MAX_BATCH) {
@@ -56,17 +55,19 @@ public class BackgroundProcessorThread implements Runnable {
                 if (next == null) {
                     break;
                 }
-                inFlight.incrementAndGet();
                 batch.add(next);
             }
+            var requeued = 0;
             try {
-                queue.addAll(EventProcessorHelper.processBatch(batch));
+                final var deferred = EventProcessorHelper.processBatch(batch);
+                queue.addAll(deferred);
+                requeued = deferred.size();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             } catch (Exception e) {
                 logger.error("Error while processing background task: ", e);
             } finally {
-                inFlight.addAndGet(-batch.size());
+                inFlight.addAndGet(requeued - batch.size());
                 idleSignal.signal();
             }
         }

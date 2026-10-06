@@ -107,6 +107,25 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
     }
 
     @Test
+    public void test_commit_tx_is_not_acked_while_the_durable_replay_is_incomplete() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("into-a-missing-collection"));
+        AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "coordinator", 0,
+                AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, "missing-coll", obj));
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"),
+                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, "missing-coll")));
+
+        final var response = pool.request(cluster.serverAddress(),
+                txResolutionRequest(ClusterMessageType.COMMIT_TX, dtxId), 10000L);
+
+        assertEquals(ClusterMessageType.ERROR, response.getType(),
+                "a slice that did not apply must not be acknowledged, or the coordinator forgets the commit");
+        assertTrue(response.getErrorMessage().contains(dtxId));
+        assertTrue(Tx2pcLog.isPrepared(dtxId), "the slice stays in doubt for the coordinator to re-drive");
+    }
+
+    @Test
     public void test_commit_tx_with_no_live_session_still_commits_when_uncontended() throws Exception {
         final var dtxId = UUID.randomUUID().toString();
         seedPreparedSlice(dtxId, "committx-uncontended");

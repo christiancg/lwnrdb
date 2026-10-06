@@ -10,6 +10,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
+import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.ErrorCode;
@@ -209,6 +210,9 @@ final class ClusterTxMessageHandler {
         } catch (TimeoutException e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Participant did not resolve the transaction within the ack timeout");
+        } catch (DurableReplayIncompleteException incomplete) {
+            response.setType(ClusterMessageType.ERROR);
+            response.setErrorMessage(incomplete.getMessage());
         } catch (Exception e) {
             response.setType(ClusterMessageType.ERROR);
             response.setErrorMessage("Failed to resolve transaction: " + e.getMessage());

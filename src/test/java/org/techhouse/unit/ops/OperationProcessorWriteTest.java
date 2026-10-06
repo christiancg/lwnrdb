@@ -460,12 +460,16 @@ public class OperationProcessorWriteTest {
                 java.util.concurrent.LinkedBlockingQueue.class);
         final var isolatedQueue = new java.util.concurrent.LinkedBlockingQueue<org.techhouse.bckg_ops.events.Event>();
         final var wasDraining = TestUtils.getPrivateField(taskManager, "draining", Boolean.class);
+        final var sharedInFlight = TestUtils.getPrivateField(taskManager, "inFlight",
+                java.util.concurrent.atomic.AtomicInteger.class);
         TestUtils.setPrivateField(taskManager, "queue", isolatedQueue);
+        TestUtils.setPrivateField(taskManager, "inFlight", new java.util.concurrent.atomic.AtomicInteger());
         TestUtils.setPrivateField(taskManager, "draining", false);
         try {
             assertDeletedEventKeepsItsPage(cache, idxEntry, pkIndex, isolatedQueue);
         } finally {
             TestUtils.setPrivateField(taskManager, "draining", wasDraining);
+            TestUtils.setPrivateField(taskManager, "inFlight", sharedInFlight);
             TestUtils.setPrivateField(taskManager, "queue", sharedQueue);
         }
     }

@@ -251,6 +251,23 @@ public class Tx2pcCoordinatorTest {
     }
 
     @Test
+    public void test_force_resolve_reports_an_error_when_the_local_replay_is_incomplete() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("force-missing"));
+        org.techhouse.ops.AdminOperationHelper.saveTransactionOp(new org.techhouse.data.admin.AdminTransactionEntry(
+                dtxId, "client", 0, org.techhouse.data.admin.AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB,
+                "missing-coll", obj));
+        org.techhouse.ops.Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"),
+                List.of(org.techhouse.cache.Cache.getCollectionIdentifier(TestGlobals.DB, "missing-coll")));
+
+        final var response = coordinator.forceResolve(dtxId, true);
+
+        assertEquals("500-24", response.getErrorCode(), "an incomplete local replay is not a resolved transaction");
+        assertTrue(org.techhouse.ops.Tx2pcLog.isPrepared(dtxId));
+    }
+
+    @Test
     public void test_force_resolve_abort_discards() throws Exception {
         final var dtxId = seedDurablePrepared("force-abort");
         assertEquals(OperationStatus.OK, coordinator.forceResolve(dtxId, false).getStatus());

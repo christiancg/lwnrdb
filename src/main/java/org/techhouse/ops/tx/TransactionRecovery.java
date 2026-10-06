@@ -14,6 +14,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ex.TransactionOpFailedException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -40,6 +41,7 @@ public final class TransactionRecovery {
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final String OBJECTS_FIELD = "objects";
     private static final String TRIGGER_RUN_ID_FIELD = "triggerRunId";
+    private static final String OPS_NOT_APPLIED = "its ops did not all apply";
 
     private TransactionRecovery() {
     }
@@ -47,17 +49,19 @@ public final class TransactionRecovery {
     public static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
             throws Exception {
         final var marker = Tx2pcLog.readParticipantMarker(dtxId);
-        replayDurableSlice(dtxId, collections, marker != null ? marker.preparedVersion() : 0L, timeoutMillis,
-                () -> resolveMarkers(dtxId, true));
+        if (!replayDurableSlice(dtxId, collections, marker != null ? marker.preparedVersion() : 0L, timeoutMillis,
+                () -> resolveMarkers(dtxId, true))) {
+            throw new DurableReplayIncompleteException(dtxId, OPS_NOT_APPLIED);
+        }
     }
 
     private static long startupFenceFor(TxCommitLog.LocalCommitMarker marker) {
         return marker == null || !clusterConfig.isEnabled() ? 0L : marker.writeVersion();
     }
 
-    private static void replayUnfenced(String txId, List<String> collections, ThrowingRunnable markerCleanup)
+    private static boolean replayUnfenced(String txId, List<String> collections, ThrowingRunnable markerCleanup)
             throws Exception {
-        replayDurableSlice(txId, collections, 0L, 0L, markerCleanup);
+        return replayDurableSlice(txId, collections, 0L, 0L, markerCleanup);
     }
 
     private static boolean replayDurableSlice(String txId, List<String> collections, long preparedVersion,
@@ -293,7 +297,9 @@ public final class TransactionRecovery {
     // Idempotent: buffered ops carry whole values, so re-applying the prefix a crash already applied
     // converges to the same state rather than compounding.
     public static void commitLocalFromDurable(String txId, List<String> collections) throws Exception {
-        replayUnfenced(txId, collections, () -> TxCommitLog.clearLocalCommit(txId));
+        if (!replayUnfenced(txId, collections, () -> TxCommitLog.clearLocalCommit(txId))) {
+            throw new DurableReplayIncompleteException(txId, OPS_NOT_APPLIED);
+        }
     }
 
     private static String dtxIdOf(String recordId) {

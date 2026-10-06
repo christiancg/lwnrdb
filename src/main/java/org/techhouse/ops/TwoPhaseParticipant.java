@@ -8,6 +8,7 @@ import java.util.concurrent.TimeUnit;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
+import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.resp.OperationResponse;
@@ -122,6 +123,9 @@ public final class TwoPhaseParticipant {
         final var result = timeoutMillis > 0 ? future.get(timeoutMillis, TimeUnit.MILLISECONDS) : future.get();
         if (TransactionOperationHelper.releasedItsLocks(result)) {
             clientTracker.removeTxSession(entry.getKey());
+        }
+        if (result.getStatus() != OperationStatus.OK) {
+            throw new DurableReplayIncompleteException(dtxId, result.getMessage());
         }
         return true;
     }

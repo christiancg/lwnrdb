@@ -3,6 +3,7 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -22,6 +23,7 @@ import org.techhouse.data.admin.AdminCollEntry;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
@@ -176,7 +178,8 @@ public class TransactionStartupReplayTest {
                 AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, LATE_COLL, document("late", "v")));
         Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"), List.of(collId));
 
-        TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 1000L);
+        assertThrows(DurableReplayIncompleteException.class,
+                () -> TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 1000L));
         assertTrue(locks.isWriteLockedByCurrentThread(collId), "the failed attempt keeps its lock by design");
 
         AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, LATE_COLL));

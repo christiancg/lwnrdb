@@ -1,5 +1,6 @@
 package org.techhouse.bckg_ops;
 
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -23,6 +24,7 @@ public class BackgroundTaskManager {
             logger.warning("Rejecting a background task during shutdown: " + op);
             return;
         }
+        inFlight.incrementAndGet();
         queue.add(op);
     }
 
@@ -48,7 +50,7 @@ public class BackgroundTaskManager {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        final var remaining = queue.size() + inFlight.get();
+        final var remaining = inFlight.get();
         logger.warning("Background queue did not drain within " + timeoutMillis + "ms; " + remaining
                 + " event(s) abandoned. Their field indexes may be stale - run REINDEX on the affected"
                 + " collections.");
@@ -61,13 +63,15 @@ public class BackgroundTaskManager {
     }
 
     public int pending() {
-        return queue.size() + inFlight.get();
+        return inFlight.get();
     }
 
     public synchronized void stopBackgroundWorkers() {
         workerCount.set(0);
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Background");
-        queue.clear();
+        final var discarded = new ArrayList<Event>();
+        queue.drainTo(discarded);
+        inFlight.addAndGet(-discarded.size());
         logger.info("Stopped listening for background tasks");
     }
 }

@@ -12,6 +12,7 @@ import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.TxSession;
 import org.techhouse.ex.CollectionBusyException;
+import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.TransactionOperationHelper;
@@ -111,7 +112,7 @@ public class Tx2pcRecovery implements MembershipListener {
                     case ABORT -> TwoPhaseParticipant.abortFromDurable(dtxId, clusterConfig.replicationAckTimeoutMs());
                     default -> logger.info("Transaction " + dtxId + " still in-doubt; will retry");
                 }
-            } catch (CollectionBusyException | TimeoutException busy) {
+            } catch (CollectionBusyException | TimeoutException | DurableReplayIncompleteException busy) {
                 logger.warning(
                         "Skipped recovering prepared transaction " + dtxId + " this round: " + busy.getMessage());
             } catch (Throwable failure) {
@@ -128,7 +129,7 @@ public class Tx2pcRecovery implements MembershipListener {
                 final var sessionId = Tx2pcLog.readCoordinatorSessionId(dtxId);
                 for (final var address : Tx2pcLog.readCoordinatorParticipants(dtxId)) {
                     if (isSelf(address)) {
-                        resolveLocalCommitted(dtxId);
+                        allResolved &= resolvedLocalCommitted(dtxId);
                     } else if (!sendCommit(address, sessionId, dtxId)) {
                         allResolved = false;
                     }
@@ -146,8 +147,14 @@ public class Tx2pcRecovery implements MembershipListener {
         }
     }
 
-    private void resolveLocalCommitted(String dtxId) throws Exception {
-        TwoPhaseParticipant.resolveFromDurable(dtxId, true, clusterConfig.replicationAckTimeoutMs());
+    private boolean resolvedLocalCommitted(String dtxId) throws Exception {
+        try {
+            TwoPhaseParticipant.resolveFromDurable(dtxId, true, clusterConfig.replicationAckTimeoutMs());
+            return true;
+        } catch (DurableReplayIncompleteException incomplete) {
+            logger.warning("Keeping the commit marker of " + dtxId + ": " + incomplete.getMessage());
+            return false;
+        }
     }
 
     private Decision resolve(String coordinatorAddress, java.util.List<String> participants, String dtxId) {

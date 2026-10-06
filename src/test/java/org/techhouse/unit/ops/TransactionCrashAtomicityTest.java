@@ -3,6 +3,7 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -18,6 +19,7 @@ import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
@@ -167,7 +169,8 @@ public class TransactionCrashAtomicityTest {
         TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(), List.of(collId));
         TestUtils.releaseAllLocks();
 
-        TransactionOperationHelper.commitLocalFromDurable(txId, List.of(collId));
+        assertThrows(DurableReplayIncompleteException.class,
+                () -> TransactionOperationHelper.commitLocalFromDurable(txId, List.of(collId)));
 
         final var locks = IocContainer.get(ResourceLocking.class);
         try {
@@ -196,7 +199,8 @@ public class TransactionCrashAtomicityTest {
         AdminOperationHelper.saveTransactionOp(corrupt);
         Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"), List.of(collId));
 
-        TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 0L);
+        assertThrows(DurableReplayIncompleteException.class,
+                () -> TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 0L));
 
         final var locks = IocContainer.get(ResourceLocking.class);
         try {
