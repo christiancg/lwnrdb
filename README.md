@@ -1180,6 +1180,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-8` | `ERROR` | The procedure, trigger or schedule was modified by someone else |
 | `409-9` | `ERROR` | The transaction was aborted and must be rolled back before continuing |
 | `409-11` | `ERROR` | A name that differs only by case already exists and would share storage with it |
+| `409-12` | `ERROR` | A previous transaction on this connection is still being resolved on a participant; retry once it finishes |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |

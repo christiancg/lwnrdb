@@ -1,5 +1,7 @@
 package org.techhouse.cluster;
 
+import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import org.techhouse.cluster.membership.MembershipService;
@@ -10,6 +12,7 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -19,6 +22,7 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.req.RequestParser;
+import org.techhouse.ops.resp.OperationResponse;
 
 final class ClusterTxMessageHandler {
     private static final EJson eJson = IocContainer.get(EJson.class);
@@ -51,6 +55,10 @@ final class ClusterTxMessageHandler {
             // holds across messages are acquired and released by the same thread.
             final var txId = request.getTxId();
             final var result = session.submit(() -> {
+                final var refusal = retireStaleTransaction(clientId, txId, type);
+                if (refusal != null) {
+                    return refusal;
+                }
                 if (startsTransaction(type) && clientTracker.getActiveTransaction(clientId) == null) {
                     // Start with the coordinator's distributed-tx id so the buffered slice and 2PC markers
                     // key on the same id everywhere.
@@ -60,7 +68,8 @@ final class ClusterTxMessageHandler {
                 return operationProcessor.processMessage(parsed, clientId);
             }).get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
             clientTracker.updateLastCommandTime(clientId);
-            if (finishesSession(type) && TransactionOperationHelper.releasedItsLocks(result)) {
+            if (finishesSession(type) && TransactionOperationHelper.releasedItsLocks(result)
+                    && clientTracker.getActiveTransaction(clientId) == null) {
                 clientTracker.removeTxSession(sessionId);
             }
             response.setType(ClusterMessageType.FORWARD_RESPONSE);
@@ -73,6 +82,25 @@ final class ClusterTxMessageHandler {
             response.setErrorMessage("Failed to execute forwarded transaction op: " + e.getMessage());
         }
         return response;
+    }
+
+    private static OperationResponse retireStaleTransaction(UUID clientId, String txId, OperationType type) {
+        final var active = clientTracker.getActiveTransaction(clientId);
+        if (active == null || txId == null || active.getTransactionId().toString().equals(txId)) {
+            return null;
+        }
+        final var rolledBack = TransactionOperationHelper.rollback(clientId);
+        if (TransactionOperationHelper.releasedItsLocks(rolledBack)) {
+            logger.warning("Rolled back forwarded transaction " + active.getTransactionId()
+                    + " left behind on its session; the edge has moved on to " + txId);
+            return null;
+        }
+        return new OperationResponse(type, ErrorCode.TRANSACTION_PREVIOUS_UNRESOLVED);
+    }
+
+    private static boolean holdsOtherTransaction(UUID clientId, String txId) {
+        final var active = clientTracker.getActiveTransaction(clientId);
+        return active != null && !active.getTransactionId().toString().equals(txId);
     }
 
     private static boolean finishesSession(OperationType type) {
@@ -106,7 +134,8 @@ final class ClusterTxMessageHandler {
         if (session != null) {
             try {
                 vote = session
-                        .submit(() -> TwoPhaseParticipant.prepare(session.clientId(), coordinatorAddress, participants))
+                        .submit(() -> preparesNamedTransaction(session.clientId(), request.getTxId(),
+                                coordinatorAddress, participants))
                         .get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -125,6 +154,23 @@ final class ClusterTxMessageHandler {
         return response;
     }
 
+    private static boolean preparesNamedTransaction(UUID clientId, String txId, String coordinatorAddress,
+            List<String> participants) {
+        if (holdsOtherTransaction(clientId, txId)) {
+            logger.warning("Voting no on PREPARE for " + txId + ": its session holds transaction "
+                    + clientTracker.getActiveTransaction(clientId).getTransactionId());
+            return false;
+        }
+        return TwoPhaseParticipant.prepare(clientId, coordinatorAddress, participants);
+    }
+
+    private static OperationResponse resolveNamedTransaction(UUID clientId, String txId, boolean commit) {
+        if (holdsOtherTransaction(clientId, txId)) {
+            return null;
+        }
+        return commit ? TwoPhaseParticipant.commitPrepared(clientId) : TransactionOperationHelper.abort(clientId);
+    }
+
     static ClusterMessage handleCommitTx(ClusterMessage request) {
         return resolveTx(request, true, ClusterMessageType.COMMIT_TX_ACK);
     }
@@ -137,24 +183,23 @@ final class ClusterTxMessageHandler {
         final var response = new ClusterMessage();
         final var sessionId = request.getTxSessionId();
         final var session = clientTracker.txSession(sessionId);
+        final var txId = request.getTxId();
         try {
-            if (session != null) {
-                final var result = session
-                        .submit(() -> commit
-                                ? TwoPhaseParticipant.commitPrepared(session.clientId())
-                                : TransactionOperationHelper.abort(session.clientId()))
-                        .get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
-                if (TransactionOperationHelper.releasedItsLocks(result)) {
+            final var resolved = session == null
+                    ? null
+                    : session.submit(() -> resolveNamedTransaction(session.clientId(), txId, commit))
+                            .get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
+            if (resolved == null) {
+                TwoPhaseParticipant.resolveFromDurable(txId, commit, clusterConfig.replicationAckTimeoutMs());
+            } else {
+                if (TransactionOperationHelper.releasedItsLocks(resolved)) {
                     clientTracker.removeTxSession(sessionId);
                 }
-                if (result != null && result.getStatus() != OperationStatus.OK) {
+                if (resolved.getStatus() != OperationStatus.OK) {
                     response.setType(ClusterMessageType.ERROR);
-                    response.setErrorMessage("Participant failed to resolve transaction: " + result.getMessage());
+                    response.setErrorMessage("Participant failed to resolve transaction: " + resolved.getMessage());
                     return response;
                 }
-            } else {
-                TwoPhaseParticipant.resolveFromDurable(request.getTxId(), commit,
-                        clusterConfig.replicationAckTimeoutMs());
             }
             response.setType(ackType);
         } catch (InterruptedException e) {

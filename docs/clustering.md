@@ -442,6 +442,15 @@ same thread and makes two concurrent sessions genuinely mutually exclusive rathe
 falsely sharing a reentrant lock. Because the lock lives on the owner, a concurrent
 non-transactional write routed there is properly serialized against the transaction.
 
+A session serves **one transaction at a time**, the one its messages name. The `txSessionId` is the
+edge connection's id, so it outlives a transaction, and the edge discards a transaction even when its
+ROLLBACK or `ABORT_TX` never reached the participant (an unreachable owner, a lost abort). A forwarded
+op naming another `txId` therefore first rolls back the transaction left on the session, since the
+edge only moves to a new id after it has discarded the old one, or answers
+`409-12 TRANSACTION_PREVIOUS_UNRESOLVED` while that one is fenced for recovery (prepared or
+half-applied). `PREPARE_TX` for another id votes no, and `COMMIT_TX`/`ABORT_TX` for another id
+resolve that id from its durable markers without touching the live session.
+
 **Single-owner fast path.** When only one owner is involved, commit skips 2PC: the sole
 owner replays its buffered ops, checks quorum (else `503-2`), and replicates them to a
 majority as **one atomic batch** (`REPLICATE_TX`, applied inside one multi-collection lock

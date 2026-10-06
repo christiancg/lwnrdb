@@ -1120,8 +1120,20 @@ def test_multi_collection_transaction():
             conn.send({"type": "SAVE", "databaseName": DB, "collectionName": c,
                                   "object": {"_id": "y", "v": 6}})
         check_status("ROLLBACK_TRANSACTION", conn.send({"type": "ROLLBACK_TRANSACTION"}), "OK")
+        check_status("START_TRANSACTION again on the same connection after the rollback",
+                     conn.send({"type": "START_TRANSACTION"}), "OK")
+        for c in mc:
+            check_status(f"next transaction's SAVE into {c} reuses the connection's participant sessions",
+                         conn.send({"type": "SAVE", "databaseName": DB, "collectionName": c,
+                                    "object": {"_id": "z", "v": 7}}), "OK")
+        check_status("COMMIT of the next transaction on the same connection",
+                     conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
     finally:
         conn.close()
+
+    for collection in mc:
+        check(f"the next transaction's commit is visible in {collection} on every node",
+              all_nodes_see(DB, collection, "z", 7), detail=f"collection={collection}")
 
     def _none_have_y():
         for c in mc:

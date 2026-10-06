@@ -133,4 +133,11 @@ public class ErrorCodeTest {
         assertEquals(OperationStatus.ERROR, ErrorCode.NAME_COLLIDES_ON_DISK.getStatus());
         assertFalse(ErrorCode.NAME_COLLIDES_ON_DISK.getDefaultMessage().isBlank());
     }
+
+    @Test
+    public void test_transaction_previous_unresolved_code_and_status() {
+        assertEquals("409-12", ErrorCode.TRANSACTION_PREVIOUS_UNRESOLVED.getCode());
+        assertEquals(OperationStatus.ERROR, ErrorCode.TRANSACTION_PREVIOUS_UNRESOLVED.getStatus());
+        assertEquals(ErrorCode.TRANSACTION_PREVIOUS_UNRESOLVED, ErrorCode.byCode("409-12"));
+    }
 }
