@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cluster.msg.TriggerRunRow;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
@@ -14,6 +15,7 @@ import org.techhouse.ops.req.ResolveTriggerRunRequest;
 public final class TriggerRunResolution {
     private static final Logger logger = Logger.logFor(TriggerRunResolution.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final ReentrantLock RESOLUTION_LOCK = new ReentrantLock();
 
     private TriggerRunResolution() {
     }
@@ -44,6 +46,15 @@ public final class TriggerRunResolution {
         if (runId == null || !TriggerRunLog.isEnabled()) {
             return false;
         }
+        RESOLUTION_LOCK.lock();
+        try {
+            return resolveRun(runId, decision);
+        } finally {
+            RESOLUTION_LOCK.unlock();
+        }
+    }
+
+    private static boolean resolveRun(String runId, String decision) {
         try {
             final var chunks = byRun().get(runId);
             if (chunks == null) {

@@ -3,6 +3,7 @@ package org.techhouse.unit.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.lang.reflect.Method;
@@ -144,26 +145,50 @@ public class AdminEpochReplicationTest {
     }
 
     @Test
-    public void test_a_replicated_admin_op_past_a_gap_applies_but_keeps_the_epoch() throws Exception {
+    public void test_a_replicated_admin_op_past_a_gap_is_refused_without_applying() throws Exception {
         final var ack = pool.request(cluster.serverAddress(), createCollectionAt("gap_coll", 3L), ACK_TIMEOUT_MS);
 
         assertNotNull(ack);
-        assertEquals(ClusterMessageType.REPLICATE_ADMIN_ACK, ack.getType(), ack.getErrorMessage());
-        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, "gap_coll"), "the op itself still applies");
-        assertEquals(0L, adminEpoch.current(),
-                "a node that skipped epochs 1 and 2 must not report the epoch of a node holding them");
+        assertEquals(ClusterMessageType.ERROR, ack.getType(),
+                "an ack must mean this node's epoch moved to the op, or a conform can later erase what it acked");
+        assertNull(cache.getAdminCollectionEntry(TestGlobals.DB, "gap_coll"),
+                "a node that skipped epochs 1 and 2 must not hold data its epoch does not account for");
+        assertEquals(0L, adminEpoch.current());
         assertTrue(adminEpoch.isConfirmed());
     }
 
     @Test
-    public void test_a_replicated_user_op_past_a_gap_applies_but_keeps_the_epoch() throws Exception {
+    public void test_a_replicated_user_op_past_a_gap_is_refused_without_applying() throws Exception {
         final var ack = pool.request(cluster.serverAddress(), userUpsertAt("gap-user", 2L), ACK_TIMEOUT_MS);
 
         assertNotNull(ack);
-        assertEquals(ClusterMessageType.REPLICATE_USER_ACK, ack.getType(), ack.getErrorMessage());
-        assertNotNull(cache.getAdminUserEntry("gap-user"));
+        assertEquals(ClusterMessageType.ERROR, ack.getType());
+        assertNull(cache.getAdminUserEntry("gap-user"));
         assertEquals(0L, adminEpoch.current());
         assertTrue(adminEpoch.isConfirmed());
+    }
+
+    @Test
+    public void test_a_replicated_op_at_or_below_the_current_epoch_still_applies_without_adopting() throws Exception {
+        TestUtils.setPrivateField(adminEpoch, "epoch", 2L);
+
+        final var ack = pool.request(cluster.serverAddress(), createCollectionAt("old_epoch_coll", 2L), ACK_TIMEOUT_MS);
+
+        assertNotNull(ack);
+        assertEquals(ClusterMessageType.REPLICATE_ADMIN_ACK, ack.getType(), ack.getErrorMessage());
+        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, "old_epoch_coll"));
+        assertEquals(2L, adminEpoch.current());
+    }
+
+    @Test
+    public void test_skips_ahead_only_past_the_next_epoch() throws Exception {
+        TestUtils.setPrivateField(adminEpoch, "epoch", 4L);
+
+        assertFalse(adminEpoch.skipsAhead(0L));
+        assertFalse(adminEpoch.skipsAhead(4L));
+        assertFalse(adminEpoch.skipsAhead(5L));
+        assertTrue(adminEpoch.skipsAhead(6L));
+        assertTrue(adminEpoch.skipsAhead(9L));
     }
 
     @Test

@@ -385,7 +385,11 @@ membership machinery — serializes them:
    no epoch bump and no replication while the client was told `421-1`, leaving a change only the
    next admin conform resolved — pushed cluster-wide or reverted by node id. The coordinator
    check runs ahead of the quorum check, so a minority node that does not coordinate still says
-   "retry elsewhere" rather than `503-2`.
+   "retry elsewhere" rather than `503-2`. Coordinatorship is decided **once, at admin-lane entry**:
+   the guard asks whether this thread holds the lane rather than re-reading ownership, and an op
+   admitted as coordinator always bumps the epoch. If the role moves while the op runs, the op has
+   already committed here, so the client gets the outcome-unknown `503-3` (epoch unconfirmed),
+   never a `421-1` that would claim it was not applied.
 
 The coordinator runs coordinated admin ops **one at a time**, through an *admin lane*
 (`ClusterAdminHelper.inAdminLane`) that spans the quorum/sync guard, the local execution,
@@ -450,6 +454,15 @@ edge only moves to a new id after it has discarded the old one, or answers
 `409-12 TRANSACTION_PREVIOUS_UNRESOLVED` while that one is fenced for recovery (prepared or
 half-applied). `PREPARE_TX` for another id votes no, and `COMMIT_TX`/`ABORT_TX` for another id
 resolve that id from its durable markers without touching the live session.
+
+A participant can also lose a slice outright: it reaps the session of an edge it saw as departed,
+or it restarts. The edge never learns of either, so it marks every forward to a participant it has
+already forwarded to in this transaction as a **continuation** (`txContinuation`). A participant
+that receives a continuation with no active transaction answers
+`409-13 TRANSACTION_SLICE_LOST` without starting one, rather than opening a fresh slice under the
+same id that would let COMMIT report the surviving half as the whole transaction. `PREPARE_TX` then
+finds no session and votes no; the client can only roll back. A peer that omits the field is read
+as a first forward.
 
 **Single-owner fast path.** When only one owner is involved, commit skips 2PC: the sole
 owner replays its buffered ops, checks quorum (else `503-2`), and replicates them to a
@@ -759,9 +772,12 @@ have it yet at broadcast time — so it adopts the epoch **unconfirmed**. Withou
 reached by a broadcast whose quorum later timed out reported `confirmed` at E while the
 coordinator that minted E reported unconfirmed, and a genuinely conflicting E from the majority
 side lost the tie to a node-id comparison again. A receiving node also moves only to the epoch
-directly after its own: one that skipped an op keeps the op it just applied but not the epoch, so it
-stays behind every node that holds the missed op until the conform catches it up, rather than
-tying with them and possibly winning on node id. A node is promoted to `confirmed` at an
+directly after its own, and one that skipped an op **refuses** the next one (answering `ERROR`
+without applying it) and schedules an admin conform. An acknowledgement therefore always means the
+replica's epoch moved to that op. A replica used to apply the op and keep its old epoch, which left
+its epoch understating its data: a conform against a peer at a higher epoch that lacked the op, or
+against a snapshot fetched before the apply, erased an op this replica had acknowledged — and
+with the coordinator gone, that op was lost cluster-wide. A node is promoted to `confirmed` at an
 **equal** epoch only by conforming to a confirmed snapshot in `reconcile`, which is sound
 because it has just taken that snapshot's content; `adopt` never demotes a confirmed epoch and
 never moves the epoch number on equality.

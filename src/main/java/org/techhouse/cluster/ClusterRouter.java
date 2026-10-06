@@ -98,9 +98,10 @@ public class ClusterRouter {
         if (ownerAddress == null) {
             return bufferLocally(clientId, collectionId);
         }
+        final var continuation = clientTracker.transactionParticipants(clientId).contains(ownerAddress);
         clientTracker.addTransactionParticipant(clientId, ownerAddress);
         clientTracker.recordTransactionWrite(clientId, collectionId, ownerAddress);
-        return forwardTx(rawJson, ownerAddress, type, actingUser, clientId);
+        return forwardTx(rawJson, ownerAddress, type, actingUser, clientId, continuation);
     }
 
     private String bufferLocally(UUID clientId, String collectionId) {
@@ -117,7 +118,7 @@ public class ClusterRouter {
         }
         if (holders.size() == 1) {
             final var holder = holders.iterator().next();
-            return LOCAL_HOLDER.equals(holder) ? null : forwardTx(rawJson, holder, type, actingUser, clientId);
+            return LOCAL_HOLDER.equals(holder) ? null : forwardTx(rawJson, holder, type, actingUser, clientId, true);
         }
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
@@ -126,7 +127,7 @@ public class ClusterRouter {
         }
         final var ownerAddress = ownershipManager.ownerAddress(dbName, collName);
         if (ownerAddress != null && clientTracker.transactionParticipants(clientId).contains(ownerAddress)) {
-            return forwardTx(rawJson, ownerAddress, type, actingUser, clientId);
+            return forwardTx(rawJson, ownerAddress, type, actingUser, clientId, true);
         }
         return null;
     }
@@ -164,7 +165,7 @@ public class ClusterRouter {
 
     private String finishSoleRemoteSlice(String rawJson, String owner, OperationType type, String actingUser,
             UUID clientId) {
-        final var response = forwardTx(rawJson, owner, type, actingUser, clientId);
+        final var response = forwardTx(rawJson, owner, type, actingUser, clientId, true);
         if (!ownerStillHoldsTheSlice(response)) {
             clientTracker.clearActiveTransaction(clientId);
             clientTracker.clearTransactionState(clientId);
@@ -193,10 +194,11 @@ public class ClusterRouter {
         return true;
     }
 
-    private String forwardTx(String rawJson, String ownerAddress, OperationType type, String actingUser,
-            UUID clientId) {
+    private String forwardTx(String rawJson, String ownerAddress, OperationType type, String actingUser, UUID clientId,
+            boolean continuation) {
         final var message = PeerRequest.message(ClusterMessageType.FORWARD_TX_REQUEST);
         message.setForwardBody(ForwardBody.encode(rawJson));
+        message.setTxContinuation(continuation);
         message.setActingUser(actingUser);
         message.setTxSessionId(clientId.toString());
         final var transaction = clientTracker.getActiveTransaction(clientId);

@@ -76,6 +76,13 @@ public class AdminAntiEntropyService implements MembershipListener {
         sweep.schedule();
     }
 
+    public void reconcileSoon() {
+        if (!clusterConfig.isEnabled()) {
+            return;
+        }
+        sweep.schedule();
+    }
+
     public void reconcile() throws Exception {
         if (!clusterConfig.isEnabled()) {
             return;

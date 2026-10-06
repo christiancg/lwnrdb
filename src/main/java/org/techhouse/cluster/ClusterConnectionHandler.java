@@ -227,6 +227,9 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage applyReplicatedAdmin(ClusterMessage request) {
+        if (adminEpoch.skipsAhead(request.getAdminEpoch())) {
+            return epochGap(request.getAdminEpoch());
+        }
         return ClusterMessages.reply(ClusterMessageType.REPLICATE_ADMIN_ACK, "Failed to apply replicated admin op",
                 response -> {
                     final var result = executeForwarded(request, true);
@@ -265,6 +268,9 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage applyReplicatedUser(ClusterMessage request) {
+        if (adminEpoch.skipsAhead(request.getAdminEpoch())) {
+            return epochGap(request.getAdminEpoch());
+        }
         final var response = new ClusterMessage();
         if (ReplicatedUserApplyHelper.apply(request.getReplication())) {
             adoptReplicatedEpoch(request.getAdminEpoch());
@@ -277,14 +283,19 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private void adoptReplicatedEpoch(long candidate) {
-        if (adminEpoch.adoptNext(candidate)) {
-            return;
-        }
+        adminEpoch.adoptNext(candidate);
+    }
+
+    private ClusterMessage epochGap(long candidate) {
         final var current = adminEpoch.current();
-        if (candidate > current + 1) {
-            logger.warning("Replicated admin op at epoch " + candidate + " skipped " + (candidate - current - 1)
-                    + " epoch(s) on this node; keeping epoch " + current + " until the admin conform catches up");
-        }
+        logger.warning("Refusing a replicated admin op at epoch " + candidate + ": this node is at epoch " + current
+                + " and missed " + (candidate - current - 1) + " op(s); conforming before it acknowledges another");
+        adminAntiEntropyService.reconcileSoon();
+        final var response = new ClusterMessage();
+        response.setType(ClusterMessageType.ERROR);
+        response.setErrorMessage("Admin epoch gap: this node is at epoch " + current + " and cannot apply the op at"
+                + " epoch " + candidate + " until it conforms");
+        return response;
     }
 
     private ClusterMessage handleReplicate(ClusterMessage request) {

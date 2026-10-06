@@ -15,6 +15,7 @@ public class ClusterMessage {
     private AntiEntropyPayload antiEntropy;
     private String txSessionId;
     private String txId;
+    private boolean txContinuation;
     private List<String> txParticipants;
     private String txStatus;
     private TxReplicationPayload txReplication;
@@ -160,6 +161,14 @@ public class ClusterMessage {
 
     public void setTxId(String txId) {
         this.txId = txId;
+    }
+
+    public boolean isTxContinuation() {
+        return txContinuation;
+    }
+
+    public void setTxContinuation(boolean txContinuation) {
+        this.txContinuation = txContinuation;
     }
 
     public List<String> getTxParticipants() {

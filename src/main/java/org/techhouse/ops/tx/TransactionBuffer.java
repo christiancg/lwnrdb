@@ -34,14 +34,13 @@ public final class TransactionBuffer {
     private static final Configuration configuration = Configuration.getInstance();
     private static final String OBJECTS_FIELD = "objects";
     private static final String DELETED_DOCUMENT_FIELD = "deletedDocument";
-    private static final String TRIGGER_RUN_ID_FIELD = "triggerRunId";
 
     private TransactionBuffer() {
     }
 
     public static void bufferTriggerRunConsume(Transaction transaction, String runId) throws Exception {
         final var payload = new JsonObject();
-        payload.addProperty(TRIGGER_RUN_ID_FIELD, runId);
+        payload.addProperty(AdminTransactionEntry.TRIGGER_RUN_ID_FIELD, runId);
         bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE_TRIGGER_RUN, "", "", payload);
     }
 

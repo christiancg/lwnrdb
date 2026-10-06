@@ -55,10 +55,15 @@ final class ClusterTxMessageHandler {
             // Run every op of the session on its own single-thread executor so the collection write locks it
             // holds across messages are acquired and released by the same thread.
             final var txId = request.getTxId();
+            final var continuation = request.isTxContinuation();
             final var result = session.submit(() -> {
                 final var refusal = retireStaleTransaction(clientId, txId, type);
                 if (refusal != null) {
                     return refusal;
+                }
+                final var lostSlice = refuseLostSlice(clientId, continuation, type);
+                if (lostSlice != null) {
+                    return lostSlice;
                 }
                 if (startsTransaction(type) && clientTracker.getActiveTransaction(clientId) == null) {
                     // Start with the coordinator's distributed-tx id so the buffered slice and 2PC markers
@@ -69,7 +74,7 @@ final class ClusterTxMessageHandler {
                 return operationProcessor.processMessage(parsed, clientId);
             }).get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
             clientTracker.updateLastCommandTime(clientId);
-            if (finishesSession(type) && TransactionOperationHelper.releasedItsLocks(result)
+            if ((finishesSession(type) || lostItsSlice(result)) && TransactionOperationHelper.releasedItsLocks(result)
                     && clientTracker.getActiveTransaction(clientId) == null) {
                 clientTracker.removeTxSession(sessionId);
             }
@@ -83,6 +88,13 @@ final class ClusterTxMessageHandler {
             response.setErrorMessage("Failed to execute forwarded transaction op: " + e.getMessage());
         }
         return response;
+    }
+
+    private static OperationResponse refuseLostSlice(UUID clientId, boolean continuation, OperationType type) {
+        if (!continuation || clientTracker.getActiveTransaction(clientId) != null) {
+            return null;
+        }
+        return new OperationResponse(type, ErrorCode.TRANSACTION_SLICE_LOST);
     }
 
     private static OperationResponse retireStaleTransaction(UUID clientId, String txId, OperationType type) {
@@ -102,6 +114,10 @@ final class ClusterTxMessageHandler {
     private static boolean holdsOtherTransaction(UUID clientId, String txId) {
         final var active = clientTracker.getActiveTransaction(clientId);
         return active != null && !active.getTransactionId().toString().equals(txId);
+    }
+
+    private static boolean lostItsSlice(OperationResponse result) {
+        return ErrorCode.TRANSACTION_SLICE_LOST.getCode().equals(result.getErrorCode());
     }
 
     private static boolean finishesSession(OperationType type) {

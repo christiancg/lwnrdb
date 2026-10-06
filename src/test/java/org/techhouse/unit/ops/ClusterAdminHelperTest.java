@@ -70,6 +70,15 @@ public class ClusterAdminHelperTest {
         TestUtils.setPrivateField(adminEpoch, "confirmed", true);
     }
 
+    private static OperationResponse admittedGuard(OperationRequest request) {
+        return ClusterAdminHelper.inAdminLane(request, () -> ClusterAdminHelper.guard(request));
+    }
+
+    private static OperationResponse admittedAfter(OperationRequest request, OperationResponse response) {
+        return ClusterAdminHelper.inAdminLane(request,
+                () -> ClusterAdminHelper.afterAdminOp(request, "alice", response));
+    }
+
     private void armAdminSync(boolean completed) throws Exception {
         TestUtils.setPrivateField(adminAntiEntropyService, "started", true);
         TestUtils.setPrivateField(adminAntiEntropyService, "adminSyncCompleted", new AtomicBoolean(completed));
@@ -92,8 +101,7 @@ public class ClusterAdminHelperTest {
                 .thenReturn(outcome);
         TestUtils.setPrivateField(coordinator, "replicator", replicator);
         try {
-            ClusterAdminHelper.afterAdminOp(adminOp(), "alice",
-                    new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok"));
+            admittedAfter(adminOp(), new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok"));
         } finally {
             TestUtils.setPrivateField(coordinator, "replicator", original);
         }
@@ -133,18 +141,18 @@ public class ClusterAdminHelperTest {
 
     @Test
     public void test_guard_null_for_non_admin_op() {
-        assertNull(ClusterAdminHelper.guard(new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL)));
+        assertNull(admittedGuard(new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL)));
     }
 
     @Test
     public void test_guard_null_when_disabled() {
-        assertNull(ClusterAdminHelper.guard(adminOp()));
+        assertNull(admittedGuard(adminOp()));
     }
 
     @Test
     public void test_guard_allows_admin_with_quorum() throws Exception {
         enable(1);
-        assertNull(ClusterAdminHelper.guard(adminOp()));
+        assertNull(admittedGuard(adminOp()));
     }
 
     @Test
@@ -152,7 +160,7 @@ public class ClusterAdminHelperTest {
         enable(1);
         armAdminSync(false);
 
-        assertEquals("503-5", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode());
+        assertEquals("503-5", Objects.requireNonNull(admittedGuard(adminOp())).getErrorCode());
     }
 
     private void becomeNonCoordinator(int expectedSize) throws Exception {
@@ -169,7 +177,7 @@ public class ClusterAdminHelperTest {
     public void test_guard_refuses_a_coordinated_op_on_a_non_coordinator() throws Exception {
         becomeNonCoordinator(2);
 
-        assertEquals("421-1", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode(),
+        assertEquals("421-1", Objects.requireNonNull(admittedGuard(adminOp())).getErrorCode(),
                 "a DDL that runs where it cannot be replicated diverges this node at an unchanged epoch");
     }
 
@@ -179,27 +187,27 @@ public class ClusterAdminHelperTest {
         final var request = adminOp();
         request.setReplicated(true);
 
-        assertNull(ClusterAdminHelper.guard(request));
+        assertNull(admittedGuard(request));
     }
 
     @Test
     public void test_guard_ignores_non_admin_ops_on_a_non_coordinator() throws Exception {
         becomeNonCoordinator(2);
 
-        assertNull(ClusterAdminHelper.guard(new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL)));
+        assertNull(admittedGuard(new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL)));
     }
 
     @Test
     public void test_guard_answers_not_owner_before_no_quorum_on_a_non_coordinator() throws Exception {
         becomeNonCoordinator(5);
 
-        assertEquals("421-1", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode());
+        assertEquals("421-1", Objects.requireNonNull(admittedGuard(adminOp())).getErrorCode());
     }
 
     @Test
     public void test_guard_rejects_admin_without_quorum() throws Exception {
         enable(3);
-        assertEquals("503-2", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode());
+        assertEquals("503-2", Objects.requireNonNull(admittedGuard(adminOp())).getErrorCode());
     }
 
     @Test
@@ -217,7 +225,7 @@ public class ClusterAdminHelperTest {
             final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
             final var epochBefore = adminEpoch.current();
 
-            assertSame(response, ClusterAdminHelper.afterAdminOp(request, "alice", response));
+            assertSame(response, admittedAfter(request, response));
 
             org.mockito.Mockito.verifyNoInteractions(replicator);
             assertEquals(epochBefore, adminEpoch.current(),
@@ -243,7 +251,7 @@ public class ClusterAdminHelperTest {
             final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
             final var epochBefore = adminEpoch.current();
 
-            ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response);
+            admittedAfter(adminOp(), response);
 
             assertEquals(epochBefore + 1, adminEpoch.current(),
                     "a client's own admin op is the one that bumps the epoch and replicates");
@@ -263,10 +271,57 @@ public class ClusterAdminHelperTest {
         org.junit.jupiter.api.Assumptions.assumeFalse(wasCoordinator, "this node must not be the coordinator");
         final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
 
-        final var answered = ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response);
+        final var answered = admittedAfter(adminOp(), response);
 
         assertEquals("421-1", answered.getErrorCode(),
                 "DDL that could not be replicated because coordinatorship moved must be retryable, not OK");
+    }
+
+    @Test
+    public void test_a_node_that_became_coordinator_after_lane_entry_is_refused_by_the_guard() throws Exception {
+        enable(1);
+        armAdminSync(true);
+
+        assertEquals("421-1", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode(),
+                "an op that did not enter the admin lane as coordinator would commit unserialised and unbumped");
+    }
+
+    private OperationResponse runAsCoordinatorThenLoseIt(OperationRequest request) throws Exception {
+        enable(1);
+        armAdminSync(true);
+        final var response = new OperationResponse(request.getType(), OperationStatus.OK, "ok");
+        return ClusterAdminHelper.inAdminLane(request, () -> {
+            ownership.setSelfNodeId("not-the-coordinator");
+            ownership.onMembershipChanged(new MembershipView(
+                    List.of(node(), new NodeInfo("other", "127.0.0.1", 9991, NodeState.ALIVE, 1L, 1L))));
+            return ClusterAdminHelper.afterAdminOp(request, "alice", response);
+        });
+    }
+
+    @Test
+    public void test_an_admin_op_whose_coordinator_moved_mid_handler_answers_outcome_unknown() throws Exception {
+        final var answered = runAsCoordinatorThenLoseIt(adminOp());
+        org.junit.jupiter.api.Assumptions.assumeFalse(ownership.isAdminCoordinator(),
+                "this node must have lost coordinatorship");
+
+        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(), answered.getErrorCode(),
+                "the op committed here, so telling the client it was not applied would be a lie");
+        assertEquals(1L, adminEpoch.current(), "a committed coordinated op must move the epoch");
+        assertFalse(adminEpoch.isConfirmed(), "no peer acknowledged it");
+    }
+
+    @Test
+    public void test_a_user_op_whose_coordinator_moved_mid_handler_answers_outcome_unknown() throws Exception {
+        final var request = new DeleteUserRequest();
+        request.setUsername("someone");
+
+        final var answered = runAsCoordinatorThenLoseIt(request);
+        org.junit.jupiter.api.Assumptions.assumeFalse(ownership.isAdminCoordinator(),
+                "this node must have lost coordinatorship");
+
+        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(), answered.getErrorCode());
+        assertEquals(1L, adminEpoch.current());
+        assertFalse(adminEpoch.isConfirmed());
     }
 
     @Test
@@ -284,20 +339,19 @@ public class ClusterAdminHelperTest {
     @Test
     public void test_after_admin_op_passes_through_non_admin() {
         final var response = new OperationResponse(OperationType.FIND_BY_ID, OperationStatus.OK, "ok");
-        assertSame(response, ClusterAdminHelper.afterAdminOp(new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL),
-                "alice", response));
+        assertSame(response, admittedAfter(new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL), response));
     }
 
     @Test
     public void test_after_admin_op_passes_through_failed_response() {
         final var error = new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ENTRY_NOT_FOUND);
-        assertSame(error, ClusterAdminHelper.afterAdminOp(adminOp(), "alice", error));
+        assertSame(error, admittedAfter(adminOp(), error));
     }
 
     @Test
     public void test_after_admin_op_passes_through_when_not_applicable() {
         final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
-        assertSame(response, ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response));
+        assertSame(response, admittedAfter(adminOp(), response));
     }
 
     @Test
@@ -320,7 +374,7 @@ public class ClusterAdminHelperTest {
     public void test_guard_rejects_procedure_op_without_quorum() throws Exception {
         enable(3);
         final var request = new org.techhouse.ops.req.SaveProcedureRequest(TestGlobals.DB, "p", "return 1;");
-        assertEquals("503-2", Objects.requireNonNull(ClusterAdminHelper.guard(request)).getErrorCode());
+        assertEquals("503-2", Objects.requireNonNull(admittedGuard(request)).getErrorCode());
     }
 
     @Test
@@ -328,7 +382,7 @@ public class ClusterAdminHelperTest {
         enable(3);
         final var request = new org.techhouse.ops.req.SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "t",
                 java.util.List.of("CREATED"), "p");
-        assertEquals("503-2", Objects.requireNonNull(ClusterAdminHelper.guard(request)).getErrorCode());
+        assertEquals("503-2", Objects.requireNonNull(admittedGuard(request)).getErrorCode());
     }
 
     @Test
@@ -336,21 +390,21 @@ public class ClusterAdminHelperTest {
         enable(3);
         final var request = new CreateUserRequest();
         request.setUsername("bob");
-        assertEquals("503-2", Objects.requireNonNull(ClusterAdminHelper.guard(request)).getErrorCode());
+        assertEquals("503-2", Objects.requireNonNull(admittedGuard(request)).getErrorCode());
     }
 
     @Test
     public void test_guard_rejects_coordinator_still_syncing() throws Exception {
         enable(1);
         armAdminSync(false);
-        assertEquals("503-5", Objects.requireNonNull(ClusterAdminHelper.guard(adminOp())).getErrorCode());
+        assertEquals("503-5", Objects.requireNonNull(admittedGuard(adminOp())).getErrorCode());
     }
 
     @Test
     public void test_guard_allows_coordinator_after_sync_completed() throws Exception {
         enable(1);
         armAdminSync(true);
-        assertNull(ClusterAdminHelper.guard(adminOp()));
+        assertNull(admittedGuard(adminOp()));
     }
 
     @Test
@@ -358,7 +412,7 @@ public class ClusterAdminHelperTest {
         enable(1);
         final var before = adminEpoch.current();
         final var response = new OperationResponse(OperationType.CREATE_COLLECTION, OperationStatus.OK, "ok");
-        ClusterAdminHelper.afterAdminOp(adminOp(), "alice", response);
+        admittedAfter(adminOp(), response);
         assertEquals(before + 1, adminEpoch.current());
     }
 
@@ -366,8 +420,7 @@ public class ClusterAdminHelperTest {
     public void test_after_admin_op_passes_through_user_ops_when_not_applicable() {
         for (final var request : userOps()) {
             final var response = new OperationResponse(request.getType(), OperationStatus.OK, "ok");
-            assertSame(response, ClusterAdminHelper.afterAdminOp(request, "alice", response),
-                    "expected passthrough for " + request.getType());
+            assertSame(response, admittedAfter(request, response), "expected passthrough for " + request.getType());
         }
     }
 

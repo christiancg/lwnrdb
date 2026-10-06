@@ -23,6 +23,7 @@ import org.techhouse.ops.DeleteOperationHelper;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TriggerRunLog;
+import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.BulkSaveRequest;
@@ -40,7 +41,6 @@ public final class TransactionRecovery {
     private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final String OBJECTS_FIELD = "objects";
-    private static final String TRIGGER_RUN_ID_FIELD = "triggerRunId";
     private static final String OPS_NOT_APPLIED = "its ops did not all apply";
 
     private TransactionRecovery() {
@@ -144,8 +144,10 @@ public final class TransactionRecovery {
     }
 
     public static void abortFromDurable(String dtxId) throws Exception {
+        final var orphanedRuns = FencedTriggerRuns.consumedBySlice(dtxId);
         AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
         resolveMarkers(dtxId, false);
+        TriggerRunRecovery.requeueRuns(orphanedRuns);
     }
 
     public static void resolveFromDurable(String dtxId, boolean commit, long timeoutMillis) throws Exception {
@@ -386,7 +388,8 @@ public final class TransactionRecovery {
             // Consuming the pending trigger run in the same commit as the run's effects is what makes a
             // trigger exactly-once: the record that would replay it disappears if and only if it landed.
             case AdminTransactionEntry.OP_TYPE_DELETE_TRIGGER_RUN -> {
-                final var runId = op.getPayload().get(TRIGGER_RUN_ID_FIELD).asJsonString().getValue();
+                final var runId = op.getPayload().get(AdminTransactionEntry.TRIGGER_RUN_ID_FIELD).asJsonString()
+                        .getValue();
                 AdminOperationHelper.deleteTriggerRuns(TriggerRunLog.recordIdsFor(runId));
             }
             default -> throw new IllegalStateException("Unknown transaction op type: " + op.getOpType());

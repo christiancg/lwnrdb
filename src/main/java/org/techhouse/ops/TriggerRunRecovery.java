@@ -18,6 +18,7 @@ import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.tx.FencedTriggerRuns;
 
 public final class TriggerRunRecovery {
     private static final Logger logger = Logger.logFor(TriggerRunRecovery.class);
@@ -40,6 +41,7 @@ public final class TriggerRunRecovery {
                     startup.add(entry.getRunId());
                 }
             }
+            ownedByReplay.addAll(FencedTriggerRuns.consumedByFencedSlices());
             startup.removeAll(ownedByReplay);
             return startup;
         } catch (Exception e) {
@@ -66,6 +68,21 @@ public final class TriggerRunRecovery {
             }
         } catch (Exception e) {
             logger.error("Failed to recover pending trigger runs at startup", e);
+        }
+    }
+
+    public static void requeueRuns(Set<String> runIds) {
+        if (runIds.isEmpty() || !configuration.isTriggersEnabled() || !TriggerRunLog.isEnabled()) {
+            return;
+        }
+        try {
+            for (final var chunks : groupByRun(TriggerRunLog.pending(), TriggerRunLog.currentNodeId(), runIds)
+                    .values()) {
+                requeue(chunks);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to requeue the trigger runs of a discarded transaction slice " + runIds
+                    + "; they stay pending until the next restart", e);
         }
     }
 
@@ -157,10 +174,10 @@ public final class TriggerRunRecovery {
     }
 
     private static LinkedHashMap<String, List<AdminTriggerRunEntry>> groupByRun(List<AdminTriggerRunEntry> pending,
-            String nodeId, Set<String> startupRunIds) {
+            String nodeId, Set<String> runIds) {
         final var byRun = new LinkedHashMap<String, List<AdminTriggerRunEntry>>();
         for (final var entry : pending) {
-            if (!startupRunIds.contains(entry.getRunId()) || !nodeId.equals(entry.getNodeId())
+            if (!runIds.contains(entry.getRunId()) || !nodeId.equals(entry.getNodeId())
                     || entry.getStatus() == TriggerRunStatus.DEAD) {
                 continue;
             }

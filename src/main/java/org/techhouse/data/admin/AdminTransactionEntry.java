@@ -37,6 +37,7 @@ public class AdminTransactionEntry extends DbEntry {
     public static final String MARKER_COORDINATOR = "coord";
     public static final String MARKER_OUTCOME = "outcome";
     public static final String MARKER_LOCAL_COMMIT = "localcommit";
+    public static final String TRIGGER_RUN_ID_FIELD = "triggerRunId";
 
     private String transactionId;
     private String clientId;
@@ -185,6 +186,14 @@ public class AdminTransactionEntry extends DbEntry {
 
     public JsonObject getPayload() {
         return payload;
+    }
+
+    public String consumedTriggerRunId() {
+        if (!OP_TYPE_DELETE_TRIGGER_RUN.equals(opType)) {
+            return null;
+        }
+        final var runId = payload.get(TRIGGER_RUN_ID_FIELD);
+        return runId != null && runId.isJsonString() ? runId.asJsonString().getValue() : null;
     }
 
     @Override

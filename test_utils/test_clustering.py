@@ -1856,6 +1856,51 @@ def test_node_rejoin():
                wait_until(_rejoined, timeout_s=45.0, interval_s=1.0))
 
 
+def test_a_restarted_participant_does_not_commit_half_a_transaction():
+    section("A participant that restarted mid-transaction refuses to continue the slice it lost")
+
+    # The edge never learns that a participant restarted: its client transaction stays open and the
+    # participant stays in its list. The participant used to start a fresh slice under the same
+    # transaction id for the next forwarded op, so COMMIT reported the whole transaction committed
+    # while the write buffered before the restart was gone.
+    owners = collections_by_owner(nodes[0].client_port, DB, "slicelost")
+    participant = nodes[1]
+    if not check(f"found a collection owned by node-{participant.index}", participant.index in owners,
+                 f"owners={owners}"):
+        return
+    coll = owners[participant.index][0]
+    if not check("the ring is healthy before the transaction starts", wait_until_cluster_is_healthy()):
+        return
+
+    conn = authed(nodes[0].client_port)
+    try:
+        check_status("START_TRANSACTION", conn.send({"type": "START_TRANSACTION"}), "OK")
+        check_status(f"buffered SAVE into {coll} on node-{participant.index}",
+                     conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                                "object": {"_id": "lost_before", "v": 1}}), "OK")
+
+        print(f"  Restarting node-{participant.index} mid-transaction ...")
+        participant.stop()
+        participant.start()
+        if not check("the ring is healthy after the restart", wait_until_cluster_is_healthy()):
+            return
+
+        after = conn.send({"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                           "object": {"_id": "lost_after", "v": 1}})
+        check("the next write to the restarted participant is refused with 409-13",
+              after.get("errorCode") == "409-13", f"response={after}")
+        commit = conn.send({"type": "COMMIT_TRANSACTION"})
+        check("COMMIT does not report half a transaction as committed", commit.get("status") != "OK",
+              f"response={commit}")
+        conn.send({"type": "ROLLBACK_TRANSACTION"})
+    finally:
+        conn.close()
+
+    for doc_id in ("lost_before", "lost_after"):
+        check(f"{doc_id} is on no node",
+              all(find_by_id(port, DB, coll, doc_id).get("status") == "NOT_FOUND" for port in all_ports()))
+
+
 def test_restart_does_not_regress_write_versions():
     section("Write versions do not regress across a restart")
 
@@ -3087,6 +3132,7 @@ def main():
         test_node_failure_quorum_maintained()
         test_schedule_failover()
         test_node_rejoin()
+        test_a_restarted_participant_does_not_commit_half_a_transaction()
         test_restart_does_not_regress_write_versions()
         test_forwarded_write_ignores_a_client_supplied_trigger_depth()
         test_a_fresh_tombstone_survives_anti_entropy_sweeps()

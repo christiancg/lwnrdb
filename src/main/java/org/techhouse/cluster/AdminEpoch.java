@@ -105,6 +105,10 @@ public class AdminEpoch {
         }
     }
 
+    public synchronized boolean skipsAhead(long candidate) {
+        return candidate > epoch + 1;
+    }
+
     public synchronized boolean adoptNext(long candidate) {
         if (candidate != epoch + 1) {
             return false;

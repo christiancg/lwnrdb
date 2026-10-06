@@ -64,7 +64,7 @@ public final class ClusterAdminHelper {
         if (!isCoordinatedAdminOp(request.getType())) {
             return null;
         }
-        if (clusterConfig.isEnabled() && !request.isReplicated() && !ownershipManager.isAdminCoordinator()) {
+        if (clusterConfig.isEnabled() && !request.isReplicated() && !holdsAdminLane()) {
             return new OperationResponse(request.getType(), ErrorCode.NOT_COLLECTION_OWNER);
         }
         if (coordinator.guardAdmin().kind() == WriteGuard.Kind.NO_QUORUM) {
@@ -83,23 +83,25 @@ public final class ClusterAdminHelper {
         if (!isCoordinatedAdminOp(type) || request.isReplicated() || response.getStatus() != OperationStatus.OK) {
             return response;
         }
+        final var admitted = holdsAdminLane();
         // Bump the epoch before replicating so the new value ships on the replication message.
-        if (clusterConfig.isEnabled() && ownershipManager.isAdminCoordinator()) {
+        if (admitted) {
             adminEpoch.bump();
         }
         final var outcome = USER_OPS.contains(type)
                 ? coordinator.replicateUserOp(usernameOf(request), type == OperationType.DELETE_USER)
                 : coordinator.replicateAdminOp(request, actingUser);
-        recordReplicationReach(outcome);
+        recordReplicationReach(admitted, outcome);
         return switch (outcome) {
             case TIMEOUT -> new OperationResponse(type, ErrorCode.REPLICATION_TIMEOUT);
-            case NOT_COORDINATOR, NOT_OWNER -> new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
+            case NOT_COORDINATOR, NOT_OWNER ->
+                new OperationResponse(type, admitted ? ErrorCode.REPLICATION_TIMEOUT : ErrorCode.NOT_COLLECTION_OWNER);
             case NOT_CLUSTERED, QUORUM_MET -> response;
         };
     }
 
-    private static void recordReplicationReach(ReplicationOutcome outcome) {
-        if (!clusterConfig.isEnabled() || !ownershipManager.isAdminCoordinator()) {
+    private static void recordReplicationReach(boolean admitted, ReplicationOutcome outcome) {
+        if (!admitted) {
             return;
         }
         final var reachedQuorum = switch (outcome) {
