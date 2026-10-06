@@ -1551,11 +1551,11 @@ def test_script_control_is_cluster_wide():
 
     expected_node = f"{HOST}:{runner_node.cluster_port}"
 
-    # Earlier placement tests fire bursts of short scripts, so the listing may still be draining
-    # one of them. Identify this run by the node executing it rather than by being the only row.
+    # Earlier tests leave short scripts and schedule runs draining. Identify this run by its kind and
+    # the node executing it rather than by being the only row.
     def _row_on_the_runner(port):
         for candidate in list_scripts(port):
-            if candidate.get("node") == expected_node:
+            if candidate.get("node") == expected_node and candidate.get("kind") == "RUN_SCRIPT":
                 return candidate
         return None
 
@@ -2738,7 +2738,10 @@ def test_schedule_rejoin_catch_up():
                wait_until(lambda: "whileDown" in schedule_names(rejoiner.client_port), timeout_s=60.0,
                           interval_s=1.0),
                detail=str(schedule_names(rejoiner.client_port)))
-    delete_schedule(nodes[0].client_port, "whileDown")
+    check_status("delete the schedule", delete_schedule(nodes[0].client_port, "whileDown"), "OK")
+    check("the deletion reaches every node",
+               wait_until(lambda: all("whileDown" not in schedule_names(n.client_port)
+                                      for n in nodes if n.alive), timeout_s=20.0))
 
 
 # ══════════════════════════════════════════════════════════════════════════
