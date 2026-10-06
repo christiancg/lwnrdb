@@ -21,6 +21,8 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
 import org.techhouse.data.TriggerDefinition;
+import org.techhouse.data.admin.AdminTriggerRunEntry;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
@@ -31,6 +33,7 @@ import org.techhouse.ops.ProcedureOperationHelper;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunLog;
+import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
@@ -43,6 +46,7 @@ import org.techhouse.test.TestUtils;
 public class TriggerPostCommitErrorTest {
     private static final String DEFINER = "postcommitowner";
     private static final String AUDIT_COLL = "postCommitAudit";
+    private static final String FENCED_COLL = "postCommitFenced";
     private static final Configuration configuration = Configuration.getInstance();
 
     private final Cache cache = IocContainer.get(Cache.class);
@@ -108,9 +112,13 @@ public class TriggerPostCommitErrorTest {
     }
 
     private void storeProcedureThatCommitsThenExhaustsItsBudget() throws Exception {
+        storeProcedureThatWritesThenExhaustsItsBudget(AUDIT_COLL);
+    }
+
+    private void storeProcedureThatWritesThenExhaustsItsBudget(String collName) throws Exception {
         ProcedureOperationHelper.executeSave(
                 new SaveProcedureRequest(TestGlobals.DB, "audit",
-                        "import db from 'db'; import args from 'args';" + " db.save(db.name, '" + AUDIT_COLL
+                        "import db from 'db'; import args from 'args';" + " db.save(db.name, '" + collName
                                 + "', { _id: args.id, hits: 1 });"
                                 + " setInterval(() => { for (let i = 0; i < 2000; i++) { } }, 0);" + " return 'ok';"),
                 DEFINER);
@@ -131,6 +139,24 @@ public class TriggerPostCommitErrorTest {
         dbEntry.set_id(id);
         dbEntry.setData(data);
         return dbEntry;
+    }
+
+    private static void registerFencedCollectionWithoutItsFolder() throws Exception {
+        AdminOperationHelper
+                .saveCollectionEntry(new org.techhouse.data.admin.AdminCollEntry(TestGlobals.DB, FENCED_COLL));
+    }
+
+    private static void releaseTheFence() throws Exception {
+        for (final var txId : TxCommitLog.localCommitTxIds()) {
+            TxCommitLog.clearLocalCommit(txId);
+        }
+        TestUtils.releaseAllLocks();
+        AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, FENCED_COLL);
+    }
+
+    private static AdminTriggerRunEntry runRecord(String runId) throws Exception {
+        return TriggerRunLog.pending().stream().filter(entry -> entry.getRunId().equals(runId)).findFirst()
+                .orElseThrow();
     }
 
     private String recordedRunFor(String id) {
@@ -201,5 +227,30 @@ public class TriggerPostCommitErrorTest {
 
         assertEquals(1, requeued.size(), "an error with no durable effects keeps its retry budget");
         assertEquals(2, requeued.getFirst().getAttempt());
+    }
+
+    @Test
+    public void test_a_fenced_commit_followed_by_an_async_error_is_dead_lettered() throws Exception {
+        registerFencedCollectionWithoutItsFolder();
+        storeProcedureThatWritesThenExhaustsItsBudget(FENCED_COLL);
+        installTrigger();
+        final var saveRequest = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        saveRequest.setObject(entry("fenced").getData());
+        saveRequest.set_id("fenced");
+        SaveOperationHelper.executeSave(saveRequest);
+        final var runId = recordedRunFor("fenced");
+        try {
+            TriggerDispatcher.dispatch(new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "audit",
+                    "audit", false, List.of(entry("fenced")), DEFINER, 0, runId, 1));
+            settle();
+
+            assertTrue(requeued.isEmpty(),
+                    "recovery finishes a half-applied commit, so re-running the body would apply it twice");
+            final var record = runRecord(runId);
+            assertEquals(TriggerRunStatus.DEAD, record.getStatus());
+            assertTrue(record.getLastError().startsWith("CommitFenced"), record.getLastError());
+        } finally {
+            releaseTheFence();
+        }
     }
 }

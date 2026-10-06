@@ -64,6 +64,7 @@ public enum ErrorCode {
             "A participant no longer holds this transaction's buffered writes (it restarted or reaped the session);"
                     + " roll back and retry",
             OperationStatus.ERROR),
+    LISTEN_ENDED("410-1", "The listen ended", OperationStatus.NOT_FOUND),
     NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection", OperationStatus.ERROR),
     CROSS_OWNER_TRANSACTION("421-2", "A transaction may only touch collections owned by a single node", OperationStatus.ERROR),
     TRANSACTION_READ_SPANS_NODES("421-3",

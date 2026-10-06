@@ -140,4 +140,11 @@ public class ErrorCodeTest {
         assertEquals(OperationStatus.ERROR, ErrorCode.TRANSACTION_PREVIOUS_UNRESOLVED.getStatus());
         assertEquals(ErrorCode.TRANSACTION_PREVIOUS_UNRESOLVED, ErrorCode.byCode("409-12"));
     }
+
+    @Test
+    public void test_listen_ended_is_410_1_not_found() {
+        assertEquals("410-1", ErrorCode.LISTEN_ENDED.getCode());
+        assertEquals(OperationStatus.NOT_FOUND, ErrorCode.LISTEN_ENDED.getStatus());
+        assertEquals(ErrorCode.LISTEN_ENDED, ErrorCode.byCode("410-1"));
+    }
 }

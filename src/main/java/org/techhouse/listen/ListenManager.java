@@ -17,8 +17,16 @@ import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.agg.step.JoinAggregationStep;
 
 public class ListenManager {
+    public static final String COLLECTION_DROPPED = "a collection it reads was dropped";
+    public static final String DATABASE_DROPPED = "the database it reads was dropped";
+    public static final String ACCESS_REVOKED = "the listening user can no longer read it";
+
+    record EndedListen(ListenRegistration registration, String reason) {
+    }
+
     private final Logger logger = Logger.logFor(ListenManager.class);
     private final Map<UUID, ListenRegistration> registrations = new ConcurrentHashMap<>();
+    private final Map<UUID, EndedListen> ended = new ConcurrentHashMap<>();
     private final Map<String, Set<UUID>> collectionToListens = new ConcurrentHashMap<>();
     private final LinkedBlockingQueue<UUID> dirtyQueue = new LinkedBlockingQueue<>();
     private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
@@ -39,7 +47,11 @@ public class ListenManager {
     }
 
     public void markDelivered(UUID listenId) {
-        final var registration = registrations.get(listenId);
+        var registration = registrations.get(listenId);
+        if (registration == null) {
+            final var endedListen = ended.get(listenId);
+            registration = endedListen != null ? endedListen.registration() : null;
+        }
         if (registration == null) {
             return;
         }
@@ -60,13 +72,41 @@ public class ListenManager {
         if (registration == null) {
             return false;
         }
+        detachKeys(registration);
+        return true;
+    }
+
+    public boolean end(UUID listenId, String reason) {
+        final var moved = new AtomicReference<ListenRegistration>();
+        registrations.computeIfPresent(listenId, (id, registration) -> {
+            ended.put(id, new EndedListen(registration, reason));
+            moved.set(registration);
+            return null;
+        });
+        final var registration = moved.get();
+        if (registration == null) {
+            return false;
+        }
+        detachKeys(registration);
+        enqueue(listenId);
+        return true;
+    }
+
+    EndedListen endedListen(UUID listenId) {
+        return ended.get(listenId);
+    }
+
+    boolean consumeEnded(UUID listenId, EndedListen endedListen) {
+        return ended.remove(listenId, endedListen);
+    }
+
+    private void detachKeys(ListenRegistration registration) {
         for (var key : registration.collectionKeys()) {
             final var listenIds = collectionToListens.get(key);
             if (listenIds != null) {
-                listenIds.remove(listenId);
+                listenIds.remove(registration.listenId());
             }
         }
-        return true;
     }
 
     public void unregisterAllForClient(UUID clientId) {
@@ -79,20 +119,21 @@ public class ListenManager {
         for (var listenId : toRemove) {
             unregister(listenId);
         }
+        ended.values().removeIf(endedListen -> endedListen.registration().clientId().equals(clientId));
     }
 
-    public void unregisterAllForCollection(String dbName, String collName) {
+    public void endAllForCollection(String dbName, String collName, String reason) {
         final var key = dbName + "|" + collName;
         final var listenIds = collectionToListens.get(key);
         if (listenIds == null || listenIds.isEmpty()) {
             return;
         }
         for (var listenId : new HashSet<>(listenIds)) {
-            unregister(listenId);
+            end(listenId, reason);
         }
     }
 
-    public void unregisterAllForDatabase(String dbName) {
+    public void endAllForDatabase(String dbName, String reason) {
         final var prefix = dbName + "|";
         final var toRemove = new HashSet<UUID>();
         for (var entry : collectionToListens.entrySet()) {
@@ -101,7 +142,7 @@ public class ListenManager {
             }
         }
         for (var listenId : toRemove) {
-            unregister(listenId);
+            end(listenId, reason);
         }
     }
 
@@ -175,6 +216,7 @@ public class ListenManager {
         dirtyQueue.clear();
         queued.clear();
         registrations.clear();
+        ended.clear();
         collectionToListens.clear();
         logger.info("Stopped listen processor worker");
     }

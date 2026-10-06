@@ -43,7 +43,7 @@ final class AdminQuarantine {
         cache.evictCollection(dbName, collName);
         AdminOperationHelper.deleteCollectionEntry(dbName, collName);
         AdminOperationHelper.deletePageCollections(dbName, collName);
-        listenManager.unregisterAllForCollection(dbName, collName);
+        listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);
         return fs.folderQuarantine().moveCollectionAside(dbName, collName, incarnation);
     }
 
@@ -127,7 +127,7 @@ final class AdminQuarantine {
             cache.evictDatabase(dbName);
             AdminOperationHelper.deleteDatabaseEntry(dbName);
             compiledProcedures.invalidateDatabase(dbName);
-            listenManager.unregisterAllForDatabase(dbName);
+            listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
             final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
             scheduleRegistry.removeDatabase(dbName);
             logger.warning("Quarantined database " + dbName + ": it is absent from the winning admin snapshot. Its"

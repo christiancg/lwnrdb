@@ -652,8 +652,15 @@ def test_unauthenticated_listen():
         check_code("LISTEN without auth → MUST_AUTHENTICATE_FIRST", r, "UNAUTHENTICATED", "401-1")
 
 
-def test_a_revoked_reader_stops_receiving_pushes(writer: Conn):
-    section("LISTEN: a reader whose permission was revoked stops receiving pushes")
+def check_listen_ended(label: str, pushed, listen_id: str) -> bool:
+    if pushed is None:
+        return check(label, False, "no frame within the timeout")
+    return check(label, pushed.get("errorCode") == "410-1" and pushed.get("status") == "NOT_FOUND"
+                 and pushed.get("listenId") == listen_id, f"got: {pushed!r}")
+
+
+def test_a_revoked_reader_is_told_its_listen_ended(writer: Conn):
+    section("LISTEN: a reader whose permission was revoked is told its listen ended")
     reader_name = "listen_revoked_reader"
     writer.send({"type": "DELETE_USER", "username": reader_name})
     check_status("create a reader on the listen database", writer.send({
@@ -665,6 +672,7 @@ def test_a_revoked_reader_stops_receiving_pushes(writer: Conn):
             check_status("AUTHENTICATE as the reader", reader.authenticate(reader_name, "listen_reader1234"), "OK")
             r = listen(reader, steps)
             check_status("the reader may LISTEN while it holds READ", r, "OK")
+            listen_id = r.get("listenId")
 
             save_doc(writer, {"_id": "revoked-1", "kind": "revoked"})
             pushed = reader.recv(timeout=5.0)
@@ -675,14 +683,61 @@ def test_a_revoked_reader_stops_receiving_pushes(writer: Conn):
                 "type": "CHANGE_PERMISSIONS", "username": reader_name, "admin": False, "globalPermissions": [],
                 "databasePermissions": {}, "collectionPermissions": {}}), "OK")
             save_doc(writer, {"_id": "revoked-2", "kind": "revoked"})
+            check_listen_ended("the revoked reader is told its listen ended", reader.recv(timeout=5.0), listen_id)
             pushed = reader.recv(timeout=2.0)
-            check("no push reaches a reader after its permission was revoked", pushed is None,
+            check("no data reaches a reader after its permission was revoked", pushed is None,
                   f"unexpected push: {pushed!r}")
             check_status("the revoked reader's own query is refused too", aggregate(reader, steps), "FORBIDDEN")
     finally:
         delete_doc(writer, "revoked-1")
         delete_doc(writer, "revoked-2")
         writer.send({"type": "DELETE_USER", "username": reader_name})
+
+
+def listen_on(conn: Conn, coll: str, steps: list) -> dict:
+    return conn.send({"type": "LISTEN", "databaseName": DB, "collectionName": coll, "aggregationSteps": steps})
+
+
+def test_dropping_the_collection_ends_the_listen(writer: Conn, listener: Conn):
+    section("LISTEN: dropping the listened collection ends the listen with one terminal frame")
+    coll = "listen_dropped_coll"
+    writer.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    r = listen_on(listener, coll, [])
+    check_status("LISTEN registered on the collection about to be dropped", r, "OK")
+    listen_id = r.get("listenId")
+    try:
+        check_status("DROP_COLLECTION", writer.send(
+            {"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+        check_listen_ended("the listener is told its listen ended", listener.recv(timeout=5.0), listen_id)
+        check_code("the ended listen is no longer registered", stop_listen(listener, listen_id), "NOT_FOUND",
+                   "404-7")
+
+        writer.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+        writer.send({"type": "SAVE", "databaseName": DB, "collectionName": coll, "object": {"_id": "after"}})
+        pushed = listener.recv(timeout=2.0)
+        check("a re-created collection does not revive the ended listen", pushed is None,
+              f"unexpected push: {pushed!r}")
+    finally:
+        writer.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": coll})
+
+
+def test_dropping_a_joined_collection_ends_the_listen(writer: Conn, listener: Conn):
+    section("LISTEN: dropping a JOIN target ends the listen on the primary collection")
+    joined = "listen_joined_coll"
+    writer.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": joined})
+    steps = [{"type": "JOIN", "joinCollection": joined, "localField": "ref", "remoteField": "_id",
+              "asField": "joined"}]
+    r = listen(listener, steps)
+    check_status("LISTEN with a JOIN registered", r, "OK")
+    listen_id = r.get("listenId")
+    try:
+        check_status("DROP_COLLECTION of the joined collection", writer.send(
+            {"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": joined}), "OK")
+        check_listen_ended("the JOIN listener is told its listen ended", listener.recv(timeout=5.0), listen_id)
+        pushed = listener.recv(timeout=2.0)
+        check("exactly one terminal frame arrives", pushed is None, f"unexpected push: {pushed!r}")
+    finally:
+        writer.send({"type": "DROP_COLLECTION", "databaseName": DB, "collectionName": joined})
 
 
 # ── main ─────────────────────────────────────────────────────────────────────
@@ -753,7 +808,9 @@ def main():
                 test_multiple_listeners(writer_conn, listener_conn)
                 test_transactional_commit_pushes_once_with_the_final_state(writer_conn, listener_conn)
                 test_listener_survives_a_concurrent_bulk_save(writer_conn, listener_conn)
-                test_a_revoked_reader_stops_receiving_pushes(writer_conn)
+                test_a_revoked_reader_is_told_its_listen_ended(writer_conn)
+                test_dropping_the_collection_ends_the_listen(writer_conn, listener_conn)
+                test_dropping_a_joined_collection_ends_the_listen(writer_conn, listener_conn)
                 test_disconnect_cleanup(writer_conn)
 
             test_unauthenticated_listen()

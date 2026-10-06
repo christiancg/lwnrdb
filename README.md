@@ -446,6 +446,20 @@ Push message (sent asynchronously when results change):
 
 The background re-run uses dirty reads (skips collection-level read lock) for timeliness. All listen registrations for a client are automatically removed when the connection closes.
 
+A listen the server ends on its own is told so with one final frame, and nothing is pushed for it afterwards. That happens when a collection it reads (its own or a `JOIN` target) is dropped, when its database is dropped, or when the listening user can no longer read it. The frame is always written after the listen's initial response:
+
+```json
+{
+  "type": "LISTEN",
+  "status": "NOT_FOUND",
+  "errorCode": "410-1",
+  "message": "The listen ended: a collection it reads was dropped",
+  "listenId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+A `STOP_LISTEN` or a closed connection ends a listen without this frame.
+
 #### `STOP_LISTEN`
 
 Cancel a specific listen subscription by its ID.
@@ -1182,6 +1196,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-11` | `ERROR` | A name that differs only by case already exists and would share storage with it |
 | `409-12` | `ERROR` | A previous transaction on this connection is still being resolved on a participant; retry once it finishes |
 | `409-13` | `ERROR` | A participant no longer holds this transaction's buffered writes (it restarted or reaped the session); roll back and retry |
+| `410-1` | `NOT_FOUND` | The listen ended: a collection it reads was dropped, its database was dropped, or the listening user can no longer read it. Pushed once on the listen's connection; the `listenId` is unregistered afterwards |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
 | `500-3` | `ERROR` | Error deleting user |

@@ -26,6 +26,25 @@ Create a collection in that database
 {"type": "CREATE_COLLECTION", "databaseName": "test", "collectionName": "testCollection"}
 ```
 
+A collection in a database that was never created → `404-4`, with nothing written to disk
+
+```json
+{"type": "CREATE_COLLECTION", "databaseName": "neverCreated", "collectionName": "orphan"}
+```
+
+A name that differs from an existing collection only by case → `409-11`, because on a case-insensitive
+disk both would share one folder
+
+```json
+{"type": "CREATE_COLLECTION", "databaseName": "test", "collectionName": "TESTCOLLECTION"}
+```
+
+The reserved database names `admin`, `admin_pages` and `cluster` cannot be created, in any case → `400-1`
+
+```json
+{"type": "CREATE_DATABASE", "databaseName": "cluster"}
+```
+
 List all collections of a database
 
 ```json
@@ -128,6 +147,13 @@ Find by id deleted document
 {"type": "FIND_BY_ID", "databaseName": "test", "collectionName": "testCollection", "_id": "1234"}
 ```
 
+A read of a collection that is not registered → `404-11`. That includes a differently-cased spelling of a
+real one; `AGGREGATE` and `LISTEN` answer the same way.
+
+```json
+{"type": "FIND_BY_ID", "databaseName": "test", "collectionName": "noSuchCollection", "_id": "findme"}
+```
+
 Aggregation with filter step matching string
 
 ```json
@@ -228,6 +254,17 @@ Aggregation with filter nin
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator":{"fieldOperatorType": "NOT_IN", "field": "aString", "value": ["asd", "frescas"]}}]}
+```
+
+`null` in an `IN` list matches a field that is explicitly `null`, as `EQUALS null` does. A document missing
+the field matches neither `IN` nor `NOT_IN`.
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "nullString", "aString": null}}
+```
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator":{"fieldOperatorType": "IN", "field": "aString", "value": [null, "hola"]}}]}
 ```
 
 Aggregation with filter contains
@@ -666,6 +703,12 @@ Create index
 
 ```json
 {"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": { "aNumber": 12 }}
+```
+
+An index on a collection that does not exist → `404-11`, rather than an `OK` for an index that would never exist
+
+```json
+{"type": "CREATE_INDEX", "databaseName": "test", "collectionName": "noSuchCollection", "fieldName": "aNumber"}
 ```
 
 Drop index
@@ -1307,6 +1350,11 @@ dead-lettered: its record is kept with the last error instead of being discarded
 finds those, `RESOLVE_TRIGGER_RUN` acts on one. Both fan out to every live member, because
 `admin/trigger_runs` is not replicated and a run's record lives on exactly one node.
 
+A run whose own transaction committed only partly (`500-33`, or `409-10` from a single remote owner) is
+dead-lettered at once rather than retried. Recovery finishes that commit, so a retry would apply the
+trigger body twice. This holds even when the script then throws from a timer or a promise. The record's
+error starts with `CommitFenced`.
+
 Everything still recorded — pending runs and dead letters alike
 
 ```json
@@ -1586,10 +1634,39 @@ An unknown id → `404-7`
 {"type": "STOP_LISTEN", "listenId": "00000000-0000-0000-0000-000000000000"}
 ```
 
+A listen the server ends on its own is told so with one final frame, `410-1`, after which nothing more is
+pushed for that `listenId`. That happens when a collection it reads (its own or a `JOIN` target) is dropped,
+when its database is dropped, or when the listening user loses read access. Listen on a scratch collection,
+then drop it from another connection:
+
+```json
+{"type": "CREATE_COLLECTION", "databaseName": "test", "collectionName": "listenDropped"}
+```
+
+```json
+{"type": "LISTEN", "databaseName": "test", "collectionName": "listenDropped", "aggregationSteps": []}
+```
+
+```json
+{"type": "DROP_COLLECTION", "databaseName": "test", "collectionName": "listenDropped"}
+```
+
+The listening connection receives:
+
+```json
+{"type": "LISTEN", "status": "NOT_FOUND", "errorCode": "410-1", "message": "The listen ended: a collection it reads was dropped", "listenId": "550e8400-e29b-41d4-a716-446655440000"}
+```
+
+After that, `STOP_LISTEN` with that id → `404-7`. A `STOP_LISTEN` or a closed connection ends a listen
+without the final frame.
+
 Transactions
 
 A transaction is scoped to the connection: every write between `START_TRANSACTION` and
 `COMMIT_TRANSACTION` is buffered and applied atomically. Reads inside it see the buffered writes.
+Any authenticated user may open one. Starting, committing and rolling back need no grant, but each
+buffered write or read is still authorized on its own, so a write the user could not make outside the
+transaction is refused inside it too → `403-1`.
 
 ```json
 {"type": "START_TRANSACTION"}

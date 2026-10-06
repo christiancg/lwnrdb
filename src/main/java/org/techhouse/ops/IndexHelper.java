@@ -175,12 +175,15 @@ public class IndexHelper {
 
     public static void bulkUpdateIndexes(String dbName, String collName, List<String> ids)
             throws IOException, InterruptedException {
-        final var existingIndexes = maintainedIndexes(dbName, collName);
-        if (existingIndexes.isEmpty() || ids.isEmpty()) {
+        if (ids.isEmpty() || maintainedIndexes(dbName, collName).isEmpty()) {
             return;
         }
         lockCollectionForMaintenance(dbName, collName);
         try {
+            final var existingIndexes = maintainedIndexes(dbName, collName);
+            if (existingIndexes.isEmpty()) {
+                return;
+            }
             final var byId = new HashMap<String, DbEntry>();
             for (var doc : cache.getEntriesByIds(dbName, collName, new HashSet<>(ids))) {
                 byId.put(doc.get_id(), doc);
@@ -205,12 +208,15 @@ public class IndexHelper {
     // rather than trusting the event snapshot; whichever event runs last makes the index converge.
     public static void updateIndexes(String dbName, String collName, String id)
             throws IOException, InterruptedException {
-        final var existingIndexes = maintainedIndexes(dbName, collName);
-        if (existingIndexes.isEmpty()) {
+        if (maintainedIndexes(dbName, collName).isEmpty()) {
             return;
         }
         lockCollectionForMaintenance(dbName, collName);
         try {
+            final var existingIndexes = maintainedIndexes(dbName, collName);
+            if (existingIndexes.isEmpty()) {
+                return;
+            }
             final var current = cache.getEntriesByIds(dbName, collName, Set.of(id));
             final var doc = current.isEmpty() ? null : current.getFirst();
             for (var fieldName : existingIndexes) {

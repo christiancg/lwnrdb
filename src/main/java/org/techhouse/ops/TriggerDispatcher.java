@@ -109,6 +109,12 @@ public final class TriggerDispatcher {
                 + event.getActingUser() + " runId=" + scriptRun.runId() + " durationMs="
                 + (System.currentTimeMillis() - start);
         final var effectsAreDurable = committed.get();
+        if (!effectsAreDurable && database.lastCommitWasFenced()) {
+            triggerExecutor.countFailure();
+            logger.warning(line + " outcome=commit-fenced");
+            deadLetterFencedCommit(event, trigger, definer, scriptRun.runId(), start, result);
+            return;
+        }
         if (result.isError()) {
             triggerExecutor.countFailure();
             logger.warning(line + " outcome=" + result.getErrorName() + ": " + result.getErrorMessage()
@@ -122,11 +128,6 @@ public final class TriggerDispatcher {
         }
         if (!effectsAreDurable) {
             triggerExecutor.countFailure();
-            if (database.lastCommitWasFenced()) {
-                logger.warning(line + " outcome=commit-fenced");
-                deadLetterFencedCommit(event, trigger, definer, scriptRun.runId(), start, result);
-                return;
-            }
             logger.warning(line + " outcome=commit-failed");
             handleFailure(event, trigger, definer, scriptRun.runId(), start, "CommitFailed",
                     "the trigger's effects could not be committed", null, result, true,

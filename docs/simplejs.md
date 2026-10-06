@@ -614,6 +614,14 @@ those ops a second time — the counter-incrementing trigger double-counts, whic
 exactly-once exists to prevent. The run is dead-lettered instead, leaving it visible to
 `RESOLVE_TRIGGER_RUN`. `REPLICATION_TIMEOUT` was already special-cased in the same seam; this is
 the second status that needs it.
+This holds whatever the script itself answers. A body whose commit fenced and that then throws
+from a timer or a microtask still surfaces as a script error, and that error used to take the
+ordinary retry path, so the dispatcher now checks the fence before it looks at the result. A
+script transaction that committed through a single remote owner, which answered `500-33` or
+`409-10`, counts as fenced too (the edge keeps that transaction, see
+[clustering](clustering.md)), so such a run is dead-lettered rather than retried. For `409-10`,
+dead-lettering is the safe direction: the outcome is unknown, and a retry could apply the body
+twice.
 
 Triggers are **queued** from `OperationProcessor`'s write handlers and `TransactionOperationHelper.commit`
 — never from the write helpers, since a replicated apply reaches those directly and would fire

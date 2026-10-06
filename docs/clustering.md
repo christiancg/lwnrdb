@@ -470,7 +470,11 @@ majority as **one atomic batch** (`REPLICATE_TX`, applied inside one multi-colle
 window so no other writer interleaves). A replication timeout returns `503-3` but the local
 commit stands. A `500-33` (half applied) or `409-10` (outcome unknown) from the owner leaves the
 transaction open on the edge, so re-sending COMMIT finishes the slice the owner is still holding; a ROLLBACK in
-that state is forwarded to the owner too and answers `500-33` rather than claiming a rollback. A re-sent COMMIT
+that state is forwarded to the owner too and answers `500-33` rather than claiming a rollback. A script's
+`db.transaction` follows the same rule: when its commit or rollback comes back from the owner with one of those
+answers, the script seam keeps the edge transaction and its participant, rather than wiping them. A script running
+on a client connection therefore leaves that connection holding the transaction, and its next COMMIT reaches the
+owner. A re-sent COMMIT
 that finds quorum or ownership lost since the first attempt answers `500-33` again and keeps the slice and its
 locks: the commit was already decided, so the re-send is refused for now rather than discarding the ops.
 

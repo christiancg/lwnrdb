@@ -127,7 +127,7 @@ public final class CollectionOperationHelper {
                 // present, so an immediate re-CREATE sees it stale and skips registration.
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
-                listenManager.unregisterAllForCollection(dbName, collName);
+                listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);
                 GrantPruner.forDroppedCollection(dbName, collName);
                 dropSucceeded = true;
                 return OperationResponse.ok(OperationType.DROP_COLLECTION, "Collection dropped successfully");

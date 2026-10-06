@@ -47,8 +47,8 @@ public class ReplicatedTxNotificationTest {
 
     @BeforeEach
     void reset() {
-        listenManager.unregisterAllForCollection(TestGlobals.DB, TestGlobals.COLL);
-        listenManager.unregisterAllForCollection(TestGlobals.DB, SECOND_COLL);
+        listenManager.endAllForCollection(TestGlobals.DB, TestGlobals.COLL, ListenManager.COLLECTION_DROPPED);
+        listenManager.endAllForCollection(TestGlobals.DB, SECOND_COLL, ListenManager.COLLECTION_DROPPED);
         queuedListenIds().clear();
     }
 

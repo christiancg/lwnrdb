@@ -241,7 +241,8 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         try {
             response = dispatch(request);
         } finally {
-            final var fenced = txId != null && TransactionOperationHelper.isFenced(txId);
+            final var fenced = txId != null
+                    && (TransactionOperationHelper.isFenced(txId) || keptAfterFinishing(response));
             lastCommitFenced = fenced;
             if (response == null && !fenced) {
                 TransactionOperationHelper.rollback(sessionClientId);
@@ -252,6 +253,10 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
                 && !ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode())) {
             throw jsError(response.getMessage());
         }
+    }
+
+    private boolean keptAfterFinishing(OperationResponse response) {
+        return response != null && clientTracker.getActiveTransaction(sessionClientId) != null;
     }
 
     public void bufferTriggerRunConsume(String runId) {
