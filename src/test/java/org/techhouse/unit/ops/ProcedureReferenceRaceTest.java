@@ -116,6 +116,27 @@ public class ProcedureReferenceRaceTest {
         assertEquals(ErrorCode.INVALID_TRIGGER.getCode(), deleted.getErrorCode());
     }
 
+    @Test
+    public void test_a_case_variant_delete_keeps_a_referenced_procedure() throws Exception {
+        assertEquals(OperationStatus.OK, TriggerOperationHelper.executeSave(
+                new SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "audit", List.of("CREATED"), PROCEDURE), ACTOR)
+                .getStatus());
+
+        ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "Recalc"));
+
+        assertNotNull(fs.readProcedure(TestGlobals.DB, PROCEDURE), "the referenced procedure's file is kept");
+        assertNotNull(cache.getProcedure(TestGlobals.DB, PROCEDURE));
+    }
+
+    @Test
+    public void test_a_trigger_cannot_name_a_case_variant_of_a_procedure() throws Exception {
+        final var saved = TriggerOperationHelper.executeSave(
+                new SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "audit", List.of("CREATED"), "Recalc"), ACTOR);
+
+        assertNotEquals(OperationStatus.OK, saved.getStatus());
+        assertNull(cache.getProcedure(TestGlobals.DB, "Recalc"));
+    }
+
     private void deleteProcedureWhileHoldingTheLock() throws Exception {
         final var deleted = onHolder(
                 () -> ProcedureOperationHelper.executeDelete(new DeleteProcedureRequest(TestGlobals.DB, PROCEDURE)));

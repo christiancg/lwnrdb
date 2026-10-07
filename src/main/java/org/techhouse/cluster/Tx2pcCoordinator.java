@@ -30,6 +30,7 @@ public class Tx2pcCoordinator {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
+    private final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
 
     public OperationResponse commit(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
@@ -89,7 +90,11 @@ public class Tx2pcCoordinator {
             if (commit && !Tx2pcLog.isCommitted(dtxId)) {
                 Tx2pcLog.recordCoordinatorCommit(dtxId, null, peers);
             }
-            TwoPhaseParticipant.resolveFromDurable(dtxId, commit, clusterConfig.replicationAckTimeoutMs());
+            final var budget = clusterConfig.replicationAckTimeoutMs();
+            tx2pcRecovery.onRecoveryThread(() -> {
+                TwoPhaseParticipant.resolveFromDurable(dtxId, commit, budget);
+                return null;
+            }, budget);
         } catch (Exception e) {
             logger.error("Failed to force-resolve transaction " + dtxId, e);
             return new OperationResponse(OperationType.RESOLVE_TRANSACTION, ErrorCode.ERROR_TRANSACTION);

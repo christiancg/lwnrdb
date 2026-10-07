@@ -18,6 +18,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.MembershipListener;
@@ -49,6 +50,7 @@ public class MembershipService {
     private final List<MembershipListener> listeners = new CopyOnWriteArrayList<>();
     private final AtomicLong heartbeatCounter = new AtomicLong();
     private final AtomicBoolean changed = new AtomicBoolean();
+    private final ReentrantLock notifyLock = new ReentrantLock();
     // Pushed in by AdminAntiEntropyService rather than read from it: it already depends on this service, and
     // the IoC container resolves fields during construction, so a field back to it would recurse.
     private volatile boolean adminSyncing;
@@ -75,7 +77,7 @@ public class MembershipService {
         this.self = self;
         members.put(self.getNodeId(), self);
         lastSeen.put(self.getNodeId(), System.currentTimeMillis());
-        notifyListeners();
+        notifyListenersInOrder();
     }
 
     public void start() {
@@ -251,10 +253,11 @@ public class MembershipService {
         if (wasRecentlyEvicted(incoming)) {
             return;
         }
+        final var becameChanged = new AtomicBoolean();
         members.compute(incoming.getNodeId(), (id, existing) -> {
             if (existing == null) {
                 lastSeen.put(id, System.currentTimeMillis());
-                changed.set(true);
+                becameChanged.set(true);
                 final var joined = new NodeInfo(id, incoming.getHost(), incoming.getPort(),
                         incoming.getState() != null ? incoming.getState() : NodeState.ALIVE, incoming.getIncarnation(),
                         incoming.getHeartbeat());
@@ -274,11 +277,14 @@ public class MembershipService {
                 if (existing.getState() != NodeState.ALIVE) {
                     lastProbe.remove(id);
                     existing.setState(NodeState.ALIVE);
-                    changed.set(true);
+                    becameChanged.set(true);
                 }
             }
             return existing;
         });
+        if (becameChanged.get()) {
+            changed.set(true);
+        }
     }
 
     private String selfId() {
@@ -286,8 +292,22 @@ public class MembershipService {
     }
 
     private void maybeNotify() {
-        if (changed.getAndSet(false)) {
+        notifyLock.lock();
+        try {
+            if (changed.getAndSet(false)) {
+                notifyListeners();
+            }
+        } finally {
+            notifyLock.unlock();
+        }
+    }
+
+    private void notifyListenersInOrder() {
+        notifyLock.lock();
+        try {
             notifyListeners();
+        } finally {
+            notifyLock.unlock();
         }
     }
 

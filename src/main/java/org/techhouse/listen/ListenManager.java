@@ -1,7 +1,9 @@
 package org.techhouse.listen;
 
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -32,6 +34,9 @@ public class ListenManager {
     private final Set<UUID> queued = ConcurrentHashMap.newKeySet();
     private final ThreadLocal<Set<String>> deferred = new ThreadLocal<>();
     private final ThreadLocal<Integer> deferralDepth = ThreadLocal.withInitial(() -> 0);
+    private final ThreadLocal<Set<String>> applyingKeys = new ThreadLocal<>();
+    private final ApplyTracker applyTracker = new ApplyTracker();
+    private final Set<UUID> heldBack = ConcurrentHashMap.newKeySet();
     private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public UUID register(UUID clientId, AggregateRequest dirtyRequest, String initialHash) {
@@ -147,10 +152,19 @@ public class ListenManager {
     }
 
     public void deferNotifications() {
+        deferNotifications(List.of());
+    }
+
+    public void deferNotifications(Collection<String> collectionKeys) {
         if (deferralDepth.get() == 0) {
             deferred.set(new LinkedHashSet<>());
+            applyingKeys.set(new LinkedHashSet<>());
         }
         deferralDepth.set(deferralDepth.get() + 1);
+        final var newlyApplying = new LinkedHashSet<>(collectionKeys);
+        newlyApplying.removeAll(applyingKeys.get());
+        applyingKeys.get().addAll(newlyApplying);
+        applyTracker.begin(newlyApplying);
     }
 
     public void flushDeferredNotifications() {
@@ -165,9 +179,38 @@ public class ListenManager {
         deferralDepth.remove();
         final var pending = deferred.get();
         deferred.remove();
+        final var applied = applyingKeys.get();
+        applyingKeys.remove();
+        if (applied != null) {
+            applyTracker.end(applied);
+        }
         if (pending != null) {
             for (final var key : pending) {
                 enqueueDirty(key);
+            }
+        }
+        releaseHeldBack();
+    }
+
+    ApplyTracker.ApplySnapshot applySnapshot(Set<String> collectionKeys) {
+        return applyTracker.snapshot(collectionKeys);
+    }
+
+    boolean unchangedSince(ApplyTracker.ApplySnapshot snapshot) {
+        return applyTracker.unchangedSince(snapshot);
+    }
+
+    void holdBack(UUID listenId, Set<String> collectionKeys) {
+        heldBack.add(listenId);
+        if (!applyTracker.anyActive(collectionKeys) && heldBack.remove(listenId)) {
+            enqueue(listenId);
+        }
+    }
+
+    private void releaseHeldBack() {
+        for (final var listenId : List.copyOf(heldBack)) {
+            if (heldBack.remove(listenId)) {
+                enqueue(listenId);
             }
         }
     }
@@ -215,6 +258,8 @@ public class ListenManager {
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Listen");
         dirtyQueue.clear();
         queued.clear();
+        heldBack.clear();
+        applyTracker.clear();
         registrations.clear();
         ended.clear();
         collectionToListens.clear();

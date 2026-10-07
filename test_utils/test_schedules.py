@@ -309,6 +309,15 @@ def test_listing(conn: Conn):
     conn.delete_schedule("listed")
 
 
+def test_schedule_name_case_variants(conn: Conn):
+    section("Schedule name case variants")
+    check_status("save Rollup", conn.save_schedule("Rollup", "counter", cron="0 3 * * *"), "OK")
+    conn.delete_schedule("rollup")
+    names = [s["name"] for s in conn.list_schedules().get("schedules", [])]
+    check("deleting rollup leaves Rollup in place", "Rollup" in names, f"got {names}")
+    check_status("Rollup still deletes by its own spelling", conn.delete_schedule("Rollup"), "OK")
+
+
 def test_validation(conn: Conn):
     section("Validation")
     check_code("a malformed cron is refused", conn.save_schedule("bad", "counter", cron="not a cron"),
@@ -597,6 +606,7 @@ def main():
             test_a_queued_run_does_not_outlive_its_delete(conn)
             test_cron_schedule(conn)
             test_listing(conn)
+            test_schedule_name_case_variants(conn)
             test_validation(conn)
             test_import_failure(conn)
             test_failure_logs_a_stack(conn, log_path)

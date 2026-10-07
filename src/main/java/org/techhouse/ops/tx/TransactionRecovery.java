@@ -84,7 +84,7 @@ public final class TransactionRecovery {
             final var fencedIds = idsWrittenSincePrepare(reconstructed, preparedVersion);
             dropTombstonesWrittenSincePrepare(reconstructed, fencedIds);
             final var reservedTombstones = coordinator.reserveTransactionTombstones(reconstructed);
-            listenManager.deferNotifications();
+            listenManager.deferNotifications(collections);
             try {
                 applied = applyAllWithRetry(ops, txId, fencedIds);
             } finally {

@@ -32,6 +32,7 @@ final class ClusterTxMessageHandler {
     private static final Tx2pcDirectory tx2pcDirectory = IocContainer.get(Tx2pcDirectory.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
+    private static final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
     private static final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
 
     private ClusterTxMessageHandler() {
@@ -207,7 +208,11 @@ final class ClusterTxMessageHandler {
                     : session.submit(() -> resolveNamedTransaction(session.clientId(), txId, commit))
                             .get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
             if (resolved == null) {
-                TwoPhaseParticipant.resolveFromDurable(txId, commit, clusterConfig.replicationAckTimeoutMs());
+                final var budget = clusterConfig.replicationAckTimeoutMs();
+                tx2pcRecovery.onRecoveryThread(() -> {
+                    TwoPhaseParticipant.resolveFromDurable(txId, commit, budget);
+                    return null;
+                }, budget);
             } else {
                 if (TransactionOperationHelper.releasedItsLocks(resolved)) {
                     clientTracker.removeTxSession(sessionId);

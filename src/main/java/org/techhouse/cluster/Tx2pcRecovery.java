@@ -1,12 +1,15 @@
 package org.techhouse.cluster;
 
-import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executors;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.conn.ClientTracker;
@@ -27,9 +30,9 @@ public class Tx2pcRecovery implements MembershipListener {
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final AtomicBoolean pendingRecovery = new AtomicBoolean();
-    private final ExecutorService membershipWorker = Executors
-            .newSingleThreadExecutor(Thread.ofVirtual().name("tx2pc-membership-", 0).factory());
-    private ScheduledExecutorService sweeper;
+    private final AtomicReference<Thread> recoveryThreadRef = new AtomicReference<>();
+    private volatile ScheduledExecutorService recoveryThread = newRecoveryThread();
+    private volatile boolean stopping;
 
     private enum Decision {
         COMMIT, ABORT, UNKNOWN
@@ -37,11 +40,15 @@ public class Tx2pcRecovery implements MembershipListener {
 
     @Override
     public void onMembershipChanged(MembershipView view) {
+        if (stopping) {
+            logger.info("Skipping membership-triggered transaction recovery: this node is shutting down");
+            return;
+        }
         if (!pendingRecovery.compareAndSet(false, true)) {
             return;
         }
         try {
-            membershipWorker.execute(() -> {
+            recoveryThread.execute(() -> {
                 pendingRecovery.set(false);
                 try {
                     recover();
@@ -56,19 +63,59 @@ public class Tx2pcRecovery implements MembershipListener {
     }
 
     public void start() {
+        stopping = false;
         if (!clusterConfig.isEnabled() || clusterConfig.antiEntropyIntervalMs() <= 0) {
             return;
         }
-        sweeper = Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().name("tx2pc-recovery-", 0).factory());
         final var interval = clusterConfig.antiEntropyIntervalMs();
-        sweeper.scheduleWithFixedDelay(this::sweep, interval, interval, TimeUnit.MILLISECONDS);
+        recoveryThread.scheduleWithFixedDelay(this::sweep, interval, interval, TimeUnit.MILLISECONDS);
     }
 
     public void stop() {
-        if (sweeper != null) {
-            sweeper.shutdownNow();
+        stopping = true;
+        final var stopped = recoveryThread;
+        recoveryThread = newRecoveryThread();
+        stopped.shutdownNow();
+    }
+
+    public void recoverNow() throws Exception {
+        onRecoveryThread(() -> {
+            recover();
+            return null;
+        }, 0L);
+    }
+
+    public <T> T onRecoveryThread(Callable<T> work, long timeoutMillis) throws Exception {
+        if (Thread.currentThread() == recoveryThreadRef.get()) {
+            return work.call();
         }
-        membershipWorker.shutdownNow();
+        final var future = recoveryThread.submit(work);
+        try {
+            return timeoutMillis > 0 ? future.get(timeoutMillis, TimeUnit.MILLISECONDS) : future.get();
+        } catch (ExecutionException failed) {
+            throw rethrowCause(failed);
+        }
+    }
+
+    private static Exception rethrowCause(ExecutionException failed) {
+        final var cause = failed.getCause();
+        if (cause instanceof Error error) {
+            throw error;
+        }
+        return cause instanceof Exception exception ? exception : failed;
+    }
+
+    private ScheduledExecutorService newRecoveryThread() {
+        return Executors.newSingleThreadScheduledExecutor(recordingThreadFactory());
+    }
+
+    private ThreadFactory recordingThreadFactory() {
+        final var virtualThreads = Thread.ofVirtual().name("tx2pc-recovery-", 0).factory();
+        return runnable -> {
+            final var thread = virtualThreads.newThread(runnable);
+            recoveryThreadRef.set(thread);
+            return thread;
+        };
     }
 
     private void sweep() {

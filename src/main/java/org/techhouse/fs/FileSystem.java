@@ -137,11 +137,13 @@ public class FileSystem {
     }
 
     public String readProcedure(String dbName, String name) throws IOException {
-        return MetadataFileStore.read(paths.procedureFile(dbName, name));
+        final var file = paths.procedureFile(dbName, name);
+        return MetadataFileStore.isListedExactly(file) ? MetadataFileStore.read(file) : null;
     }
 
     public boolean deleteProcedure(String dbName, String name) {
-        return MetadataFileStore.delete(paths.procedureFile(dbName, name));
+        final var file = paths.procedureFile(dbName, name);
+        return MetadataFileStore.isListedExactly(file) && MetadataFileStore.delete(file);
     }
 
     public List<String> listProcedureNames(String dbName) {
@@ -154,11 +156,13 @@ public class FileSystem {
     }
 
     public String readSchedule(String dbName, String name) throws IOException {
-        return MetadataFileStore.read(paths.scheduleFile(dbName, name));
+        final var file = paths.scheduleFile(dbName, name);
+        return MetadataFileStore.isListedExactly(file) ? MetadataFileStore.read(file) : null;
     }
 
     public boolean deleteSchedule(String dbName, String name) {
-        return MetadataFileStore.delete(paths.scheduleFile(dbName, name));
+        final var file = paths.scheduleFile(dbName, name);
+        return MetadataFileStore.isListedExactly(file) && MetadataFileStore.delete(file);
     }
 
     public List<String> listScheduleNames(String dbName) {

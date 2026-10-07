@@ -65,7 +65,8 @@ public final class ReplicatedApplyHelper {
     }
 
     static boolean applyLocked(ReplicationPayload payload) throws Exception {
-        listenManager.deferNotifications();
+        listenManager
+                .deferNotifications(List.of(Cache.getCollectionIdentifier(payload.getDbName(), payload.getCollName())));
         try {
             return switch (payload.getOp()) {
                 case UPSERT -> applyUpsert(payload);

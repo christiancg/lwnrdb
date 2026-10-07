@@ -68,6 +68,37 @@ public class FileSystemProcedureTest {
     }
 
     @Test
+    public void test_a_case_variant_procedure_name_reads_as_absent() throws Exception {
+        fs.writeProcedure(TestGlobals.DB, "foo", "{\"name\":\"foo\"}");
+
+        assertNull(fs.readProcedure(TestGlobals.DB, "Foo"));
+        assertFalse(fs.deleteProcedure(TestGlobals.DB, "Foo"));
+        assertEquals("{\"name\":\"foo\"}", fs.readProcedure(TestGlobals.DB, "foo"));
+    }
+
+    @Test
+    public void test_a_case_variant_schedule_name_reads_as_absent() throws Exception {
+        fs.writeSchedule(TestGlobals.DB, "daily", "{\"name\":\"daily\"}");
+        try {
+            assertNull(fs.readSchedule(TestGlobals.DB, "Daily"));
+            assertFalse(fs.deleteSchedule(TestGlobals.DB, "Daily"));
+            assertEquals("{\"name\":\"daily\"}", fs.readSchedule(TestGlobals.DB, "daily"));
+        } finally {
+            fs.deleteSchedule(TestGlobals.DB, "daily");
+        }
+    }
+
+    @Test
+    public void test_a_definition_in_a_missing_folder_reads_as_absent() throws Exception {
+        if (proceduresFolder().exists()) {
+            TestUtils.deleteFolder(proceduresFolder());
+        }
+
+        assertNull(fs.readProcedure(TestGlobals.DB, "one"));
+        assertFalse(fs.deleteProcedure(TestGlobals.DB, "one"));
+    }
+
+    @Test
     public void test_delete_returns_false_when_absent() {
         assertFalse(fs.deleteProcedure(TestGlobals.DB, "nothing"));
     }

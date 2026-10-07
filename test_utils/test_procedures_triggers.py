@@ -306,6 +306,16 @@ def test_procedure_name_case_collision(conn: Conn):
     check_status("re-saving MyProc still updates it", resaved, "OK")
     check("re-saving MyProc bumped its version", (resaved.get("version") or 0) > 1,
           detail=str(resaved)[:160])
+    check_status("a trigger references MyProc", conn.save_trigger("case_guard", ["CREATED"], "MyProc"), "OK")
+    conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "myproc"})
+    listed = conn.send({"type": "LIST_PROCEDURES", "databaseName": DB})
+    names = [p.get("name") for p in listed.get("procedures", [])]
+    check("deleting myproc leaves the referenced MyProc in place", "MyProc" in names, f"got {names}")
+    check_result("MyProc is still callable", conn.call("MyProc"), 3)
+    check_code("myproc is not a name for MyProc", conn.call("myproc"), "NOT_FOUND", "404-8")
+    refused = conn.save_trigger("case_alias", ["CREATED"], "myproc")
+    check("a trigger cannot name myproc", refused.get("status") != "OK", detail=str(refused)[:160])
+    conn.send({"type": "DELETE_TRIGGER", "databaseName": DB, "collectionName": COLL, "name": "case_guard"})
     conn.send({"type": "DELETE_PROCEDURE", "databaseName": DB, "name": "MyProc"})
 
 

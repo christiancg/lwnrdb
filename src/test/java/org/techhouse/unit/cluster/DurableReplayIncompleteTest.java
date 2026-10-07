@@ -206,6 +206,21 @@ public class DurableReplayIncompleteTest {
     }
 
     @Test
+    public void test_a_replay_that_failed_at_startup_is_finished_by_a_later_round() throws Exception {
+        final var dtxId = seedUnappliablePreparedSlice();
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
+        recovery.recoverNow();
+        assertTrue(Tx2pcLog.isPrepared(dtxId), "the first round could not apply the slice");
+
+        createAbsentCollection();
+        recovery.recoverNow();
+
+        assertFalse(Tx2pcLog.isPrepared(dtxId), "a later round finishes the slice the startup round kept locked");
+        assertEquals(OperationStatus.OK, findStatus(ABSENT_COLL, "into-a-missing-collection"));
+        assertEquals(OperationStatus.OK, saveFromAnotherThread());
+    }
+
+    @Test
     public void test_a_half_applied_commit_through_a_live_session_is_not_reported_resolved() throws Exception {
         final var sessionId = "half-applied-session";
         final var session = clientTracker.registerTxSession(sessionId, "tester", "edge-node");

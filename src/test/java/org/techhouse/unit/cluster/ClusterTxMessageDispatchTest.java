@@ -6,9 +6,11 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
@@ -21,6 +23,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.Tx2pcLog;
+import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -123,6 +126,47 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
                 "a slice that did not apply must not be acknowledged, or the coordinator forgets the commit");
         assertTrue(response.getErrorMessage().contains(dtxId));
         assertTrue(Tx2pcLog.isPrepared(dtxId), "the slice stays in doubt for the coordinator to re-drive");
+    }
+
+    @Test
+    public void test_a_replay_that_failed_on_a_closed_connection_is_finished_by_a_later_commit() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        final var obj = new JsonObject();
+        obj.add(Globals.PK_FIELD, new JsonString("lane-retry"));
+        AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "coordinator", 0,
+                AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, "lane-coll", obj));
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"),
+                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+        final var first = pool.request(cluster.serverAddress(),
+                txResolutionRequest(ClusterMessageType.COMMIT_TX, dtxId), 10000L);
+        assertEquals(ClusterMessageType.ERROR, first.getType());
+        pool.closeAll();
+
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "lane-coll")).getStatus());
+        final var freshConnection = new PeerConnectionPool();
+        try {
+            final var retried = freshConnection.request(cluster.serverAddress(),
+                    txResolutionRequest(ClusterMessageType.COMMIT_TX, dtxId), 10000L);
+
+            assertEquals(ClusterMessageType.COMMIT_TX_ACK, retried.getType(),
+                    "the retry must not find the slice's locks owned by the closed connection's thread");
+        } finally {
+            freshConnection.closeAll();
+        }
+        assertFalse(Tx2pcLog.isPrepared(dtxId));
+        assertTrue(lockableFromAnotherThread(), "the finished replay released every lock it kept");
+    }
+
+    private boolean lockableFromAnotherThread() throws InterruptedException {
+        final var acquired = new AtomicBoolean();
+        Thread.ofVirtual().start(() -> {
+            if (locks.tryLockWrite(TestGlobals.DB, TestGlobals.COLL)) {
+                acquired.set(true);
+                locks.release(TestGlobals.DB, TestGlobals.COLL);
+            }
+        }).join(5000);
+        return acquired.get();
     }
 
     @Test

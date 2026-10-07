@@ -54,11 +54,8 @@ public class ListenProcessorThread implements Runnable {
         if (registration == null || !registration.delivered().get()) {
             return;
         }
-        final List<JsonObject> results;
-        try {
-            results = AggregationOperationHelper.processAggregation(registration.request());
-        } catch (Exception e) {
-            logger.error("Error re-running listen query for " + listenId, e);
+        final var results = rerunOutsideAnyApply(listenId, registration);
+        if (results == null) {
             return;
         }
         final var newHash = ResultHasher.hash(results,
@@ -71,6 +68,26 @@ public class ListenProcessorThread implements Runnable {
             return;
         }
         push(listenId, registration.clientId(), new ListenResponse(listenId.toString(), results, newHash, true));
+    }
+
+    private List<JsonObject> rerunOutsideAnyApply(UUID listenId, ListenRegistration registration) {
+        final var before = manager.applySnapshot(registration.collectionKeys());
+        if (before == null) {
+            manager.holdBack(listenId, registration.collectionKeys());
+            return null;
+        }
+        final List<JsonObject> results;
+        try {
+            results = AggregationOperationHelper.processAggregation(registration.request());
+        } catch (Exception e) {
+            logger.error("Error re-running listen query for " + listenId, e);
+            return null;
+        }
+        if (!manager.unchangedSince(before)) {
+            manager.holdBack(listenId, registration.collectionKeys());
+            return null;
+        }
+        return results;
     }
 
     private void pushEndedOnceDelivered(UUID listenId, ListenManager.EndedListen endedListen) {

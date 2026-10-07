@@ -158,11 +158,19 @@ public class Main {
             ownershipManager.setSelfNodeId(membershipService.getSelf().getNodeId());
             adminAntiEntropyService.start();
             antiEntropyService.start();
-            tx2pcRecovery.recover();
+            recoverTransactionsAtStartup();
             tx2pcRecovery.start();
         } catch (IOException e) {
             logger.fatal("Failed to start the cluster server", e);
             throw new RuntimeException("Failed to start the cluster server", e);
+        }
+    }
+
+    private static void recoverTransactionsAtStartup() {
+        try {
+            tx2pcRecovery.recoverNow();
+        } catch (Exception failure) {
+            logger.error("Failed to recover in-doubt transactions at startup", failure);
         }
     }
 

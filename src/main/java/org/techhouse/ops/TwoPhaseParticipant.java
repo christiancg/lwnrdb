@@ -61,7 +61,7 @@ public final class TwoPhaseParticipant {
             }
             final var txId = transaction.getTransactionId().toString();
             final var reservedTombstones = coordinator.reserveTransactionTombstones(transaction);
-            listenManager.deferNotifications();
+            listenManager.deferNotifications(transaction.getHeldLocks());
             final boolean applied;
             try {
                 applied = TransactionRecovery.applyAllWithRetry(ops, txId);

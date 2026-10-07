@@ -3,6 +3,7 @@ package org.techhouse.fs;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -33,6 +34,12 @@ final class MetadataFileStore {
         } finally {
             lock.unlock();
         }
+    }
+
+    static boolean isListedExactly(File file) {
+        final var folder = file.getParentFile();
+        final var names = folder == null ? null : folder.list();
+        return names != null && Arrays.asList(names).contains(file.getName());
     }
 
     static void ensureFolder(File folder, String label, String dbName) throws IOException {

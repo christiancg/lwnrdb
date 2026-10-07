@@ -38,7 +38,7 @@ public final class ReplicatedTxApplyHelper {
     private static boolean applyUnderWriteLocks(TxReplicationPayload payload, java.util.Set<String> collIds,
             long timeoutMillis) throws Exception {
         final ResourceLocking.LockedAction<Boolean> applyEntries = () -> {
-            listenManager.deferNotifications();
+            listenManager.deferNotifications(collIds);
             try {
                 for (final var entry : payload.getEntries()) {
                     if (!ReplicatedApplyHelper.applyLocked(entry)) {

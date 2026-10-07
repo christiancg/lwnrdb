@@ -88,6 +88,11 @@ catch-up signals — used for script placement. Adopting a peer's new telemetry 
 does **not** count as a membership change: firing the membership listeners every round
 would rebuild the ownership ring and re-run anti-entropy for nothing.
 
+Membership listeners are notified from the gossip tick and from the handlers answering a peer's
+`GOSSIP`/`JOIN_REQUEST`, one notification at a time: the change flag, the view snapshot and every
+listener run under one lock, so the last view a listener applies always includes every member merged
+before it.
+
 ## Ownership and the hash ring
 
 `HashRing` places `virtualNodesPerNode` virtual points per **ALIVE** node on a SHA-256
@@ -511,7 +516,10 @@ marker and locks, so the coordinator keeps its own marker and re-drives the comm
 lands — an acknowledged replay that had not finished let the coordinator forget the commit and the
 participant later abort a half-applied slice. Recovery re-runs on every
 membership change and on a periodic sweep, which also GCs old outcome markers and logs
-long in-doubt transactions.
+long in-doubt transactions. Every durable replay — startup, membership-triggered, the sweep, a peer's
+`COMMIT_TX`/`ABORT_TX` with no live session, `RESOLVE_TRANSACTION` — runs on one recovery thread,
+because a replay that cannot finish keeps its collection write locks and only the thread that holds
+them can retry.
 
 **Coordinator-loss mitigation.** A prepared participant that cannot reach its coordinator
 falls back to **cooperative termination**: it polls the *other* participants (whose
@@ -807,8 +815,9 @@ connection reads this node's replica, and a commit the owner acknowledged is onl
 A client that runs `AGGREGATE` and then `LISTEN` can therefore watch the result set go **backwards**.
 
 Re-runs are deliberately dirty reads (timeliness over strict consistency), but a transactional commit
-defers its notifications until every buffered op has applied, so a listener never sees a frame holding
-half a transaction.
+defers its notifications until every buffered op has applied, and a re-run that overlaps a commit's
+apply (one queued before the commit started) is held back and re-queued by the commit's flush, so a
+listener never sees a frame holding half a transaction.
 
 Dirty does not mean unsynchronised. A writer reshapes the cached PK index in place — a bulk save
 removes, appends twice, and only re-sorts in a `finally` — so a reader binary-searching that list

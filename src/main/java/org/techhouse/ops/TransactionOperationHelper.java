@@ -171,7 +171,7 @@ public final class TransactionOperationHelper {
                     new ArrayList<>(transaction.getHeldLocks()));
             pastCommitPoint = true;
             final var reservedTombstones = coordinator.reserveTransactionTombstones(transaction);
-            listenManager.deferNotifications();
+            listenManager.deferNotifications(transaction.getHeldLocks());
             final boolean applied;
             try {
                 applied = TransactionRecovery.applyAllWithRetry(ops, txId);
