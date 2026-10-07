@@ -2507,6 +2507,72 @@ def test_a_trigger_fires_once_despite_a_replication_timeout():
           f"{ran} run(s) recorded")
 
 
+STARTUP_REPLAY_SETTLE_S = 10
+
+
+def test_a_trigger_writing_only_to_another_owner_consumes_its_run():
+    section("A trigger whose body writes only to another node's collection consumes its run")
+
+    owners = collections_by_owner(nodes[0].client_port, DB, "remotebody")
+    pair = next(((host, other) for host in owners for other in owners if host != other), None)
+    if not check("found collections owned by two different nodes", pair is not None, f"owners={owners}"):
+        return
+    host = nodes[pair[0]]
+    watched, marks = owners[pair[0]][0], owners[pair[1]][0]
+
+    conn = authed(host.client_port)
+    try:
+        check_status("store the remote-marking procedure", conn.send({
+            "type": "SAVE_PROCEDURE", "databaseName": DB, "name": "remotebody_mark",
+            "script": "import db from 'db'; import args from 'args';"
+                      f" db.save(db.name, '{marks}', {{ _id: crypto.randomUUID(), src: args.id }});"
+                      " return 1;"}), "OK")
+        trigger_result = {}
+
+        def _trigger_installed():
+            nonlocal trigger_result
+            trigger_result = conn.send({
+                "type": "SAVE_TRIGGER", "databaseName": DB, "collectionName": watched, "name": "remotebody",
+                "events": ["CREATED"], "procedureName": "remotebody_mark"})
+            return trigger_result.get("status") == "OK"
+
+        wait_until(_trigger_installed, timeout_s=30.0, interval_s=1.0)
+        check_status("install the after trigger on the host's own collection", trigger_result, "OK")
+    finally:
+        conn.close()
+
+    check_status("write the watched document on its owner",
+                 save(host.client_port, DB, watched, {"_id": "fires_remotely", "v": 1}), "OK")
+
+    def _runs():
+        response = aggregate(host.client_port, DB, marks, [filter_step("src", "EQUALS", "fires_remotely")])
+        return len(ids_of(response))
+
+    if not check("the trigger's remote write landed", wait_until(lambda: _runs() >= 1, timeout_s=60.0)):
+        return
+
+    def _pending_runs_of_the_trigger():
+        listing = authed(host.client_port)
+        try:
+            runs = listing.send({"type": "LIST_TRIGGER_RUNS", "status": "PENDING"}).get("runs") or []
+            return [run for run in runs if run.get("trigger") == "remotebody"]
+        finally:
+            listing.close()
+
+    check("the firing node holds no pending run for the trigger once it succeeded",
+          wait_until(lambda: not _pending_runs_of_the_trigger(), timeout_s=15.0),
+          f"pending: {_pending_runs_of_the_trigger()} - the consume op sat in a local slice the commit skipped")
+
+    host.stop()
+    host.start()
+    if not check("the restarted firing node rejoined", wait_until_cluster_is_healthy()):
+        return
+    time.sleep(STARTUP_REPLAY_SETTLE_S)
+    ran = _runs()
+    check("the restart did not replay the body", ran == 1,
+          f"{ran} run(s) recorded - startup recovery re-submitted a run whose effects had committed")
+
+
 def test_forwarded_write_ignores_a_client_supplied_trigger_depth():
     section("A client-supplied triggerDepth does not survive forwarding")
 
@@ -3141,6 +3207,7 @@ def main():
         test_a_prepared_participant_resolves_without_its_coordinator()
         test_a_post_prepare_write_survives_2pc_recovery()
         test_a_trigger_fires_once_despite_a_replication_timeout()
+        test_a_trigger_writing_only_to_another_owner_consumes_its_run()
         test_drop_and_recreate_does_not_resurrect_documents()
         test_drop_database_and_recreate_does_not_resurrect_documents()
         test_drop_then_rejoin_then_recreate_does_not_resurrect_documents()

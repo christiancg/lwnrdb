@@ -122,6 +122,7 @@ public final class IndexOperationHelper {
         if (Set.copyOf(rebuiltFields).containsAll(registeredIndexes)) {
             pendingIndexWrites.clearCollection(dbName, collName);
             fs.clearIndexesDirty(dbName, collName);
+            fs.retireUncleanStopMarker(dbName, collName);
         }
     }
 }

@@ -234,4 +234,36 @@ public class ResultHasherTest {
         assertTrue(ResultHasher.ordersResults(List.of(filter)),
                 "the recursion into a conjunction's operands must not be accidentally shallow");
     }
+
+    @Test
+    public void test_first_unordered_cut_finds_a_limit_or_skip_over_an_unordered_source() {
+        final var filter = new FilterAggregationStep(equalsName("x"));
+
+        assertEquals(0, ResultHasher.firstUnorderedCut(List.of(new LimitAggregationStep(3))));
+        assertEquals(2, ResultHasher
+                .firstUnorderedCut(List.of(filter, filter, new SkipAggregationStep(1), new LimitAggregationStep(3))));
+    }
+
+    @Test
+    public void test_first_unordered_cut_is_none_once_an_order_is_defined() {
+        assertEquals(-1, ResultHasher
+                .firstUnorderedCut(List.of(new SortAggregationStep("name", true), new LimitAggregationStep(3))));
+        assertEquals(-1, ResultHasher
+                .firstUnorderedCut(List.of(new FilterAggregationStep(nearest()), new LimitAggregationStep(3))));
+    }
+
+    @Test
+    public void test_first_unordered_cut_stops_at_a_step_that_rebuilds_rows() {
+        assertEquals(-1, ResultHasher
+                .firstUnorderedCut(List.of(new GroupByAggregationStep("category"), new LimitAggregationStep(3))));
+        assertEquals(-1, ResultHasher
+                .firstUnorderedCut(List.of(new DistinctAggregationStep("category"), new SkipAggregationStep(1))));
+    }
+
+    @Test
+    public void test_first_unordered_cut_is_none_without_a_limit_or_skip() {
+        assertEquals(-1, ResultHasher.firstUnorderedCut(List.of(new FilterAggregationStep(equalsName("x")))));
+        assertEquals(-1, ResultHasher.firstUnorderedCut(List.of()));
+        assertEquals(-1, ResultHasher.firstUnorderedCut(null));
+    }
 }

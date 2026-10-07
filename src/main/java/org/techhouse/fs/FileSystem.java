@@ -189,6 +189,14 @@ public class FileSystem {
         return dirtyIndexMarkers.listMarked();
     }
 
+    public List<String> retainUncleanStopMarkers() {
+        return dirtyIndexMarkers.retainUncleanStops();
+    }
+
+    public void retireUncleanStopMarker(String dbName, String collName) {
+        dirtyIndexMarkers.clearUncleanStop(dbName, collName);
+    }
+
     public IndexBuildMarkers indexBuildMarkers() {
         return indexBuildMarkers;
     }

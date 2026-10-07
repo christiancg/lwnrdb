@@ -1434,6 +1434,13 @@ def test_cursor(conn: Conn):
                       " inIdOrder: seen.every((id, i) => id === sorted[i]) };")
     check_result("a walk over a pipeline with no SORT still visits every document exactly once, in _id order",
                  conn.run(unordered_walk), {"distinct": BIG_DOCS, "total": BIG_DOCS, "inIdOrder": True})
+    limited_walk = ('import db from "db";\n'
+                    "const seen = [];\n"
+                    f'for (const doc of db.cursor(db.name, "{BIG_COLL}", [{{ type: "LIMIT", limit: 7 }}],'
+                    " { batchSize: 2 })) seen.push(doc._id);\n"
+                    "return seen;")
+    check_result("a cursor over a bare LIMIT pages one defined subset: the first rows by _id",
+                 conn.run(limited_walk), [f"big{i:04d}" for i in range(7)])
 
     counted = conn.send({"type": "AGGREGATE", "databaseName": DB, "collectionName": BIG_COLL,
                          "aggregationSteps": [{"type": "COUNT"}]})

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -15,6 +16,8 @@ import java.util.Set;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.config.Globals;
@@ -262,6 +265,28 @@ public class AdminSnapshotConformerTest {
         assertNotNull(cache.getAdminCollectionEntry("legacydb", "legacycoll"),
                 "an entry written before incarnations existed carries 0 and must be adopted, not quarantined");
         assertEquals(300L, cache.getAdminCollectionEntry("legacydb", "legacycoll").getIncarnation());
+    }
+
+    @Test
+    public void test_a_failed_incarnation_write_leaves_the_cached_entry_unchanged_until_a_round_lands_it()
+            throws Exception {
+        final var legacy = snapshot(List.of(dbJson("faildb", List.of())),
+                List.of(collJson("faildb", "failcoll", Set.of())), List.of());
+        final var stamped = snapshot(List.of(dbJson("faildb", List.of())),
+                List.of(collJson("faildb", "failcoll", Set.of(), 400L)), List.of());
+        conform(legacy);
+
+        try (var helper = Mockito.mockStatic(AdminOperationHelper.class, Mockito.CALLS_REAL_METHODS)) {
+            helper.when(() -> AdminOperationHelper.saveCollectionEntry(ArgumentMatchers.any(AdminCollEntry.class)))
+                    .thenThrow(new IOException("disk full"));
+            assertFalse(conformer.conform(stamped, adminEpoch.current()));
+        }
+        assertEquals(0L, cache.getAdminCollectionEntry("faildb", "failcoll").getIncarnation(),
+                "memory must not run ahead of a write that never landed, or no later round retries it");
+
+        assertTrue(conformer.conform(stamped, adminEpoch.current()));
+        cache.loadAdminData();
+        assertEquals(400L, cache.getAdminCollectionEntry("faildb", "failcoll").getIncarnation());
     }
 
     @Test

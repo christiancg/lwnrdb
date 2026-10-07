@@ -40,11 +40,12 @@ final class AdminQuarantine {
     }
 
     private boolean unregisterAndMoveAside(String dbName, String collName, long incarnation) throws Exception {
-        cache.evictCollection(dbName, collName);
         AdminOperationHelper.deleteCollectionEntry(dbName, collName);
         AdminOperationHelper.deletePageCollections(dbName, collName);
         listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);
-        return fs.folderQuarantine().moveCollectionAside(dbName, collName, incarnation);
+        final var moved = fs.folderQuarantine().moveCollectionAside(dbName, collName, incarnation);
+        cache.evictCollection(dbName, collName);
+        return moved;
     }
 
     private static String movedOrLeft(boolean moved) {
@@ -124,11 +125,11 @@ final class AdminQuarantine {
                 }
                 lockedColls.add(collName);
             }
-            cache.evictDatabase(dbName);
             AdminOperationHelper.deleteDatabaseEntry(dbName);
-            compiledProcedures.invalidateDatabase(dbName);
             listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
             final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
+            cache.evictDatabase(dbName);
+            compiledProcedures.invalidateDatabase(dbName);
             scheduleRegistry.removeDatabase(dbName);
             logger.warning("Quarantined database " + dbName + ": it is absent from the winning admin snapshot. Its"
                     + " documents were " + movedOrLeft(moved) + " and it no longer serves reads or writes until an"

@@ -63,6 +63,23 @@ public final class ResultHasher {
         return false;
     }
 
+    public static int firstUnorderedCut(List<BaseAggregationStep> steps) {
+        if (steps == null) {
+            return -1;
+        }
+        for (var i = 0; i < steps.size(); i++) {
+            final var step = steps.get(i);
+            final var type = step.getType();
+            if (type == AggregationStepType.SORT || isRankingFilter(step) || !ORDER_PRESERVING.contains(type)) {
+                return -1;
+            }
+            if (type == AggregationStepType.LIMIT || type == AggregationStepType.SKIP) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
     private static boolean isRankingFilter(BaseAggregationStep step) {
         if (!(step instanceof FilterAggregationStep filterStep)) {
             return false;

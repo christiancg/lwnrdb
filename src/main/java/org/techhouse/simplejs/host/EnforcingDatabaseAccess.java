@@ -140,6 +140,17 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         }
     }
 
+    @Override
+    public int firstUnorderedCut(String db, String coll, JsonArray pipeline) {
+        try {
+            return RequestParser.parseRequest(aggregateMessage(db, coll, pipeline)) instanceof AggregateRequest parsed
+                    ? ResultHasher.firstUnorderedCut(parsed.getAggregationSteps())
+                    : -1;
+        } catch (RuntimeException unparseable) {
+            return -1;
+        }
+    }
+
     private String aggregateMessage(String db, String coll, JsonArray pipeline) {
         final var message = new JsonObject();
         message.add("type", new JsonString("AGGREGATE"));
@@ -267,6 +278,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         }
         try {
             TransactionOperationHelper.bufferTriggerRunConsume(transaction, runId);
+            clientTracker.markLocalSlice(sessionClientId);
         } catch (Exception e) {
             throw jsError("Could not consume the pending trigger run: " + e.getMessage());
         }

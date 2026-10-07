@@ -23,8 +23,8 @@ public final class LeftoverFolders {
                 || !fs.folderQuarantine().holdsLeftoverCollection(dbName, collName)) {
             return true;
         }
-        cache.evictCollection(dbName, collName);
         final var moved = fs.folderQuarantine().moveCollectionAside(dbName, collName, 0);
+        cache.evictCollection(dbName, collName);
         logOutcome("collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName, moved);
         return moved;
     }
@@ -33,10 +33,10 @@ public final class LeftoverFolders {
         if (cache.getAdminDbEntry(dbName) != null || !fs.folderQuarantine().holdsLeftoverDatabase(dbName)) {
             return true;
         }
+        final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
         cache.evictDatabase(dbName);
         compiledProcedures.invalidateDatabase(dbName);
         scheduleRegistry.removeDatabase(dbName);
-        final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
         logOutcome("database " + dbName, moved);
         return moved;
     }

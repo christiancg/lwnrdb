@@ -15,8 +15,8 @@ public final class StartupWarnings {
     private StartupWarnings() {
     }
 
-    public static void warnIfIndexesLeftDirty() {
-        final var dirty = IocContainer.get(FileSystem.class).listDirtyIndexCollections();
+    public static void retainAndReportUncleanStops() {
+        final var dirty = IocContainer.get(FileSystem.class).retainUncleanStopMarkers();
         if (!dirty.isEmpty()) {
             logger.warning("These collections stopped with field-index work outstanding, so their indexes may be"
                     + " missing entries: " + String.join(", ", dirty) + ". Run REINDEX on each of them.");

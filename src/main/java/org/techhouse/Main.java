@@ -88,8 +88,9 @@ public class Main {
         StartupWarnings.warnIfCompactionsLeftUnrecovered();
         cache.loadAdminData();
         seedHybridClock();
-        StartupWarnings.warnIfIndexesLeftDirty();
+        StartupWarnings.retainAndReportUncleanStops();
         PageOccupancyReconciler.reconcileAll();
+        relistUnlistedCollections();
         PageOccupancyReconciler.scheduleIndexCleanupFor(recoveredDeletes);
         cleanupOrphanedTransactions();
         bootstrapDefaultAdmin();
@@ -191,6 +192,14 @@ public class Main {
         }
         hybridClock.seed(highest);
         logger.info("Seeded the write clock from disk at version " + highest);
+    }
+
+    private static void relistUnlistedCollections() {
+        try {
+            AdminOperationHelper.relistUnlistedCollections();
+        } catch (Exception failure) {
+            logger.error("Failed to re-list registered collections missing from their database's list", failure);
+        }
     }
 
     private static void cleanupOrphanedTransactions() {

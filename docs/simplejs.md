@@ -375,7 +375,10 @@ authorized, schema-checked and cluster-routed exactly like a hand-written `db.ag
 no cluster surface at all. A pipeline that does not already end in a defined order is paged with
 a `SORT` on `_id` appended before `SKIP`/`LIMIT`, because an unordered source enumerates differently
 warm and cold and an eviction between batches would otherwise repeat or skip rows; rows with no
-`_id` (`GROUP_BY` output) keep their stream position under SORT's own fallback. It is still **not**
+`_id` (`GROUP_BY` output) keep their stream position under SORT's own fallback. A `LIMIT` or `SKIP`
+the caller's own pipeline applies to unordered documents gets a `SORT` on `_id` inserted before it
+too, so `[LIMIT 100]` pages the first 100 documents by `_id` rather than a subset that differs warm
+and cold. It is still **not**
 a snapshot (a write landing between batches can show a document twice or not at all), and **not**
 stateful server-side (abandoning it holds nothing to release).
 
@@ -558,7 +561,10 @@ when the request is a replicated apply, so a client cannot install a trigger tha
 **An after trigger runs exactly once, not at least once.** Before an event is queued,
 `TriggerRunLog` persists a pending-run record in `admin/trigger_runs`; `TriggerDispatcher` then
 runs the procedure inside a transaction whose final buffered op **consumes** that record, so the
-run's effects and the evidence that would replay them commit together. `TriggerRunRecovery`
+run's effects and the evidence that would replay them commit together. On a cluster the record is
+node-local, so the consume op always sits in the firing node's own slice: a body whose writes were
+all forwarded to other owners still commits through 2PC with this node as a participant, never as a
+bare forward that would leave the record behind. `TriggerRunRecovery`
 re-queues what is still pending at startup — only the runs pending when the process started,
 snapshotted before the executor, the scheduler or the cluster can record new ones, since a run
 recorded after that was already queued by whatever recorded it. This rests on single-node commits being crash-atomic

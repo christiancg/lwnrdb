@@ -21,6 +21,10 @@ public interface DatabaseAccess {
         return true;
     }
 
+    default int firstUnorderedCut(String db, String coll, JsonArray pipeline) {
+        return -1;
+    }
+
     JsonObject save(String db, String coll, JsonObject document);
 
     BulkSaveOutcome bulkSave(String db, String coll, List<JsonObject> documents);

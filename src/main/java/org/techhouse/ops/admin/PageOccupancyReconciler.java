@@ -33,7 +33,7 @@ public final class PageOccupancyReconciler {
     public static void reconcileAll() {
         healAdminPageTails();
         for (final var dbEntry : List.copyOf(cache.getAllAdminDbEntries())) {
-            for (final var collName : List.copyOf(dbEntry.getCollections())) {
+            for (final var collName : cache.getCollectionNamesForDatabase(dbEntry.get_id())) {
                 reconcileQuietly(dbEntry.get_id(), collName);
             }
         }

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Predicate;
 import org.junit.jupiter.api.Test;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
@@ -28,6 +29,8 @@ public class DbCursorTest {
         private int failFromBatch = Integer.MAX_VALUE;
         private String padding = "";
         private boolean pipelineIsOrdered = true;
+        private Predicate<JsonArray> ordering = _ -> pipelineIsOrdered;
+        private int unorderedCut = -1;
 
         private PagingDatabase(int total) {
             for (var i = 0; i < total; i++) {
@@ -62,7 +65,12 @@ public class DbCursorTest {
 
         @Override
         public boolean ordersResults(String db, String coll, JsonArray pipeline) {
-            return pipelineIsOrdered;
+            return ordering.test(pipeline);
+        }
+
+        @Override
+        public int firstUnorderedCut(String db, String coll, JsonArray pipeline) {
+            return unorderedCut;
         }
 
         private static int value(JsonArray pipeline, int index, String field) {
@@ -306,6 +314,77 @@ public class DbCursorTest {
         for (final var pipeline : database.pipelines) {
             assertEquals(3, pipeline.size(), "the caller's own SORT plus SKIP and LIMIT, and nothing else");
             assertEquals("SORT", firstStepType(pipeline));
+        }
+    }
+
+    private static String walkOver(String pipeline) {
+        return """
+                import db from "db";
+                const seen = [];
+                for (const doc of db.cursor('d', 'c', %s, { batchSize: 2 })) {
+                    seen.push(doc._id);
+                }
+                return seen;
+                """.formatted(pipeline);
+    }
+
+    private static List<String> stepTypes(JsonArray pipeline) {
+        final var types = new ArrayList<String>();
+        for (final var step : pipeline) {
+            types.add(step.asJsonObject().get("type").asJsonString().getValue());
+        }
+        return types;
+    }
+
+    private static void assertSortsById(JsonArray pipeline, int index) {
+        final var sort = pipeline.get(index).asJsonObject();
+        assertEquals("SORT", sort.get("type").asJsonString().getValue());
+        assertEquals("_id", sort.get("fieldName").asJsonString().getValue());
+        assertTrue(sort.get("ascending").asJsonBoolean().getValue());
+    }
+
+    @Test
+    public void test_a_cursor_anchors_the_order_before_an_unordered_limit() {
+        final var database = new PagingDatabase(3);
+        database.unorderedCut = 0;
+        database.ordering = pipeline -> "SORT".equals(firstStepType(pipeline));
+
+        ids(run(database, walkOver("[{ type: 'LIMIT', limit: 3 }]")));
+
+        assertFalse(database.pipelines.isEmpty());
+        for (final var pipeline : database.pipelines) {
+            assertEquals(List.of("SORT", "LIMIT", "SKIP", "LIMIT"), stepTypes(pipeline),
+                    "the LIMIT must pick its rows from a defined order, or each batch pages a different subset");
+            assertSortsById(pipeline, 0);
+        }
+    }
+
+    @Test
+    public void test_a_cursor_keeps_the_trailing_sort_when_the_anchored_pipeline_is_still_unordered() {
+        final var database = new PagingDatabase(3);
+        database.unorderedCut = 1;
+        database.ordering = _ -> false;
+
+        ids(run(database, walkOver(
+                "[{ type: 'FILTER', operator: { type: 'FIELD', fieldOperatorType: 'EQUALS', field: 'a', value: 1 } },"
+                        + " { type: 'LIMIT', limit: 3 }, { type: 'DISTINCT', fieldName: 'a' }]")));
+
+        assertFalse(database.pipelines.isEmpty());
+        for (final var pipeline : database.pipelines) {
+            assertEquals(List.of("FILTER", "SORT", "LIMIT", "DISTINCT", "SORT", "SKIP", "LIMIT"), stepTypes(pipeline));
+            assertSortsById(pipeline, 1);
+            assertSortsById(pipeline, 4);
+        }
+    }
+
+    @Test
+    public void test_a_cursor_with_no_unordered_cut_leaves_the_pipeline_as_given() {
+        final var database = new PagingDatabase(3);
+
+        ids(run(database, walkOver("[{ type: 'LIMIT', limit: 3 }]")));
+
+        for (final var pipeline : database.pipelines) {
+            assertEquals(List.of("LIMIT", "SKIP", "LIMIT"), stepTypes(pipeline));
         }
     }
 }

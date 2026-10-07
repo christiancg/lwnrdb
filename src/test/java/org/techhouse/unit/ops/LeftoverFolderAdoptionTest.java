@@ -2,12 +2,14 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
@@ -20,6 +22,7 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.admin.DatabaseOperationHelper;
+import org.techhouse.ops.admin.LeftoverFolders;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.SaveRequest;
@@ -76,6 +79,27 @@ public class LeftoverFolderAdoptionTest {
         cache.evictCollection(TestGlobals.DB, COLLECTION);
         AdminOperationHelper.deleteCollectionEntry(TestGlobals.DB, COLLECTION);
         AdminOperationHelper.deletePageCollections(TestGlobals.DB, COLLECTION);
+    }
+
+    @Test
+    public void test_a_schema_loaded_just_before_a_leftover_move_does_not_outlive_it() throws Exception {
+        leaveAPopulatedUnregisteredCollection();
+        fs.writeCollectionSchema(TestGlobals.DB, COLLECTION, "{\"type\":\"object\",\"required\":[\"legacy\"]}");
+        final var original = fs.folderQuarantine();
+        final var loadingFirst = Mockito.spy(original);
+        Mockito.doAnswer(invocation -> {
+            cache.getCollectionSchema(TestGlobals.DB, COLLECTION);
+            return invocation.callRealMethod();
+        }).when(loadingFirst).moveCollectionAside(TestGlobals.DB, COLLECTION, 0L);
+        TestUtils.setPrivateField(fs, "folderQuarantine", loadingFirst);
+        try {
+            assertTrue(LeftoverFolders.moveAsideUnregisteredCollection(TestGlobals.DB, COLLECTION));
+        } finally {
+            TestUtils.setPrivateField(fs, "folderQuarantine", original);
+        }
+
+        assertNull(cache.getCollectionSchema(TestGlobals.DB, COLLECTION),
+                "the leftover folder's schema is gone, so the next incarnation must not be validated against it");
     }
 
     @Test

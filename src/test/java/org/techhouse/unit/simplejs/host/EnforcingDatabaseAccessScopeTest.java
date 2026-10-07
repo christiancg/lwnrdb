@@ -175,4 +175,22 @@ public class EnforcingDatabaseAccessScopeTest {
 
         assertTrue(scoped().ordersResults(TestGlobals.DB, TestGlobals.COLL, steps));
     }
+
+    @Test
+    public void test_first_unordered_cut_finds_a_bare_limit() {
+        assertEquals(0, scoped().firstUnorderedCut(TestGlobals.DB, TestGlobals.COLL, pipeline("LIMIT")));
+    }
+
+    @Test
+    public void test_first_unordered_cut_is_none_after_a_sort() {
+        assertEquals(-1, scoped().firstUnorderedCut(TestGlobals.DB, TestGlobals.COLL, pipeline("SORT", "LIMIT")));
+    }
+
+    @Test
+    public void test_first_unordered_cut_leaves_an_unparseable_pipeline_to_aggregate() {
+        final var steps = new org.techhouse.ejson.elements.JsonArray();
+        steps.add(new JsonString("not a step"));
+
+        assertEquals(-1, scoped().firstUnorderedCut(TestGlobals.DB, TestGlobals.COLL, steps));
+    }
 }

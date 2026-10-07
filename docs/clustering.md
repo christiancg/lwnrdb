@@ -363,6 +363,11 @@ network round trip on the write path — and is deliberately not implemented. Be
 replication is not an acceptable substitute: a lost completion notification would resurrect
 a consumed run and double-apply it, which is the failure the design exists to prevent.
 
+Because the record is local, the op that consumes it is always buffered in the firing node's own
+slice, and that slice is always part of the commit: a trigger whose body writes only to collections
+other nodes own commits through 2PC with the firing node as a participant, so the run's effects and
+the deletion of its record still land together.
+
 ## Admin and DDL replication
 
 Admin and DDL operations mutate cluster-wide metadata rather than one collection's

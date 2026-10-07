@@ -96,6 +96,9 @@ LEFTOVER_ROWS_COLL = "leftover_row_docs"
 LEFTOVER_ROWS_COPY = "leftover_rows_copy"
 BULK_GROWTH_COLL = "bulk_growth_docs"
 BULK_GROWTH_DOCS = 10
+UNLISTED_DB = "unlisted_db"
+UNLISTED_COLL = "unlisted_docs"
+UNLISTED_GHOST = "unlisted_docX"
 DROPPED_DB_COLLECTIONS = 4
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
@@ -948,6 +951,60 @@ def tear_an_admin_page_tail(work_dir: str):
         page.write(TORN_BYTES.encode("utf-8"))
 
 
+def seed_a_collection_its_database_will_stop_listing(conn: Conn):
+    section("Seed a collection whose database row a kill will leave without it")
+    check_status("create its database", conn.send({"type": "CREATE_DATABASE", "databaseName": UNLISTED_DB}), "OK")
+    check_status("create the collection", conn.send({"type": "CREATE_COLLECTION", "databaseName": UNLISTED_DB,
+                                                     "collectionName": UNLISTED_COLL}), "OK")
+    check_status("write into it", conn.send({"type": "SAVE", "databaseName": UNLISTED_DB,
+                                             "collectionName": UNLISTED_COLL, "object": {"_id": "kept"}}), "OK")
+
+
+def database_row_lines(work_dir: str, db: str) -> list:
+    folder = admin_databases_folder(work_dir)
+    marker = f'"{db}"'.encode("utf-8")
+    found = []
+    for name in sorted(os.listdir(folder)):
+        if name.endswith(".dat"):
+            with open(os.path.join(folder, name), "rb") as page:
+                found.extend(line for line in page.read().split(b"\n") if marker in line)
+    return found
+
+
+def unlist_the_collection(work_dir: str):
+    listed, unlisted = f'"{UNLISTED_COLL}"'.encode("utf-8"), f'"{UNLISTED_GHOST}"'.encode("utf-8")
+    folder = admin_databases_folder(work_dir)
+    rewritten = 0
+    for name in os.listdir(folder):
+        if not name.endswith(".dat"):
+            continue
+        path = os.path.join(folder, name)
+        with open(path, "rb") as page:
+            lines = page.read().split(b"\n")
+        changed = [line.replace(listed, unlisted) if f'"{UNLISTED_DB}"'.encode("utf-8") in line else line
+                   for line in lines]
+        if changed != lines:
+            rewritten += 1
+            with open(path, "wb") as page:
+                page.write(b"\n".join(changed))
+    check("the database row no longer lists its collection, as a kill mid-CREATE_COLLECTION leaves it",
+          rewritten == 1, f"rewrote {rewritten} page(s)")
+
+
+def test_an_unlisted_collection_is_relisted_at_startup(conn: Conn, work_dir: str):
+    section("A registered collection its database row does not list is re-listed at startup")
+    rows = database_row_lines(work_dir, UNLISTED_DB)
+    check("the database row lists the collection again", any(f'"{UNLISTED_COLL}"'.encode("utf-8") in row
+                                                              for row in rows), f"rows: {rows}")
+    check_status("its document is still served", conn.send({"type": "FIND_BY_ID", "databaseName": UNLISTED_DB,
+                                                             "collectionName": UNLISTED_COLL, "_id": "kept"}), "OK")
+    check_status("drop the database", conn.send({"type": "DROP_DATABASE", "databaseName": UNLISTED_DB}), "OK")
+    check_status("re-create it", conn.send({"type": "CREATE_DATABASE", "databaseName": UNLISTED_DB}), "OK")
+    leftover = collection_names(conn, UNLISTED_DB)
+    check("the re-created database inherits no collection from the dropped one", not leftover,
+          f"collections: {leftover}")
+
+
 def test_an_admin_write_after_a_torn_admin_tail_lands_on_its_own_line(conn: Conn, work_dir: str):
     section("A torn admin page tail is healed at startup, so the next admin write is not glued onto it")
     folder = admin_databases_folder(work_dir)
@@ -1622,7 +1679,7 @@ def dirty_markers(work_dir: str, db=DB, coll=DIRTY_COLL):
     folder = os.path.join(work_dir, "db", db, coll)
     if not os.path.isdir(folder):
         return []
-    return sorted(f for f in os.listdir(folder) if f.endswith("-indexes.dirty"))
+    return sorted(f for f in os.listdir(folder) if f.endswith(("-indexes.dirty", "-indexes.unclean")))
 
 
 def kill_while_the_indexes_are_dirty(conn: Conn, work_dir: str, proc) -> bool:
@@ -2073,6 +2130,7 @@ def main():
             seed_a_collection_that_will_hold_an_unindexed_record(conn)
             seed_collections_whose_compactions_a_kill_will_interrupt(conn)
             seed_drops_a_kill_will_interrupt(conn, work_dir)
+            seed_a_collection_its_database_will_stop_listing(conn)
 
             print("\n  Killing the server without a drain ...")
             check("the unclean stop left an index-dirty marker on disk",
@@ -2090,6 +2148,7 @@ def main():
         leave_an_unindexed_record(work_dir)
         interrupt_the_compactions(work_dir)
         interrupt_the_drops(work_dir)
+        unlist_the_collection(work_dir)
         tear_an_admin_page_tail(work_dir)
         write_config(work_dir, max_memory=CACHE_DISABLED)
         print(f"  Restarting server on {HOST}:{PORT} with the cache disabled ...")
@@ -2114,6 +2173,7 @@ def main():
             test_reindex_clears_the_marker_only_once_every_index_was_rebuilt(conn, work_dir)
             test_a_self_heal_never_erases_a_committed_write(conn, work_dir, log_path)
             test_an_admin_write_after_a_torn_admin_tail_lands_on_its_own_line(conn, work_dir)
+            test_an_unlisted_collection_is_relisted_at_startup(conn, work_dir)
         bu.stop_server(proc)
         proc = None
 

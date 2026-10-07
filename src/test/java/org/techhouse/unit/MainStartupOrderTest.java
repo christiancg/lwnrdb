@@ -71,7 +71,7 @@ public class MainStartupOrderTest {
     @Test
     public void test_dirty_indexes_are_reported_before_startup_marks_anything() throws IOException {
         final var body = mainBody();
-        final var warning = positionOf(body, "StartupWarnings.warnIfIndexesLeftDirty();");
+        final var warning = positionOf(body, "StartupWarnings.retainAndReportUncleanStops();");
 
         assertTrue(positionOf(body, "cache.loadAdminData();") < warning);
         assertTrue(warning < positionOf(body, "PageOccupancyReconciler.reconcileAll();"),
@@ -91,6 +91,18 @@ public class MainStartupOrderTest {
         assertTrue(positionOf(body, "PageOccupancyReconciler.reconcileAll();") < cleanup,
                 "the cleanup events carry no page delta because the rows were just rebuilt from the page files");
         assertTrue(cleanup < positionOf(body, "backgroundTaskManager.startBackgroundWorkers();"));
+    }
+
+    @Test
+    public void test_unlisted_collections_are_relisted_after_the_admin_tail_heal_and_before_any_writer()
+            throws IOException {
+        final var body = mainBody();
+        final var relist = positionOf(body, "relistUnlistedCollections();");
+
+        assertTrue(positionOf(body, "PageOccupancyReconciler.reconcileAll();") < relist,
+                "the re-list writes admin/databases, which must not append onto a torn tail");
+        assertTrue(relist < positionOf(body, "cleanupOrphanedTransactions();"));
+        assertTrue(relist < positionOf(body, "backgroundTaskManager.startBackgroundWorkers();"));
     }
 
     @Test

@@ -357,8 +357,9 @@ final class AdminSnapshotConformer {
                 entry.setIncarnation(snapshotIncarnation);
                 AdminOperationHelper.saveCollectionEntry(entry);
             } else if (localEntry.getIncarnation() != snapshotIncarnation && snapshotIncarnation != 0) {
-                localEntry.setIncarnation(snapshotIncarnation);
-                AdminOperationHelper.saveCollectionEntry(localEntry);
+                final var reincarnated = new AdminCollEntry(dbName, collName, new HashSet<>(localEntry.getIndexes()));
+                reincarnated.setIncarnation(snapshotIncarnation);
+                AdminOperationHelper.saveCollectionEntry(reincarnated);
             }
             final var existing = new HashSet<>(cache.getIndexesForCollection(dbName, collName));
             for (final var field : desiredIndexes) {

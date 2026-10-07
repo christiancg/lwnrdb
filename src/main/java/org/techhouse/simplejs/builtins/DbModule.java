@@ -157,18 +157,29 @@ public final class DbModule {
             this.ops = ops;
             this.dbName = dbName;
             this.collName = collName;
-            this.steps = database.ordersResults(dbName, collName, steps) ? steps : sortedById(steps);
+            final var cut = database.firstUnorderedCut(dbName, collName, steps);
+            final var anchored = cut < 0 ? steps : sortedByIdAt(steps, cut);
+            this.steps = database.ordersResults(dbName, collName, anchored)
+                    ? anchored
+                    : sortedByIdAt(anchored, anchored.size());
             this.batchSize = batchSize;
         }
 
-        private static JsonArray sortedById(JsonArray steps) {
+        private static JsonArray sortedByIdAt(JsonArray steps, int index) {
             final var sort = new JsonObject();
             sort.add("type", new JsonString("SORT"));
             sort.add("fieldName", new JsonString(PK_FIELD));
             sort.add("ascending", new JsonBoolean(true));
             final var ordered = new JsonArray();
-            ordered.addAll(steps);
-            ordered.add(sort);
+            for (var i = 0; i < steps.size(); i++) {
+                if (i == index) {
+                    ordered.add(sort);
+                }
+                ordered.add(steps.get(i));
+            }
+            if (index >= steps.size()) {
+                ordered.add(sort);
+            }
             return ordered;
         }
 

@@ -42,7 +42,7 @@ public class IndexDirtyMarkerStartupTest {
 
         assertTrue(fs.listDirtyIndexCollections().contains(identifier()),
                 "an unclean stop leaves the marker behind, and startup is where an operator can act on it");
-        assertDoesNotThrow(StartupWarnings::warnIfIndexesLeftDirty);
+        assertDoesNotThrow(StartupWarnings::retainAndReportUncleanStops);
     }
 
     @Test
@@ -51,14 +51,14 @@ public class IndexDirtyMarkerStartupTest {
         fs.clearIndexesDirty(TestGlobals.DB, TestGlobals.COLL);
 
         assertFalse(fs.listDirtyIndexCollections().contains(identifier()));
-        assertDoesNotThrow(StartupWarnings::warnIfIndexesLeftDirty);
+        assertDoesNotThrow(StartupWarnings::retainAndReportUncleanStops);
     }
 
     @Test
     public void test_startup_warns_for_an_index_left_half_built() throws Exception {
         fs.indexBuildMarkers().mark(TestGlobals.DB, TestGlobals.COLL, "name");
         try (var logWriter = mockStatic(LogWriter.class)) {
-            StartupWarnings.warnIfIndexesLeftDirty();
+            StartupWarnings.retainAndReportUncleanStops();
 
             logWriter.verify(() -> LogWriter.writeLogEntry(
                     argThat(entry -> entry.contains(identifier() + "|name") && entry.contains("REINDEX"))));

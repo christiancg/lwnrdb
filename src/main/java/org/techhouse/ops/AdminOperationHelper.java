@@ -345,6 +345,24 @@ public final class AdminOperationHelper {
         }
     }
 
+    public static void relistUnlistedCollections() throws IOException, InterruptedException {
+        rewriteDatabases(AdminOperationHelper::withRegisteredCollectionsListed);
+    }
+
+    private static AdminDbEntry withRegisteredCollectionsListed(AdminDbEntry database) {
+        final var listed = new ArrayList<>(database.getCollections());
+        final var unlisted = cache.getCollectionNamesForDatabase(database.get_id()).stream()
+                .filter(name -> !listed.contains(name)).toList();
+        if (unlisted.isEmpty()) {
+            return null;
+        }
+        logger.warning("Re-listing " + unlisted + " in database " + database.get_id()
+                + ": registered but missing from the database's list, which a process killed during"
+                + " CREATE_COLLECTION leaves");
+        listed.addAll(unlisted);
+        return new AdminDbEntry(database.get_id(), listed, new ArrayList<>(database.getOwners()));
+    }
+
     public static void saveTransactionOp(AdminTransactionEntry entry) throws IOException, InterruptedException {
         lockAdmin(Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
         try {
