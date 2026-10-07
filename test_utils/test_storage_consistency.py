@@ -100,6 +100,8 @@ UNLISTED_DB = "unlisted_db"
 UNLISTED_COLL = "unlisted_docs"
 UNLISTED_GHOST = "unlisted_docX"
 DROPPED_DB_COLLECTIONS = 4
+ADMIN_PAGES_DB = "admin_pages_spill_db"
+ADMIN_PAGES_COLLECTIONS = 80
 
 JAR = "target/lwnrdb-1.0-SNAPSHOT.jar"
 REPO_ROOT = bu.REPO_ROOT
@@ -310,6 +312,7 @@ def seed(conn: Conn, work_dir: str):
           f"got {conn.count_via_pk(coll=HEAL_COLL)} of {HEAL_SEEDED}")
 
     seed_script_written_documents(conn)
+    seed_collections_spanning_several_admin_pages(conn, work_dir)
 
     files = page_files(work_dir)
     check("the collection really spans several pages", len(files) > 1, f"got {files}")
@@ -317,6 +320,24 @@ def seed(conn: Conn, work_dir: str):
           "admin/pages/<db>_<coll> is empty, so a restart would lose the page list")
     check("the full scan sees every seeded document", conn.count_via_scan() == SEEDED_DOCS,
           f"got {conn.count_via_scan()} of {SEEDED_DOCS}")
+
+
+def admin_pages_collection_name(index: int) -> str:
+    return f"collection_registered_before_the_restart_{index:03d}"
+
+
+def seed_collections_spanning_several_admin_pages(conn: Conn, work_dir: str):
+    section("Seeding enough collections that admin/collections spans several pages")
+    check_status("create their database", conn.send({"type": "CREATE_DATABASE", "databaseName": ADMIN_PAGES_DB}),
+                 "OK")
+    refused = [response for response in (
+        conn.send({"type": "CREATE_COLLECTION", "databaseName": ADMIN_PAGES_DB,
+                   "collectionName": admin_pages_collection_name(i)}) for i in range(ADMIN_PAGES_COLLECTIONS))
+        if response.get("status") != "OK"]
+    check(f"{ADMIN_PAGES_COLLECTIONS} collections were registered", not refused,
+          f"{len(refused)} requests failed; first: {refused[:1]}")
+    check("admin/collections spans several pages", len(actual_pages(work_dir, "admin", "collections")) > 1,
+          f"pages: {sorted(actual_pages(work_dir, 'admin', 'collections'))}")
 
 
 # ── phase 2: after a restart ─────────────────────────────────────────────────
@@ -1149,6 +1170,27 @@ def test_page_metadata_follows_dropped_databases(conn: Conn, work_dir: str):
                if page not in recorded or recorded[page]["size"] != actual[page][0]]
     check("the recorded admin/databases page size still matches the page on disk", not drifted,
           "; ".join(drifted))
+
+
+def test_page_metadata_follows_collections_dropped_after_a_restart(conn: Conn, work_dir: str):
+    section("Page occupancy for admin/collections after dropping collections registered before the restart")
+    refused = [response for response in (
+        conn.send({"type": "DROP_COLLECTION", "databaseName": ADMIN_PAGES_DB,
+                   "collectionName": admin_pages_collection_name(i)}) for i in range(ADMIN_PAGES_COLLECTIONS))
+        if response.get("status") != "OK"]
+    check(f"{ADMIN_PAGES_COLLECTIONS} collections loaded at startup were dropped", not refused,
+          f"{len(refused)} requests failed; first: {refused[:1]}")
+
+    recorded = recorded_pages(work_dir, "admin", "collections")
+    actual = actual_pages(work_dir, "admin", "collections")
+    drifted = [f"page {page}: recorded {recorded[page]['size']}B/{recorded[page]['entryCount']} entries,"
+               f" on disk {actual[page][0]}B/{actual[page][1]} entries"
+               for page in sorted(actual)
+               if page not in recorded
+               or recorded[page]["size"] != actual[page][0]
+               or recorded[page]["entryCount"] != actual[page][1]]
+    check("the recorded admin/collections occupancy still matches every page on disk", not drifted,
+          "a dropped row's delta landed on another page — " + "; ".join(drifted) if drifted else "")
 
 
 COLLIDING_DB_LONG, COLLIDING_COLL_SHORT = "pgfold_one", "two"
@@ -2098,6 +2140,7 @@ def main():
             test_page_cap_is_enforced_after_restart(conn, work_dir)
             test_page_metadata_follows_an_admin_row_that_grows_on_update(conn, work_dir)
             test_page_metadata_follows_dropped_databases(conn, work_dir)
+            test_page_metadata_follows_collections_dropped_after_a_restart(conn, work_dir)
             test_dropping_a_colliding_collection_keeps_the_others_page_rows(conn, work_dir)
             test_a_transaction_of_in_place_growths_respects_max_page_size(conn, work_dir)
             test_a_bulk_save_does_not_place_inserts_against_a_stale_page_size(conn, work_dir)

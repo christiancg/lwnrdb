@@ -231,6 +231,7 @@ public final class AdminOperationHelper {
                 lockAdmin(Globals.ADMIN_COLLECTIONS_COLLECTION_NAME);
                 final var adminCollEntry = cache.getAdminCollectionEntry(dbName, collName);
                 adminCollEntry.setPreviousByteSize(adminIndexPkCollEntry.getLength());
+                adminCollEntry.setPage(adminIndexPkCollEntry.getPage());
                 final var compaction = fs.deleteFromCollection(adminIndexPkCollEntry);
                 cache.shiftPkPositionsAfterCompaction(compaction);
                 cache.removeAdminCollEntry(collIdentifier);

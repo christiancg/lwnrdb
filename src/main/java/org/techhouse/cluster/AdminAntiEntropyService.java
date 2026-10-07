@@ -117,10 +117,14 @@ public class AdminAntiEntropyService implements MembershipListener {
                     best = snapshot;
                 }
             }
-            if (best != null && wouldEmptyThisNode(best)) {
+            if (best != null && wouldEmptyThisNode(best) && !isAcknowledgedHistory(best, localEpoch)) {
+                answered = best.getEpoch() <= localEpoch;
                 logger.warning("Refusing to conform to the admin snapshot of " + bestNodeId + " at epoch " + bestEpoch
                         + ": it lists no databases while this node holds some, which would unregister every one"
-                        + " of them and delete every user");
+                        + " of them and delete every user"
+                        + (answered ? "" : "; this node stays admin-syncing until a confirmed snapshot answers"));
+            } else if (best != null && Thread.currentThread().isInterrupted()) {
+                answered = false;
             } else if (best != null) {
                 answered = conformInAdminLane(best, localEpoch, localConfirmed);
             }
@@ -161,6 +165,10 @@ public class AdminAntiEntropyService implements MembershipListener {
     private boolean wouldEmptyThisNode(AdminSnapshotPayload snapshot) {
         final var offered = snapshot.getDatabases();
         return (offered == null || offered.isEmpty()) && !cache.getAllAdminDbEntries().isEmpty();
+    }
+
+    private static boolean isAcknowledgedHistory(AdminSnapshotPayload snapshot, long localEpoch) {
+        return snapshot.getEpoch() > localEpoch && snapshot.isEpochConfirmed();
     }
 
     private static boolean outranks(long epoch, boolean confirmed, String nodeId, long bestEpoch, boolean bestConfirmed,
@@ -254,6 +262,9 @@ public class AdminAntiEntropyService implements MembershipListener {
                 return response.getAdminSnapshot();
             }
             logger.warning("Admin snapshot request to " + address + " not acknowledged: " + response.getErrorMessage());
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             return null;
         } catch (Exception e) {
             logger.warning("Admin snapshot request to " + address + " failed: " + e.getMessage());

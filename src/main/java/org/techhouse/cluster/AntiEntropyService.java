@@ -76,8 +76,14 @@ public class AntiEntropyService implements MembershipListener {
     private void reconcileAllCollections() {
         for (final var dbName : cache.getUserDatabaseNames()) {
             for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
+                if (Thread.currentThread().isInterrupted()) {
+                    return;
+                }
                 try {
                     reconcile(dbName, collName);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
                 } catch (Exception e) {
                     logger.warning(
                             "Anti-entropy reconciliation of " + dbName + "|" + collName + " failed: " + e.getMessage());
@@ -250,23 +256,28 @@ public class AntiEntropyService implements MembershipListener {
             }
         }
 
-        if (!deleteIds.isEmpty()) {
+        if (!deleteIds.isEmpty() && !Thread.currentThread().isInterrupted()) {
             ReplicatedApplyHelper.apply(
                     new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, deleteVersions),
                     clusterConfig.replicationAckTimeoutMs());
         }
         for (final var pull : pullByPeer.entrySet()) {
             final var ids = pull.getValue();
-            for (var from = 0; from < ids.size(); from += PULL_BATCH_SIZE) {
+            for (var from = 0; from < ids.size() && !Thread.currentThread().isInterrupted(); from += PULL_BATCH_SIZE) {
                 final var batch = new ArrayList<>(ids.subList(from, Math.min(ids.size(), from + PULL_BATCH_SIZE)));
                 pullAndApply(pull.getKey(), dbName, collName, batch);
             }
         }
-        garbageCollectTombstones(dbName, collName, everyPeerAnswered && !peers.isEmpty());
+        if (!Thread.currentThread().isInterrupted()) {
+            garbageCollectTombstones(dbName, collName, everyPeerAnswered && !peers.isEmpty());
+        }
     }
 
     private void pullAndApply(NodeAddress peer, String dbName, String collName, List<String> ids) {
         final var response = requestPull(peer, dbName, collName, ids);
+        if (Thread.currentThread().isInterrupted()) {
+            return;
+        }
         if (response != null && response.getDocuments() != null && !response.getDocuments().isEmpty()) {
             ReplicatedApplyHelper.apply(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT,
                     response.getDocuments(), null, response.getVersions()), clusterConfig.replicationAckTimeoutMs());
@@ -352,6 +363,9 @@ public class AntiEntropyService implements MembershipListener {
                 return response;
             }
             logger.warning("Anti-entropy request to " + address + " not acknowledged: " + response.getErrorMessage());
+            return null;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
             return null;
         } catch (Exception e) {
             logger.warning("Anti-entropy request to " + address + " failed: " + e.getMessage());

@@ -481,6 +481,45 @@ def test_push_on_reorder_inside_an_unsorted_nearest_top_k(writer: Conn, listener
         delete_doc(writer, id_)
 
 
+def test_push_on_reorder_after_a_sort_then_distinct(writer: Conn, listener: Conn):
+    section("LISTEN: push when a SORT followed by DISTINCT is reordered without changing its members")
+
+    save_doc(writer, {"_id": "dist-a", "kind": "distinct", "category": "alpha", "score": 1})
+    save_doc(writer, {"_id": "dist-b", "kind": "distinct", "category": "beta", "score": 2})
+    time.sleep(0.5)
+
+    steps = [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "kind", "value": "distinct"}},
+        {"type": "SORT", "fieldName": "score", "ascending": True},
+        {"type": "DISTINCT", "fieldName": "category"},
+    ]
+    r = listen(listener, steps)
+    check_status("LISTEN registered for the sorted distinct query", r, "OK")
+    listen_id = r.get("listenId")
+    initial_hash = r.get("resultHash")
+    check("initial result is [alpha, beta]",
+          [d.get("category") for d in (r.get("results") or [])] == ["alpha", "beta"],
+          f"got {[d.get('category') for d in (r.get('results') or [])]!r}")
+
+    save_doc(writer, {"_id": "dist-b", "kind": "distinct", "category": "beta", "score": 0})
+
+    pushed = listener.recv(timeout=5.0)
+    check("push received after the distinct values were reordered", pushed is not None,
+          "no push message within 5 s: a DISTINCT after a SORT keeps the sorted order, so a reorder is a change")
+
+    if pushed is not None:
+        check("push resultHash differs from initial",
+              pushed.get("resultHash") != initial_hash,
+              f"hash unchanged: {pushed.get('resultHash')!r}")
+        check("pushed result is [beta, alpha]",
+              [d.get("category") for d in (pushed.get("results") or [])] == ["beta", "alpha"],
+              f"got {[d.get('category') for d in (pushed.get('results') or [])]!r}")
+
+    stop_listen(listener, listen_id)
+    for id_ in ("dist-a", "dist-b"):
+        delete_doc(writer, id_)
+
+
 def test_no_push_when_an_unordered_group_by_result_is_unchanged(writer: Conn, listener: Conn):
     section("LISTEN: no push when a GROUP_BY result set is unchanged")
 
@@ -802,6 +841,7 @@ def main():
                 test_no_push_on_vector_farther(writer_conn, listener_conn)
                 test_push_on_reorder_inside_a_sorted_top_k(writer_conn, listener_conn)
                 test_push_on_reorder_inside_an_unsorted_nearest_top_k(writer_conn, listener_conn)
+                test_push_on_reorder_after_a_sort_then_distinct(writer_conn, listener_conn)
                 test_no_push_when_an_unordered_group_by_result_is_unchanged(writer_conn, listener_conn)
                 test_stop_listen(writer_conn, listener_conn)
                 test_stop_listen_from_another_client_is_refused(writer_conn, listener_conn)

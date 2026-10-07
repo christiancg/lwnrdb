@@ -112,21 +112,63 @@ public class AdminAntiEntropyServiceTest {
         when(mockPool.request(any(), any(), anyLong())).thenReturn(ack);
     }
 
+    private void stubEmptySnapshotAt(long epoch, boolean confirmed) throws Exception {
+        final var snapshot = new AdminSnapshotPayload(epoch, List.of(), List.of(), List.of(), new JsonObject());
+        snapshot.setEpochConfirmed(confirmed);
+        final var ack = new ClusterMessage();
+        ack.setType(ClusterMessageType.ADMIN_SNAPSHOT_ACK);
+        ack.setAdminSnapshot(snapshot);
+        when(mockPool.request(any(), any(), anyLong())).thenReturn(ack);
+    }
+
+    private void holdOneDatabase() throws Exception {
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB, new ArrayList<>(), new ArrayList<>()));
+        assertNotNull(cache.getAdminDbEntry(TestGlobals.DB), "the node must start out holding a database");
+    }
+
     private static JsonObject dbJson(List<String> owners) {
         return new AdminDbEntry("newdb", new ArrayList<>(), new ArrayList<>(owners)).getData();
     }
 
     @Test
     public void test_an_empty_snapshot_never_unregisters_a_populated_node() throws Exception {
-        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry(TestGlobals.DB, new ArrayList<>(), new ArrayList<>()));
-        assertNotNull(cache.getAdminDbEntry(TestGlobals.DB), "the node must start out holding a database");
-        stubSnapshot(List.of(), List.of(), List.of());
+        holdOneDatabase();
+        stubEmptySnapshotAt(0L, true);
 
         service.reconcile();
 
         assertNotNull(cache.getAdminDbEntry(TestGlobals.DB),
                 "a fresh node joining a populated one is also at epoch 0, so the winner was a uuid coin flip;"
                         + " conforming to its empty snapshot unregistered every database and deleted every user");
+        assertTrue(service.hasCompletedAdminSync(), "an equal-epoch refusal is the bootstrap case and still syncs");
+    }
+
+    @Test
+    public void test_a_confirmed_higher_empty_snapshot_is_conformed_to() throws Exception {
+        holdOneDatabase();
+        TestUtils.setPrivateField(adminEpoch, "epoch", 3L);
+        stubEmptySnapshotAt(5L, true);
+
+        service.reconcile();
+
+        assertNull(cache.getAdminDbEntry(TestGlobals.DB),
+                "a majority acknowledged dropping every database; a node that missed it must converge");
+        assertTrue(service.hasCompletedAdminSync());
+        assertEquals(5L, adminEpoch.current());
+    }
+
+    @Test
+    public void test_an_unconfirmed_higher_empty_snapshot_is_refused_and_leaves_the_node_syncing() throws Exception {
+        holdOneDatabase();
+        TestUtils.setPrivateField(adminEpoch, "epoch", 3L);
+        stubEmptySnapshotAt(5L, false);
+
+        service.reconcile();
+
+        assertNotNull(cache.getAdminDbEntry(TestGlobals.DB), "an unconfirmed empty snapshot is never conformed to");
+        assertFalse(service.hasCompletedAdminSync(),
+                "a refused snapshot ahead of this node means its admin state is known to be stale");
+        assertEquals(3L, adminEpoch.current());
     }
 
     @Test

@@ -56,11 +56,16 @@ public final class ResultHasher {
             if (type == AggregationStepType.SORT || isRankingFilter(step)) {
                 return true;
             }
-            if (!ORDER_PRESERVING.contains(type)) {
+            if (!isOrderPreserving(steps, i)) {
                 return false;
             }
         }
         return false;
+    }
+
+    private static boolean isOrderPreserving(List<BaseAggregationStep> steps, int index) {
+        final var type = steps.get(index).getType();
+        return ORDER_PRESERVING.contains(type) || (type == AggregationStepType.DISTINCT && index > 0);
     }
 
     public static int firstUnorderedCut(List<BaseAggregationStep> steps) {

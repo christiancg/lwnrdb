@@ -152,4 +152,18 @@ public class ReplicatedApplyHelperTest {
             listenManager.unregister(listenId);
         }
     }
+
+    @Test
+    public void test_an_interrupted_apply_applies_nothing_and_keeps_the_interrupt() {
+        final var payload = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                List.of(doc("interrupted")), null, List.of("1"));
+        Thread.currentThread().interrupt();
+        final var applied = ReplicatedApplyHelper.apply(payload, 1000L);
+        final var stillInterrupted = Thread.interrupted();
+
+        assertFalse(applied);
+        assertTrue(stillInterrupted,
+                "a shutdown interrupt must survive the apply so the sweep that owns this thread stops");
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("interrupted"));
+    }
 }

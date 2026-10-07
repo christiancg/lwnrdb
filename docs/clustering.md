@@ -767,9 +767,17 @@ therefore never bumped and sits at epoch 0, exactly like a brand-new node joinin
 equal epochs are broken by node id — a coin flip between random uuids. Losing that flip
 would conform the populated node to the empty one, deleting every user and unregistering
 every database, and both would stay at 0 so no later round could repair it. Two rules close
-that: a snapshot listing no databases is never adopted by a node that holds some, and a node
+that: a snapshot listing no databases is not adopted by a node that holds some, and a node
 whose `cluster/admin.epoch` exists but cannot be parsed refuses to conform at all rather than
-bidding 0 with real data on disk. The epoch file is written atomically, so a crash mid-write
+bidding 0 with real data on disk. The empty-snapshot refusal depends on how the snapshot
+outranks this node:
+
+- **Strictly higher, confirmed epoch:** acknowledged history, for example the cluster dropping
+  its last database while this node was down. It is conformed to normally. The conform moves
+  the dropped data aside rather than deleting it.
+- **Strictly higher, unconfirmed epoch:** refused, and the node stays admin-syncing until a
+  later round reaches the confirmed copy.
+- **Equal epoch:** this is the coin flip above. It is refused, and the node counts as synced. The epoch file is written atomically, so a crash mid-write
 leaves the previous value rather than a truncated one that parses as a lower epoch.
 
 The epoch also records **whether the op that produced it reached a quorum**. `afterAdminOp`

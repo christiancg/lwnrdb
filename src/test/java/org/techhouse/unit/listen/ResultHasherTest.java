@@ -138,7 +138,6 @@ public class ResultHasherTest {
         final var sort = new SortAggregationStep("score", false);
 
         assertFalse(ResultHasher.ordersResults(List.of(sort, new GroupByAggregationStep("category"))));
-        assertFalse(ResultHasher.ordersResults(List.of(sort, new DistinctAggregationStep("category"))));
         assertFalse(ResultHasher.ordersResults(List.of(sort, new CountAggregationStep())));
         assertFalse(ResultHasher.ordersResults(List.of(sort, new ReduceAggregationStep("(a, b) => a", null, "total"))));
     }
@@ -265,5 +264,33 @@ public class ResultHasherTest {
         assertEquals(-1, ResultHasher.firstUnorderedCut(List.of(new FilterAggregationStep(equalsName("x")))));
         assertEquals(-1, ResultHasher.firstUnorderedCut(List.of()));
         assertEquals(-1, ResultHasher.firstUnorderedCut(null));
+    }
+
+    @Test
+    public void test_sort_then_distinct_is_order_significant() {
+        final var sort = new SortAggregationStep("score", false);
+        final var distinct = new DistinctAggregationStep("category");
+
+        assertTrue(ResultHasher.ordersResults(List.of(sort, distinct)),
+                "a DISTINCT after a SORT keeps the first occurrences in sorted order");
+        assertTrue(ResultHasher.ordersResults(List.of(sort, distinct, new LimitAggregationStep(3))));
+        assertTrue(ResultHasher.ordersResults(
+                List.of(new GroupByAggregationStep("category"), sort, new DistinctAggregationStep(null))));
+    }
+
+    @Test
+    public void test_a_source_distinct_is_not_order_significant() {
+        final var distinct = new DistinctAggregationStep("category");
+
+        assertFalse(ResultHasher.ordersResults(List.of(distinct)),
+                "a source DISTINCT answers in index-entry order on one path and encounter order on the other");
+        assertFalse(ResultHasher.ordersResults(List.of(distinct, new LimitAggregationStep(3))));
+        assertFalse(ResultHasher.ordersResults(List.of(new FilterAggregationStep(equalsName("x")), distinct)));
+    }
+
+    @Test
+    public void test_first_unordered_cut_still_stops_at_a_non_source_distinct() {
+        assertEquals(-1, ResultHasher.firstUnorderedCut(List.of(new FilterAggregationStep(equalsName("x")),
+                new DistinctAggregationStep("category"), new LimitAggregationStep(3))));
     }
 }

@@ -313,11 +313,11 @@ public class ResourceLocking {
 
     public void removeLock(String dbName, String collName) {
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
-        locks.computeIfPresent(collIdentifier, (_, lock) -> isEvictable(lock) ? null : lock);
+        evictIfUnused(collIdentifier);
         final var indexPrefix = collIdentifier + Globals.COLL_IDENTIFIER_SEPARATOR;
         for (final var key : List.copyOf(locks.keySet())) {
             if (key.startsWith(indexPrefix)) {
-                locks.computeIfPresent(key, (_, lock) -> isEvictable(lock) ? null : lock);
+                evictIfUnused(key);
             }
         }
     }
@@ -339,10 +339,20 @@ public class ResourceLocking {
     }
 
     public void removeDatabaseLock(String dbName) {
-        locks.computeIfPresent(dbName, (_, lock) -> isEvictable(lock) ? null : lock);
+        evictIfUnused(dbName);
     }
 
-    private static boolean isEvictable(ReentrantReadWriteLock lock) {
-        return !lock.isWriteLocked() && lock.getReadLockCount() == 0 && !lock.hasQueuedThreads();
+    private static void evictIfUnused(String key) {
+        final var retired = new ReentrantReadWriteLock[1];
+        locks.computeIfPresent(key, (_, lock) -> {
+            if (lock.isWriteLocked() || lock.hasQueuedThreads() || !lock.writeLock().tryLock()) {
+                return lock;
+            }
+            retired[0] = lock;
+            return null;
+        });
+        if (retired[0] != null) {
+            retired[0].writeLock().unlock();
+        }
     }
 }

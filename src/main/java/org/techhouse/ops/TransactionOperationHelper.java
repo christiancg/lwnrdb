@@ -152,6 +152,7 @@ public final class TransactionOperationHelper {
         var pastCommitPoint = false;
         try {
             final var decided = isLocalCommitFenced(transaction);
+            pastCommitPoint = decided;
             final var refusal = preApplyRefusal(transaction);
             if (refusal != null && decided) {
                 fenced = true;
@@ -165,6 +166,10 @@ public final class TransactionOperationHelper {
             if (ops.size() != transaction.getBufferedOpIds().size()) {
                 logger.error("Transaction " + transaction.getTransactionId() + " lost "
                         + (transaction.getBufferedOpIds().size() - ops.size()) + " buffered op(s) before commit");
+                if (decided) {
+                    fenced = true;
+                    return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
+                }
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
             }
             final var txId = transaction.getTransactionId().toString();

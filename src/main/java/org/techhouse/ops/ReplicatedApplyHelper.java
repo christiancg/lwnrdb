@@ -54,6 +54,10 @@ public final class ReplicatedApplyHelper {
                 locked = true;
             }
             return applyLocked(payload);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.warning("Interrupted applying a replicated write to " + dbName + "|" + collName);
+            return false;
         } catch (Exception e) {
             logger.error("Failed to apply replicated write to " + dbName + "|" + collName, e);
             return false;

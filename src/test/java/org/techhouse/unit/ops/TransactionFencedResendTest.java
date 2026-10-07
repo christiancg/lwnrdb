@@ -7,11 +7,14 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.techhouse.test.ClusterTestHarness.node;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentMatchers;
+import org.mockito.Mockito;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.concurrency.ResourceLocking;
@@ -183,5 +186,74 @@ public class TransactionFencedResendTest {
         assertFalse(opIds.stream().anyMatch(id -> cache.getPkIndexTransaction(id) != null),
                 "the refused commit discards its buffered ops");
         assertNull(clientTracker.getActiveTransaction(clientId), "the refused commit deregisters the transaction");
+    }
+
+    @Test
+    public void test_resent_commit_whose_marker_rewrite_fails_keeps_the_fenced_slice() throws Exception {
+        final var clientId = fencedTransaction(TestGlobals.COLL, "marker-io");
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var txId = transaction.getTransactionId().toString();
+        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+
+        try (var log = Mockito.mockStatic(TxCommitLog.class, Mockito.CALLS_REAL_METHODS)) {
+            log.when(() -> TxCommitLog.recordLocalCommit(ArgumentMatchers.anyString(), ArgumentMatchers.anyList(),
+                    ArgumentMatchers.anyList())).thenThrow(new IOException("disk full"));
+            final var response = TransactionOperationHelper.commit(clientId);
+
+            assertEquals("500-33", response.getErrorCode(),
+                    "a decided commit that fails before applying is still half applied, not failed");
+        }
+        assertSliceRetained(clientId, txId, opIds, TestGlobals.COLL);
+    }
+
+    @Test
+    public void test_resent_commit_whose_op_read_fails_keeps_the_fenced_slice() throws Exception {
+        final var clientId = fencedTransaction(TestGlobals.COLL, "read-io");
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var txId = transaction.getTransactionId().toString();
+        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+
+        try (var admin = Mockito.mockStatic(AdminOperationHelper.class, Mockito.CALLS_REAL_METHODS)) {
+            admin.when(() -> AdminOperationHelper.readTransactionOps(ArgumentMatchers.anyList()))
+                    .thenThrow(new IOException("disk full"));
+            final var response = TransactionOperationHelper.commit(clientId);
+
+            assertEquals("500-33", response.getErrorCode(),
+                    "a decided commit whose ops cannot be read is still half applied, not failed");
+        }
+        assertSliceRetained(clientId, txId, opIds, TestGlobals.COLL);
+    }
+
+    @Test
+    public void test_resent_commit_missing_an_op_keeps_the_fenced_slice() throws Exception {
+        final var clientId = fencedTransaction(TestGlobals.COLL, "lost-op");
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var txId = transaction.getTransactionId().toString();
+        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+
+        try (var admin = Mockito.mockStatic(AdminOperationHelper.class, Mockito.CALLS_REAL_METHODS)) {
+            admin.when(() -> AdminOperationHelper.readTransactionOps(ArgumentMatchers.anyList())).thenReturn(List.of());
+            final var response = TransactionOperationHelper.commit(clientId);
+
+            assertEquals("500-33", response.getErrorCode(),
+                    "a decided commit missing a buffered op must stay fenced for recovery");
+        }
+        assertSliceRetained(clientId, txId, opIds, TestGlobals.COLL);
+    }
+
+    @Test
+    public void test_unfenced_commit_whose_op_read_fails_still_releases() {
+        final var clientId = transactionWithOneSave(TestGlobals.COLL, "undecided-io");
+
+        try (var admin = Mockito.mockStatic(AdminOperationHelper.class, Mockito.CALLS_REAL_METHODS)) {
+            admin.when(() -> AdminOperationHelper.readTransactionOps(ArgumentMatchers.anyList()))
+                    .thenThrow(new IOException("disk full"));
+            final var response = TransactionOperationHelper.commit(clientId);
+
+            assertEquals("500-24", response.getErrorCode(), "an undecided commit that fails before applying fails");
+        }
+        assertNull(clientTracker.getActiveTransaction(clientId), "the failed commit deregisters the transaction");
+        assertFalse(locks.isWriteLockedByCurrentThread(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)),
+                "the failed commit releases its locks");
     }
 }

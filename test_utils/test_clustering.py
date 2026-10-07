@@ -3054,6 +3054,43 @@ def test_drop_database_then_rejoin_then_recreate_does_not_resurrect_documents():
     assert_no_resurrection(db, coll, {"live0", "live1", "live2"}, victim, quarantined=_database_quarantined)
 
 
+def test_a_node_that_missed_the_last_database_drop_converges():
+    section("A node that missed the drop of the cluster's last database conforms to the empty snapshot")
+    victim = nodes[2]
+    print(f"  Killing node-{victim.index} so it misses every drop ...")
+    victim.kill()
+    databases = list_databases(nodes[0].client_port).get("databases") or []
+    check("the cluster still holds databases before the drop", bool(databases), "nothing left to drop")
+    for db in databases:
+        check(f"the survivors drop {db}",
+              wait_until(lambda db=db: drop_db(nodes[0].client_port, db).get("status") == "OK",
+                         timeout_s=30.0, interval_s=1.0))
+    check("the survivors hold no database",
+          wait_until(lambda: all(not (list_databases(p).get("databases") or []) for p in all_ports()),
+                     timeout_s=30.0))
+
+    print(f"  Restarting node-{victim.index} after the cluster emptied ...")
+    victim.start()
+
+    def _victim_holds_nothing():
+        response = list_databases(victim.client_port)
+        return response.get("status") == "OK" and not (response.get("databases") or [])
+
+    check("the rejoined node conforms to the confirmed empty snapshot instead of keeping the dropped databases",
+          wait_until(_victim_holds_nothing, timeout_s=60.0, interval_s=1.0),
+          f"node-{victim.index} still lists {list_databases(victim.client_port).get('databases')!r}")
+
+    def _every_database_quarantined():
+        try:
+            log = bu.read_log(victim.log_path)
+        except OSError:
+            return False
+        return all(f"Quarantined database {db}" in log for db in databases)
+
+    check("its data folders were moved aside, not deleted", wait_until(_every_database_quarantined, timeout_s=30.0),
+          f"node-{victim.index} logged no quarantine for some of {databases!r}")
+
+
 def _node_log_mentions_quarantine(node, coll, db: str = DB) -> bool:
     try:
         return f"Quarantined collection {db}|{coll}" in bu.read_log(node.log_path)
@@ -3220,10 +3257,8 @@ def main():
         # this before the placement tests would bias which node they pick.
         test_script_control_is_cluster_wide()
 
-        # Cleanup (best-effort).
-        drop_db(nodes[0].client_port, DB)
-        drop_db(nodes[0].client_port, CANARY_DB)
-        drop_db(nodes[0].client_port, LOCALITY_DB)
+        # Last: it drops every database in the cluster, which is also the suite's cleanup.
+        test_a_node_that_missed_the_last_database_drop_converges()
     except BaseException:
         print("\n[ERROR] the suite raised - dumping node logs", file=sys.stderr)
         dump_all_logs()
