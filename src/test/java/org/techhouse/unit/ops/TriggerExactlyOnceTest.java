@@ -321,7 +321,7 @@ public class TriggerExactlyOnceTest {
     }
 
     @Test
-    public void test_garbage_collect_drops_records_past_retention() throws Exception {
+    public void test_garbage_collect_keeps_this_nodes_records_past_retention() throws Exception {
         installTrigger("noop");
         save("d8");
         assertNotNull(settleOne());
@@ -329,7 +329,8 @@ public class TriggerExactlyOnceTest {
 
         TriggerRunLog.garbageCollect(-1L);
 
-        assertTrue(TriggerRunLog.pending().isEmpty(), "records older than the retention window are dropped");
+        assertFalse(TriggerRunLog.pending().isEmpty(),
+                "a run this node recorded is not stranded: its own recovery replays it");
     }
 
     @Test

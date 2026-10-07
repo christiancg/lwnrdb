@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.mockStatic;
 
 import java.util.List;
 import org.junit.jupiter.api.AfterAll;
@@ -119,13 +121,17 @@ public class TriggerRetryTest {
 
     @Test
     public void test_the_two_retentions_apply_to_the_two_states() throws Exception {
-        final var pendingRun = recordRun("t4");
+        final String pendingRun;
+        try (var runLog = mockStatic(TriggerRunLog.class, CALLS_REAL_METHODS)) {
+            runLog.when(TriggerRunLog::currentNodeId).thenReturn("another-node");
+            pendingRun = recordRun("t4");
+        }
         final var deadRun = recordRun("t5");
         TriggerRunLog.markAttempt(deadRun, TriggerRunStatus.DEAD, 3, "Error: nope", 0L);
 
         TriggerRunLog.garbageCollect(-1L, 3_600_000L);
 
-        assertNull(firstChunk(pendingRun), "a pending run past its retention is swept");
+        assertNull(firstChunk(pendingRun), "another node's pending run past its retention is swept");
         assertNotNull(firstChunk(deadRun), "a dead letter keeps its own, longer retention");
     }
 

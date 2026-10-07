@@ -69,6 +69,7 @@ final class ClusterTxMessageHandler {
                 if (startsTransaction(type) && clientTracker.getActiveTransaction(clientId) == null) {
                     // Start with the coordinator's distributed-tx id so the buffered slice and 2PC markers
                     // key on the same id everywhere.
+                    clientTracker.setAuthenticatedUser(clientId, request.getActingUser());
                     TransactionOperationHelper.start(clientId, java.util.UUID.fromString(txId),
                             parsed.getTriggerDepth());
                 }

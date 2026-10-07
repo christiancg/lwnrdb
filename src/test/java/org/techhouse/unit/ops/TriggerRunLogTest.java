@@ -5,9 +5,12 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.mockStatic;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import org.junit.jupiter.api.AfterAll;
@@ -18,6 +21,8 @@ import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.admin.AdminTriggerRunEntry;
+import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ops.TriggerDispatcher;
@@ -156,13 +161,50 @@ public class TriggerRunLogTest {
         assertEquals(1, TriggerRunLog.pending().size());
     }
 
+    private static String recordedByAnotherNode() {
+        try (var runLog = mockStatic(TriggerRunLog.class, CALLS_REAL_METHODS)) {
+            runLog.when(TriggerRunLog::currentNodeId).thenReturn("another-node");
+            return TriggerRunLog.record(descriptor(EventType.CREATED, List.of(entry("a", 1))));
+        }
+    }
+
     @Test
-    public void test_garbage_collect_drops_records_past_retention() throws Exception {
-        assertNotNull(TriggerRunLog.record(descriptor(EventType.CREATED, List.of(entry("a", 1)))));
+    public void test_garbage_collect_drops_another_nodes_records_past_retention() throws Exception {
+        assertNotNull(recordedByAnotherNode());
 
         TriggerRunLog.garbageCollect(-1L);
 
         assertTrue(TriggerRunLog.pending().isEmpty());
+    }
+
+    @Test
+    public void test_garbage_collect_keeps_this_nodes_pending_runs_past_retention() throws Exception {
+        assertNotNull(TriggerRunLog.record(descriptor(EventType.CREATED, List.of(entry("a", 1)))));
+
+        TriggerRunLog.garbageCollect(-1L);
+
+        assertEquals(1, TriggerRunLog.pending().size(),
+                "a run this node recorded is replayed by its own recovery, so it is never stranded");
+    }
+
+    @Test
+    public void test_garbage_collect_keeps_this_nodes_staged_runs_past_retention() throws Exception {
+        assertNotNull(TriggerRunLog.recordStaged(descriptor(EventType.CREATED, List.of(entry("a", 1))),
+                Map.of("a", AdminTriggerRunEntry.ABSENT_VERSION)));
+
+        TriggerRunLog.garbageCollect(-1L);
+
+        assertEquals(1, TriggerRunLog.pending().size());
+    }
+
+    @Test
+    public void test_garbage_collect_still_drops_this_nodes_dead_letters_past_their_retention() throws Exception {
+        final var runId = TriggerRunLog.record(descriptor(EventType.CREATED, List.of(entry("a", 1))));
+        TriggerRunLog.markAttempt(runId, TriggerRunStatus.DEAD, 1, "boom", System.currentTimeMillis());
+
+        TriggerRunLog.garbageCollect(60_000L, -1L);
+
+        assertTrue(TriggerRunLog.pending().isEmpty(), "a dead letter keeps its own clock whichever node owns it");
     }
 
     @Test

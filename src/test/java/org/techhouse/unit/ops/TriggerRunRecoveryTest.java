@@ -170,6 +170,24 @@ public class TriggerRunRecoveryTest {
     }
 
     @Test
+    public void test_a_run_older_than_the_retention_is_still_replayed_at_startup() throws Exception {
+        saveDocument();
+        for (final var entry : TriggerRunLog.pending()) {
+            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
+        }
+        captured.clear();
+        writeRecord("run-old", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(), 1L);
+
+        final var startupRuns = TriggerRunRecovery.startupRunIds();
+        TriggerRunRecovery.garbageCollect();
+        TriggerRunRecovery.recoverLocal(startupRuns);
+        sleep();
+
+        assertEquals(1, captured.size(), "a node down longer than the retention must still replay its own runs");
+        assertEquals("run-old", captured.getFirst().getRunId());
+    }
+
+    @Test
     public void test_run_from_another_node_is_not_replayed_locally() throws Exception {
         writeRecord("run-b", "some-other-node", EventType.UPDATED, List.of("live"), List.of(),
                 System.currentTimeMillis());
@@ -305,12 +323,13 @@ public class TriggerRunRecoveryTest {
 
     @Test
     public void test_garbage_collect_uses_the_configured_retention() throws Exception {
-        writeRecord("run-h", TriggerRunLog.currentNodeId(), EventType.UPDATED, List.of("live"), List.of(), 1L);
+        writeRecord("run-h", "some-other-node", EventType.UPDATED, List.of("live"), List.of(), 1L);
         assertNotNull(TriggerRunLog.pending());
 
         TriggerRunRecovery.garbageCollect();
 
-        assertTrue(TriggerRunLog.pending().isEmpty(), "a record older than triggerRunRetentionMs is collected");
+        assertTrue(TriggerRunLog.pending().isEmpty(),
+                "another node's record older than triggerRunRetentionMs is stranded and collected");
     }
 
     @Test

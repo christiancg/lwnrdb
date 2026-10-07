@@ -207,10 +207,10 @@ public final class TriggerRunLog {
         final var now = System.currentTimeMillis();
         final var cutoff = now - retentionMs;
         final var deadCutoff = now - deadLetterRetentionMs;
+        final var selfNodeId = currentNodeId();
         final var stale = new ArrayList<String>();
         for (final var entry : pending()) {
-            final var limit = entry.getStatus() == TriggerRunStatus.DEAD ? deadCutoff : cutoff;
-            if (entry.getFiredAt() < limit) {
+            if (isStranded(entry, selfNodeId, cutoff, deadCutoff)) {
                 stale.add(entry.get_id());
             }
         }
@@ -219,6 +219,13 @@ public final class TriggerRunLog {
         }
         AdminOperationHelper.deleteTriggerRuns(stale);
         logger.info("Garbage-collected " + stale.size() + " stranded trigger run record(s)");
+    }
+
+    private static boolean isStranded(AdminTriggerRunEntry entry, String selfNodeId, long cutoff, long deadCutoff) {
+        if (entry.getStatus() == TriggerRunStatus.DEAD) {
+            return entry.getFiredAt() < deadCutoff;
+        }
+        return !selfNodeId.equals(entry.getNodeId()) && entry.getFiredAt() < cutoff;
     }
 
     public static String currentNodeId() {

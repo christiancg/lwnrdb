@@ -1264,6 +1264,7 @@ REG_IN = "idxagg_reg_in"
 REG_NOTIN = "idxagg_reg_notin"
 REG_MINVALUE = "idxagg_reg_minvalue"
 REG_GEO_WRAP = "idxagg_reg_geowrap"
+REG_GEO_NAN = "idxagg_reg_geonan"
 REG_TIES = "idxagg_reg_ties"
 REG_VALUELESS = "idxagg_reg_valueless"
 REG_CAST = "idxagg_reg_cast"
@@ -1674,6 +1675,25 @@ def probe_geo_distance_across_the_antimeridian(c):
           detail=f"scan={scanned} indexed={indexed}")
 
 
+def probe_a_non_finite_geo_operand_is_refused(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_GEO_NAN})
+    save_doc(c, REG_GEO_NAN, {"_id": "inside", "location": "#geo(2.000000,5.000000)"})
+    nan_polygon = ["#geo(0,0)", "#geo(10,0)", "#geo(NaN,NaN)"]
+    nan_target = geo_distance_steps("SMALLER_THAN", 50000, target="#geo(NaN,0)")
+
+    def _probe(label):
+        check_code(f"a within polygon with a NaN vertex is refused ({label})",
+                   agg(c, REG_GEO_NAN, geo_within_steps(nan_polygon)), "ERROR", "400-1")
+        check_code(f"a distance target holding NaN is refused ({label})",
+                   agg(c, REG_GEO_NAN, nan_target), "ERROR", "400-1")
+
+    _probe("scan")
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_GEO_NAN, "fieldName": "location"})
+    wait_for_indexes(c, [(REG_GEO_NAN, "location")])
+    wait_for_background()
+    _probe("indexed")
+
+
 def probe_sort_ties_do_not_depend_on_the_index(c):
     c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_TIES})
     for i in range(10):
@@ -2051,6 +2071,7 @@ def regression_suite(c):
     probe_not_in_then_equals_on_a_scalar_only_field(c)
     probe_group_by_integer_min_value(c)
     probe_geo_distance_across_the_antimeridian(c)
+    probe_a_non_finite_geo_operand_is_refused(c)
     probe_sort_ties_do_not_depend_on_the_index(c)
     probe_a_custom_filter_survives_a_map_step(c)
     probe_a_conjunction_after_a_row_reshaping_step(c)

@@ -111,7 +111,7 @@ final class AdminSnapshotConformer {
             snapshotDbs.put(db.get_id(), db);
         }
         for (final var db : new ArrayList<>(snapshotDbs.values())) {
-            if (!clearedOfLeftovers(db.get_id())) {
+            if (!clearedOfCaseVariant(db.get_id(), snapshotDbs.keySet()) || !clearedOfLeftovers(db.get_id())) {
                 snapshotDbs.remove(db.get_id());
                 outcome.record(false);
                 continue;
@@ -127,6 +127,16 @@ final class AdminSnapshotConformer {
             }
         }
         return snapshotDbs;
+    }
+
+    private boolean clearedOfCaseVariant(String dbName, Set<String> snapshotDbNames) throws Exception {
+        return cache.getAdminDbEntry(dbName) != null || quarantine.clearCaseVariantDatabase(dbName, snapshotDbNames,
+                clusterConfig.replicationAckTimeoutMs());
+    }
+
+    private boolean clearedOfCaseVariant(String dbName, String collName, Set<String> snapshotCollIds) throws Exception {
+        return cache.getAdminCollectionEntry(dbName, collName) != null || quarantine.clearCaseVariantCollection(dbName,
+                collName, snapshotCollIds, clusterConfig.replicationAckTimeoutMs());
     }
 
     private boolean clearedOfLeftovers(String dbName) throws InterruptedException {
@@ -149,8 +159,10 @@ final class AdminSnapshotConformer {
     private HashSet<String> conformCollections(AdminSnapshotPayload snapshot, HashMap<String, AdminDbEntry> snapshotDbs,
             long epochAtStart, ConformOutcome outcome, UnreadableItems unreadable) {
         final var snapshotColls = new HashSet<String>();
-        for (final var collJson : snapshot.getCollections()) {
-            final var coll = AdminCollEntry.fromJsonObject(collJson);
+        final var snapshotCollIds = new HashSet<String>();
+        final var collections = snapshot.getCollections().stream().map(AdminCollEntry::fromJsonObject).toList();
+        collections.forEach(coll -> snapshotCollIds.add(coll.get_id()));
+        for (final var coll : collections) {
             final var parts = coll.get_id().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
             final var dbName = parts[0];
             final var collName = parts[1];
@@ -161,6 +173,10 @@ final class AdminSnapshotConformer {
             final var schemaEl = snapshot.getSchemas().get(coll.get_id());
             final var desiredSchema = schemaEl != null && schemaEl.isJsonObject() ? schemaEl.asJsonObject() : null;
             try {
+                if (!clearedOfCaseVariant(dbName, collName, snapshotCollIds)) {
+                    outcome.record(false);
+                    continue;
+                }
                 outcome.record(conformCollection(dbName, collName, coll.getIndexes(), desiredSchema,
                         snapshot.getTriggers(), epochAtStart, coll.getIncarnation(), unreadable));
             } catch (Exception e) {

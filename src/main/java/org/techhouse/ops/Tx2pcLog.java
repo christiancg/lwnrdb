@@ -136,6 +136,10 @@ public final class Tx2pcLog {
         return cache.getPkIndexTransaction(markerId(dtxId, AdminTransactionEntry.MARKER_PARTICIPANT)) != null;
     }
 
+    public static boolean isDecidedCommit(String dtxId) {
+        return isPrepared(dtxId) && isCommitted(dtxId);
+    }
+
     public static List<String> preparedDtxIds() {
         return dtxIdsWithSuffix(AdminTransactionEntry.MARKER_PARTICIPANT);
     }

@@ -145,6 +145,9 @@ public final class TransactionOperationHelper {
             clientTracker.clearTransactionState(clientId);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_NOT_USABLE);
         }
+        if (Tx2pcLog.isDecidedCommit(transaction.getTransactionId().toString())) {
+            return TwoPhaseParticipant.commitPrepared(clientId);
+        }
         var fenced = false;
         var pastCommitPoint = false;
         try {

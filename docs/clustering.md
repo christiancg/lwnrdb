@@ -494,6 +494,9 @@ it still owns every collection it buffered, and durably recording a PREPARED mar
 **durably records the commit decision** and drives `COMMIT_TX` to all. Any no vote or
 unreachable participant drives `ABORT_TX` to all and returns `409-7 TRANSACTION_ABORTED`.
 Each participant's commit reuses the same atomic `REPLICATE_TX` batch to its own replicas.
+If the coordinator's own slice fails to apply, the edge keeps the transaction open and answers `409-10`. A
+re-sent COMMIT then finishes that slice through the prepared-commit path, which neither re-checks quorum nor
+ownership, because the decision was already made.
 
 **Durable recovery log.** The PREPARED markers and the coordinator's commit decision are
 records in `admin/transactions` (keyed `{dtxId}|part` / `{dtxId}|coord`, alongside the
@@ -727,7 +730,9 @@ create missing collections and reconcile their indexes; then drop collections an
 absent from the snapshot. A drop unregisters the name and renames its folder aside
 (`<coll>.quarantined-<incarnation>-<ts>`, `<db>.quarantined-<ts>`) rather than deleting it, and a
 create never adopts an unregistered folder that still holds data — it moves that aside first, so a
-re-created name always starts empty. Each create/drop takes the target collection's write lock,
+re-created name always starts empty. A create whose name shares a folder on disk with a
+registered sibling the snapshot does not hold, such as `Foo` after `foo`, quarantines that sibling first. Dropping it
+afterwards would move the new folder aside on a case-insensitive volume. Each create/drop takes the target collection's write lock,
 mirroring the DDL handlers, and skips the target for the round if that lock stays busy. The
 winning epoch is adopted only when nothing was skipped: adopting it after a partial conform
 would leave this node equal to the peer, and an equal epoch outranks only on node id, so the

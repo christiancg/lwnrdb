@@ -36,9 +36,9 @@ public class ForwardedTxSessionReuseTest extends ClusterConnectionHandlerTestBas
         clientTracker.removeTxSession(sessionId);
     }
 
-    private ClusterMessage forwarded(String txId, String body) {
+    private ClusterMessage forwarded(String txId, String body, String actingUser) {
         final var message = envelope(ClusterMessageType.FORWARD_TX_REQUEST);
-        message.setActingUser("admin");
+        message.setActingUser(actingUser);
         message.setTxSessionId(sessionId);
         message.setTxId(txId);
         message.setForwardBody(ForwardBody.encode(body));
@@ -63,7 +63,11 @@ public class ForwardedTxSessionReuseTest extends ClusterConnectionHandlerTestBas
     }
 
     private OperationResponse send(String txId, String body) throws Exception {
-        final var reply = pool.request(cluster.serverAddress(), forwarded(txId, body), ACK_TIMEOUT_MS);
+        return send(txId, body, "admin");
+    }
+
+    private OperationResponse send(String txId, String body, String actingUser) throws Exception {
+        final var reply = pool.request(cluster.serverAddress(), forwarded(txId, body, actingUser), ACK_TIMEOUT_MS);
         assertEquals(ClusterMessageType.FORWARD_RESPONSE, reply.getType(), reply.getErrorMessage());
         return eJson.fromJson(ForwardBody.decode(reply.getForwardBody()), OperationResponse.class);
     }
@@ -102,6 +106,32 @@ public class ForwardedTxSessionReuseTest extends ClusterConnectionHandlerTestBas
         assertEquals(OperationStatus.OK, findById("kept").getStatus());
         assertEquals(OperationStatus.NOT_FOUND, findById("abandoned").getStatus(),
                 "a write of a transaction the edge discarded must not ride on the next transaction's commit");
+    }
+
+    private String sessionUser() {
+        return clientTracker.getAuthenticatedUsername(clientTracker.txSession(sessionId).clientId());
+    }
+
+    @Test
+    public void test_a_new_transaction_on_a_leftover_session_runs_as_its_own_acting_user() throws Exception {
+        assertEquals(OperationStatus.OK, send(tx1, save("abandoned"), "admin").getStatus());
+        assertEquals("admin", sessionUser());
+
+        assertEquals(OperationStatus.OK, send(tx2, save("kept"), "editor").getStatus());
+
+        assertEquals("editor", sessionUser(),
+                "the next transaction's hooks and triggers must not run as the user who created the session");
+        send(tx2, control("ROLLBACK_TRANSACTION"), "editor");
+    }
+
+    @Test
+    public void test_a_continuation_keeps_the_user_its_transaction_started_with() throws Exception {
+        send(tx1, save("first"), "editor");
+
+        send(tx1, save("second"), "admin");
+
+        assertEquals("editor", sessionUser(), "only a forward that starts a transaction binds the session user");
+        send(tx1, control("ROLLBACK_TRANSACTION"));
     }
 
     @Test

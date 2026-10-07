@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Set;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -15,6 +16,7 @@ import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.CompiledProcedureCache;
+import org.techhouse.ops.OnDiskNameRegistry;
 
 final class AdminQuarantine {
     private final Logger logger = Logger.logFor(AdminQuarantine.class);
@@ -50,6 +52,37 @@ final class AdminQuarantine {
 
     private static String movedOrLeft(boolean moved) {
         return moved ? "moved aside on disk" : "left on disk";
+    }
+
+    boolean clearCaseVariantDatabase(String dbName, Set<String> snapshotDbNames, long waitMillis) throws Exception {
+        final var sibling = OnDiskNameRegistry.collidingDatabase(dbName);
+        if (sibling == null || cache.getAdminDbEntry(sibling) == null) {
+            return true;
+        }
+        if (snapshotDbNames.contains(sibling)) {
+            warnAmbiguous("database " + dbName, "database " + sibling);
+            return false;
+        }
+        return dropDatabase(sibling, waitMillis);
+    }
+
+    boolean clearCaseVariantCollection(String dbName, String collName, Set<String> snapshotCollIds, long waitMillis)
+            throws Exception {
+        final var sibling = OnDiskNameRegistry.collidingCollection(dbName, collName);
+        if (sibling == null || cache.getAdminCollectionEntry(dbName, sibling) == null) {
+            return true;
+        }
+        if (snapshotCollIds.contains(Cache.getCollectionIdentifier(dbName, sibling))) {
+            warnAmbiguous("collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName,
+                    "collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + sibling);
+            return false;
+        }
+        return dropCollection(dbName, sibling, waitMillis);
+    }
+
+    private void warnAmbiguous(String installed, String sibling) {
+        logger.warning("Skipping the install of " + installed + ": the winning admin snapshot also holds " + sibling
+                + ", and both names share one folder on disk. An operator has to drop one of them.");
     }
 
     boolean dropAbsentCollections(HashMap<String, AdminDbEntry> snapshotDbs, HashSet<String> snapshotColls,

@@ -321,8 +321,8 @@ public class AggregationStepValidator {
     }
 
     private static ValidationResult validateDistanceArgs(CustomOperator operator, JsonObject args) {
-        if (isNotGeo(operator.getValue())) {
-            return ValidationResult.fail("distance operator requires a geo value");
+        if (isNotFiniteGeo(operator.getValue())) {
+            return ValidationResult.fail("distance operator requires a finite geo value");
         }
         final var comparator = args.get("comparator");
         if (comparator == null || !comparator.isJsonString() || parseComparator(comparator) == null) {
@@ -341,8 +341,8 @@ public class AggregationStepValidator {
             return ValidationResult.fail("within operator requires a polygon of at least 3 points");
         }
         for (var vertex : polygon.asJsonArray().asList()) {
-            if (isNotGeo(vertex)) {
-                return ValidationResult.fail("within operator requires a polygon of geo points");
+            if (isNotFiniteGeo(vertex)) {
+                return ValidationResult.fail("within operator requires a polygon of finite geo points");
             }
         }
         return ValidationResult.ok();
@@ -351,6 +351,10 @@ public class AggregationStepValidator {
     private static boolean isNotGeo(JsonBaseElement element) {
         return element == null || !element.isJsonCustom()
                 || !JsonGeo.CUSTOM_TYPE_NAME.equals(element.asJsonCustom().getCustomTypeName());
+    }
+
+    private static boolean isNotFiniteGeo(JsonBaseElement element) {
+        return isNotGeo(element) || !(element instanceof JsonGeo geo && geo.isFinitePoint());
     }
 
     private static GeoDistanceComparator parseComparator(JsonBaseElement comparator) {

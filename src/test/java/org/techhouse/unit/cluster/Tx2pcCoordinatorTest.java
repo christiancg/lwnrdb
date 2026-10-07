@@ -2,6 +2,7 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -35,12 +36,18 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.TwoPhaseParticipant;
+import org.techhouse.ops.Tx2pcLog;
+import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
+import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -171,6 +178,63 @@ public class Tx2pcCoordinatorTest {
 
         assertTrue(org.techhouse.ops.Tx2pcLog.isCommitted(txId),
                 "the commit decision must survive so recovery can re-drive the failed slice");
+    }
+
+    private OperationResponse resendCommitWithoutQuorum(UUID clientId) throws Exception {
+        TestUtils.setPrivateField(config, "clusterExpectedSize", 3);
+        return processor.processMessage(new CommitTransactionRequest(), clientId);
+    }
+
+    @Test
+    public void test_a_resent_commit_without_quorum_keeps_a_decided_slice() throws Exception {
+        poolReplies(ClusterMessageType.PREPARE_TX_ACK);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-resent-noquorum");
+        final var txId = breakLocalSlice(clientId);
+        assertEquals("409-10", coordinator.commit(clientId).getErrorCode());
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+
+        final var response = resendCommitWithoutQuorum(clientId);
+
+        assertEquals("500-33", response.getErrorCode(),
+                "a decided slice is not refused for quorum: the decision is already binding");
+        assertTrue(Tx2pcLog.sliceOpIds(txId).containsAll(opIds),
+                "deleting the slice leaves recovery an empty replay it records as committed");
+        assertTrue(Tx2pcLog.isPrepared(txId), "the prepared marker must survive the re-sent commit");
+        assertFalse(transaction.getHeldLocks().isEmpty(), "the half-applied slice stays fenced");
+        assertEquals(transaction, clientTracker.getActiveTransaction(clientId));
+    }
+
+    @Test
+    public void test_a_resent_commit_finishes_a_decided_slice_without_quorum() throws Exception {
+        poolReplies(ClusterMessageType.PREPARE_TX_ACK);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-resent-finish");
+        final var txId = breakLocalSlice(clientId);
+        assertEquals("409-10", coordinator.commit(clientId).getErrorCode());
+        final var opIds = clientTracker.getActiveTransaction(clientId).getBufferedOpIds();
+        final var corruptOpId = opIds.getLast();
+        opIds.remove(corruptOpId);
+        AdminOperationHelper.deleteTransactionOps(List.of(corruptOpId));
+
+        final var response = resendCommitWithoutQuorum(clientId);
+
+        assertEquals(OperationStatus.OK, response.getStatus(), "the re-sent commit finishes the decided slice");
+        assertEquals(OperationStatus.OK, findStatus("tpc-resent-finish"));
+        assertFalse(Tx2pcLog.isPrepared(txId), "finishing the slice resolves its prepared marker");
+        assertNull(clientTracker.getActiveTransaction(clientId));
+    }
+
+    @Test
+    public void test_a_prepared_but_undecided_slice_keeps_the_quorum_refusal() throws Exception {
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-undecided");
+        final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
+        assertTrue(TwoPhaseParticipant.prepare(clientId, REMOTE, List.of(REMOTE)));
+
+        final var response = resendCommitWithoutQuorum(clientId);
+
+        assertEquals(ErrorCode.NO_QUORUM.getCode(), response.getErrorCode(),
+                "without a commit decision the single-node refusals still apply");
+        Tx2pcLog.deleteParticipantMarker(txId);
     }
 
     @Test
