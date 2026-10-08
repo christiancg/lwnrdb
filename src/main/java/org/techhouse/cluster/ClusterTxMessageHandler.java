@@ -9,6 +9,7 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.FinishedSlice;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ioc.IocContainer;
@@ -62,9 +63,9 @@ final class ClusterTxMessageHandler {
                 if (refusal != null) {
                     return refusal;
                 }
-                final var lostSlice = refuseLostSlice(clientId, continuation, type);
-                if (lostSlice != null) {
-                    return lostSlice;
+                final var withoutSlice = answerFinishedOrLostSlice(sessionId, clientId, continuation, txId, type);
+                if (withoutSlice != null) {
+                    return withoutSlice;
                 }
                 if (startsTransaction(type) && clientTracker.getActiveTransaction(clientId) == null) {
                     // Start with the coordinator's distributed-tx id so the buffered slice and 2PC markers
@@ -73,7 +74,8 @@ final class ClusterTxMessageHandler {
                     TransactionOperationHelper.start(clientId, java.util.UUID.fromString(txId),
                             parsed.getTriggerDepth());
                 }
-                return operationProcessor.processMessage(parsed, clientId);
+                return finishOnSession(sessionId, clientId, txId, type,
+                        operationProcessor.processMessage(parsed, clientId));
             }).get(clusterConfig.replicationAckTimeoutMs(), TimeUnit.MILLISECONDS);
             clientTracker.updateLastCommandTime(clientId);
             if ((finishesSession(type) || lostItsSlice(result)) && TransactionOperationHelper.releasedItsLocks(result)
@@ -92,11 +94,37 @@ final class ClusterTxMessageHandler {
         return response;
     }
 
-    private static OperationResponse refuseLostSlice(UUID clientId, boolean continuation, OperationType type) {
+    private static OperationResponse answerFinishedOrLostSlice(String sessionId, UUID clientId, boolean continuation,
+            String txId, OperationType type) {
         if (!continuation || clientTracker.getActiveTransaction(clientId) != null) {
             return null;
         }
+        final var finished = clientTracker.finishedSlice(sessionId);
+        if (finished == null || !finished.txId().equals(txId)) {
+            return new OperationResponse(type, ErrorCode.TRANSACTION_SLICE_LOST);
+        }
+        if (type == finished.type()) {
+            return finished.response();
+        }
+        if (type == OperationType.ROLLBACK_TRANSACTION) {
+            return landed(finished.response())
+                    ? new OperationResponse(type, ErrorCode.TRANSACTION_ALREADY_COMMITTED)
+                    : OperationResponse.ok(type, "Transaction rolled back");
+        }
         return new OperationResponse(type, ErrorCode.TRANSACTION_SLICE_LOST);
+    }
+
+    private static boolean landed(OperationResponse commit) {
+        return commit.getStatus() == OperationStatus.OK
+                || ErrorCode.REPLICATION_TIMEOUT.getCode().equals(commit.getErrorCode());
+    }
+
+    private static OperationResponse finishOnSession(String sessionId, UUID clientId, String txId, OperationType type,
+            OperationResponse result) {
+        if (finishesSession(type) && txId != null && clientTracker.getActiveTransaction(clientId) == null) {
+            clientTracker.recordFinishedSlice(sessionId, new FinishedSlice(txId, type, result));
+        }
+        return result;
     }
 
     private static OperationResponse retireStaleTransaction(UUID clientId, String txId, OperationType type) {

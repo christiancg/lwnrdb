@@ -215,10 +215,11 @@ public class ClusterConnectionHandler implements Runnable {
 
     private ClusterMessage handleReplicateAdmin(ClusterMessage request) {
         return adminLane.within(clusterConfig.replicationAckTimeoutMs(), () -> applyReplicatedAdmin(request),
-                ClusterConnectionHandler::adminLaneBusy);
+                this::adminLaneBusy);
     }
 
-    private static ClusterMessage adminLaneBusy() {
+    private ClusterMessage adminLaneBusy() {
+        adminAntiEntropyService.reconcileSoon();
         final var response = new ClusterMessage();
         response.setType(ClusterMessageType.ERROR);
         response.setErrorMessage("The admin lane stayed busy past replicationAckTimeoutMs: an admin conform or another"
@@ -264,7 +265,7 @@ public class ClusterConnectionHandler implements Runnable {
 
     private ClusterMessage handleReplicateUser(ClusterMessage request) {
         return adminLane.within(clusterConfig.replicationAckTimeoutMs(), () -> applyReplicatedUser(request),
-                ClusterConnectionHandler::adminLaneBusy);
+                this::adminLaneBusy);
     }
 
     private ClusterMessage applyReplicatedUser(ClusterMessage request) {

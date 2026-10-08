@@ -487,6 +487,11 @@ on a client connection therefore leaves that connection holding the transaction,
 owner. A re-sent COMMIT
 that finds quorum or ownership lost since the first attempt answers `500-33` again and keeps the slice and its
 locks: the commit was already decided, so the re-send is refused for now rather than discarding the ops.
+A `409-10` can also mean the owner simply stopped waiting: the owner gives a forwarded op `replicationAckTimeoutMs`,
+and a commit that also waits that long for replica acks outlives it, finishing on the session's own thread
+afterwards. The session remembers how that commit or rollback finished, so a re-sent COMMIT answers the real outcome
+(`OK`, or `503-3` when replication timed out but the local commit stands) instead of `409-13`, and a ROLLBACK of a
+commit that landed answers `409-14 TRANSACTION_ALREADY_COMMITTED` rather than claiming a rollback.
 
 **Cross-owner two-phase commit.** When a transaction spans multiple owners the edge runs
 2PC: `PREPARE_TX` to every participant (each votes yes only after confirming quorum, confirming
@@ -814,7 +819,12 @@ never moves the epoch number on equality.
 
 To close the window where a stale node becomes the admin coordinator before it has caught
 up, a coordinator rejects coordinated admin ops with a retryable `503-5 ADMIN_SYNCING`
-until it has completed one admin reconciliation since starting. A peer definition that stays
+until it has completed one admin reconciliation since starting. That alone covers a restart, not a
+node that stayed up, missed one op and then became coordinator when the old one died or a partition
+healed: committing there would land at the epoch its peers already hold, without the op they hold
+there, and win the conform. So a coordinator also answers `503-5` — and schedules a conform — while
+any ALIVE peer gossips a higher admin epoch than its own. A replica that refused an op because the
+admin lane stayed busy schedules a conform too, as one that saw an epoch gap does. A peer definition that stays
 unreadable keeps a coordinator conforming to that peer refusing admin ops until the file is
 repaired; the conform's warning names the key.
 

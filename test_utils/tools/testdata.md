@@ -2,13 +2,35 @@
 
 Manual test playbook — send each JSON command to the server over TCP, one line at a time.
 
+Anything but `AUTHENTICATE`, `LIST_DATABASES` and `CLOSE_CONNECTION` before authenticating → `401-1`
+
+```json
+{"type": "LIST_COLLECTIONS", "databaseName": "test"}
+```
+
+A wrong password, or a user that does not exist → `401-3`
+
+```json
+{"type": "AUTHENTICATE", "username": "admin", "password": "not-the-password"}
+```
+
 Authenticate (must be done before any protected operation)
 
 ```json
 {"type": "AUTHENTICATE", "username": "admin", "password": "administrator"}
 ```
 
+A connection past `maxConnections` (100 by default) gets a single `CLOSE_CONNECTION` frame carrying `503-1`
+and is closed before it can send anything. There is no command for it: set `maxConnections=2` in
+`lwnrdb.cfg` and open a third connection.
+
 Create database
+
+```json
+{"type": "CREATE_DATABASE", "databaseName": "test"}
+```
+
+Creating it again → `409-2`
 
 ```json
 {"type": "CREATE_DATABASE", "databaseName": "test"}
@@ -129,6 +151,13 @@ A repeated `_id` within one request is rejected → `400-3`
 {"type": "BULK_SAVE", "databaseName": "test", "collectionName": "testCollection", "objects": [{"_id": "dup", "n": 1}, {"_id": "dup", "n": 2}]}
 ```
 
+A document larger than `maxEntrySize` (`1Mb` by default) → `400-2`, and nothing is written. To try it by hand,
+set `maxEntrySize=1Kb` in `lwnrdb.cfg` and send a document whose `blob` alone is over a kilobyte:
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "too-big", "blob": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}}
+```
+
 Delete the one with id 1234
 
 ```json
@@ -145,6 +174,14 @@ Find by id deleted document
 
 ```json
 {"type": "FIND_BY_ID", "databaseName": "test", "collectionName": "testCollection", "_id": "1234"}
+```
+
+`dirtyRead: true` skips the collection read lock, so the read never waits behind a writer — at the price of
+possibly seeing a write that is still landing. `FIND_BY_ID`, `AGGREGATE`, `LIST_COLLECTIONS` and `LIST_USERS`
+accept it.
+
+```json
+{"type": "FIND_BY_ID", "databaseName": "test", "collectionName": "testCollection", "_id": "findme", "dirtyRead": true}
 ```
 
 A read of a collection that is not registered → `404-11`. That includes a differently-cased spelling of a
@@ -164,6 +201,20 @@ Aggregation with filter step not matching string
 
 ```json
 {"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator":{"fieldOperatorType": "NOT_EQUALS", "field": "fieldAdded", "value": "an added field"}}]}
+```
+
+A filter nothing matches → `404-3`: an empty result is answered as `NOT_FOUND`, not as an empty list
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator":{"fieldOperatorType": "EQUALS", "field": "fieldAdded", "value": "no such value"}}]}
+```
+
+`analyze: true` adds an `analyzeResult`: whether an index was used and which ones, how many documents were
+scanned, the locks taken, script invocations and their time, how long it took, and index suggestions. With
+it, an empty result is `OK` rather than `404-3`, since the analysis is still worth returning.
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "analyze": true, "aggregationSteps": [{"type": "FILTER", "operator":{"fieldOperatorType": "EQUALS", "field": "fieldAdded", "value": "no such value"}}]}
 ```
 
 Insert numeric one to be searched for
@@ -885,6 +936,10 @@ Close connection
 {"type": "CLOSE_CONNECTION"}
 ```
 
+Once the server starts shutting down, any request on a connection that is still open → `503-13`, except
+`ROLLBACK_TRANSACTION` and `CLOSE_CONNECTION`, which still answer so an open transaction can be released.
+Send a request right after stopping the server (Ctrl+C, or `SIGTERM`) to see it.
+
 Users and permissions
 
 Re-authenticate after reconnecting
@@ -909,6 +964,18 @@ Create a user that can create and drop databases
 
 ```json
 {"type": "CREATE_USER", "username": "dbadmin", "password": "dbadmin1234", "admin": false, "globalPermissions": ["CREATE_DATABASE", "DROP_DATABASE"], "databasePermissions": {}, "collectionPermissions": {}, "scriptPermissions": {}}
+```
+
+A user that already exists → `409-1`
+
+```json
+{"type": "CREATE_USER", "username": "readonly", "password": "readonly1234", "admin": false, "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {"test|testCollection": "READ"}, "scriptPermissions": {}}
+```
+
+A `LIST_USERS` filter that matches nobody → `404-5`
+
+```json
+{"type": "LIST_USERS", "aggregationSteps": [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "_id", "value": "nobody"}}]}
 ```
 
 Grant Alice admin rights and update her permissions (an admin needs no script grant)
@@ -939,6 +1006,12 @@ Change a user's password as admin — no `currentPassword` needed
 
 ```json
 {"type": "SET_PASSWORD", "username": "Alice", "newPassword": "new_secret_1234"}
+```
+
+A user that does not exist → `404-1` (`DELETE_USER` and `CHANGE_PERMISSIONS` answer the same)
+
+```json
+{"type": "SET_PASSWORD", "username": "nobody", "newPassword": "whatever1234"}
 ```
 
 Authenticate with the new password
@@ -987,6 +1060,22 @@ Clear the owners again
 ```json
 {"type": "SET_DATABASE_OWNERS", "databaseName": "test", "owners": []}
 ```
+
+The last admin can be neither demoted → `400-5`
+
+```json
+{"type": "CHANGE_PERMISSIONS", "username": "admin", "admin": false, "globalPermissions": [], "databasePermissions": {}, "collectionPermissions": {}, "scriptPermissions": {}}
+```
+
+nor deleted → `400-4`
+
+```json
+{"type": "DELETE_USER", "username": "admin"}
+```
+
+Deleting a user signs out every connection still authenticated as them: if Alice is connected on another
+connection, her next request there answers `401-1` until she authenticates again. A user created later under
+the same name does not inherit those connections.
 
 Delete Alice
 
@@ -1119,6 +1208,28 @@ Waiting past `scriptTimeoutMs` → `408-1`
 ```json
 {"type": "RUN_SCRIPT", "databaseName": "test", "script": "return (async () => { await new Promise(r => setTimeout(r, 60000)); return 'never'; })();"}
 ```
+
+A returned promise that never settles → `400-20`, rather than a silent `null`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return new Promise(() => {});"}
+```
+
+Allocating past `scriptMaxMemoryBytes` (`64Mb` by default) → `400-12`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "const parts = [];\nwhile (true) { parts.push('x'.repeat(1000000)); }"}
+```
+
+A result larger than `scriptMaxResultBytes` (`16Mb` by default) → `400-15`
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return 'x'.repeat(17000000);"}
+```
+
+A source larger than `scriptMaxSourceBytes` (`256Kb` by default) → `400-10`, before anything is parsed. The
+same cap refuses a `SAVE_PROCEDURE` and a pipeline `SCRIPT` operator. To try it by hand, set
+`scriptMaxSourceBytes=1Kb` in `lwnrdb.cfg` and send any script over a kilobyte.
 
 Unknown database → `404-4`
 
@@ -1296,6 +1407,15 @@ cluster it is the executing node's `host:clusterPort`.
 
 ```json
 {"type": "LIST_SCRIPTS"}
+```
+
+While it runs, admission is also visible. With `maxConcurrentScripts=1` in `lwnrdb.cfg`, a second script on
+connection B waits `scriptQueueWaitMs` (250 ms by default) for a permit and is then refused → `503-6`. The
+message names the limit that refused it; `maxConcurrentScriptsPerUser` and `maxConcurrentScriptsPerDatabase`
+refuse the same way.
+
+```json
+{"type": "RUN_SCRIPT", "databaseName": "test", "script": "return 1;"}
 ```
 
 Stop it, using the `runId` from that listing. Connection A's `RUN_SCRIPT` then answers `408-2`, and the
@@ -1496,6 +1616,45 @@ Custom types
 {"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": { "_id": "aDatetimeTest", "aDatetime": "#time(12:00:00)" }}
 ```
 
+Geo points are `#geo(latitude,longitude)`. `distance` compares the distance in metres to a target point;
+`within` keeps points inside a polygon given as its corners in order.
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "geo-near", "location": "#geo(40.0,-74.0)"}}
+```
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "geo-far", "location": "#geo(41.0,-74.0)"}}
+```
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator": {"customOperatorName": "distance", "field": "location", "value": "#geo(40.001,-74.0)", "comparator": "SMALLER_THAN", "distance": 1000}}]}
+```
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator": {"customOperatorName": "within", "field": "location", "polygon": ["#geo(39.9,-74.1)", "#geo(39.9,-73.9)", "#geo(40.1,-73.9)", "#geo(40.1,-74.1)"]}}]}
+```
+
+Vectors are `#vector(...)`. `nearest` returns the `k` documents most similar to the query by cosine
+similarity. It is an approximate search by default, so it can miss a document a full scan would rank;
+`exact: true` scans every document instead.
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "vec-a", "embedding": "#vector(1.0,0.0)"}}
+```
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "vec-b", "embedding": "#vector(0.0,1.0)"}}
+```
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator": {"customOperatorName": "nearest", "field": "embedding", "value": "#vector(0.9,0.1)", "k": 1}}]}
+```
+
+```json
+{"type": "AGGREGATE", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator": {"customOperatorName": "nearest", "field": "embedding", "value": "#vector(0.9,0.1)", "k": 1, "exact": true}}]}
+```
+
 Index-backed aggregations
 
 The `GROUP_BY`, `JOIN`, `SORT`, and `DISTINCT` steps use a field index when one exists on the step's field and the step is the first step in the pipeline. Create an index on the field, then run the step as the only step to exercise the index path (the same commands return the same results with or without the index — the index just makes them faster).
@@ -1567,6 +1726,10 @@ A schema that is not itself valid is refused → `400-8`
 {"type": "SAVE_SCHEMA", "databaseName": "test", "collectionName": "people", "schema": {"type": "not-a-type"}}
 ```
 
+A schema the server cannot read never lets a write through unvalidated: every `SAVE` and `BULK_SAVE` to the
+collection → `503-11` until the schema is saved again or deleted. To see it, stop the server, replace
+`<filePath>/test/people/people-schema.json` with text that is not JSON, and start it again.
+
 Remove the schema — idempotent, so sending it twice still returns OK
 
 ```json
@@ -1620,6 +1783,12 @@ An empty pipeline watches the whole collection. The array is required, so omitti
 
 ```json
 {"type": "LISTEN", "databaseName": "test", "collectionName": "joinMe"}
+```
+
+A script anywhere in a `LISTEN` pipeline → `400-19`, since it would run again on every write
+
+```json
+{"type": "LISTEN", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator": {"script": "export default (doc) => doc.aNumber > 5;"}}]}
 ```
 
 Cancel a subscription (use a `listenId` from a response above)
@@ -1735,6 +1904,59 @@ Committing with none open → `409-4`
 ```json
 {"type": "COMMIT_TRANSACTION"}
 ```
+
+A buffered write takes its collection's write lock and keeps it until the transaction ends. Another
+transaction that cannot get that lock within `transactionLockTimeoutMs` (5 s by default) → `409-5`, and its
+transaction is aborted. This needs two connections. On connection A:
+
+```json
+{"type": "START_TRANSACTION"}
+```
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "tx-lock-a", "holder": "A"}}
+```
+
+On connection B, the same collection → `409-5` after the timeout
+
+```json
+{"type": "START_TRANSACTION"}
+```
+
+```json
+{"type": "SAVE", "databaseName": "test", "collectionName": "testCollection", "object": {"_id": "tx-lock-b", "holder": "B"}}
+```
+
+B's transaction is now unusable: anything but `COMMIT_TRANSACTION`, `ROLLBACK_TRANSACTION` and
+`CLOSE_CONNECTION` → `409-9`, and a `COMMIT_TRANSACTION` answers `409-9` too and ends it
+
+```json
+{"type": "FIND_BY_ID", "databaseName": "test", "collectionName": "testCollection", "_id": "findme"}
+```
+
+```json
+{"type": "COMMIT_TRANSACTION"}
+```
+
+Back on connection A
+
+```json
+{"type": "ROLLBACK_TRANSACTION"}
+```
+
+In a cluster a transaction can touch collections owned by different nodes, and a few more answers appear:
+
+- `409-7` — a participant could not prepare (it lost quorum, lost ownership of a collection it buffered, or
+  never answered), so the commit was aborted everywhere.
+- `409-10` — part of the commit did not apply, or the owner stopped waiting for it. Recovery re-drives it;
+  re-sending `COMMIT_TRANSACTION` reports how it ended.
+- `409-12` — a previous transaction on this connection is still being resolved on a participant; retry
+  once it finishes.
+- `409-13` — a participant no longer holds this transaction's writes (it restarted, or reaped the session
+  of an edge it saw as gone). The transaction can only be rolled back and retried.
+- `409-14` — a `ROLLBACK_TRANSACTION` sent after a `409-10` commit that in fact committed on its owner.
+- `421-3` — a read inside the transaction (a `JOIN` included) touches collections whose buffered writes
+  live on different nodes, so no single node can answer it with the transaction's own writes.
 
 In-doubt distributed transactions (admin only, clustering). Lists every prepared 2PC transaction the
 cluster still holds — the input to a manual resolution. On a standalone node the list is empty.
@@ -1971,6 +2193,12 @@ Try one against a document without writing anything — `decision` is `accept`, 
 {"type": "TEST_TRIGGER", "databaseName": "test", "collectionName": "testCollection", "name": "normalizeOrder", "event": "CREATED", "document": {"_id": "dryRun", "qty": -1}}
 ```
 
+A name with no trigger on that collection → `404-9`
+
+```json
+{"type": "TEST_TRIGGER", "databaseName": "test", "collectionName": "testCollection", "name": "noSuchTrigger", "event": "CREATED", "document": {"_id": "dryRun", "qty": 4}}
+```
+
 Only a before trigger can be tested, because only it is directly callable → `400-14`
 
 ```json
@@ -2122,6 +2350,15 @@ Deleting a procedure a schedule still references is refused → `400-16`
 {"type": "DELETE_PROCEDURE", "databaseName": "test", "name": "beat"}
 ```
 
+A database holding `scheduleMaxPerDatabase` schedules (100 by default) refuses a new one → `400-17`.
+Re-saving one it already holds is still allowed. To try it by hand, set `scheduleMaxPerDatabase=1` in
+`lwnrdb.cfg` before running this section: `everyTwoSeconds` is then the only schedule it can hold, the other
+saves above are refused, and so is this one.
+
+```json
+{"type": "SAVE_SCHEDULE", "databaseName": "test", "name": "oneTooMany", "procedureName": "beat", "intervalMs": 60000}
+```
+
 The schedule counters appear in the stats
 
 ```json
@@ -2153,3 +2390,29 @@ Delete — idempotent, so sending it twice still returns OK
 ```json
 {"type": "DELETE_SCHEDULE", "databaseName": "test", "name": "monthly"}
 ```
+
+Answers only a cluster gives
+
+These need `clusterEnabled=true` and at least three nodes. A client may connect to any node: writes and
+reads are forwarded to the collection's owner, admin operations to the admin coordinator.
+
+- `503-2` — the node cannot see a majority of the cluster, so it refuses writes and admin operations. Stop
+  two nodes of three and write to the survivor.
+- `503-3` — the write committed on its owner, but not enough replicas acknowledged it within
+  `replicationAckTimeoutMs`. It is not rolled back; anti-entropy brings the replicas up to date.
+- `503-4` — the owner could not be reached, and the request provably never reached it.
+- `503-8` — a forwarded write whose owner did not report an outcome. It may already have applied, so check
+  before retrying.
+- `503-7` — the same for a script placed on another node.
+- `503-5` — the admin coordinator is still catching up with its peers (right after it starts, or while a
+  peer holds a newer admin epoch). Retry shortly.
+- `503-9` — no admin coordinator could be resolved from this node's view of the cluster.
+- `503-12` — another admin operation still holds the coordinator's admin lane past `adminLaneTimeoutMs`.
+- `503-10` — the collection exists on the cluster but has not reached this node yet.
+- `421-1` — the node stopped owning the collection while the write waited for its lock, or an admin
+  operation reached a node that is no longer the coordinator. Retry, and it is routed to the new one.
+
+Every `500-*` answer is a failure inside the server — a disk that is full or unwritable, a file that could not
+be read — and cannot be provoked from this playbook; the server log names the cause. One of them changes what a
+client does next: `500-33` is a commit that failed after its commit point. The transaction stays open and keeps
+its locks, and re-sending `COMMIT_TRANSACTION` finishes it once the fault is gone.

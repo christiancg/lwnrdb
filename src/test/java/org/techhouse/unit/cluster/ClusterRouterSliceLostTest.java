@@ -2,13 +2,16 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.techhouse.test.ClusterTestHarness.node;
 
 import java.net.InetAddress;
 import java.net.Socket;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,6 +19,7 @@ import org.mockito.Mockito;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
@@ -33,6 +37,7 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
 import org.techhouse.ops.resp.OperationResponse;
@@ -41,6 +46,7 @@ import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class ClusterRouterSliceLostTest {
+    private static final long SHORT_WAIT_MS = 300L;
     private final ClusterTestHarness cluster = new ClusterTestHarness();
     private final Configuration config = Configuration.getInstance();
     private final ClusterRouter router = IocContainer.get(ClusterRouter.class);
@@ -155,5 +161,55 @@ public class ClusterRouterSliceLostTest {
 
         assertEquals(ErrorCode.TRANSACTION_SLICE_LOST.getCode(), findLostRemotely().getErrorCode(),
                 "a read would otherwise start a fresh slice that no longer sees the transaction's own write");
+    }
+
+    private OperationResponse commitThatOutlivesTheOwnersWait() throws Exception {
+        final var locks = IocContainer.get(ResourceLocking.class);
+        cluster.configureMembership(1, node("other", cluster.serverPort()));
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", SHORT_WAIT_MS);
+        locks.lock(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
+        final OperationResponse first;
+        try {
+            first = route(new CommitTransactionRequest());
+        } finally {
+            locks.release(Globals.ADMIN_DB_NAME, Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME);
+        }
+        awaitTheOwnersLateFinish();
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 10_000L);
+        return first;
+    }
+
+    private void awaitTheOwnersLateFinish() throws Exception {
+        for (final var entry : clientTracker.txSessionsSnapshot().entrySet()) {
+            entry.getValue().submit(() -> null).get(10, TimeUnit.SECONDS);
+            assertNotNull(clientTracker.finishedSlice(entry.getKey()),
+                    "the owner finished the commit it stopped waiting for, on the session's own thread");
+        }
+    }
+
+    @Test
+    public void test_a_resent_commit_after_the_owner_finished_late_answers_the_commit() throws Exception {
+        saveRemotely("late");
+
+        assertEquals(ErrorCode.TRANSACTION_INDETERMINATE.getCode(), commitThatOutlivesTheOwnersWait().getErrorCode());
+        final var resent = route(new CommitTransactionRequest());
+
+        assertEquals(OperationStatus.OK, resent.getStatus(),
+                "the transaction committed, so a re-send must not be told to roll back and retry");
+        assertEquals(OperationStatus.OK, committedStatus("late"));
+        assertNull(clientTracker.getActiveTransaction(clientId));
+        assertTrue(clientTracker.txSessionsSnapshot().isEmpty(), "the finished session is removed once answered");
+    }
+
+    @Test
+    public void test_a_rollback_after_the_owner_finished_late_answers_already_committed() throws Exception {
+        saveRemotely("late");
+        commitThatOutlivesTheOwnersWait();
+
+        final var rollback = route(new RollbackTransactionRequest());
+
+        assertEquals(ErrorCode.TRANSACTION_ALREADY_COMMITTED.getCode(), rollback.getErrorCode());
+        assertEquals(OperationStatus.OK, committedStatus("late"));
+        assertNull(clientTracker.getActiveTransaction(clientId), "the transaction is over on the edge too");
     }
 }

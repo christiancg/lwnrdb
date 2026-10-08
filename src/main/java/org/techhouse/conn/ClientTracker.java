@@ -21,6 +21,7 @@ public class ClientTracker {
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
     private final Map<UUID, Runnable> disconnectSignals = new ConcurrentHashMap<>();
     private final Map<String, TxSession> txSessions = new ConcurrentHashMap<>();
+    private final Map<String, FinishedSlice> finishedSlices = new ConcurrentHashMap<>();
     private final Configuration configuration = Configuration.getInstance();
 
     public UUID addClient(Socket socket) {
@@ -78,10 +79,19 @@ public class ClientTracker {
 
     public void removeTxSession(String sessionId) {
         final var session = txSessions.remove(sessionId);
+        finishedSlices.remove(sessionId);
         if (session != null) {
             clients.remove(session.clientId());
             session.shutdown();
         }
+    }
+
+    public void recordFinishedSlice(String sessionId, FinishedSlice slice) {
+        finishedSlices.put(sessionId, slice);
+    }
+
+    public FinishedSlice finishedSlice(String sessionId) {
+        return sessionId != null ? finishedSlices.get(sessionId) : null;
     }
 
     public TxSession txSession(String sessionId) {

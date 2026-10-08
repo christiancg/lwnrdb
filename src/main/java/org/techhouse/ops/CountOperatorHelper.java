@@ -29,7 +29,7 @@ public final class CountOperatorHelper {
         final var result = new JsonObject();
         if (resultStream != null) {
             try (var documents = resultStream) {
-                result.addProperty(COUNT_FIELD_NAME, documents.count());
+                result.addProperty(COUNT_FIELD_NAME, documents.mapToLong(_ -> 1L).sum());
             }
         } else {
             result.addProperty(COUNT_FIELD_NAME, wholeCollectionCount(dbName, collName));

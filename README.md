@@ -1180,7 +1180,6 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-7` | `NOT_FOUND` | Listen registration not found |
 | `404-8` | `NOT_FOUND` | Procedure not found |
 | `404-9` | `NOT_FOUND` | Trigger not found |
-| `404-10` | `NOT_FOUND` | Schedule not found |
 | `404-11` | `NOT_FOUND` | Collection not found — a write (`SAVE`, `BULK_SAVE`, `DELETE`) named a collection this node has no metadata for. Definitive only when clustering is off; a clustered node answers `503-10` instead, since it cannot tell "never existed" from "not replicated here yet" |
 | `408-1` | `ERROR` | Script exceeded its time budget |
 | `408-2` | `ERROR` | Script was cancelled |
@@ -1196,6 +1195,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-11` | `ERROR` | A name that differs only by case already exists and would share storage with it |
 | `409-12` | `ERROR` | A previous transaction on this connection is still being resolved on a participant; retry once it finishes |
 | `409-13` | `ERROR` | A participant no longer holds this transaction's buffered writes (it restarted or reaped the session); roll back and retry |
+| `409-14` | `ERROR` | The transaction already committed on its owner; it can no longer be rolled back |
 | `410-1` | `NOT_FOUND` | The listen ended: a collection it reads was dropped, its database was dropped, or the listening user can no longer read it. Pushed once on the listen's connection; the `listenId` is unregistered afterwards |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
@@ -1230,7 +1230,6 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `500-31` | `ERROR` | Error while saving the schedule |
 | `500-32` | `ERROR` | Error while deleting the schedule |
 | `421-1` | `ERROR` | This node is not the owner of the target collection |
-| `421-2` | `ERROR` | A transaction may only touch collections owned by a single node |
 | `421-3` | `ERROR` | This read joins collections the transaction wrote on different nodes |
 | `503-1` | `ERROR` | Max number of connections reached |
 | `503-2` | `ERROR` | Cluster does not have a write quorum |

@@ -9,6 +9,7 @@ import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.WriteGuard;
+import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.ChangePermissionsRequest;
@@ -34,6 +35,7 @@ public final class ClusterAdminHelper {
     private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
             .get(AdminAntiEntropyService.class);
     private static final AdminLane adminLane = IocContainer.get(AdminLane.class);
+    private static final MembershipService membershipService = IocContainer.get(MembershipService.class);
 
     private ClusterAdminHelper() {
     }
@@ -74,7 +76,17 @@ public final class ClusterAdminHelper {
                 && !adminAntiEntropyService.hasCompletedAdminSync()) {
             return new OperationResponse(request.getType(), ErrorCode.ADMIN_SYNCING);
         }
+        if (clusterConfig.isEnabled() && !request.isReplicated() && behindAPeer()) {
+            adminAntiEntropyService.reconcileSoon();
+            return new OperationResponse(request.getType(), ErrorCode.ADMIN_SYNCING);
+        }
         return null;
+    }
+
+    private static boolean behindAPeer() {
+        final var local = adminEpoch.current();
+        return membershipService.membershipView().peers(membershipService.getSelf()).stream()
+                .anyMatch(peer -> peer.getAdminEpoch() > local);
     }
 
     public static OperationResponse afterAdminOp(OperationRequest request, String actingUser,

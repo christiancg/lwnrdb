@@ -342,6 +342,14 @@ def probe_count_after_a_failing_map_script(c):
     scanned = agg(c, CONS, [{"type": "SKIP", "skip": 0}, countme, THROWING_MAP, {"type": "COUNT"}])
     check_code("a COUNT whose MAP script throws fails even when an index could count", indexed, "ERROR", "400-9")
     check_code("exactly as it fails when the filter is answered by a scan", scanned, "ERROR", "400-9")
+    by_unindexed = agg(c, CONS, [{"type": "SORT", "fieldName": "unindexed", "ascending": True}, THROWING_MAP,
+                                 {"type": "COUNT"}])
+    by_indexed = agg(c, CONS, [{"type": "SORT", "fieldName": "status", "ascending": True}, THROWING_MAP,
+                               {"type": "COUNT"}])
+    grouped = agg(c, CONS, [{"type": "GROUP_BY", "fieldName": "status"}, THROWING_MAP, {"type": "COUNT"}])
+    check_code("a COUNT after a scan SORT still runs the MAP script before it", by_unindexed, "ERROR", "400-9")
+    check_code("as it does after an index-backed SORT", by_indexed, "ERROR", "400-9")
+    check_code("and after a GROUP_BY, whose output size is known up front", grouped, "ERROR", "400-9")
 
 
 def probe_whole_collection_count(c):
