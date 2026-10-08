@@ -66,6 +66,17 @@ public final class AdminPageHelper {
                 type == EventType.UPDATED, incarnation);
     }
 
+    public static void recordLandedDelta(String collName, EventType type, List<DbEntry> entries) {
+        try {
+            baseUpdateEntryCount(Globals.ADMIN_DB_NAME, collName, type, entries, false);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            logger.error("Interrupted recording the page row of a landed admin/" + collName + " write", e);
+        } catch (IOException e) {
+            logger.error("Failed to record the page row of a landed admin/" + collName + " write", e);
+        }
+    }
+
     public static void baseUpdateEntryCount(final String dbName, final String collName, final EventType type,
             final List<DbEntry> insertedOrDeleted, final boolean skipMemoryDeltaForCreated)
             throws InterruptedException, IOException {

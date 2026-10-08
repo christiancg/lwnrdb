@@ -102,14 +102,7 @@ public final class AdminOperationHelper {
     }
 
     private static void applyAdminPageDelta(String collName, EventType type, List<DbEntry> entries) {
-        try {
-            AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, collName, type, entries, false);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            logger.error("Interrupted recording the page row of a landed admin/" + collName + " write", e);
-        } catch (IOException e) {
-            logger.error("Failed to record the page row of a landed admin/" + collName + " write", e);
-        }
+        AdminPageHelper.recordLandedDelta(collName, type, entries);
     }
 
     // The caller owns the lock and the cache eviction, which differ per collection.

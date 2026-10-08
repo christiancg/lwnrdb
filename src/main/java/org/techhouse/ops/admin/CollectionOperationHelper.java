@@ -111,10 +111,15 @@ public final class CollectionOperationHelper {
     public static OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
         final var dbName = dropCollectionRequest.getDatabaseName();
         final var collName = dropCollectionRequest.getCollectionName();
+        final var lockBudget = OperationLocks.lockBudgetMillis(dropCollectionRequest.isReplicated());
         boolean dropSucceeded = false;
+        boolean namesLocked = false;
         try {
-            if (!locks.tryLockWrite(dbName, collName,
-                    OperationLocks.lockBudgetMillis(dropCollectionRequest.isReplicated()))) {
+            if (!locks.tryLockWrite(dbName, collName, lockBudget)) {
+                return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
+            }
+            namesLocked = locks.tryLockWrite(dbName, Globals.COLLECTION_NAMES_LOCK, lockBudget);
+            if (!namesLocked) {
                 return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
             }
             if (isNotRegistered(dbName, collName)) {
@@ -123,8 +128,6 @@ public final class CollectionOperationHelper {
             final var result = fs.deleteCollectionFiles(dbName, collName);
             if (result) {
                 cache.evictCollection(dbName, collName);
-                // Synchronous, mirroring creation: a background delete leaves the admin entry briefly
-                // present, so an immediate re-CREATE sees it stale and skips registration.
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
                 listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);
@@ -138,6 +141,9 @@ public final class CollectionOperationHelper {
                     OperationType.DROP_COLLECTION + " failed with " + ErrorCode.ERROR_DROPPING_COLLECTION.getCode(), e);
             return new OperationResponse(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION);
         } finally {
+            if (namesLocked) {
+                locks.release(dbName, Globals.COLLECTION_NAMES_LOCK);
+            }
             locks.release(dbName, collName);
             if (dropSucceeded) {
                 locks.removeLock(dbName, collName);

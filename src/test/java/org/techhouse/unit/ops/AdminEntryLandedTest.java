@@ -20,22 +20,31 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
+import org.techhouse.bckg_ops.events.CollectionUsageEvent;
+import org.techhouse.cache.AccessKind;
 import org.techhouse.cache.Cache;
+import org.techhouse.cache.MemoryManagement;
 import org.techhouse.config.Globals;
+import org.techhouse.data.admin.AdminCollectionUsageEntry;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.admin.AdminPageHelper;
+import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
 public class AdminEntryLandedTest {
     private final Cache cache = IocContainer.get(Cache.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
 
     @BeforeAll
     static void setUp() throws Exception {
         TestUtils.standardInitialSetup();
+        TestUtils.createTestDatabaseAndCollection();
     }
 
     @AfterAll
@@ -123,5 +132,79 @@ public class AdminEntryLandedTest {
 
         assertNotNull(cache.getAdminUserEntry("landeduser"));
         assertNotNull(cache.getPkIndexAdminUserEntry("landeduser"));
+    }
+
+    private static MockedStatic<AdminPageHelper> usagePageRowFailing() {
+        return pageRowFailingWith(Globals.ADMIN_COLLECTION_USAGE_NAME, new IOException("disk full"));
+    }
+
+    private CollectionUsageEvent usageEvent(String indexKey) {
+        memoryManagement.recordAccess(AccessKind.FIELD_INDEX, TestGlobals.DB, TestGlobals.COLL, indexKey);
+        return new CollectionUsageEvent(AccessKind.FIELD_INDEX, TestGlobals.DB, TestGlobals.COLL, indexKey,
+                System.currentTimeMillis());
+    }
+
+    private static String usageId(String indexKey) {
+        return AdminCollectionUsageEntry.buildId(TestGlobals.DB, TestGlobals.COLL, indexKey);
+    }
+
+    private long usageRowsOnDisk(String id) throws IOException {
+        return fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME).stream()
+                .filter(pk -> pk.getValue().equals(id)).count();
+    }
+
+    @Test
+    public void test_a_new_usage_record_is_published_when_its_page_row_fails() throws Exception {
+        final var event = usageEvent("landedNewUsage");
+        try (var ignored = usagePageRowFailing()) {
+            assertDoesNotThrow(() -> AdminOperationHelper.upsertCollectionUsage(event));
+        }
+        assertNotNull(cache.getPkIndexCollectionUsage(usageId("landedNewUsage")));
+
+        AdminOperationHelper.upsertCollectionUsage(usageEvent("landedNewUsage"));
+
+        assertEquals(1, usageRowsOnDisk(usageId("landedNewUsage")),
+                "a usage record left unpublished is inserted a second time under the same _id");
+    }
+
+    @Test
+    public void test_an_updated_usage_record_is_published_with_its_new_position() throws Exception {
+        AdminOperationHelper.upsertCollectionUsage(usageEvent("landedUpdatedUsage"));
+        final var event = usageEvent("landedUpdatedUsage");
+        try (var ignored = usagePageRowFailing()) {
+            assertDoesNotThrow(() -> AdminOperationHelper.upsertCollectionUsage(event));
+        }
+
+        final var onDisk = fs.readWholePkIndexFile(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME).stream()
+                .filter(pk -> pk.getValue().equals(usageId("landedUpdatedUsage"))).findFirst().orElseThrow();
+        final var cached = cache.getPkIndexCollectionUsage(usageId("landedUpdatedUsage"));
+        assertEquals(onDisk.getPosition(), cached.getPosition());
+        assertEquals(onDisk.getLength(), cached.getLength());
+        assertDoesNotThrow(() -> AdminOperationHelper.cleanupCollectionUsage(Long.MAX_VALUE));
+    }
+
+    @Test
+    public void test_a_usage_cleanup_continues_past_a_failing_page_row() throws Exception {
+        AdminOperationHelper.upsertCollectionUsage(usageEvent("expiredUsageOne"));
+        AdminOperationHelper.upsertCollectionUsage(usageEvent("expiredUsageTwo"));
+        try (var ignored = usagePageRowFailing()) {
+            assertDoesNotThrow(() -> AdminOperationHelper.cleanupCollectionUsage(-60_000L));
+        }
+
+        for (final var indexKey : List.of("expiredUsageOne", "expiredUsageTwo")) {
+            assertNull(cache.getPkIndexCollectionUsage(usageId(indexKey)));
+            assertEquals(0, usageRowsOnDisk(usageId(indexKey)));
+        }
+    }
+
+    @Test
+    public void test_an_interrupted_usage_page_row_restores_the_interrupt() throws Exception {
+        final var event = usageEvent("interruptedUsage");
+        try (var ignored = pageRowFailingWith(Globals.ADMIN_COLLECTION_USAGE_NAME, new InterruptedException("stop"))) {
+            AdminOperationHelper.upsertCollectionUsage(event);
+        }
+
+        assertTrue(Thread.interrupted(), "the interrupt must survive the swallowed bookkeeping failure");
+        assertNotNull(cache.getPkIndexCollectionUsage(usageId("interruptedUsage")));
     }
 }

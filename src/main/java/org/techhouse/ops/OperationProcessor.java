@@ -381,8 +381,8 @@ public class OperationProcessor {
                         return hookError;
                     }
                     final var staged = TriggerHelper.stageDelete(deleteRequest, deleted, actingUser);
-                    final var reservedVersion = ClusterWriteHelper.reserveDelete(dbName, collName,
-                            deleteRequest.get_id());
+                    final var reservedVersion = TriggerHelper.discardingOnFailure(staged,
+                            () -> ClusterWriteHelper.reserveDelete(dbName, collName, deleteRequest.get_id()));
                     final var local = TriggerHelper.runStaged(staged, dbName, collName, actingUser,
                             deleteRequest.getTriggerDepth(),
                             () -> ClusterWriteHelper.deleteOrRetract(deleteRequest, reservedVersion));

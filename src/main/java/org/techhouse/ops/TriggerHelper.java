@@ -238,6 +238,15 @@ public final class TriggerHelper {
                                 trigger.isBatchMode() ? null : group.getFirst().get_id())));
     }
 
+    public static <T> T discardingOnFailure(StagedTriggerRuns staged, Callable<T> step) throws Exception {
+        try {
+            return step.call();
+        } catch (Exception e) {
+            staged.discard();
+            throw e;
+        }
+    }
+
     public static OperationResponse runStaged(StagedTriggerRuns staged, String dbName, String collName,
             String actingUser, int depth, Callable<OperationResponse> write) throws Exception {
         final OperationResponse response;

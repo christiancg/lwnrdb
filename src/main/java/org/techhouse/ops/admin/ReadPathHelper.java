@@ -86,11 +86,6 @@ public final class ReadPathHelper {
                 ? activeTransaction.overlayFor(Cache.getCollectionIdentifier(dbName, collName))
                 : null;
         try {
-            final var unregistered = CollectionReadinessGuard.checkRead(OperationType.AGGREGATE, dbName,
-                    AggregationOperationHelper.aggregateCollections(aggregateRequest));
-            if (unregistered != null) {
-                return unregistered;
-            }
             final var lockSet = AggregationOperationHelper.aggregateLockSet(aggregateRequest);
             final var acquired = activeTransaction != null
                     ? locks.acquireReadLocks(aggregateRequest.isDirtyRead(), lockSet,
@@ -100,6 +95,11 @@ public final class ReadPathHelper {
                 return new OperationResponse(OperationType.AGGREGATE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
             }
             readLocks = acquired;
+            final var unregistered = CollectionReadinessGuard.checkRead(OperationType.AGGREGATE, dbName,
+                    AggregationOperationHelper.aggregateCollections(aggregateRequest));
+            if (unregistered != null) {
+                return unregistered;
+            }
             if (analyzeContext != null) {
                 readLocks.forEach(analyzeContext::addLock);
             }

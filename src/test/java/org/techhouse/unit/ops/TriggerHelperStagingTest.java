@@ -244,6 +244,28 @@ public class TriggerHelperStagingTest {
     }
 
     @Test
+    public void test_discarding_on_failure_returns_the_step_result_and_keeps_the_staged_run() throws Exception {
+        install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT);
+        final var staged = TriggerHelper.stageSave(saveRequest("kept-staged"), USER);
+
+        assertEquals(42L, TriggerHelper.discardingOnFailure(staged, () -> 42L));
+
+        assertEquals(TriggerRunStatus.STAGED, onlyRecord().getStatus());
+    }
+
+    @Test
+    public void test_discarding_on_failure_discards_and_rethrows() throws Exception {
+        install(Set.of(EventType.CREATED), TriggerDefinition.MODE_DOCUMENT);
+        final var staged = TriggerHelper.stageSave(saveRequest("discarded-staged"), USER);
+
+        assertThrows(IOException.class, () -> TriggerHelper.discardingOnFailure(staged, () -> {
+            throw new IOException("disk full");
+        }));
+
+        assertTrue(TriggerRunLog.pending().isEmpty());
+    }
+
+    @Test
     public void test_a_partial_bulk_save_submits_and_keeps_only_the_committed_ids() throws Exception {
         install(Set.of(EventType.CREATED), TriggerDefinition.MODE_BATCH);
         final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
