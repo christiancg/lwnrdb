@@ -122,7 +122,8 @@ final class ClusterTxMessageHandler {
     private static OperationResponse finishOnSession(String sessionId, UUID clientId, String txId, OperationType type,
             OperationResponse result) {
         if (finishesSession(type) && txId != null && clientTracker.getActiveTransaction(clientId) == null) {
-            clientTracker.recordFinishedSlice(sessionId, new FinishedSlice(txId, type, result));
+            clientTracker.recordFinishedSlice(sessionId,
+                    new FinishedSlice(txId, type, result, System.currentTimeMillis()));
         }
         return result;
     }

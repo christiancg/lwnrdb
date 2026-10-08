@@ -1791,7 +1791,8 @@ A script anywhere in a `LISTEN` pipeline → `400-19`, since it would run again 
 {"type": "LISTEN", "databaseName": "test", "collectionName": "testCollection", "aggregationSteps": [{"type": "FILTER", "operator": {"script": "export default (doc) => doc.aNumber > 5;"}}]}
 ```
 
-Cancel a subscription (use a `listenId` from a response above)
+Cancel a subscription (use a `listenId` from a response above). Once its answer arrives, nothing more is pushed
+for that `listenId`.
 
 ```json
 {"type": "STOP_LISTEN", "listenId": "550e8400-e29b-41d4-a716-446655440000"}
@@ -1948,8 +1949,9 @@ In a cluster a transaction can touch collections owned by different nodes, and a
 
 - `409-7` — a participant could not prepare (it lost quorum, lost ownership of a collection it buffered, or
   never answered), so the commit was aborted everywhere.
-- `409-10` — part of the commit did not apply, or the owner stopped waiting for it. Recovery re-drives it;
-  re-sending `COMMIT_TRANSACTION` reports how it ended.
+- `409-10` — part of the commit did not apply, the owner stopped waiting for it, or its answer never reached
+  this node. Recovery re-drives it; re-sending `COMMIT_TRANSACTION` within `finishedSliceRetentionMs` (one
+  hour by default) reports how it ended.
 - `409-12` — a previous transaction on this connection is still being resolved on a participant; retry
   once it finishes.
 - `409-13` — a participant no longer holds this transaction's writes (it restarted, or reaped the session
@@ -2405,7 +2407,8 @@ reads are forwarded to the collection's owner, admin operations to the admin coo
   before retrying.
 - `503-7` — the same for a script placed on another node.
 - `503-5` — the admin coordinator is still catching up with its peers (right after it starts, or while a
-  peer holds a newer admin epoch). Retry shortly.
+  peer holds a newer admin epoch — including a fresh node that joined one which held data before it was
+  clustered, until it has copied that node's state). Retry shortly.
 - `503-9` — no admin coordinator could be resolved from this node's view of the cluster.
 - `503-12` — another admin operation still holds the coordinator's admin lane past `adminLaneTimeoutMs`.
 - `503-10` — the collection exists on the cluster but has not reached this node yet.

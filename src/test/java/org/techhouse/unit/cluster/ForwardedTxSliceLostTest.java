@@ -133,7 +133,7 @@ public class ForwardedTxSliceLostTest extends ClusterConnectionHandlerTestBase {
 
     private void finishedWith(String id, OperationType type, OperationResponse response) {
         clientTracker.registerTxSession(sessionId, "admin", null);
-        clientTracker.recordFinishedSlice(sessionId, new FinishedSlice(id, type, response));
+        clientTracker.recordFinishedSlice(sessionId, new FinishedSlice(id, type, response, System.currentTimeMillis()));
     }
 
     @Test
@@ -179,13 +179,35 @@ public class ForwardedTxSliceLostTest extends ClusterConnectionHandlerTestBase {
     }
 
     @Test
-    public void test_removing_the_session_forgets_its_finished_slice() {
+    public void test_removing_the_session_keeps_its_finished_slice() {
         finishedWith(txId, OperationType.COMMIT_TRANSACTION,
                 OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed"));
 
         clientTracker.removeTxSession(sessionId);
 
-        assertNull(clientTracker.finishedSlice(sessionId));
+        assertNotNull(clientTracker.finishedSlice(sessionId),
+                "the edge may still re-send a commit whose answer never reached it");
+    }
+
+    @Test
+    public void test_a_commit_whose_answer_was_lost_is_answered_by_its_outcome_on_resend() throws Exception {
+        send(txId, save("lost-answer"), false);
+        assertEquals(OperationStatus.OK, send(txId, commit(), true).getStatus());
+        assertNull(clientTracker.txSession(sessionId), "the handler closed the session after the commit");
+
+        final var resent = send(txId, commit(), true);
+
+        assertEquals(OperationStatus.OK, resent.getStatus(), "the transaction committed; 409-13 would say otherwise");
+        assertEquals(OperationStatus.OK, findById("lost-answer").getStatus());
+    }
+
+    @Test
+    public void test_a_rollback_after_a_commit_whose_answer_was_lost_answers_already_committed() throws Exception {
+        send(txId, save("lost-answer-rollback"), false);
+        send(txId, commit(), true);
+
+        assertEquals(ErrorCode.TRANSACTION_ALREADY_COMMITTED.getCode(), send(txId, rollback(), true).getErrorCode());
+        assertEquals(OperationStatus.OK, findById("lost-answer-rollback").getStatus());
     }
 
     @Test

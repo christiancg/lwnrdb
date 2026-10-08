@@ -8,6 +8,7 @@ import org.techhouse.log.Logger;
 
 public class BackgroundProcessorThread implements Runnable {
     private static final int MAX_BATCH = 256;
+    private static final ScopedValue<Boolean> WORKER = ScopedValue.newInstance();
 
     private final Logger logger = Logger.logFor(BackgroundProcessorThread.class);
     private final LinkedBlockingQueue<Event> queue;
@@ -25,10 +26,14 @@ public class BackgroundProcessorThread implements Runnable {
         this.idleSignal = idleSignal;
     }
 
+    public static boolean onWorkerThread() {
+        return WORKER.isBound();
+    }
+
     @Override
     public void run() {
         try {
-            workLoop();
+            ScopedValue.where(WORKER, Boolean.TRUE).run(this::workLoop);
         } finally {
             workerCount.updateAndGet(live -> Math.max(0, live - 1));
             idleSignal.signal();

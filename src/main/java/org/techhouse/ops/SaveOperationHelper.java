@@ -95,11 +95,7 @@ public final class SaveOperationHelper {
             if (wouldOverflowPage(dbName, collName, idxEntry, entry)) {
                 // The grown document no longer fits its page; relocate as delete + insert so page metadata
                 // and field indexes stay correct through the standard background events.
-                final var relocatedPkIndexEntry = relocateOnGrowUpdate(dbName, collName, entry, idxEntry,
-                        primaryKeyIndex);
-                listenManager.markDirty(dbName, collName);
-                CollectionAccessHelper.recordCollectionAccess(dbName, collName);
-                return new SaveResponse("Successfully saved", relocatedPkIndexEntry.getValue());
+                return relocateWithListensHeld(dbName, collName, entry, idxEntry, primaryKeyIndex);
             }
             entry.setPage(idxEntry.getPage());
             final var previousLength = idxEntry.getLength();
@@ -291,6 +287,19 @@ public final class SaveOperationHelper {
 
     private static List<String> idsOf(List<DbEntry> entries) {
         return entries.stream().map(DbEntry::get_id).toList();
+    }
+
+    private static SaveResponse relocateWithListensHeld(String dbName, String collName, DbEntry entry,
+            PkIndexEntry idxEntry, List<PkIndexEntry> primaryKeyIndex) throws Exception {
+        listenManager.deferNotifications(List.of(Cache.getCollectionIdentifier(dbName, collName)));
+        try {
+            final var relocatedPkIndexEntry = relocateOnGrowUpdate(dbName, collName, entry, idxEntry, primaryKeyIndex);
+            listenManager.markDirty(dbName, collName);
+            CollectionAccessHelper.recordCollectionAccess(dbName, collName);
+            return new SaveResponse("Successfully saved", relocatedPkIndexEntry.getValue());
+        } finally {
+            listenManager.flushDeferredNotifications();
+        }
     }
 
     public static boolean wouldOverflowPage(String dbName, String collName, PkIndexEntry idxEntry, DbEntry entry) {

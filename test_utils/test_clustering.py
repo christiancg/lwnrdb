@@ -49,6 +49,8 @@ from the node's own files (see "node-local introspection"), so the harness waits
 needs and acts inside it rather than racing a timer.
 """
 
+import bisect
+import hashlib
 import json
 import os
 import signal
@@ -58,6 +60,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from collections.abc import Callable
 
 import base_utils as bu
@@ -3179,6 +3182,116 @@ def test_recreating_an_existing_collection_keeps_its_documents():
     check("the later write converges", all_nodes_see(DB, coll, "after", 9, ports=all_ports(), timeout_s=30.0))
 
 
+# ── standalone node switched to clustered ────────────────────────────────────
+
+MIGRATION_NODE_OFFSET = 10
+ADMIN_COORDINATOR_KEY = "admin|__admin_coordinator__"
+VIRTUAL_NODES = 128
+
+
+class MigrationNode(Node):
+    def __init__(self, index: int, base_dir: str, node_id: str, seed_port: int = 0):
+        self.node_id = node_id
+        self.seed_port = seed_port
+        self.clustered = False
+        super().__init__(index, base_dir)
+
+    def _write_config(self):
+        super()._write_config()
+        path = os.path.join(self.work_dir, "lwnrdb.cfg")
+        with open(path) as fp:
+            lines = fp.read().splitlines()
+        seeds = f"{HOST}:{self.seed_port}" if self.seed_port else ""
+        overrides = {
+            "clusterEnabled": "true" if self.clustered else "false",
+            "clusterSeeds": seeds,
+            "clusterExpectedSize": "2",
+        }
+        rewritten = [f"{key}={overrides[key]}" if (key := line.split("=", 1)[0]) in overrides else line
+                     for line in lines]
+        rewritten.append(f"nodeId={self.node_id}")
+        with open(path, "w") as fp:
+            fp.write("\n".join(rewritten) + "\n")
+
+    def cluster_it(self):
+        self.clustered = True
+        self._write_config()
+
+
+def _ring_hash(value: str) -> int:
+    return int.from_bytes(hashlib.sha256(value.encode()).digest()[:8], "big", signed=True)
+
+
+def _ring_owner(node_ids: list, key: str) -> str:
+    ring = sorted((_ring_hash(f"{node_id}#{i}"), node_id) for node_id in node_ids for i in range(VIRTUAL_NODES))
+    position = bisect.bisect_left([point for point, _ in ring], _ring_hash(key))
+    return ring[position % len(ring)][1]
+
+
+def _ids_where_the_fresh_node_wins_and_coordinates() -> tuple:
+    while True:
+        populated, fresh = sorted([str(uuid.uuid4()), str(uuid.uuid4())])
+        if _ring_owner([populated, fresh], ADMIN_COORDINATOR_KEY) == fresh:
+            return populated, fresh
+
+
+def _authenticates(port: int, username: str, password: str) -> bool:
+    conn = Conn(port=port)
+    try:
+        return conn.send({"type": "AUTHENTICATE", "username": username, "password": password}).get("status") == "OK"
+    finally:
+        conn.close()
+
+
+def test_a_populated_standalone_node_keeps_its_data_when_a_fresh_node_joins():
+    section("A standalone node switched to clustered keeps its data when a fresh node joins and coordinates")
+
+    populated_id, fresh_id = _ids_where_the_fresh_node_wins_and_coordinates()
+    base_dir = tempfile.mkdtemp(prefix="lwnrdb-migration-")
+    populated = MigrationNode(MIGRATION_NODE_OFFSET, base_dir, populated_id)
+    fresh = MigrationNode(MIGRATION_NODE_OFFSET + 1, base_dir, fresh_id, populated.cluster_port)
+    db, coll, user, password = "standalone_db", "kept", "standalone_analyst", "standalone_analyst1"
+    try:
+        populated.start()
+        check_status("CREATE_DATABASE while standalone", create_db(populated.client_port, db), "OK")
+        check_status("CREATE_COLLECTION while standalone", create_coll(populated.client_port, db, coll), "OK")
+        check_status("SAVE while standalone", save(populated.client_port, db, coll, {"_id": "d1", "v": 1}), "OK")
+        check_status("CREATE_USER while standalone", op(populated.client_port, {
+            "type": "CREATE_USER", "username": user, "password": password, "admin": False,
+            "globalPermissions": [], "databasePermissions": {db: "READ"}, "collectionPermissions": {}}), "OK")
+        populated.stop()
+
+        populated.cluster_it()
+        populated.start()
+        epoch_file = os.path.join(populated.work_dir, "db", "cluster", "admin.epoch")
+        seeded = ""
+        if os.path.isfile(epoch_file):
+            with open(epoch_file) as fp:
+                seeded = fp.read().strip()
+        check("a populated node's first clustered start seeds its admin epoch", seeded == "1|false", seeded)
+
+        fresh.cluster_it()
+        fresh.start()
+
+        check("the fresh coordinator commits its first CREATE_DATABASE once it has conformed",
+              wait_until(lambda: create_db(fresh.client_port, "fresh_db").get("status") == "OK", timeout_s=60.0))
+        ports = [populated.client_port, fresh.client_port]
+        check("both nodes list the standalone database and the new one",
+              wait_until(lambda: all({db, "fresh_db"} <= set(list_databases(p).get("databases") or [])
+                                     for p in ports), timeout_s=30.0))
+        check("the standalone document is readable through both nodes",
+              wait_until(lambda: all(find_by_id(p, db, coll, "d1").get("status") == "OK" for p in ports),
+                         timeout_s=30.0))
+        check("the standalone user authenticates on both nodes",
+              wait_until(lambda: all(_authenticates(p, user, password) for p in ports), timeout_s=30.0))
+        quarantined = [name for name in os.listdir(os.path.join(populated.work_dir, "db"))
+                       if ".quarantined-" in name]
+        check("nothing on the populated node was moved aside", not quarantined, str(quarantined))
+    finally:
+        fresh.stop()
+        populated.stop()
+
+
 def main():
     bu.banner("Clustering (multi-node) integration suite")
 
@@ -3259,6 +3372,7 @@ def main():
 
         # Last: it drops every database in the cluster, which is also the suite's cleanup.
         test_a_node_that_missed_the_last_database_drop_converges()
+        test_a_populated_standalone_node_keeps_its_data_when_a_fresh_node_joins()
     except BaseException:
         print("\n[ERROR] the suite raised - dumping node logs", file=sys.stderr)
         dump_all_logs()

@@ -17,6 +17,7 @@ import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterServer;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.cluster.MetadataCachePruner;
+import org.techhouse.cluster.StandaloneEpochSeed;
 import org.techhouse.cluster.TransactionSessionReaper;
 import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
@@ -146,6 +147,7 @@ public class Main {
             clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(), factory);
             clusterServer.start();
             adminEpoch.load();
+            StandaloneEpochSeed.seedIfPopulated();
             membershipService.addListener(ownershipManager);
             // Listeners fire in registration order: this must follow the ownership manager to read the rebuilt ring.
             membershipService.addListener(metadataCachePruner);

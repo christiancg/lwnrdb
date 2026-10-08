@@ -110,4 +110,16 @@ public class MainStartupOrderTest {
         assertTrue(mainBody().contains(RECOVER_LOCAL),
                 "recovery must replay only the runs pending before the executor started, not every pending run");
     }
+
+    @Test
+    public void test_the_admin_epoch_is_seeded_after_loading_and_before_the_first_gossip() throws IOException {
+        final var body = mainBody();
+        final var seed = positionOf(body, "StandaloneEpochSeed.seedIfPopulated();");
+
+        assertTrue(positionOf(body, "adminEpoch.load();") < seed, "the seed decides from the epoch file it loaded");
+        assertTrue(seed < positionOf(body, "membershipService.start();"),
+                "a fresh peer must see the seeded epoch in the first gossip, before it can coordinate an op");
+        assertTrue(positionOf(body, "bootstrapDefaultAdmin();") < positionOf(body, "startClusterIfEnabled();"),
+                "a fresh node's own bootstrap admin must already exist, or it would be counted as missing data");
+    }
 }

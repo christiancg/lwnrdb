@@ -76,6 +76,7 @@ public class ConfigReaderTest {
         expectedConfig.put("deadProbeIntervalMs", "10000");
         expectedConfig.put("replicationAckTimeoutMs", "5000");
         expectedConfig.put("adminLaneTimeoutMs", "15000");
+        expectedConfig.put("finishedSliceRetentionMs", "3600000");
         expectedConfig.put("virtualNodesPerNode", "128");
         expectedConfig.put("readFallbackToLocal", "true");
         expectedConfig.put("scriptRoutingEnabled", "true");

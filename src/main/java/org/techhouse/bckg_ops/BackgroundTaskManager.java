@@ -20,7 +20,7 @@ public class BackgroundTaskManager {
     private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public void submitBackgroundTask(Event op) {
-        if (draining) {
+        if (draining && !BackgroundProcessorThread.onWorkerThread()) {
             logger.warning("Rejecting a background task during shutdown: " + op);
             return;
         }

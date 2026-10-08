@@ -19,13 +19,16 @@ public class AdminEpoch {
     private long epoch;
     private boolean confirmed;
     private boolean unreadable;
+    private boolean absent;
 
     public synchronized void load() {
         final var path = epochFilePath();
         unreadable = false;
+        absent = false;
         epoch = 0;
         confirmed = true;
         if (!Files.exists(path)) {
+            absent = true;
             return;
         }
         try {
@@ -55,6 +58,17 @@ public class AdminEpoch {
 
     public synchronized boolean isUnreadable() {
         return unreadable;
+    }
+
+    public synchronized boolean seedFromStandalone() {
+        if (!absent || unreadable || epoch != 0) {
+            return false;
+        }
+        epoch = 1;
+        confirmed = false;
+        absent = false;
+        persist();
+        return true;
     }
 
     public synchronized long current() {

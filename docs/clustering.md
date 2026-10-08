@@ -489,9 +489,12 @@ that finds quorum or ownership lost since the first attempt answers `500-33` aga
 locks: the commit was already decided, so the re-send is refused for now rather than discarding the ops.
 A `409-10` can also mean the owner simply stopped waiting: the owner gives a forwarded op `replicationAckTimeoutMs`,
 and a commit that also waits that long for replica acks outlives it, finishing on the session's own thread
-afterwards. The session remembers how that commit or rollback finished, so a re-sent COMMIT answers the real outcome
-(`OK`, or `503-3` when replication timed out but the local commit stands) instead of `409-13`, and a ROLLBACK of a
-commit that landed answers `409-14 TRANSACTION_ALREADY_COMMITTED` rather than claiming a rollback.
+afterwards. The edge's own wait also starts first, so it can give up on an answer the owner did send in time, and an
+answer can be lost in transit. The owner therefore remembers how each forwarded commit or rollback finished for
+`finishedSliceRetentionMs` (one hour by default), even after it has closed the session, so a re-sent COMMIT answers the
+real outcome (`OK`, or `503-3` when replication timed out but the local commit stands) instead of `409-13`, and a
+ROLLBACK of a commit that landed answers `409-14 TRANSACTION_ALREADY_COMMITTED` rather than claiming a rollback. A
+re-send after that window answers `409-13`.
 
 **Cross-owner two-phase commit.** When a transaction spans multiple owners the edge runs
 2PC: `PREPARE_TX` to every participant (each votes yes only after confirming quorum, confirming
@@ -771,11 +774,24 @@ and acting as admin coordinator. A populated node switched from standalone to cl
 therefore never bumped and sits at epoch 0, exactly like a brand-new node joining it, and
 equal epochs are broken by node id — a coin flip between random uuids. Losing that flip
 would conform the populated node to the empty one, deleting every user and unregistering
-every database, and both would stay at 0 so no later round could repair it. Two rules close
-that: a snapshot listing no databases is not adopted by a node that holds some, and a node
-whose `cluster/admin.epoch` exists but cannot be parsed refuses to conform at all rather than
-bidding 0 with real data on disk. The empty-snapshot refusal depends on how the snapshot
-outranks this node:
+every database, and both would stay at 0 so no later round could repair it.
+
+The first clustered start of a populated node therefore seeds its epoch: when
+`cluster/admin.epoch` does not exist yet and the node holds any database, any user besides the
+bootstrap admin, or a bootstrap admin whose password no longer matches `defaultAdminPassword`,
+it writes `1|false` before it gossips. A fresh peer at 0 then trails it, so as admin
+coordinator it answers `503-5` and conforms to the populated node before it can commit an op.
+Without the seed, refusing the empty snapshot was not enough: a fresh coordinator that won the
+coin flip committed its first `CREATE_DATABASE` at `1|true`, the populated node adopted `1|false`
+through the replication, and the now non-empty snapshot outranked it, quarantining every
+original database and deleting every user. A node whose epoch file already exists is never
+re-seeded, and two populated standalone nodes still tie at `1|false` — merging two populated
+nodes is not supported.
+
+Two rules back that up: a snapshot listing no databases is not adopted by a node that holds
+some, and a node whose `cluster/admin.epoch` exists but cannot be parsed refuses to conform at
+all rather than bidding 0 with real data on disk. The empty-snapshot refusal depends on how the
+snapshot outranks this node:
 
 - **Strictly higher, confirmed epoch:** acknowledged history, for example the cluster dropping
   its last database while this node was down. It is conformed to normally. The conform moves

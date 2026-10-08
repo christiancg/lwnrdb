@@ -67,7 +67,8 @@ public class ListenProcessorThread implements Runnable {
         if (!registration.lastHash().compareAndSet(oldHash, newHash)) {
             return;
         }
-        push(listenId, registration.clientId(), new ListenResponse(listenId.toString(), results, newHash, true));
+        push(listenId, registration.clientId(), new ListenResponse(listenId.toString(), results, newHash, true),
+                registration);
     }
 
     private List<JsonObject> rerunOutsideAnyApply(UUID listenId, ListenRegistration registration) {
@@ -93,7 +94,8 @@ public class ListenProcessorThread implements Runnable {
     private void pushEndedOnceDelivered(UUID listenId, ListenManager.EndedListen endedListen) {
         final var registration = endedListen.registration();
         if (registration.delivered().get() && manager.consumeEnded(listenId, endedListen)) {
-            push(listenId, registration.clientId(), new ListenEndedResponse(listenId.toString(), endedListen.reason()));
+            push(listenId, registration.clientId(), new ListenEndedResponse(listenId.toString(), endedListen.reason()),
+                    null);
         }
     }
 
@@ -115,7 +117,7 @@ public class ListenProcessorThread implements Runnable {
         return user != null && AuthorizationChecker.check(registration.request(), user).isAllowed();
     }
 
-    private void push(UUID listenId, UUID clientId, OperationResponse frame) {
+    private void push(UUID listenId, UUID clientId, OperationResponse frame, ListenRegistration expected) {
         final var writer = clientTracker.getWriter(clientId);
         final var writerLock = clientTracker.getWriterLock(clientId);
         if (writer == null || writerLock == null) {
@@ -124,6 +126,9 @@ public class ListenProcessorThread implements Runnable {
         }
         writerLock.lock();
         try {
+            if (expected != null && manager.getRegistration(listenId) != expected) {
+                return;
+            }
             writer.write(eJson.toJson(frame));
             writer.newLine();
             writer.flush();

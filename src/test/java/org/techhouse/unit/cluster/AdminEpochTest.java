@@ -26,6 +26,7 @@ public class AdminEpochTest {
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
         TestUtils.setPrivateField(adminEpoch, "confirmed", true);
         TestUtils.setPrivateField(adminEpoch, "unreadable", false);
+        TestUtils.setPrivateField(adminEpoch, "absent", false);
     }
 
     @AfterEach
@@ -33,6 +34,7 @@ public class AdminEpochTest {
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
         TestUtils.setPrivateField(adminEpoch, "confirmed", true);
         TestUtils.setPrivateField(adminEpoch, "unreadable", false);
+        TestUtils.setPrivateField(adminEpoch, "absent", false);
         TestUtils.standardTearDown();
     }
 
@@ -298,5 +300,51 @@ public class AdminEpochTest {
         adminEpoch.confirm();
 
         assertEquals(new AdminEpoch.State(7L, true), adminEpoch.state());
+    }
+
+    @Test
+    public void test_seeding_an_absent_epoch_persists_one_unconfirmed() throws Exception {
+        adminEpoch.load();
+
+        assertTrue(adminEpoch.seedFromStandalone());
+
+        assertEquals(1L, adminEpoch.current());
+        assertFalse(adminEpoch.isConfirmed());
+        assertEquals("1|false", Files.readString(epochPath(), StandardCharsets.UTF_8).trim());
+        assertFalse(adminEpoch.seedFromStandalone(), "a seed happens once");
+    }
+
+    @Test
+    public void test_seeding_is_refused_when_the_file_exists() throws Exception {
+        Files.createDirectories(Objects.requireNonNull(epochPath().getParent()));
+        Files.writeString(epochPath(), "0|true", StandardCharsets.UTF_8);
+        adminEpoch.load();
+
+        assertFalse(adminEpoch.seedFromStandalone());
+        assertEquals(0L, adminEpoch.current());
+    }
+
+    @Test
+    public void test_seeding_is_refused_when_unreadable() throws Exception {
+        Files.createDirectories(Objects.requireNonNull(epochPath().getParent()));
+        Files.writeString(epochPath(), "garbage", StandardCharsets.UTF_8);
+        adminEpoch.load();
+
+        assertFalse(adminEpoch.seedFromStandalone());
+        assertEquals("garbage", Files.readString(epochPath(), StandardCharsets.UTF_8).trim());
+    }
+
+    @Test
+    public void test_seeding_is_refused_after_a_bump() {
+        adminEpoch.load();
+        adminEpoch.bump();
+
+        assertFalse(adminEpoch.seedFromStandalone());
+        assertEquals(1L, adminEpoch.current());
+    }
+
+    @Test
+    public void test_seeding_is_refused_before_any_load() {
+        assertFalse(adminEpoch.seedFromStandalone());
     }
 }

@@ -79,7 +79,6 @@ public class ClientTracker {
 
     public void removeTxSession(String sessionId) {
         final var session = txSessions.remove(sessionId);
-        finishedSlices.remove(sessionId);
         if (session != null) {
             clients.remove(session.clientId());
             session.shutdown();
@@ -87,11 +86,22 @@ public class ClientTracker {
     }
 
     public void recordFinishedSlice(String sessionId, FinishedSlice slice) {
+        final var now = System.currentTimeMillis();
+        final var retention = configuration.getFinishedSliceRetentionMs();
+        finishedSlices.values().removeIf(finished -> finished.expiredAt(now, retention));
         finishedSlices.put(sessionId, slice);
     }
 
     public FinishedSlice finishedSlice(String sessionId) {
-        return sessionId != null ? finishedSlices.get(sessionId) : null;
+        final var finished = sessionId != null ? finishedSlices.get(sessionId) : null;
+        if (finished == null) {
+            return null;
+        }
+        if (finished.expiredAt(System.currentTimeMillis(), configuration.getFinishedSliceRetentionMs())) {
+            finishedSlices.remove(sessionId, finished);
+            return null;
+        }
+        return finished;
     }
 
     public TxSession txSession(String sessionId) {

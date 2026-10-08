@@ -1052,8 +1052,14 @@ def index_files(work_dir: str, db: str, coll: str) -> dict:
     folder = os.path.join(work_dir, "db", db, coll)
     if not os.path.isdir(folder):
         return {}
-    return {f: os.path.getsize(os.path.join(folder, f))
-            for f in os.listdir(folder) if f.endswith(".idx")}
+    sizes = {}
+    for f in os.listdir(folder):
+        if f.endswith(".idx"):
+            try:
+                sizes[f] = os.path.getsize(os.path.join(folder, f))
+            except FileNotFoundError:
+                continue
+    return sizes
 
 
 def await_index_file(conn: Conn, work_dir: str, coll: str, name: str, present: bool,
