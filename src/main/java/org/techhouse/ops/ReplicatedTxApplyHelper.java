@@ -38,6 +38,11 @@ public final class ReplicatedTxApplyHelper {
     private static boolean applyUnderWriteLocks(TxReplicationPayload payload, java.util.Set<String> collIds,
             long timeoutMillis) throws Exception {
         final ResourceLocking.LockedAction<Boolean> applyEntries = () -> {
+            if (payload.getEntries().stream().anyMatch(ReplicatedApplyHelper::belongsToAnotherIncarnation)) {
+                logger.warning("Refusing a replicated transaction batch: one of its collections was dropped and"
+                        + " re-created since the batch was built");
+                return false;
+            }
             listenManager.deferNotifications(collIds);
             try {
                 for (final var entry : payload.getEntries()) {

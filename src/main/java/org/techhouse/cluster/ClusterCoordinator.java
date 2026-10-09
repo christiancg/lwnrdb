@@ -20,6 +20,7 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.OperationRequest;
 
 public class ClusterCoordinator {
@@ -55,7 +56,7 @@ public class ClusterCoordinator {
             final var versions = new ArrayList<String>();
             readDocuments(dbName, collName, ids, documents, versions);
             return replicator.broadcast(
-                    new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions));
+                    stamped(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions)));
         } catch (Exception e) {
             // The local commit stands; a failure to ship it is reported to the client and reconciled later.
             logger.warning("Failed to replicate upsert to " + dbName + "|" + collName + ": " + e.getMessage());
@@ -95,8 +96,8 @@ public class ClusterCoordinator {
         }
         final var version = reservedVersion != null ? reservedVersion : hybridClock.next();
         final var versions = new ArrayList<>(Collections.nCopies(ids.size(), Long.toString(version)));
-        return replicator
-                .broadcast(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, ids, versions));
+        return replicator.broadcast(
+                stamped(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, ids, versions)));
     }
 
     // A clustered transaction must not commit without a write quorum (split-brain protection). Always true
@@ -163,6 +164,11 @@ public class ClusterCoordinator {
         return replicator.broadcastTx(new TxReplicationPayload(entries));
     }
 
+    private static ReplicationPayload stamped(ReplicationPayload payload) {
+        payload.setIncarnationValue(CollectionIncarnation.current(payload.getDbName(), payload.getCollName()));
+        return payload;
+    }
+
     private void buildCollectionEntries(String dbName, String collName, Map<String, JsonObject> overlay,
             List<ReplicationPayload> entries, Long reservedVersion) throws Exception {
         final var upsertIds = new ArrayList<String>();
@@ -178,7 +184,8 @@ public class ClusterCoordinator {
             final var documents = new ArrayList<JsonObject>();
             final var versions = new ArrayList<String>();
             readDocuments(dbName, collName, upsertIds, documents, versions);
-            entries.add(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions));
+            entries.add(
+                    stamped(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, documents, null, versions)));
         }
         if (!deleteIds.isEmpty()) {
             final long version;
@@ -191,7 +198,8 @@ public class ClusterCoordinator {
                 }
             }
             final var versions = new ArrayList<>(Collections.nCopies(deleteIds.size(), Long.toString(version)));
-            entries.add(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, versions));
+            entries.add(
+                    stamped(new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, versions)));
         }
     }
 

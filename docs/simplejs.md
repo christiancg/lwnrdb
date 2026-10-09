@@ -596,7 +596,7 @@ whose record is already gone. Such a run is recorded as an error and **never re-
 re-running it would apply the effects a second time. A retryable failure
 (a script error or a commit failure) increments `attempts` and re-queues after a doubling
 backoff up to `triggerMaxAttempts`, after which the record is marked `DEAD` with its payload and
-last error kept. A retry re-reads its documents when it *runs*, not when it is scheduled, so it
+last error kept, for `triggerDeadLetterRetentionMs` from the moment it died. A retry re-reads its documents when it *runs*, not when it is scheduled, so it
 sees any write made during the backoff; if they are gone the run is consumed, and if the read
 itself fails the run stays pending and is retried (then dead-lettered) like any other failure. A
 run evicted by a full trigger queue is dead-lettered too, not dropped. Everything else is terminal

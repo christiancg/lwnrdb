@@ -113,4 +113,26 @@ public class MetadataFileStoreTest {
 
         assertEquals(List.of("a", "b"), MetadataFileStore.listNames(tmp, ".json"));
     }
+
+    @Test
+    public void test_a_file_in_a_missing_folder_is_not_listed(@TempDir File tmp) throws IOException {
+        assertFalse(MetadataFileStore.isListedExactly(new File(new File(tmp, "absent"), "one.json")));
+    }
+
+    @Test
+    public void test_only_the_exact_spelling_is_listed(@TempDir File tmp) throws IOException {
+        Files.writeString(new File(tmp, "foo.json").toPath(), "{}", StandardCharsets.UTF_8);
+
+        assertTrue(MetadataFileStore.isListedExactly(new File(tmp, "foo.json")));
+        assertFalse(MetadataFileStore.isListedExactly(new File(tmp, "Foo.json")));
+    }
+
+    @Test
+    public void test_a_folder_that_cannot_be_listed_throws_instead_of_answering_absent(@TempDir File tmp)
+            throws IOException {
+        final var notAFolder = new File(tmp, "file");
+        Files.writeString(notAFolder.toPath(), "x", StandardCharsets.UTF_8);
+
+        assertThrows(IOException.class, () -> MetadataFileStore.isListedExactly(new File(notAFolder, "one.json")));
+    }
 }

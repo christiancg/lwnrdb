@@ -697,6 +697,17 @@ that reports `staleIncarnation` or whose answer carries a different incarnation 
 incarnation travels as **text**; `0` on either side means "unknown" and the exchange proceeds as
 before, so a collection created before the field existed is never affected.
 
+**The apply checks it again, because the exchange is not atomic.** A gate on the request and the
+answer alone still let a pull answered by a peer that had not yet processed a drop land after this
+node finished `DROP_COLLECTION` and `CREATE_COLLECTION` during the round trip — the fresh collection
+holds no version and no tombstone to compare against, so every dead document was accepted. An
+owner's `REPLICATE` held on a replica's ordered peer lane across the replica's own drop and create
+had the same effect. Every replicated document payload — owner push, transaction batch, and the
+deletes and pulls anti-entropy applies — therefore carries the collection incarnation as text, and
+`ReplicatedApplyHelper` refuses it under the collection write lock when it names another incarnation
+or a collection that is not registered. A refused `REPLICATE` answers `ERROR`, so the owner counts no
+ack; a refused transaction batch applies none of its entries. `0` still means unknown and applies.
+
 A node also refuses `DIGEST` and `PULL` with an `ERROR` until its first admin reconciliation has
 completed, because `Main` starts the cluster server and joins the membership before admin
 anti-entropy runs, and a peer sweeps the moment the node appears. `ADMIN_SNAPSHOT` is deliberately

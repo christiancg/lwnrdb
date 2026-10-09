@@ -4,6 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
@@ -14,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.ejson.EJson;
 import org.techhouse.fs.FileSystem;
@@ -121,5 +124,28 @@ public class TriggerUnreadableDefinitionTest {
 
         assertTrue(TriggerRunLog.recordIdsFor(runId).isEmpty(),
                 "a trigger that really is gone must still consume its pending run");
+    }
+
+    @Test
+    public void test_a_procedures_folder_that_cannot_be_listed_keeps_the_pending_run() throws Exception {
+        writeTriggers(definition());
+        final var runId = recordRun();
+        org.junit.jupiter.api.Assumptions.assumeTrue(runId != null, "the run log must be enabled for this case");
+        final var folder = new File(
+                TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator + Globals.PROCEDURES_FOLDER);
+        if (folder.exists()) {
+            TestUtils.deleteFolder(folder);
+        }
+        Files.writeString(folder.toPath(), "x", StandardCharsets.UTF_8);
+        cache.removeProceduresForDatabase(TestGlobals.DB);
+        try {
+            TriggerDispatcher.dispatch(eventFor(runId));
+
+            assertFalse(TriggerRunLog.recordIdsFor(runId).isEmpty(),
+                    "a folder listing that failed read as a deleted procedure, so the run was consumed");
+        } finally {
+            Files.delete(folder.toPath());
+            cache.removeProceduresForDatabase(TestGlobals.DB);
+        }
     }
 }

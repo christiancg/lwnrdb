@@ -15,37 +15,19 @@ import static org.mockito.Mockito.when;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cache.Cache;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.DigestEntry;
 import org.techhouse.config.Configuration;
-import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
-import org.techhouse.fs.FileSystem;
-import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-public class AntiEntropyServiceTest {
-    private final AntiEntropyService service = IocContainer.get(AntiEntropyService.class);
-    private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
-    private final Cache cache = IocContainer.get(Cache.class);
-    private final FileSystem fs = IocContainer.get(FileSystem.class);
-    private final EJson eJson = IocContainer.get(EJson.class);
-    private MembershipService realMembership;
-    private PeerConnectionPool realPool;
-
-    private static NodeInfo node(String id, int port) {
-        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
-    }
+public class AntiEntropyServiceTest extends AntiEntropyTestBase {
 
     private void seed() {
         final var obj = new JsonObject();
@@ -64,32 +46,6 @@ public class AntiEntropyServiceTest {
     private boolean hasLive() throws Exception {
         return cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
                 .anyMatch(e -> e.getValue().equals("a"));
-    }
-
-    @BeforeEach
-    public void setUp() throws Exception {
-        TestUtils.standardInitialSetup();
-        TestUtils.createTestDatabaseAndCollection();
-        realMembership = TestUtils.getPrivateField(service, "membershipService", MembershipService.class);
-        realPool = TestUtils.getPrivateField(service, "pool", PeerConnectionPool.class);
-    }
-
-    @AfterEach
-    public void tearDown() throws Exception {
-        TestUtils.setPrivateField(service, "membershipService", realMembership);
-        TestUtils.setPrivateField(service, "pool", realPool);
-        TestUtils.releaseAllLocks();
-        TestUtils.standardTearDown();
-    }
-
-    private void injectPeer(PeerConnectionPool pool) throws Exception {
-        final var self = node("self", 5000);
-        final var peer = node("peer", 5001);
-        final var membership = mock(MembershipService.class);
-        when(membership.getSelf()).thenReturn(self);
-        when(membership.membershipView()).thenReturn(new MembershipView(List.of(self, peer)));
-        TestUtils.setPrivateField(service, "membershipService", membership);
-        TestUtils.setPrivateField(service, "pool", pool);
     }
 
     @Test

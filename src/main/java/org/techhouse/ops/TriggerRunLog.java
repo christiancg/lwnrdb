@@ -224,9 +224,13 @@ public final class TriggerRunLog {
     private static boolean isStranded(AdminTriggerRunEntry entry, Set<String> ownNodeIds, long cutoff,
             long deadCutoff) {
         if (entry.getStatus() == TriggerRunStatus.DEAD) {
-            return entry.getFiredAt() < deadCutoff;
+            return diedAt(entry) < deadCutoff;
         }
         return !ownNodeIds.contains(entry.getNodeId()) && entry.getFiredAt() < cutoff;
+    }
+
+    private static long diedAt(AdminTriggerRunEntry entry) {
+        return Math.max(entry.getFiredAt(), entry.getLastErrorAt());
     }
 
     public static Set<String> ownNodeIds() {

@@ -37,10 +37,19 @@ final class MetadataFileStore {
         }
     }
 
-    static boolean isListedExactly(File file) {
+    static boolean isListedExactly(File file) throws IOException {
         final var folder = file.getParentFile();
-        final var names = folder == null ? null : folder.list();
-        return names != null && Arrays.asList(names).contains(file.getName());
+        if (folder == null) {
+            return false;
+        }
+        final var names = folder.list();
+        if (names != null) {
+            return Arrays.asList(names).contains(file.getName());
+        }
+        if (folder.exists()) {
+            throw new IOException("Could not list the folder " + folder);
+        }
+        return false;
     }
 
     static void ensureFolder(File folder, String label, String dbName) throws IOException {

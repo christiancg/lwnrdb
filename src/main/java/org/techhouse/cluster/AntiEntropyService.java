@@ -192,12 +192,14 @@ public class AntiEntropyService implements MembershipListener {
     void reconcile(String dbName, String collName) throws Exception {
         final var localLive = new HashMap<String, LocalEntry>();
         final Map<String, Long> localTombstones;
+        final long selfIncarnation;
         lockReadOrSkip(dbName, collName);
         try {
             for (final var entry : cache.getPkIndexAndLoadIfNecessary(dbName, collName)) {
                 localLive.put(entry.getValue(), new LocalEntry(entry.getVersion(), entry.getLength()));
             }
             localTombstones = fs.tombstones().read(dbName, collName);
+            selfIncarnation = localIncarnation(dbName, collName);
         } finally {
             locks.releaseRead(dbName, collName);
         }
@@ -211,14 +213,13 @@ public class AntiEntropyService implements MembershipListener {
 
         final var self = membershipService.getSelf();
         final var peers = membershipService.membershipView().peers(self);
-        final var selfIncarnation = localIncarnation(dbName, collName);
         var everyPeerAnswered = true;
         for (final var member : peers) {
             if (member.isAdminSyncing()) {
                 everyPeerAnswered = false;
                 continue;
             }
-            final var response = requestDigest(member.address(), dbName, collName, localSummary);
+            final var response = requestDigest(member.address(), dbName, collName, localSummary, selfIncarnation);
             if (response == null) {
                 everyPeerAnswered = false;
                 continue;
@@ -257,15 +258,16 @@ public class AntiEntropyService implements MembershipListener {
         }
 
         if (!deleteIds.isEmpty() && !Thread.currentThread().isInterrupted()) {
-            ReplicatedApplyHelper.apply(
-                    new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds, deleteVersions),
-                    clusterConfig.replicationAckTimeoutMs());
+            final var deletes = new ReplicationPayload(dbName, collName, ReplicationOp.DELETE, null, deleteIds,
+                    deleteVersions);
+            deletes.setIncarnationValue(selfIncarnation);
+            ReplicatedApplyHelper.apply(deletes, clusterConfig.replicationAckTimeoutMs());
         }
         for (final var pull : pullByPeer.entrySet()) {
             final var ids = pull.getValue();
             for (var from = 0; from < ids.size() && !Thread.currentThread().isInterrupted(); from += PULL_BATCH_SIZE) {
                 final var batch = new ArrayList<>(ids.subList(from, Math.min(ids.size(), from + PULL_BATCH_SIZE)));
-                pullAndApply(pull.getKey(), dbName, collName, batch);
+                pullAndApply(pull.getKey(), dbName, collName, batch, selfIncarnation);
             }
         }
         if (!Thread.currentThread().isInterrupted()) {
@@ -273,14 +275,16 @@ public class AntiEntropyService implements MembershipListener {
         }
     }
 
-    private void pullAndApply(NodeAddress peer, String dbName, String collName, List<String> ids) {
-        final var response = requestPull(peer, dbName, collName, ids);
+    private void pullAndApply(NodeAddress peer, String dbName, String collName, List<String> ids, long incarnation) {
+        final var response = requestPull(peer, dbName, collName, ids, incarnation);
         if (Thread.currentThread().isInterrupted()) {
             return;
         }
         if (response != null && response.getDocuments() != null && !response.getDocuments().isEmpty()) {
-            ReplicatedApplyHelper.apply(new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT,
-                    response.getDocuments(), null, response.getVersions()), clusterConfig.replicationAckTimeoutMs());
+            final var upserts = new ReplicationPayload(dbName, collName, ReplicationOp.UPSERT, response.getDocuments(),
+                    null, response.getVersions());
+            upserts.setIncarnationValue(incarnation);
+            ReplicatedApplyHelper.apply(upserts, clusterConfig.replicationAckTimeoutMs());
         }
     }
 
@@ -336,21 +340,23 @@ public class AntiEntropyService implements MembershipListener {
         return nodeId.compareTo(currentNodeId) > 0;
     }
 
-    private AntiEntropyPayload requestDigest(NodeAddress address, String dbName, String collName, String summary) {
+    private AntiEntropyPayload requestDigest(NodeAddress address, String dbName, String collName, String summary,
+            long incarnation) {
         final var message = message(ClusterMessageType.DIGEST);
         final var query = new AntiEntropyPayload(dbName, collName);
         query.setSummary(summary);
-        query.setIncarnationValue(localIncarnation(dbName, collName));
+        query.setIncarnationValue(incarnation);
         message.setAntiEntropy(query);
         final var response = send(address, message, ClusterMessageType.DIGEST_ACK);
         return response == null ? null : response.getAntiEntropy();
     }
 
-    private AntiEntropyPayload requestPull(NodeAddress address, String dbName, String collName, List<String> ids) {
+    private AntiEntropyPayload requestPull(NodeAddress address, String dbName, String collName, List<String> ids,
+            long incarnation) {
         final var message = message(ClusterMessageType.PULL);
         final var payload = new AntiEntropyPayload(dbName, collName);
         payload.setIds(ids);
-        payload.setIncarnationValue(localIncarnation(dbName, collName));
+        payload.setIncarnationValue(incarnation);
         message.setAntiEntropy(payload);
         final var response = send(address, message, ClusterMessageType.PULL_ACK);
         return response == null ? null : response.getAntiEntropy();

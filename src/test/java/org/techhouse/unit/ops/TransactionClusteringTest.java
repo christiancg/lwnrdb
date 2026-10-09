@@ -2,11 +2,14 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.net.InetAddress;
@@ -17,6 +20,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
 import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
@@ -25,6 +29,8 @@ import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.Replicator;
 import org.techhouse.cluster.TransactionSessionReaper;
 import org.techhouse.cluster.membership.MembershipService;
+import org.techhouse.cluster.msg.ReplicationPayload;
+import org.techhouse.cluster.msg.TxReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
@@ -37,7 +43,10 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
+import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.CommitTransactionRequest;
+import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
@@ -354,5 +363,79 @@ public class TransactionClusteringTest {
                         + " same reason a commit must");
         assertEquals(OperationStatus.NOT_FOUND, findStatus("abort-sess"), "the aborted slice must not have applied");
         assertNull(clientTracker.getActiveTransaction(sessionClient));
+    }
+
+    private Replicator capturingReplicator() throws Exception {
+        final var replicator = mock(Replicator.class);
+        when(replicator.broadcast(any())).thenReturn(ReplicationOutcome.QUORUM_MET);
+        when(replicator.broadcastTx(any())).thenReturn(ReplicationOutcome.QUORUM_MET);
+        TestUtils.setPrivateField(coordinator, "replicator", replicator);
+        return replicator;
+    }
+
+    private String collectionWithAnIncarnation() throws Exception {
+        TestUtils.setPrivateField(config, "clusterEnabled", false);
+        try {
+            assertEquals(OperationStatus.OK,
+                    processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "stamped")).getStatus());
+        } finally {
+            TestUtils.setPrivateField(config, "clusterEnabled", true);
+        }
+        assertNotEquals(0L, CollectionIncarnation.current(TestGlobals.DB, "stamped"));
+        return "stamped";
+    }
+
+    private static SaveRequest saveIn(String collName, String id) {
+        final var request = new SaveRequest(TestGlobals.DB, collName);
+        final var object = new JsonObject();
+        object.add("_id", new JsonString(id));
+        request.setObject(object);
+        request.set_id(id);
+        return request;
+    }
+
+    private static DeleteRequest deleteIn(String collName, String id) {
+        final var request = new DeleteRequest(TestGlobals.DB, collName);
+        request.set_id(id);
+        return request;
+    }
+
+    @Test
+    public void test_an_owner_save_and_delete_carry_the_collection_incarnation() throws Exception {
+        final var collName = collectionWithAnIncarnation();
+        configureMembership(1, node("self", 5000));
+        final var replicator = capturingReplicator();
+
+        assertEquals(OperationStatus.OK, processor.processMessage(saveIn(collName, "a")).getStatus());
+        assertEquals(OperationStatus.OK, processor.processMessage(deleteIn(collName, "a")).getStatus());
+
+        final var payloads = ArgumentCaptor.forClass(ReplicationPayload.class);
+        verify(replicator, times(2)).broadcast(payloads.capture());
+        for (final var payload : payloads.getAllValues()) {
+            assertEquals(CollectionIncarnation.current(TestGlobals.DB, collName), payload.incarnationValue(),
+                    "a replica cannot refuse a write that outlived a drop and re-create without its incarnation");
+        }
+    }
+
+    @Test
+    public void test_every_entry_of_a_replicated_transaction_carries_the_collection_incarnation() throws Exception {
+        final var collName = collectionWithAnIncarnation();
+        configureMembership(1, node("self", 5000));
+        final var replicator = capturingReplicator();
+        processor.processMessage(saveIn(collName, "gone"));
+        final var clientId = newClient();
+        processor.processMessage(new StartTransactionRequest(), clientId);
+        processor.processMessage(saveIn(collName, "kept"), clientId);
+        processor.processMessage(deleteIn(collName, "gone"), clientId);
+
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CommitTransactionRequest(), clientId).getStatus());
+
+        final var batch = ArgumentCaptor.forClass(TxReplicationPayload.class);
+        verify(replicator).broadcastTx(batch.capture());
+        assertEquals(2, batch.getValue().getEntries().size());
+        for (final var entry : batch.getValue().getEntries()) {
+            assertEquals(CollectionIncarnation.current(TestGlobals.DB, collName), entry.incarnationValue());
+        }
     }
 }

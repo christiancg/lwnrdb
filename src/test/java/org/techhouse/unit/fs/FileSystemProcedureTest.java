@@ -3,6 +3,9 @@ package org.techhouse.unit.fs;
 import static org.junit.jupiter.api.Assertions.*;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,8 +40,22 @@ public class FileSystemProcedureTest {
     }
 
     private static File proceduresFolder() {
-        return new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
-                + Globals.PROCEDURES_FOLDER);
+        return metadataFolder(Globals.PROCEDURES_FOLDER);
+    }
+
+    private static File schedulesFolder() {
+        return metadataFolder(Globals.SCHEDULES_FOLDER);
+    }
+
+    private static File metadataFolder(String name) {
+        return new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR + name);
+    }
+
+    private static void replaceWithAFile(File folder) throws Exception {
+        if (folder.exists()) {
+            TestUtils.deleteFolder(folder);
+        }
+        Files.writeString(folder.toPath(), "x", StandardCharsets.UTF_8);
     }
 
     @Test
@@ -156,5 +173,27 @@ public class FileSystemProcedureTest {
         fs.writeTriggers(TestGlobals.DB, "trigdropcoll", "[{\"name\":\"t\"}]");
         assertTrue(fs.deleteCollectionFiles(TestGlobals.DB, "trigdropcoll"));
         assertNull(fs.readTriggers(TestGlobals.DB, "trigdropcoll"));
+    }
+
+    @Test
+    public void test_a_procedures_folder_that_cannot_be_listed_fails_instead_of_reading_absent() throws Exception {
+        replaceWithAFile(proceduresFolder());
+        try {
+            assertThrows(IOException.class, () -> fs.readProcedure(TestGlobals.DB, "one"));
+            assertThrows(IOException.class, () -> fs.deleteProcedure(TestGlobals.DB, "one"));
+        } finally {
+            Files.delete(proceduresFolder().toPath());
+        }
+    }
+
+    @Test
+    public void test_a_schedules_folder_that_cannot_be_listed_fails_instead_of_reading_absent() throws Exception {
+        replaceWithAFile(schedulesFolder());
+        try {
+            assertThrows(IOException.class, () -> fs.readSchedule(TestGlobals.DB, "daily"));
+            assertThrows(IOException.class, () -> fs.deleteSchedule(TestGlobals.DB, "daily"));
+        } finally {
+            Files.delete(schedulesFolder().toPath());
+        }
     }
 }

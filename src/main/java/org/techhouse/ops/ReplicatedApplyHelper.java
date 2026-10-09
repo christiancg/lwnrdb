@@ -14,6 +14,7 @@ import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.admin.CollectionIncarnation;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
@@ -69,6 +70,13 @@ public final class ReplicatedApplyHelper {
     }
 
     static boolean applyLocked(ReplicationPayload payload) throws Exception {
+        if (belongsToAnotherIncarnation(payload)) {
+            logger.warning("Refusing a replicated " + payload.getOp() + " to " + payload.getDbName() + "|"
+                    + payload.getCollName() + ": it belongs to incarnation " + payload.incarnationValue()
+                    + " and this node holds incarnation "
+                    + CollectionIncarnation.current(payload.getDbName(), payload.getCollName()));
+            return false;
+        }
         listenManager
                 .deferNotifications(List.of(Cache.getCollectionIdentifier(payload.getDbName(), payload.getCollName())));
         try {
@@ -79,6 +87,11 @@ public final class ReplicatedApplyHelper {
         } finally {
             listenManager.flushDeferredNotifications();
         }
+    }
+
+    public static boolean belongsToAnotherIncarnation(ReplicationPayload payload) {
+        final var stamped = payload.incarnationValue();
+        return stamped != 0L && !CollectionIncarnation.isCurrent(payload.getDbName(), payload.getCollName(), stamped);
     }
 
     private static boolean applyUpsert(ReplicationPayload payload) throws Exception {

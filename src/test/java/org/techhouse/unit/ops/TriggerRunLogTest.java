@@ -62,9 +62,23 @@ public class TriggerRunLogTest {
         return DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
     }
 
+    private static final long THIRTY_DAYS_MS = 30L * 24 * 60 * 60 * 1000;
+    private static final long SEVEN_DAYS_MS = 7L * 24 * 60 * 60 * 1000;
+
     private static TriggerRunLog.TriggerRunDescriptor descriptor(EventType type, List<DbEntry> entries) {
+        return firedAt(System.currentTimeMillis(), type, entries);
+    }
+
+    private static TriggerRunLog.TriggerRunDescriptor firedAt(long firedAt, EventType type, List<DbEntry> entries) {
         return new TriggerRunLog.TriggerRunDescriptor(TestGlobals.DB, TestGlobals.COLL, "audit", "recalc", type, false,
-                "alice", 0, System.currentTimeMillis(), entries);
+                "alice", 0, firedAt, entries);
+    }
+
+    private static String deadLetter(long firedAt, String error) {
+        final var runId = TriggerRunLog.record(firedAt(firedAt, EventType.CREATED, List.of(entry("a", 1))));
+        assertNotNull(runId);
+        TriggerRunLog.markAttempt(runId, TriggerRunStatus.DEAD, 1, error, 0L);
+        return runId;
     }
 
     @Test
@@ -257,5 +271,27 @@ public class TriggerRunLogTest {
     @Test
     public void test_pending_run_ids_is_empty_without_records() {
         assertTrue(TriggerRunLog.pendingRunIds().isEmpty());
+    }
+
+    @Test
+    public void test_a_dead_letter_that_died_recently_is_kept_however_long_ago_it_fired() throws Exception {
+        deadLetter(System.currentTimeMillis() - THIRTY_DAYS_MS, "boom");
+
+        TriggerRunLog.garbageCollect(60_000L, SEVEN_DAYS_MS);
+
+        assertEquals(1, TriggerRunLog.pending().size(),
+                "a run replayed after a long outage that then dies must stay visible for the operator");
+    }
+
+    @Test
+    public void test_a_dead_letter_without_a_recorded_death_falls_back_to_when_it_fired() throws Exception {
+        deadLetter(System.currentTimeMillis() - THIRTY_DAYS_MS, null);
+        final var recent = deadLetter(System.currentTimeMillis(), null);
+
+        TriggerRunLog.garbageCollect(60_000L, SEVEN_DAYS_MS);
+
+        final var pending = TriggerRunLog.pending();
+        assertEquals(1, pending.size());
+        assertEquals(recent, pending.getFirst().getRunId());
     }
 }
