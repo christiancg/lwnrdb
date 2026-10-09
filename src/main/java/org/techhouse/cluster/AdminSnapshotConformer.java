@@ -1,10 +1,13 @@
 package org.techhouse.cluster;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.function.BiFunction;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
@@ -80,6 +83,46 @@ final class AdminSnapshotConformer {
         logger.warning("Leaving " + key + " as it is: the admin snapshot of " + unreadable.nodeId()
                 + " could not read it. The next round retries it.");
         return false;
+    }
+
+    private record Removal(boolean complete, boolean removedAny) {
+    }
+
+    private interface DefinitionRemover {
+        void remove(String name) throws IOException;
+    }
+
+    private Removal removeAbsentDefinitions(String dbName, String folderKey, NameListing listing,
+            BiFunction<String, String, String> itemKey, Map<String, JsonObject> desired, UnreadableItems unreadable,
+            DefinitionRemover remover) {
+        if (unreadable.contains(folderKey)) {
+            return new Removal(skipUnreadable(folderKey, unreadable), false);
+        }
+        final List<String> existing;
+        try {
+            existing = listing.names();
+        } catch (IOException e) {
+            logger.warning("Removing nothing from " + folderKey + ": it could not be listed. The next round retries"
+                    + " it: " + e.getMessage());
+            return new Removal(false, false);
+        }
+        var complete = true;
+        var removedAny = false;
+        for (final var name : existing) {
+            final var key = itemKey.apply(dbName, name);
+            if (unreadable.contains(key)) {
+                complete &= skipUnreadable(key, unreadable);
+            } else if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, name))) {
+                try {
+                    remover.remove(name);
+                    removedAny = true;
+                } catch (IOException e) {
+                    logger.warning("Could not remove " + key + ". The next round retries it: " + e.getMessage());
+                    complete = false;
+                }
+            }
+        }
+        return new Removal(complete, removedAny);
     }
 
     private HashSet<String> conformUsers(AdminSnapshotPayload snapshot) throws Exception {
@@ -204,16 +247,13 @@ final class AdminSnapshotConformer {
                 continue;
             }
             try {
-                for (final var existingName : new ArrayList<>(fs.listProcedureNames(dbName))) {
-                    final var key = AdminSnapshotKeys.procedure(dbName, existingName);
-                    if (unreadable.contains(key)) {
-                        complete &= skipUnreadable(key, unreadable);
-                    } else if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
-                        fs.deleteProcedure(dbName, existingName);
-                        cache.removeProcedure(dbName, existingName);
-                        compiledProcedures.invalidateProcedure(dbName, existingName);
-                    }
-                }
+                complete &= removeAbsentDefinitions(dbName, AdminSnapshotKeys.procedures(dbName),
+                        () -> fs.listProcedureNames(dbName), AdminSnapshotKeys::procedure, desired, unreadable,
+                        name -> {
+                            fs.deleteProcedure(dbName, name);
+                            cache.removeProcedure(dbName, name);
+                            compiledProcedures.invalidateProcedure(dbName, name);
+                        }).complete();
                 for (final var entry : desired.entrySet()) {
                     final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
                     if (parts.length < 2 || !parts[0].equals(dbName)) {
@@ -257,7 +297,7 @@ final class AdminSnapshotConformer {
             desired.put(entry.getKey(), entry.getValue().asJsonObject());
         }
         for (final var dbName : snapshotDbs.keySet()) {
-            var changed = false;
+            boolean changed;
             final var waitMillis = clusterConfig.replicationAckTimeoutMs();
             if (!locks.tryLockWrite(dbName, Globals.SCHEDULES_FOLDER, waitMillis)) {
                 logger.warning("Skipping the schedules conform of " + dbName + ": its lock stayed held" + " for "
@@ -266,16 +306,13 @@ final class AdminSnapshotConformer {
                 continue;
             }
             try {
-                for (final var existingName : new ArrayList<>(fs.listScheduleNames(dbName))) {
-                    final var key = AdminSnapshotKeys.schedule(dbName, existingName);
-                    if (unreadable.contains(key)) {
-                        complete &= skipUnreadable(key, unreadable);
-                    } else if (!desired.containsKey(Cache.getCollectionIdentifier(dbName, existingName))) {
-                        fs.deleteSchedule(dbName, existingName);
-                        cache.removeSchedule(dbName, existingName);
-                        changed = true;
-                    }
-                }
+                final var removal = removeAbsentDefinitions(dbName, AdminSnapshotKeys.schedules(dbName),
+                        () -> fs.listScheduleNames(dbName), AdminSnapshotKeys::schedule, desired, unreadable, name -> {
+                            fs.deleteSchedule(dbName, name);
+                            cache.removeSchedule(dbName, name);
+                        });
+                complete &= removal.complete();
+                changed = removal.removedAny();
                 for (final var entry : desired.entrySet()) {
                     final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX);
                     if (parts.length < 2 || !parts[0].equals(dbName)) {

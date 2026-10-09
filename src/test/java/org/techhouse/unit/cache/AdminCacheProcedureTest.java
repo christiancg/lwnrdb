@@ -33,7 +33,7 @@ public class AdminCacheProcedureTest {
     }
 
     @BeforeEach
-    void clear() {
+    void clear() throws Exception {
         for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
             fs.deleteProcedure(TestGlobals.DB, name);
         }

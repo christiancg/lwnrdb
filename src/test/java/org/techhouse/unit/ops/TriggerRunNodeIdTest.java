@@ -1,7 +1,9 @@
 package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -27,6 +29,7 @@ public class TriggerRunNodeIdTest {
     @AfterEach
     public void tearDown() throws Exception {
         TestUtils.setPrivateField(configuration, "clusterEnabled", originalClusterEnabled);
+        TestUtils.setPrivateField(configuration, "nodeId", "");
         TestUtils.setPrivateField(membershipService, "self", null);
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
@@ -51,5 +54,48 @@ public class TriggerRunNodeIdTest {
         TestUtils.setPrivateField(membershipService, "self", null);
 
         assertEquals(Globals.STANDALONE_NODE_ID, TriggerRunLog.currentNodeId());
+    }
+
+    @Test
+    public void test_a_clustered_node_owns_its_id_and_the_runs_it_stamped_while_standalone() throws Exception {
+        TestUtils.setPrivateField(configuration, "clusterEnabled", true);
+        TestUtils.setPrivateField(membershipService, "self", null);
+
+        final var own = TriggerRunLog.ownNodeIds();
+
+        assertTrue(own.contains(membershipService.resolveNodeId()));
+        assertTrue(own.contains(Globals.STANDALONE_NODE_ID),
+                "admin/trigger_runs is never replicated, so a run stamped local was written by this node before"
+                        + " clusterEnabled was switched on");
+    }
+
+    @Test
+    public void test_a_standalone_node_owns_the_runs_it_stamped_while_clustered() throws Exception {
+        TestUtils.setPrivateField(configuration, "clusterEnabled", true);
+        TestUtils.setPrivateField(membershipService, "self", null);
+        final var clusteredId = membershipService.resolveNodeId();
+        TestUtils.setPrivateField(configuration, "clusterEnabled", false);
+
+        final var own = TriggerRunLog.ownNodeIds();
+
+        assertTrue(own.contains(clusteredId), "the uuid persisted in cluster/node.id is this node's former id");
+        assertTrue(own.contains(Globals.STANDALONE_NODE_ID));
+    }
+
+    @Test
+    public void test_a_configured_node_id_is_owned_even_after_the_cluster_is_switched_off() throws Exception {
+        TestUtils.setPrivateField(configuration, "clusterEnabled", false);
+        TestUtils.setPrivateField(configuration, "nodeId", "  node-a  ");
+        TestUtils.setPrivateField(membershipService, "self", null);
+
+        assertTrue(TriggerRunLog.ownNodeIds().contains("node-a"));
+    }
+
+    @Test
+    public void test_an_id_this_node_never_ran_under_is_not_owned() throws Exception {
+        TestUtils.setPrivateField(configuration, "clusterEnabled", false);
+        TestUtils.setPrivateField(membershipService, "self", null);
+
+        assertFalse(TriggerRunLog.ownNodeIds().contains("another-node"));
     }
 }

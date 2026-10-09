@@ -7,7 +7,6 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.UUID;
 import org.techhouse.bckg_ops.TriggerExecutor;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
@@ -81,7 +80,26 @@ public final class TriggerDispatcher {
             recordSkip(event, reason);
             return;
         }
-        run(event, trigger, procedure.getVersion(), procedure.getSource(), definer);
+        runOnCurrentEntries(event, trigger, procedure, definer);
+    }
+
+    private static void runOnCurrentEntries(TriggerEvent event, TriggerDefinition trigger,
+            ProcedureDefinition procedure, String definer) {
+        final TriggerEvent current;
+        try {
+            current = withCurrentEntries(event);
+        } catch (IOException e) {
+            retryUnreadableDocuments(event, e.getMessage());
+            return;
+        }
+        if (current == null) {
+            consumeQuietly(event.getRunId(), event.getTriggerName());
+            logger.info("Trigger '" + event.getTriggerName()
+                    + "' retry skipped: its document(s) no longer exist; runId=" + event.getRunId());
+            recordSkip(event, "its document(s) no longer exist");
+            return;
+        }
+        run(current, trigger, procedure.getVersion(), procedure.getSource(), definer);
     }
 
     private static void run(TriggerEvent event, TriggerDefinition trigger, long version, String source,
@@ -159,31 +177,19 @@ public final class TriggerDispatcher {
         final var maxAttempts = Math.max(1, configuration.getTriggerMaxAttempts());
         final var error = errorName + ": " + errorMessage;
         if (retryable && event.getRunId() != null && clusterUnavailable && withinClusterRetryWindow(event)) {
-            final var waiting = retryOf(event, attempt);
-            if (waiting == null) {
-                skipRetryOfVanishedEntries(event, trigger, definer, runId, start, errorName, errorMessage, stack,
-                        result);
-                return;
-            }
             final var delay = backoffFor(attempt);
             TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
                     System.currentTimeMillis() + delay);
-            triggerExecutor.submitAfter(waiting, delay);
+            triggerExecutor.submitAfter(event.retry(attempt), delay);
             logger.info("Trigger '" + trigger.getName() + "' is waiting for the cluster; retrying in " + delay
                     + "ms without consuming an attempt");
             return;
         }
         if (retryable && event.getRunId() != null && attempt < maxAttempts) {
-            final var retry = retryOf(event);
-            if (retry == null) {
-                skipRetryOfVanishedEntries(event, trigger, definer, runId, start, errorName, errorMessage, stack,
-                        result);
-                return;
-            }
             final var delay = backoffFor(attempt);
             TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
                     System.currentTimeMillis() + delay);
-            triggerExecutor.submitAfter(retry, delay);
+            triggerExecutor.submitAfter(event.retry(attempt + 1), delay);
             logger.info("Trigger '" + trigger.getName() + "' attempt " + attempt + " of " + maxAttempts
                     + " failed; retrying in " + delay + "ms");
             recordRun(event, trigger, definer, runId, start, ScriptRunRecord.OUTCOME_ERROR, errorName, errorMessage,
@@ -205,15 +211,6 @@ public final class TriggerDispatcher {
                 result);
     }
 
-    private static void skipRetryOfVanishedEntries(TriggerEvent event, TriggerDefinition trigger, String definer,
-            String runId, long start, String errorName, String errorMessage, List<String> stack, ScriptResult result) {
-        consumeQuietly(event.getRunId(), trigger.getName());
-        logger.info("Trigger '" + trigger.getName() + "' retry skipped: its document(s) no longer exist; runId="
-                + event.getRunId());
-        recordRun(event, trigger, definer, runId, start, ScriptRunRecord.OUTCOME_SKIPPED, errorName, errorMessage,
-                stack, result);
-    }
-
     public static long backoffFor(int attempt) {
         final var base = Math.max(0L, configuration.getTriggerRetryBackoffMs());
         final var ceiling = Math.max(0L, configuration.getTriggerRetryMaxBackoffMs());
@@ -229,32 +226,16 @@ public final class TriggerDispatcher {
         return System.currentTimeMillis() - event.getFiredAt() < Math.max(0L, configuration.getTriggerRunRetentionMs());
     }
 
-    private static TriggerEvent retryOf(TriggerEvent event) {
-        return retryOf(event, event.getAttempt() + 1);
-    }
-
-    private static TriggerEvent retryOf(TriggerEvent event, int nextAttempt) {
-        final var entries = event.getType() == EventType.DELETED ? event.getEntries() : currentEntriesFor(event);
-        if (entries.isEmpty()) {
-            return null;
+    private static TriggerEvent withCurrentEntries(TriggerEvent event) throws IOException {
+        if (!event.hasStaleEntries()) {
+            return event;
         }
-        return new TriggerEvent(event.getType(), event.getDbName(), event.getCollName(), event.getTriggerName(),
-                event.getProcedureName(), event.isBatchMode(), entries, event.getActingUser(), event.getDepth(),
-                event.getRunId(), nextAttempt, event.getFiredAt());
-    }
-
-    private static List<DbEntry> currentEntriesFor(TriggerEvent event) {
         final var ids = new LinkedHashSet<String>();
         for (final var entry : event.getEntries()) {
             ids.add(entry.get_id());
         }
-        try {
-            return cache.getEntriesByIds(event.getDbName(), event.getCollName(), ids);
-        } catch (IOException e) {
-            logger.warning("Could not re-read the current document(s) for a retried trigger '" + event.getTriggerName()
-                    + "': " + e.getMessage());
-            return List.of();
-        }
+        final List<DbEntry> current = cache.getEntriesByIds(event.getDbName(), event.getCollName(), ids);
+        return current.isEmpty() ? null : event.withCurrentEntries(current);
     }
 
     private static void recordRun(TriggerEvent event, TriggerDefinition trigger, String definer, String runId,
@@ -345,9 +326,16 @@ public final class TriggerDispatcher {
     }
 
     private static void retryUnreadableDefinition(TriggerEvent event, String what, String cause) {
+        retryUnreadable(event, what, "MetadataReadException: " + cause, cause);
+    }
+
+    private static void retryUnreadableDocuments(TriggerEvent event, String cause) {
+        retryUnreadable(event, "the current document(s)", "IOException: " + cause, cause);
+    }
+
+    private static void retryUnreadable(TriggerEvent event, String what, String error, String cause) {
         final var attempt = event.getAttempt();
         final var maxAttempts = Math.max(1, configuration.getTriggerMaxAttempts());
-        final var error = "MetadataReadException: " + cause;
         triggerExecutor.countFailure();
         if (event.getRunId() == null) {
             logger.warning("Could not read " + what + " for " + event.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR
@@ -355,18 +343,10 @@ public final class TriggerDispatcher {
             return;
         }
         if (attempt < maxAttempts) {
-            final var retry = retryOf(event);
-            if (retry == null) {
-                consumeQuietly(event.getRunId(), event.getTriggerName());
-                logger.info("Trigger '" + event.getTriggerName()
-                        + "' retry skipped after an unreadable definition: its document(s) no longer exist; runId="
-                        + event.getRunId());
-                return;
-            }
             final var delay = backoffFor(attempt);
             TriggerRunLog.markAttempt(event.getRunId(), TriggerRunStatus.PENDING, attempt, error,
                     System.currentTimeMillis() + delay);
-            triggerExecutor.submitAfter(retry, delay);
+            triggerExecutor.submitAfter(event.retry(attempt + 1), delay);
             logger.warning("Could not read " + what + " for " + event.getDbName() + Globals.COLL_IDENTIFIER_SEPARATOR
                     + event.getCollName() + "; the run stays pending and is retried in " + delay + "ms: " + cause);
             return;

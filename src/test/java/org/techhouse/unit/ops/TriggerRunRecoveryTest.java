@@ -188,6 +188,51 @@ public class TriggerRunRecoveryTest {
     }
 
     @Test
+    public void test_a_run_stamped_local_is_replayed_once_the_cluster_is_enabled() throws Exception {
+        saveDocument();
+        for (final var entry : TriggerRunLog.pending()) {
+            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
+        }
+        captured.clear();
+        writeRecord("run-standalone-era", Globals.STANDALONE_NODE_ID, EventType.UPDATED, List.of("live"), List.of(),
+                System.currentTimeMillis());
+        TestUtils.setPrivateField(configuration, "clusterEnabled", true);
+        try {
+            TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
+            sleep();
+        } finally {
+            TestUtils.setPrivateField(configuration, "clusterEnabled", false);
+        }
+
+        assertEquals(1, captured.size(), "a run left pending before clusterEnabled was switched on is still owed");
+        assertEquals("run-standalone-era", captured.getFirst().getRunId());
+    }
+
+    @Test
+    public void test_a_run_stamped_with_this_nodes_former_cluster_id_is_replayed_standalone() throws Exception {
+        saveDocument();
+        for (final var entry : TriggerRunLog.pending()) {
+            TriggerDispatcher.consumeQuietly(entry.getRunId(), entry.getTriggerName());
+        }
+        captured.clear();
+        TestUtils.setPrivateField(configuration, "clusterEnabled", true);
+        final String clusteredId;
+        try {
+            clusteredId = TriggerRunLog.currentNodeId();
+        } finally {
+            TestUtils.setPrivateField(configuration, "clusterEnabled", false);
+        }
+        writeRecord("run-cluster-era", clusteredId, EventType.UPDATED, List.of("live"), List.of(),
+                System.currentTimeMillis());
+
+        TriggerRunRecovery.recoverLocal(TriggerRunLog.pendingRunIds());
+        sleep();
+
+        assertEquals(1, captured.size(), "a run left pending before clusterEnabled was switched off is still owed");
+        assertEquals("run-cluster-era", captured.getFirst().getRunId());
+    }
+
+    @Test
     public void test_run_from_another_node_is_not_replayed_locally() throws Exception {
         writeRecord("run-b", "some-other-node", EventType.UPDATED, List.of("live"), List.of(),
                 System.currentTimeMillis());

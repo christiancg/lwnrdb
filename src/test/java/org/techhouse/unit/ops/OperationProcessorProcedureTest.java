@@ -106,7 +106,7 @@ public class OperationProcessorProcedureTest {
     // Dropping the database takes its procedure files with the folder; the cached definitions and the
     // compiled programs must go too, because a re-created database restarts its versions at 1.
     @Test
-    public void test_drop_database_removes_procedures_and_their_compiled_programs() {
+    public void test_drop_database_removes_procedures_and_their_compiled_programs() throws Exception {
         final var dbName = "procdropdb";
         assertEquals(OperationStatus.OK, processor.processMessage(new CreateDatabaseRequest(dbName)).getStatus());
         assertInstanceOf(SaveProcedureResponse.class,

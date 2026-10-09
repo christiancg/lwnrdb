@@ -1,5 +1,6 @@
 package org.techhouse.bckg_ops;
 
+import java.io.IOException;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.ArrayList;
@@ -76,8 +77,18 @@ public class ScheduleRegistry {
 
     public synchronized void reload(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        final var listingKey = prefix + Globals.SCHEDULES_FOLDER;
+        final List<String> names;
+        try {
+            names = fs.listScheduleNames(dbName);
+        } catch (IOException e) {
+            warnOnce(listingKey, "the schedules folder could not be listed, so the registered schedules are kept: "
+                    + e.getMessage());
+            return;
+        }
+        warned.remove(listingKey);
         final var seen = new ArrayList<String>();
-        for (final var name : fs.listScheduleNames(dbName)) {
+        for (final var name : names) {
             final var key = Cache.getCollectionIdentifier(dbName, name);
             final ScheduleDefinition definition;
             try {

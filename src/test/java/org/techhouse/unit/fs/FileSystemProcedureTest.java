@@ -29,7 +29,7 @@ public class FileSystemProcedureTest {
     }
 
     @BeforeEach
-    void clearProcedures() {
+    void clearProcedures() throws Exception {
         for (final var name : fs.listProcedureNames(TestGlobals.DB)) {
             fs.deleteProcedure(TestGlobals.DB, name);
         }
@@ -99,7 +99,7 @@ public class FileSystemProcedureTest {
     }
 
     @Test
-    public void test_delete_returns_false_when_absent() {
+    public void test_delete_returns_false_when_absent() throws Exception {
         assertFalse(fs.deleteProcedure(TestGlobals.DB, "nothing"));
     }
 
@@ -111,7 +111,7 @@ public class FileSystemProcedureTest {
     }
 
     @Test
-    public void test_list_returns_empty_when_folder_absent() {
+    public void test_list_returns_empty_when_folder_absent() throws Exception {
         TestUtils.deleteFolder(proceduresFolder());
         assertTrue(fs.listProcedureNames(TestGlobals.DB).isEmpty());
     }

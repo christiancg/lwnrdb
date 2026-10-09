@@ -48,7 +48,7 @@ public class AdminAntiEntropySchemaTest {
     }
 
     @BeforeEach
-    void clear() {
+    void clear() throws Exception {
         for (final var collName : new String[]{TestGlobals.COLL, SECOND_COLL}) {
             fs.deleteCollectionSchema(TestGlobals.DB, collName);
             cache.removeCollectionSchema(TestGlobals.DB, collName);

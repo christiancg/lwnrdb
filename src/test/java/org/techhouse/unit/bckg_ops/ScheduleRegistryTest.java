@@ -2,6 +2,8 @@ package org.techhouse.unit.bckg_ops;
 
 import static org.junit.jupiter.api.Assertions.*;
 
+import java.io.File;
+import java.nio.file.Files;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -13,6 +15,7 @@ import org.mockito.Mockito;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.ScheduleDefinition;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.ejson.EJson;
@@ -79,6 +82,23 @@ public class ScheduleRegistryTest {
     private void writeCorruptSchedule(String name) throws Exception {
         fs.writeSchedule(TestGlobals.DB, name, "{\"name\": \"" + name);
         cache.removeSchedule(TestGlobals.DB, name);
+    }
+
+    @Test
+    public void test_a_folder_that_cannot_be_listed_keeps_the_registered_schedules() throws Exception {
+        writeSchedule(OTHER_DB, "kept", null, 2000L);
+        registry.reload(OTHER_DB);
+        assertNotNull(registry.get(OTHER_DB, "kept"));
+        final var folder = new File(TestUtils.getDbPath(fs), OTHER_DB + File.separator + Globals.SCHEDULES_FOLDER);
+        TestUtils.deleteFolder(folder);
+        Files.writeString(folder.toPath(), "not a folder");
+        try {
+            registry.reload(OTHER_DB);
+
+            assertNotNull(registry.get(OTHER_DB, "kept"), "a listing that failed is not an empty folder");
+        } finally {
+            Files.delete(folder.toPath());
+        }
     }
 
     @Test

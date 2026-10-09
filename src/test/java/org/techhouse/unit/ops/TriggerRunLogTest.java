@@ -188,6 +188,20 @@ public class TriggerRunLogTest {
     }
 
     @Test
+    public void test_garbage_collect_keeps_a_standalone_era_run_once_clustered() throws Exception {
+        assertNotNull(TriggerRunLog.record(descriptor(EventType.CREATED, List.of(entry("a", 1)))));
+        TestUtils.setPrivateField(configuration, "clusterEnabled", true);
+        try {
+            TriggerRunLog.garbageCollect(-1L);
+        } finally {
+            TestUtils.setPrivateField(configuration, "clusterEnabled", false);
+        }
+
+        assertEquals(1, TriggerRunLog.pending().size(),
+                "a run stamped local was recorded by this node, so switching the cluster on does not strand it");
+    }
+
+    @Test
     public void test_garbage_collect_keeps_this_nodes_staged_runs_past_retention() throws Exception {
         assertNotNull(TriggerRunLog.recordStaged(descriptor(EventType.CREATED, List.of(entry("a", 1))),
                 Map.of("a", AdminTriggerRunEntry.ABSENT_VERSION)));

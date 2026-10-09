@@ -23,6 +23,14 @@ final class AdminSnapshotKeys {
         return of("schedule", dbName, name);
     }
 
+    static String procedures(String dbName) {
+        return of("procedures", dbName, Globals.PROCEDURES_FOLDER);
+    }
+
+    static String schedules(String dbName) {
+        return of("schedules", dbName, Globals.SCHEDULES_FOLDER);
+    }
+
     private static String of(String kind, String dbName, String name) {
         return kind + Globals.COLL_IDENTIFIER_SEPARATOR + Cache.getCollectionIdentifier(dbName, name);
     }

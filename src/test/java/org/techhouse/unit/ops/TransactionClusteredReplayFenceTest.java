@@ -2,8 +2,13 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.File;
+import java.nio.file.Files;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -21,8 +26,10 @@ import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.DeleteOperationHelper;
 import org.techhouse.ops.SaveOperationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
@@ -38,6 +45,7 @@ public class TransactionClusteredReplayFenceTest {
     private final Cache cache = IocContainer.get(Cache.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private final HybridClock clock = IocContainer.get(HybridClock.class);
+    private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final String collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
 
     @BeforeAll
@@ -245,6 +253,82 @@ public class TransactionClusteredReplayFenceTest {
         TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 0L);
 
         assertEquals("theirs", valueOf("prepForeign"));
+    }
+
+    @Test
+    public void test_prepared_slice_replay_does_not_recreate_an_id_a_client_deleted_after_the_restart()
+            throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        savePreparedOp(dtxId, 0, document("deletedLater", "mine"));
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"), List.of(collId));
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "deletedLater", clock.next());
+
+        TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 0L);
+
+        assertNull(valueOf("deletedLater"),
+                "a delete accepted after the prepare is newer than the slice's save, as a newer save would be");
+    }
+
+    @Test
+    public void test_prepared_slice_replay_recreates_an_id_deleted_before_the_prepare() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "deletedEarlier", clock.next());
+        savePreparedOp(dtxId, 0, document("deletedEarlier", "mine"));
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"), List.of(collId));
+
+        TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 0L);
+
+        assertEquals("mine", valueOf("deletedEarlier"));
+    }
+
+    @Test
+    public void test_prepared_slice_replay_finishes_an_id_it_deleted_itself_before_saving() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        applyDirectly(document("ownDelete", "before"));
+        final var delete = new JsonObject();
+        delete.add(Globals.PK_FIELD, new JsonString("ownDelete"));
+        AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "client", 0,
+                AdminTransactionEntry.OP_TYPE_DELETE, TestGlobals.DB, TestGlobals.COLL, delete));
+        savePreparedOp(dtxId, 1, document("ownDelete", "mine"));
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"), List.of(collId));
+        deleteOwnDeleteDirectly();
+        fs.tombstones().append(TestGlobals.DB, TestGlobals.COLL, "ownDelete", clock.next());
+
+        TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 0L);
+
+        assertEquals("mine", valueOf("ownDelete"),
+                "the slice's own applied delete leaves a tombstone above the prepare too, so it cannot fence");
+    }
+
+    @Test
+    public void test_prepared_slice_replay_fails_on_an_unreadable_tombstone_file() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        savePreparedOp(dtxId, 0, document("unreadableTombstones", "mine"));
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"), List.of(collId));
+        final var tombstones = new File(TestUtils.getDbPath(fs), TestGlobals.DB + File.separator + TestGlobals.COLL
+                + File.separator + TestGlobals.COLL + "-tombstones.idx");
+        Files.deleteIfExists(tombstones.toPath());
+        assertTrue(tombstones.mkdirs(), "a directory in place of the tombstone file makes its read fail");
+        try {
+            assertThrows(Exception.class,
+                    () -> TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collId), 0L));
+
+            assertNull(valueOf("unreadableTombstones"), "a fence that cannot be computed applies nothing");
+            assertNotNull(Tx2pcLog.readParticipantMarker(dtxId), "the slice stays prepared for a retry");
+        } finally {
+            assertTrue(tombstones.delete());
+        }
+    }
+
+    private void deleteOwnDeleteDirectly() throws Exception {
+        final var request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        request.set_id("ownDelete");
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            DeleteOperationHelper.executeDelete(request);
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+        }
     }
 
     private void savePreparedOp(String dtxId, int seq, JsonObject document) throws Exception {

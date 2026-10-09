@@ -19,6 +19,7 @@ import org.techhouse.ops.BulkBeforeHooks;
 import org.techhouse.ops.CollectionReadinessGuard;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
@@ -55,6 +56,10 @@ public final class TransactionBuffer {
             final var readinessError = CollectionReadinessGuard.check(OperationType.SAVE, dbName, collName);
             if (readinessError != null) {
                 return readinessError;
+            }
+            final var schemaError = SchemaValidationHelper.check(request);
+            if (schemaError != null) {
+                return schemaError;
             }
             final var object = request.getObject();
             final var id = TransactionWrites.ensureId(object, request.get_id());
@@ -94,6 +99,10 @@ public final class TransactionBuffer {
             final var readinessError = CollectionReadinessGuard.check(OperationType.BULK_SAVE, dbName, collName);
             if (readinessError != null) {
                 return readinessError;
+            }
+            final var schemaError = SchemaValidationHelper.check(request);
+            if (schemaError != null) {
+                return schemaError;
             }
             final var validationError = validateBulkObjects(request);
             if (validationError != null) {

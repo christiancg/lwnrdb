@@ -158,7 +158,8 @@ public final class ScheduleOperationHelper {
                 request.getDescription(), version, createdAt, updatedAt, updatedBy);
     }
 
-    public static OperationResponse executeDelete(DeleteScheduleRequest request) throws InterruptedException {
+    public static OperationResponse executeDelete(DeleteScheduleRequest request)
+            throws IOException, InterruptedException {
         if (!configuration.isSchedulesEnabled()) {
             return new OperationResponse(OperationType.DELETE_SCHEDULE, ErrorCode.SCRIPTS_DISABLED);
         }
@@ -183,7 +184,7 @@ public final class ScheduleOperationHelper {
                 () -> listSchedules(request));
     }
 
-    private static OperationResponse listSchedules(ListSchedulesRequest request) {
+    private static OperationResponse listSchedules(ListSchedulesRequest request) throws IOException {
         if (!configuration.isSchedulesEnabled()) {
             return new OperationResponse(OperationType.LIST_SCHEDULES, ErrorCode.SCRIPTS_DISABLED);
         }
@@ -215,7 +216,7 @@ public final class ScheduleOperationHelper {
         return json;
     }
 
-    public static String scheduleReferencing(String dbName, String procedureName) {
+    public static String scheduleReferencing(String dbName, String procedureName) throws IOException {
         for (final var name : fs.listScheduleNames(dbName)) {
             final var definition = cache.getSchedule(dbName, name);
             if (definition != null && procedureName.equals(definition.getProcedureName())) {

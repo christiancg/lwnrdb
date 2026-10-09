@@ -38,8 +38,7 @@ public final class SchemaOperationHelper {
         return new SaveSchemaResponse("Collection schema saved successfully", validation.getWarnings());
     }
 
-    // Idempotent so cluster re-execution on an already schema-less peer does not fail replication.
-    public static OperationResponse executeDeleteSchema(DeleteSchemaRequest request) {
+    public static OperationResponse executeDeleteSchema(DeleteSchemaRequest request) throws IOException {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         if (cache.getAdminCollectionEntry(dbName, collName) == null) {

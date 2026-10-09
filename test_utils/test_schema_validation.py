@@ -125,6 +125,26 @@ def test_bulk_save_atomic(c):
                find_by_id(c, COLL, "bob").get("status") == "NOT_FOUND")
 
 
+def test_transactional_writes_answer_like_plain_writes(c):
+    section("Transactional writes are validated like plain ones")
+    save_schema(c, COLL, PERSON_SCHEMA)
+    plain = save(c, COLL, {"_id": "plainbad", "name": "NoAge"})
+    check_code("a plain non-compliant save is rejected", plain, "ERROR", "400-7")
+
+    check_status("start a transaction", c.send({"type": "START_TRANSACTION"}), "OK")
+    in_tx = save(c, COLL, {"_id": "txbad", "name": "NoAge"})
+    check_code("the same document inside a transaction is rejected with the same code", in_tx, "ERROR", "400-7")
+    check("and the same message, apart from the document",
+          in_tx.get("message", "").split(":")[0] == plain.get("message", "").split(":")[0],
+          f"plain={plain.get('message')!r} tx={in_tx.get('message')!r}")
+    bulk = bulk_save(c, COLL, [{"_id": "txgood", "name": "Ok", "age": 1}, {"_id": "txbulkbad", "name": "NoAge"}])
+    check_code("a transactional bulk save with one bad document is rejected", bulk, "ERROR", "400-7")
+    check_status("commit what is left", c.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+    check("nothing the transaction refused was persisted",
+          all(find_by_id(c, COLL, _id).get("status") == "NOT_FOUND" for _id in ("txbad", "txgood", "txbulkbad")))
+
+
 def test_multiple_of_rejects_a_tiny_non_multiple(c):
     section("multipleOf rejects a nonzero value smaller than its divisor")
     check_status("save a multipleOf schema",
@@ -294,6 +314,7 @@ def main():
     groups = [
         test_save_and_enforce_schema,
         test_bulk_save_atomic,
+        test_transactional_writes_answer_like_plain_writes,
         test_multiple_of_rejects_a_tiny_non_multiple,
         test_multiple_of_is_exact_for_huge_values,
         test_pattern_uses_ecma_semantics,

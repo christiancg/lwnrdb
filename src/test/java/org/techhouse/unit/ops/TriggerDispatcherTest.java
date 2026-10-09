@@ -429,9 +429,9 @@ public class TriggerDispatcherTest {
     }
 
     private static TriggerEvent invokeRetryOf(TriggerEvent event) throws Exception {
-        final var method = TriggerDispatcher.class.getDeclaredMethod("retryOf", TriggerEvent.class);
+        final var method = TriggerDispatcher.class.getDeclaredMethod("withCurrentEntries", TriggerEvent.class);
         method.setAccessible(true);
-        return (TriggerEvent) method.invoke(null, event);
+        return (TriggerEvent) method.invoke(null, event.retry(event.getAttempt() + 1));
     }
 
     @Test

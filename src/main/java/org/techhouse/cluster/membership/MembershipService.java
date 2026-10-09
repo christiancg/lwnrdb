@@ -377,6 +377,20 @@ public class MembershipService {
         }
     }
 
+    public String persistedNodeId() {
+        final var path = nodeIdFilePath();
+        try {
+            if (!Files.exists(path)) {
+                return null;
+            }
+            final var stored = Files.readString(path, StandardCharsets.UTF_8).trim();
+            return isWellFormedNodeId(stored) ? stored : null;
+        } catch (IOException e) {
+            logger.warning("Could not read the node id at " + path + ": " + e.getMessage());
+            return null;
+        }
+    }
+
     private static boolean isWellFormedNodeId(String candidate) {
         if (candidate.isBlank()) {
             return false;

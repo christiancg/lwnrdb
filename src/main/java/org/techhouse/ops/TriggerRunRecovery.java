@@ -56,7 +56,7 @@ public final class TriggerRunRecovery {
             return;
         }
         try {
-            final var byRun = groupByRun(TriggerRunLog.pending(), TriggerRunLog.currentNodeId(), startupRunIds);
+            final var byRun = groupByRun(TriggerRunLog.pending(), TriggerRunLog.ownNodeIds(), startupRunIds);
             var requeued = 0;
             for (final var chunks : byRun.values()) {
                 if (requeue(chunks)) {
@@ -76,8 +76,7 @@ public final class TriggerRunRecovery {
             return;
         }
         try {
-            for (final var chunks : groupByRun(TriggerRunLog.pending(), TriggerRunLog.currentNodeId(), runIds)
-                    .values()) {
+            for (final var chunks : groupByRun(TriggerRunLog.pending(), TriggerRunLog.ownNodeIds(), runIds).values()) {
                 requeue(chunks);
             }
         } catch (Exception e) {
@@ -181,10 +180,10 @@ public final class TriggerRunRecovery {
     }
 
     private static LinkedHashMap<String, List<AdminTriggerRunEntry>> groupByRun(List<AdminTriggerRunEntry> pending,
-            String nodeId, Set<String> runIds) {
+            Set<String> ownNodeIds, Set<String> runIds) {
         final var byRun = new LinkedHashMap<String, List<AdminTriggerRunEntry>>();
         for (final var entry : pending) {
-            if (!runIds.contains(entry.getRunId()) || !nodeId.equals(entry.getNodeId())
+            if (!runIds.contains(entry.getRunId()) || !ownNodeIds.contains(entry.getNodeId())
                     || entry.getStatus() == TriggerRunStatus.DEAD) {
                 continue;
             }

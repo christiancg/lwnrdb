@@ -39,7 +39,7 @@ public class SchemaValidationHelperTest {
     }
 
     @BeforeEach
-    void reset() {
+    void reset() throws Exception {
         cache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
         fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
     }

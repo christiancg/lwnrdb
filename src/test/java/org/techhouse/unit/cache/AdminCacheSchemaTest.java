@@ -36,7 +36,7 @@ public class AdminCacheSchemaTest {
     }
 
     @BeforeEach
-    void reset() {
+    void reset() throws Exception {
         adminCache.removeCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
         fs.deleteCollectionSchema(TestGlobals.DB, TestGlobals.COLL);
     }

@@ -596,10 +596,15 @@ whose record is already gone. Such a run is recorded as an error and **never re-
 re-running it would apply the effects a second time. A retryable failure
 (a script error or a commit failure) increments `attempts` and re-queues after a doubling
 backoff up to `triggerMaxAttempts`, after which the record is marked `DEAD` with its payload and
-last error kept. Everything else is terminal and consumes the record: a missing definer or
-procedure, exceeded depth, a queue-overflow drop, and a **cancellation** — the one place the
-exactly-once guarantee is deliberately waived, because an operator cancelling a runaway trigger
-wants it stopped. `LIST_TRIGGER_RUNS`/`RESOLVE_TRIGGER_RUN` are the admin-only operator surface,
+last error kept. A retry re-reads its documents when it *runs*, not when it is scheduled, so it
+sees any write made during the backoff; if they are gone the run is consumed, and if the read
+itself fails the run stays pending and is retried (then dead-lettered) like any other failure. A
+run evicted by a full trigger queue is dead-lettered too, not dropped. Everything else is terminal
+and consumes the record: a missing definer or procedure, exceeded depth, and a **cancellation** —
+the one place the exactly-once guarantee is deliberately waived, because an operator cancelling a
+runaway trigger wants it stopped. A run is replayed by the node whose data directory holds it,
+whatever id that node ran under when it wrote it, so switching `clusterEnabled` on or off does not
+orphan a pending run. `LIST_TRIGGER_RUNS`/`RESOLVE_TRIGGER_RUN` are the admin-only operator surface,
 fanned out cluster-wide because `admin/trigger_runs` is not replicated.
 
 Two outcomes are neither ordinary retries nor terminal consumes, and both used to be misfiled.

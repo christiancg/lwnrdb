@@ -207,10 +207,10 @@ public final class TriggerRunLog {
         final var now = System.currentTimeMillis();
         final var cutoff = now - retentionMs;
         final var deadCutoff = now - deadLetterRetentionMs;
-        final var selfNodeId = currentNodeId();
+        final var ownNodeIds = ownNodeIds();
         final var stale = new ArrayList<String>();
         for (final var entry : pending()) {
-            if (isStranded(entry, selfNodeId, cutoff, deadCutoff)) {
+            if (isStranded(entry, ownNodeIds, cutoff, deadCutoff)) {
                 stale.add(entry.get_id());
             }
         }
@@ -221,11 +221,27 @@ public final class TriggerRunLog {
         logger.info("Garbage-collected " + stale.size() + " stranded trigger run record(s)");
     }
 
-    private static boolean isStranded(AdminTriggerRunEntry entry, String selfNodeId, long cutoff, long deadCutoff) {
+    private static boolean isStranded(AdminTriggerRunEntry entry, Set<String> ownNodeIds, long cutoff,
+            long deadCutoff) {
         if (entry.getStatus() == TriggerRunStatus.DEAD) {
             return entry.getFiredAt() < deadCutoff;
         }
-        return !selfNodeId.equals(entry.getNodeId()) && entry.getFiredAt() < cutoff;
+        return !ownNodeIds.contains(entry.getNodeId()) && entry.getFiredAt() < cutoff;
+    }
+
+    public static Set<String> ownNodeIds() {
+        final var ids = new HashSet<String>();
+        ids.add(currentNodeId());
+        ids.add(Globals.STANDALONE_NODE_ID);
+        final var configured = clusterConfig.configuredNodeId();
+        if (configured != null && !configured.isBlank()) {
+            ids.add(configured.trim());
+        }
+        final var persisted = membershipService.persistedNodeId();
+        if (persisted != null) {
+            ids.add(persisted);
+        }
+        return ids;
     }
 
     public static String currentNodeId() {

@@ -14,16 +14,18 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
 final class ReplayFence {
     private static final Logger logger = Logger.logFor(ReplayFence.class);
     private static final Cache cache = IocContainer.get(Cache.class);
+    private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final String OBJECTS_FIELD = "objects";
     private static final int MULTI_OP = 2;
 
-    private record IdWrites(int ops, List<JsonObject> payloads) {
+    private record IdWrites(int ops, List<JsonObject> payloads, boolean deletes) {
     }
 
     private ReplayFence() {
@@ -42,9 +44,10 @@ final class ReplayFence {
                 continue;
             }
             final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
+            final var tombstones = fs.tombstones().read(parts[0], parts[1]);
             for (final var id : overlay.keySet()) {
                 final var key = TransactionRecovery.fenceKey(parts[0], parts[1], id);
-                if (isForeignWrite(parts[0], parts[1], id, preparedVersion, writes.get(key))) {
+                if (isForeignWrite(parts[0], parts[1], id, preparedVersion, writes.get(key), tombstones)) {
                     fenced.add(key);
                 }
             }
@@ -53,14 +56,21 @@ final class ReplayFence {
     }
 
     private static boolean isForeignWrite(String dbName, String collName, String id, long preparedVersion,
-            IdWrites writes) throws IOException {
+            IdWrites writes, Map<String, Long> tombstones) throws IOException {
         final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
         final var found = Collections.binarySearch(pkIndex, id);
-        if (found < 0 || pkIndex.get(found).getVersion() <= preparedVersion) {
+        if (found < 0) {
+            return isForeignDelete(tombstones.get(id), preparedVersion, writes);
+        }
+        if (pkIndex.get(found).getVersion() <= preparedVersion) {
             return false;
         }
         return writes == null || writes.ops() < MULTI_OP
                 || !storedEqualsOwnPayload(dbName, collName, pkIndex.get(found), writes);
+    }
+
+    private static boolean isForeignDelete(Long deletedAt, long preparedVersion, IdWrites writes) {
+        return deletedAt != null && deletedAt > preparedVersion && (writes == null || !writes.deletes());
     }
 
     private static boolean storedEqualsOwnPayload(String dbName, String collName, PkIndexEntry pkEntry,
@@ -104,6 +114,7 @@ final class ReplayFence {
         if (isSave) {
             payloads.add(payload);
         }
-        result.put(key, new IdWrites(previous == null ? 1 : previous.ops() + 1, payloads));
+        final var deletes = !isSave || previous != null && previous.deletes();
+        result.put(key, new IdWrites(previous == null ? 1 : previous.ops() + 1, payloads, deletes));
     }
 }

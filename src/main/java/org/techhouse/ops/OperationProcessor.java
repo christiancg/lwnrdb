@@ -311,6 +311,10 @@ public class OperationProcessor {
                     if (readinessError != null) {
                         return readinessError;
                     }
+                    final var schemaError = SchemaValidationHelper.check(bulkSaveRequest);
+                    if (schemaError != null) {
+                        return schemaError;
+                    }
                     final var hookError = BeforeHookHelper.beforeBulkSave(bulkSaveRequest, actingUser);
                     if (hookError != null) {
                         return hookError;
@@ -339,6 +343,10 @@ public class OperationProcessor {
             final var readinessError = CollectionReadinessGuard.check(OperationType.SAVE, dbName, collName);
             if (readinessError != null) {
                 return readinessError;
+            }
+            final var schemaError = SchemaValidationHelper.check(saveRequest);
+            if (schemaError != null) {
+                return schemaError;
             }
             final var hookError = BeforeHookHelper.beforeSave(saveRequest, actingUser);
             if (hookError != null) {

@@ -127,7 +127,7 @@ public class FileSystem {
         return MetadataFileStore.read(paths.schemaFile(dbName, collName));
     }
 
-    public boolean deleteCollectionSchema(String dbName, String collName) {
+    public boolean deleteCollectionSchema(String dbName, String collName) throws IOException {
         return MetadataFileStore.delete(paths.schemaFile(dbName, collName));
     }
 
@@ -141,12 +141,12 @@ public class FileSystem {
         return MetadataFileStore.isListedExactly(file) ? MetadataFileStore.read(file) : null;
     }
 
-    public boolean deleteProcedure(String dbName, String name) {
+    public boolean deleteProcedure(String dbName, String name) throws IOException {
         final var file = paths.procedureFile(dbName, name);
         return MetadataFileStore.isListedExactly(file) && MetadataFileStore.delete(file);
     }
 
-    public List<String> listProcedureNames(String dbName) {
+    public List<String> listProcedureNames(String dbName) throws IOException {
         return MetadataFileStore.listNames(paths.proceduresFolder(dbName), Globals.PROCEDURE_FILE_EXTENSION);
     }
 
@@ -160,12 +160,12 @@ public class FileSystem {
         return MetadataFileStore.isListedExactly(file) ? MetadataFileStore.read(file) : null;
     }
 
-    public boolean deleteSchedule(String dbName, String name) {
+    public boolean deleteSchedule(String dbName, String name) throws IOException {
         final var file = paths.scheduleFile(dbName, name);
         return MetadataFileStore.isListedExactly(file) && MetadataFileStore.delete(file);
     }
 
-    public List<String> listScheduleNames(String dbName) {
+    public List<String> listScheduleNames(String dbName) throws IOException {
         return MetadataFileStore.listNames(paths.schedulesFolder(dbName), Globals.SCHEDULE_FILE_EXTENSION);
     }
 
@@ -177,7 +177,7 @@ public class FileSystem {
         return MetadataFileStore.read(paths.triggersFile(dbName, collName));
     }
 
-    public boolean deleteTriggers(String dbName, String collName) {
+    public boolean deleteTriggers(String dbName, String collName) throws IOException {
         return MetadataFileStore.delete(paths.triggersFile(dbName, collName));
     }
 

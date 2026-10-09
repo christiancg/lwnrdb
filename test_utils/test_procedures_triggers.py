@@ -3,7 +3,7 @@
 Like the RUN_SCRIPT suite this script is **self-contained**: it starts its own LWNRDB
 instance on a dedicated port and working directory, because the feature needs both
 `scriptsEnabled=true` and `triggersEnabled=true`, which the shared CI server does not have.
-It runs in four phases:
+It runs in five phases:
 
   phase 1 — scripts and triggers enabled, with a deliberately tight sandbox so every limit
             is reachable in a test rather than only in theory;
@@ -12,6 +12,9 @@ It runs in four phases:
             a deterministically failing trigger is attempted twice and then dead-lettered;
   phase 3 — a retry backoff longer than the shutdown budget, so a retry is still pending when
             the server is asked to stop;
+  phase 3b — the same data directory restarted clustered (alone, its peer never started), so the
+            run phase 3 left pending under the standalone node id is still replayed under the
+            clustered one;
   phase 4 — the same data directory restarted with `scriptsEnabled=false` and
             `triggersEnabled=false`, proving each master switch refuses independently.
 
@@ -59,6 +62,7 @@ from base_utils import check, check_code, check_result, check_status, section
 
 HOST = "127.0.0.1"
 PORT = int(os.environ.get("PROC_TEST_PORT", "8996"))
+CLUSTER_PORT = int(os.environ.get("PROC_TEST_CLUSTER_PORT", "9996"))
 ADMIN_USERNAME = "admin"
 ADMIN_PASSWORD = "administrator"
 
@@ -169,7 +173,8 @@ def await_absent(conn: Conn, doc_id: str, coll=AUDIT, settle=2.0):
 def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
                  history_enabled: bool = True, history_kinds: str = "CALL_PROCEDURE,TRIGGER,SCHEDULE",
                  history_retention_ms: int = 604800000, max_attempts: int = 1, retry_backoff_ms: int = 0,
-                 retry_max_backoff_ms: int = 2000, shutdown_timeout_ms: int = SHUTDOWN_BUDGET_MS):
+                 retry_max_backoff_ms: int = 2000, shutdown_timeout_ms: int = SHUTDOWN_BUDGET_MS,
+                 clustered: bool = False):
     cfg = (
         f"port={PORT}\n"
         "filePath=db\n"
@@ -207,6 +212,16 @@ def write_config(work_dir: str, scripts_enabled: bool, triggers_enabled: bool,
         "triggerDeadLetterRetentionMs=604800000\n"
         f"shutdownTimeoutMs={shutdown_timeout_ms}\n"
     )
+    if clustered:
+        cfg += (
+            "clusterEnabled=true\n"
+            f"clusterPort={CLUSTER_PORT}\n"
+            "clusterBindAddress=127.0.0.1\n"
+            "clusterAdvertisedAddress=127.0.0.1\n"
+            "clusterSeeds=\n"
+            "clusterExpectedSize=2\n"
+            "clusterSecret=proc-test-cluster-secret\n"
+        )
     with open(os.path.join(work_dir, "lwnrdb.cfg"), "w") as fp:
         fp.write(cfg)
 
@@ -1713,6 +1728,20 @@ def test_shutdown_does_not_wait_out_its_budget(proc):
           " for a retry that cannot come back takes the whole budget and abandons the background queue")
 
 
+def test_a_run_left_pending_standalone_is_replayed_once_clustered(conn: Conn):
+    section("A run left pending before clusterEnabled was switched on")
+    deadline = time.time() + 30.0
+    dead = dead_letters_for(conn, "shutdown_retry")
+    while not dead and time.time() < deadline:
+        time.sleep(0.3)
+        dead = dead_letters_for(conn, "shutdown_retry")
+    check("startup recovery replayed it until it was dead-lettered", len(dead) == 1,
+          f"runs={trigger_runs(conn)!r} - a run stamped with the standalone node id that the clustered node"
+          " skips stays pending at its first attempt forever, and its write never gets its trigger")
+    if dead:
+        check("every configured attempt was spent", dead[0].get("attempts") == 3, f"entry={dead[0]!r}")
+
+
 def trigger_runs(conn: Conn, status: str = None) -> list:
     payload = {"type": "LIST_TRIGGER_RUNS"}
     if status:
@@ -2212,6 +2241,14 @@ def main():
         with admin_conn() as conn:
             arrange_a_pending_trigger_retry(conn)
         test_shutdown_does_not_wait_out_its_budget(proc)
+        proc = None
+
+        write_config(work_dir, scripts_enabled=True, triggers_enabled=True, max_attempts=3,
+                     retry_backoff_ms=200, clustered=True)
+        proc = bu.start_server(work_dir, log_path)
+        with admin_conn() as conn:
+            test_a_run_left_pending_standalone_is_replayed_once_clustered(conn)
+        bu.stop_server(proc)
         proc = None
 
         # Phase 4: same data directory, both switches off

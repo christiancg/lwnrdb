@@ -42,7 +42,7 @@ public class TriggerUnreadableDefinitionTest {
     }
 
     @BeforeEach
-    void clear() {
+    void clear() throws Exception {
         fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
     }
@@ -111,7 +111,7 @@ public class TriggerUnreadableDefinitionTest {
     }
 
     @Test
-    public void test_a_genuinely_deleted_trigger_still_consumes_the_run() {
+    public void test_a_genuinely_deleted_trigger_still_consumes_the_run() throws Exception {
         fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
         final var runId = recordRun();

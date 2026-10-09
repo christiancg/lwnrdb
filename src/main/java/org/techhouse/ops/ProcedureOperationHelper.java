@@ -183,7 +183,7 @@ public final class ProcedureOperationHelper {
                 () -> listProcedures(request));
     }
 
-    private static OperationResponse listProcedures(ListProceduresRequest request) {
+    private static OperationResponse listProcedures(ListProceduresRequest request) throws IOException {
         final var dbName = request.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) == null) {
             return new OperationResponse(OperationType.LIST_PROCEDURES, "Database '" + dbName + "' not found",

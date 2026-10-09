@@ -132,7 +132,7 @@ public class ProcedureImportIntegrationTest {
         clearProcedures(OTHER_DB);
     }
 
-    private void clearProcedures(String dbName) {
+    private void clearProcedures(String dbName) throws Exception {
         for (final var name : fs.listProcedureNames(dbName)) {
             fs.deleteProcedure(dbName, name);
         }

@@ -2416,6 +2416,9 @@ reads are forwarded to the collection's owner, admin operations to the admin coo
   operation reached a node that is no longer the coordinator. Retry, and it is routed to the new one.
 
 Every `500-*` answer is a failure inside the server — a disk that is full or unwritable, a file that could not
-be read — and cannot be provoked from this playbook; the server log names the cause. One of them changes what a
+be read — and cannot be provoked from this playbook; the server log names the cause. That includes a
+`DELETE_PROCEDURE`, `DELETE_SCHEDULE`, `DELETE_TRIGGER` or `DELETE_SCHEMA` whose file could not be removed
+(`500-28`, `500-32`, `500-30`, `500-26`): the definition is still in force, where it used to answer `OK` and come
+back on the next load. One of them changes what a
 client does next: `500-33` is a commit that failed after its commit point. The transaction stays open and keeps
 its locks, and re-sending `COMMIT_TRANSACTION` finishes it once the fault is gone.

@@ -1,5 +1,6 @@
 package org.techhouse.cluster;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -185,6 +186,16 @@ public class AdminAntiEntropyService implements MembershipListener {
         return nodeId.compareTo(bestNodeId) > 0;
     }
 
+    private List<String> listable(String key, List<String> unreadable, NameListing listing) {
+        try {
+            return listing.names();
+        } catch (IOException e) {
+            logger.warning("Marking " + key + " unreadable in the admin snapshot: " + e.getMessage());
+            unreadable.add(key);
+            return List.of();
+        }
+    }
+
     private <T> T readable(String key, List<String> unreadable, Supplier<T> loader) {
         try {
             return loader.get();
@@ -208,14 +219,16 @@ public class AdminAntiEntropyService implements MembershipListener {
         final var schedules = new JsonObject();
         final var unreadable = new ArrayList<String>();
         for (final var dbName : cache.getUserDatabaseNames()) {
-            for (final var procedureName : fs.listProcedureNames(dbName)) {
+            for (final var procedureName : listable(AdminSnapshotKeys.procedures(dbName), unreadable,
+                    () -> fs.listProcedureNames(dbName))) {
                 final var procedure = readable(AdminSnapshotKeys.procedure(dbName, procedureName), unreadable,
                         () -> cache.loadProcedureUncached(dbName, procedureName));
                 if (procedure != null) {
                     procedures.add(Cache.getCollectionIdentifier(dbName, procedureName), procedure.toJsonObject());
                 }
             }
-            for (final var scheduleName : fs.listScheduleNames(dbName)) {
+            for (final var scheduleName : listable(AdminSnapshotKeys.schedules(dbName), unreadable,
+                    () -> fs.listScheduleNames(dbName))) {
                 final var schedule = readable(AdminSnapshotKeys.schedule(dbName, scheduleName), unreadable,
                         () -> cache.loadScheduleUncached(dbName, scheduleName));
                 if (schedule != null) {

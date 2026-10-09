@@ -38,7 +38,7 @@ public class AdminCacheTriggerTest {
     }
 
     @BeforeEach
-    void clear() {
+    void clear() throws Exception {
         fs.deleteTriggers(TestGlobals.DB, TestGlobals.COLL);
         cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
     }

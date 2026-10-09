@@ -3,7 +3,6 @@ package org.techhouse.unit.ops;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
@@ -119,14 +118,16 @@ public class TriggerDispatcherClusterRetryTest {
     }
 
     @Test
-    public void test_a_cluster_unavailable_retry_for_a_vanished_document_is_consumed() throws Exception {
+    public void test_a_cluster_unavailable_retry_for_a_vanished_document_is_left_to_its_run() throws Exception {
         saveDocument("vanished");
         final var runId = pendingRunFor("vanished");
         deleteDocument();
 
         failBecauseTheClusterIsUnavailable(eventFor("vanished", runId));
 
-        assertNull(runNamed(runId), "a retry for a document that no longer exists must not stay pending");
+        final var run = runNamed(runId);
+        assertNotNull(run, "whether the document vanished is decided when the retry runs, not when it is scheduled");
+        assertEquals(TriggerRunStatus.PENDING, run.getStatus());
     }
 
     @Test
@@ -162,12 +163,6 @@ public class TriggerDispatcherClusterRetryTest {
         assertEquals(TriggerRunStatus.PENDING, run.getStatus());
     }
 
-    private static TriggerEvent retryOf(TriggerEvent event, int nextAttempt) throws Exception {
-        final var method = TriggerDispatcher.class.getDeclaredMethod("retryOf", TriggerEvent.class, int.class);
-        method.setAccessible(true);
-        return (TriggerEvent) method.invoke(null, event, nextAttempt);
-    }
-
     @Test
     public void test_a_cluster_retry_keeps_the_original_fired_at() throws Exception {
         saveDocument("carried");
@@ -175,7 +170,7 @@ public class TriggerDispatcherClusterRetryTest {
         final var original = new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "audit", "audit",
                 false, List.of(entry("carried")), OWNER, 0, "run", 1, firedAt);
 
-        final var waiting = retryOf(original, original.getAttempt());
+        final var waiting = original.retry(original.getAttempt());
 
         assertNotNull(waiting);
         assertEquals(firedAt, waiting.getFiredAt(), "waiting for the cluster must not restart the retention window");
@@ -188,7 +183,7 @@ public class TriggerDispatcherClusterRetryTest {
         final var original = new TriggerEvent(EventType.CREATED, TestGlobals.DB, TestGlobals.COLL, "audit", "audit",
                 false, List.of(entry("attempted")), OWNER, 0, "run", 1, firedAt);
 
-        final var retry = retryOf(original, 2);
+        final var retry = original.retry(2);
 
         assertNotNull(retry);
         assertEquals(2, retry.getAttempt());
