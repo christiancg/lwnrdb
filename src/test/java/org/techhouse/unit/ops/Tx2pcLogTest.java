@@ -6,6 +6,8 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.test.TestUtils;
 
@@ -90,5 +92,38 @@ public class Tx2pcLogTest {
         assertEquals(List.of(), Tx2pcLog.readCoordinatorParticipants("no-such-dtx"));
         assertNull(Tx2pcLog.readCoordinatorSessionId("no-such-dtx"));
         assertNull(Tx2pcLog.readParticipantMarker("no-such-dtx"));
+    }
+
+    @Test
+    public void test_status_rechecks_the_decision_before_answering_no_record() throws Exception {
+        final var dtxId = "dddd4444-0000-0000-0000-000000000000";
+        Tx2pcLog.recordCoordinatorCommit(dtxId, "session", List.of("127.0.0.1:9001"));
+        try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
+            log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false, true);
+
+            assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(dtxId));
+        }
+    }
+
+    @Test
+    public void test_status_recheck_reads_the_outcome_marker_too() throws Exception {
+        final var dtxId = "eeee5555-0000-0000-0000-000000000000";
+        try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
+            log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false);
+            Tx2pcLog.recordOutcome(dtxId, false);
+
+            assertEquals(Tx2pcLog.Status.ABORTED, Tx2pcLog.status(dtxId));
+        }
+    }
+
+    @Test
+    public void test_status_prepared_takes_precedence_over_a_late_decision() throws Exception {
+        final var dtxId = "ffff6666-0000-0000-0000-000000000000";
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:9000", List.of("127.0.0.1:9000"), List.of("db|collA"));
+        try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
+            log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false);
+
+            assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId));
+        }
     }
 }

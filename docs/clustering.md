@@ -519,9 +519,10 @@ participant asks the coordinator via `TX_STATUS` what to do, and a coordinator t
 commit re-drives `COMMIT_TX`. The participant does **not** hold its write locks while in doubt —
 clients may write those collections meanwhile — so the replay is version-aware instead: the marker
 records the write-clock version at prepare time, and any document written above that version is
-left alone rather than overwritten with the pre-crash value. The same fence also skips the
-transaction's own later ops on an id its pre-crash apply already wrote, so a slice that saves one id
-twice can finish with the first value — a known gap (see CLAUDE.md). A participant whose replay
+left alone rather than overwritten with the pre-crash value. An id the slice touches with two or
+more ops is told apart by content: a stored document equal to one of the slice's own payloads for
+that id is the pre-crash apply's own prefix, so the slice replays on it and finishes, while any other
+document is a foreign write and the id is left alone. A participant whose replay
 cannot finish applying its slice answers `ERROR` to `COMMIT_TX` rather than the ack, keeping its
 marker and locks, so the coordinator keeps its own marker and re-drives the commit until the slice
 lands — an acknowledged replay that had not finished let the coordinator forget the commit and the

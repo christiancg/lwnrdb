@@ -142,19 +142,19 @@ public class TransactionStartupReplayTest {
     }
 
     @Test
-    public void test_a_clustered_startup_replay_still_fences_what_the_commit_already_wrote() throws Exception {
+    public void test_a_clustered_startup_replay_still_fences_a_foreign_write_to_an_id_with_two_ops() throws Exception {
         final var transaction = new Transaction(UUID.randomUUID(), UUID.randomUUID());
         TransactionOperationHelper.bufferSave(saveRequest(document("fenced", "first")), transaction);
         TransactionOperationHelper.bufferSave(saveRequest(document("fenced", "second")), transaction);
         final var txId = transaction.getTransactionId().toString();
         TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(), List.of(collId));
-        SaveOperationHelper.executeSave(saveRequest(document("fenced", "first")));
+        SaveOperationHelper.executeSave(saveRequest(document("fenced", "elsewhere")));
         TestUtils.releaseAllLocks();
         TestUtils.setPrivateField(org.techhouse.config.Configuration.getInstance(), "clusterEnabled", true);
 
         TransactionOperationHelper.cleanupOrphansAtStartup();
 
-        assertEquals("first", valueOf("fenced"),
+        assertEquals("elsewhere", valueOf("fenced"),
                 "clustered, the new owner may have written newer values while this node was down, and a replay"
                         + " at a fresh version would overwrite them cluster-wide");
     }

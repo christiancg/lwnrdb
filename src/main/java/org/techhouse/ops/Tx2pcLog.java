@@ -78,7 +78,21 @@ public final class Tx2pcLog {
         if (isPrepared(dtxId)) {
             return coordinatorRestartedUndecided(dtxId, selfAddress) ? Status.NO_RECORD : Status.PREPARED;
         }
-        return clientTracker.hasActiveTransaction(dtxId) ? Status.UNKNOWN : Status.NO_RECORD;
+        if (clientTracker.hasActiveTransaction(dtxId)) {
+            return Status.UNKNOWN;
+        }
+        return decidedOrNoRecord(dtxId);
+    }
+
+    private static Status decidedOrNoRecord(String dtxId) throws Exception {
+        if (isCommitted(dtxId)) {
+            return Status.COMMITTED;
+        }
+        final var outcome = readOutcome(dtxId);
+        if (outcome == null) {
+            return Status.NO_RECORD;
+        }
+        return OUTCOME_COMMITTED.equals(outcome) ? Status.COMMITTED : Status.ABORTED;
     }
 
     private static boolean coordinatorRestartedUndecided(String dtxId, String selfAddress) throws Exception {

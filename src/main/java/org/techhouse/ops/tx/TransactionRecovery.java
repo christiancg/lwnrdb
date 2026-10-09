@@ -81,7 +81,7 @@ public final class TransactionRecovery {
             for (final var op : ops) {
                 recordIntoOverlay(reconstructed, op);
             }
-            final var fencedIds = idsWrittenSincePrepare(reconstructed, preparedVersion);
+            final var fencedIds = ReplayFence.fencedIds(ops, reconstructed, preparedVersion);
             dropTombstonesWrittenSincePrepare(reconstructed, fencedIds);
             final var reservedTombstones = coordinator.reserveTransactionTombstones(reconstructed);
             listenManager.deferNotifications(collections);
@@ -169,27 +169,6 @@ public final class TransactionRecovery {
         Tx2pcLog.recordOutcome(dtxId, committed);
     }
 
-    private static Set<String> idsWrittenSincePrepare(Transaction transaction, long preparedVersion)
-            throws java.io.IOException {
-        final var fenced = new HashSet<String>();
-        if (preparedVersion <= 0) {
-            return fenced;
-        }
-        for (final var collId : transaction.touchedCollections()) {
-            final var overlay = transaction.overlayFor(collId);
-            if (overlay == null) {
-                continue;
-            }
-            final var parts = collId.split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
-            for (final var id : overlay.keySet()) {
-                if (writtenSincePrepare(parts[0], parts[1], id, preparedVersion)) {
-                    fenced.add(fenceKey(parts[0], parts[1], id));
-                }
-            }
-        }
-        return fenced;
-    }
-
     static String fenceKey(String dbName, String collName, String id) {
         return Cache.getCollectionIdentifier(dbName, collName) + Globals.COLL_IDENTIFIER_SEPARATOR + id;
     }
@@ -214,16 +193,6 @@ public final class TransactionRecovery {
                 overlay.remove(id);
             }
         }
-    }
-
-    private static boolean writtenSincePrepare(String dbName, String collName, String id, long preparedVersion)
-            throws java.io.IOException {
-        if (preparedVersion <= 0) {
-            return false;
-        }
-        final var pkIndex = cache.getPkIndexAndLoadIfNecessary(dbName, collName);
-        final var found = java.util.Collections.binarySearch(pkIndex, id);
-        return found >= 0 && pkIndex.get(found).getVersion() > preparedVersion;
     }
 
     private static int triggerDepthOf(List<AdminTransactionEntry> ops) {
