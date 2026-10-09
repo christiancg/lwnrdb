@@ -133,4 +133,51 @@ public class PendingIndexWritesTest {
         pending.clearCollection("db", "coll");
         assertEquals(1L, pending.mark("db", "coll", List.of()));
     }
+
+    @Test
+    public void test_a_recreated_collection_writes_its_marker_after_a_drop_clears_the_old_life() throws Exception {
+        org.techhouse.test.TestUtils.standardInitialSetup();
+        org.techhouse.test.TestUtils.createTestDatabaseAndCollection();
+        final var fs = org.techhouse.ioc.IocContainer.get(org.techhouse.fs.FileSystem.class);
+        final var db = org.techhouse.test.TestGlobals.DB;
+        final var coll = org.techhouse.test.TestGlobals.COLL;
+        try {
+            pending.mark(db, coll, "old");
+            fs.clearIndexesDirty(db, coll);
+            pending.clearCollection(db, coll);
+
+            pending.mark(db, coll, "new");
+
+            assertEquals(List.of(db + "|" + coll), fs.listDirtyIndexCollections(),
+                    "the first write of the new life must write the marker the old life's drop deleted");
+        } finally {
+            org.techhouse.test.TestUtils.standardTearDown();
+        }
+    }
+
+    @Test
+    public void test_clear_database_clears_only_that_database() {
+        pending.mark("db", "a", "1");
+        pending.mark("db", "b", "2");
+        pending.mark("dbx", "a", "3");
+
+        pending.clearDatabase("db");
+
+        assertTrue(pending.idsFor("db", "a").isEmpty());
+        assertTrue(pending.idsFor("db", "b").isEmpty());
+        assertEquals(Set.of("3"), pending.idsFor("dbx", "a"));
+    }
+
+    @Test
+    public void test_a_clear_from_before_the_drop_is_ignored() {
+        final var oldGeneration = pending.mark("db", "coll", "1");
+        pending.clearDatabase("db");
+        final var newGeneration = pending.mark("db", "coll", "1");
+
+        pending.clear("db", "coll", "1", oldGeneration);
+
+        assertEquals(Set.of("1"), pending.idsFor("db", "coll"));
+        pending.clear("db", "coll", "1", newGeneration);
+        assertTrue(pending.idsFor("db", "coll").isEmpty());
+    }
 }

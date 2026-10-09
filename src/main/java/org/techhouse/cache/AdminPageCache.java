@@ -29,7 +29,7 @@ final class AdminPageCache {
     void loadAdminPagesForCollection(String dbName, String collName) throws IOException {
         final var pagesCollName = String.format(Globals.ADMIN_PAGES_PER_COLLECTION_NAME, dbName, collName);
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
-        final var pkIdx = fs.readWholePkIndexFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+        final var pkIdx = readPagesPkIndexOrEmpty(pagesCollName);
         pagesPkIndexes.put(pagesCollectionKey(pagesCollName), new ArrayList<>(pkIdx));
         final var pageEntries = new ArrayList<AdminPageEntry>();
         final var idPrefix = collId + Globals.COLL_IDENTIFIER_SEPARATOR;
@@ -40,6 +40,16 @@ final class AdminPageCache {
         }
         pages.put(collId, new CopyOnWriteArrayList<>(pageEntries));
         rebuildInMemoryPagesFromPkIndex(pagesCollName, pkIdx);
+    }
+
+    private List<PkIndexEntry> readPagesPkIndexOrEmpty(String pagesCollName) {
+        try {
+            return fs.readWholePkIndexFile(Globals.ADMIN_PAGES_DB_NAME, pagesCollName);
+        } catch (IOException e) {
+            logger.error("Could not read the page rows of " + pagesCollName + "; starting with none, and the"
+                    + " startup reconciliation rebuilds them from the page files", e);
+            return List.of();
+        }
     }
 
     void rebuildInMemoryPagesFromPkIndex(String collName, List<PkIndexEntry> pkIdx) {

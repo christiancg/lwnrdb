@@ -1,6 +1,7 @@
 package org.techhouse.ops.admin;
 
 import java.util.List;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
@@ -26,6 +27,7 @@ public final class CollectionOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
+    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
     private static final org.techhouse.cluster.HybridClock hybridClock = IocContainer
             .get(org.techhouse.cluster.HybridClock.class);
 
@@ -128,6 +130,7 @@ public final class CollectionOperationHelper {
             final var result = fs.deleteCollectionFiles(dbName, collName);
             if (result) {
                 cache.evictCollection(dbName, collName);
+                pendingIndexWrites.clearCollection(dbName, collName);
                 AdminOperationHelper.deleteCollectionEntry(dbName, collName);
                 AdminOperationHelper.deletePageCollections(dbName, collName);
                 listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);

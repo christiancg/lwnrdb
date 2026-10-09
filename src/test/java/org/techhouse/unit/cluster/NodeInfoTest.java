@@ -1,12 +1,14 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
+import org.techhouse.ejson.EJson;
 
 public class NodeInfoTest {
 
@@ -93,5 +95,23 @@ public class NodeInfoTest {
         assertNotEquals(null, a);
         assertNotEquals("node-1", a);
         assertTrue(a.toString().contains("node-1"));
+    }
+
+    @Test
+    public void test_the_unconfirmed_admin_epoch_flag_travels_and_defaults_to_confirmed() {
+        final var incoming = sample();
+        incoming.setAdminEpochUnconfirmed(true);
+        final var local = sample();
+        assertFalse(local.isAdminEpochUnconfirmed());
+        assertNotEquals(local, incoming);
+
+        local.copyTelemetryFrom(incoming);
+
+        assertTrue(local.isAdminEpochUnconfirmed());
+        assertEquals(local, incoming);
+        assertEquals(local.hashCode(), incoming.hashCode());
+        assertTrue(local.toString().contains("adminEpochUnconfirmed=true"));
+        final var decoded = new EJson().fromJson("{\"nodeId\":\"node-1\",\"adminEpoch\":3}", NodeInfo.class);
+        assertFalse(decoded.isAdminEpochUnconfirmed());
     }
 }

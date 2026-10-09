@@ -1072,6 +1072,29 @@ def test_name_case_collisions(c):
     check_status("DROP_DATABASE CaseDb twice is refused", drop_db(c, "CaseDb"), "ERROR")
 
 
+def test_admin_database_reads_follow_admin_writes(c):
+    section("Reads of the admin database follow the admin writes that came after them")
+    first, second = "AdminReadFirst", "AdminReadSecond"
+    check_status(f"CREATE_DATABASE {first}", create_db(c, first), "OK")
+    check_status("FIND_BY_ID admin/databases for it", find_by_id(c, "databases", first, db="admin"), "OK")
+    check_status("AGGREGATE over admin/databases before the next write",
+                 aggregate(c, "databases", [], db="admin"), "OK")
+
+    check_status(f"CREATE_DATABASE {second}", create_db(c, second), "OK")
+    check_status("FIND_BY_ID admin/databases finds the database created after the first read",
+                 find_by_id(c, "databases", second, db="admin"), "OK")
+    listed = set(ids_of(aggregate(c, "databases", [], db="admin")))
+    check("a scan of admin/databases sees both", {first, second} <= listed, f"listed={sorted(listed)}")
+
+    check_status(f"DROP_DATABASE {first}", drop_db(c, first), "OK")
+    check("FIND_BY_ID admin/databases no longer serves the dropped database",
+          find_by_id(c, "databases", first, db="admin").get("status") != "OK")
+    listed = set(ids_of(aggregate(c, "databases", [], db="admin")))
+    check("a scan of admin/databases no longer lists it", first not in listed and second in listed,
+          f"listed={sorted(listed)}")
+    check_status(f"DROP_DATABASE {second}", drop_db(c, second), "OK")
+
+
 def main():
     bu.banner("API commands & aggregations integration suite", HOST, PORT)
 
@@ -1088,6 +1111,7 @@ def main():
     groups = [
         test_database_and_collection_ops,
         test_name_case_collisions,
+        test_admin_database_reads_follow_admin_writes,
         test_reserved_script_runs_collection,
         test_crud,
         test_top_level_id,

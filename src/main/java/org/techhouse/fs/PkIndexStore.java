@@ -159,7 +159,13 @@ final class PkIndexStore {
     }
 
     List<PkIndexEntry> readWholePkIndexFile(String dbName, String collectionName) throws IOException {
-        return readHealed(dbName, collectionName).entries();
+        final var parsed = readHealed(dbName, collectionName);
+        if (parsed.unrecognised()) {
+            throw new IOException("No line in " + paths.pkIndexFile(dbName, collectionName).getName()
+                    + " could be read as a PK index entry; it is left untouched. Repair or restore it before"
+                    + " reading or writing " + dbName + "|" + collectionName);
+        }
+        return parsed.entries();
     }
 
     Optional<List<PkIndexEntry>> readRecognisedPkIndex(String dbName, String collectionName) throws IOException {

@@ -124,6 +124,19 @@ public class ClusteredDeleteStagingTest {
         }
     }
 
+    private org.techhouse.ops.resp.OperationResponse deleteWhileOwnershipMovesAway() {
+        final var elsewhere = new NodeInfo("elsewhere", "127.0.0.1", 5001, NodeState.ALIVE, 1L, 1L);
+        try (var writes = mockStatic(ClusterWriteHelper.class, CALLS_REAL_METHODS)) {
+            writes.when(() -> ClusterWriteHelper.reserveDelete(anyString(), anyString(), any())).thenAnswer(call -> {
+                ownership.onMembershipChanged(new MembershipView(List.of(elsewhere)));
+                return call.callRealMethod();
+            });
+            final var request = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+            request.set_id(ID);
+            return processor.processMessage(request);
+        }
+    }
+
     private List<TriggerEvent> dispatchedWhile(Runnable emit) throws InterruptedException {
         final var dispatched = new CopyOnWriteArrayList<TriggerEvent>();
         final var drained = new CountDownLatch(1);
@@ -170,5 +183,21 @@ public class ClusteredDeleteStagingTest {
         final var runIds = TriggerRunLog.pending().stream().map(AdminTriggerRunEntry::getRunId).distinct().toList();
         assertTrue(runIds.size() <= 1, "only the retry's own run may remain recorded, got " + runIds);
         runIds.forEach(runId -> assertEquals(events.getFirst().getRunId(), runId));
+    }
+
+    @Test
+    public void test_a_delete_whose_ownership_moves_before_its_reservation_is_refused_untouched() throws Exception {
+        save();
+
+        final var response = deleteWhileOwnershipMovesAway();
+
+        assertEquals("421-1", response.getErrorCode());
+        assertTrue(
+                cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
+                        .anyMatch(pk -> ID.equals(pk.getValue())),
+                "a delete with no tombstone would be undone by anti-entropy, so it must not apply locally");
+        assertTrue(IocContainer.get(org.techhouse.fs.FileSystem.class).tombstones()
+                .read(TestGlobals.DB, TestGlobals.COLL).isEmpty());
+        assertTrue(TriggerRunLog.pending().isEmpty(), "a DELETED run for a delete that never applied must not stay");
     }
 }

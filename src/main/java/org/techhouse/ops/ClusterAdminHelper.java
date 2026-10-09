@@ -7,6 +7,7 @@ import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.AdminLane;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterCoordinator;
+import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.WriteGuard;
 import org.techhouse.cluster.membership.MembershipService;
@@ -84,9 +85,16 @@ public final class ClusterAdminHelper {
     }
 
     private static boolean behindAPeer() {
-        final var local = adminEpoch.current();
+        final var local = adminEpoch.state();
         return membershipService.membershipView().peers(membershipService.getSelf()).stream()
-                .anyMatch(peer -> peer.getAdminEpoch() > local);
+                .anyMatch(peer -> outranksLocal(peer, local));
+    }
+
+    private static boolean outranksLocal(NodeInfo peer, AdminEpoch.State local) {
+        if (peer.getAdminEpoch() != local.epoch()) {
+            return peer.getAdminEpoch() > local.epoch();
+        }
+        return !local.confirmed() && !peer.isAdminEpochUnconfirmed();
     }
 
     public static OperationResponse afterAdminOp(OperationRequest request, String actingUser,

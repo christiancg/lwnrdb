@@ -8,6 +8,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.exceptions.NonFiniteNumberException;
+import org.techhouse.utils.CaseFolding;
 
 public class FieldIndexEntry<T> extends CollectionScopedEntry implements Comparable<T> {
     private static final char ESCAPE_CHAR = '\\';
@@ -238,7 +239,7 @@ public class FieldIndexEntry<T> extends CollectionScopedEntry implements Compara
         return switch (value) {
             case Number d -> compareIndexedNumbers(d, (Number) otherIndexValue);
             case Boolean b -> b.compareTo((Boolean) otherIndexValue);
-            case String s -> s.compareToIgnoreCase((String) otherIndexValue);
+            case String s -> CaseFolding.compare(s, (String) otherIndexValue);
             case null -> 0;
             default -> {
                 if (otherIndexValue instanceof JsonCustom<?>) {

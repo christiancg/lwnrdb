@@ -184,16 +184,7 @@ public class Main {
         try {
             for (final var dbName : cache.getUserDatabaseNames()) {
                 for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
-                    final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
-                    if (collEntry != null) {
-                        highest = Math.max(highest, collEntry.getIncarnation());
-                    }
-                    for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
-                        highest = Math.max(highest, pkEntry.getVersion());
-                    }
-                    for (final var tombstoneVersion : fs.tombstones().read(dbName, collName).values()) {
-                        highest = Math.max(highest, tombstoneVersion);
-                    }
+                    highest = Math.max(highest, highestVersionOrZero(dbName, collName));
                 }
             }
         } catch (Exception e) {
@@ -202,6 +193,26 @@ public class Main {
         }
         hybridClock.seed(highest);
         logger.info("Seeded the write clock from disk at version " + highest);
+    }
+
+    private static long highestVersionOrZero(String dbName, String collName) {
+        var highest = 0L;
+        try {
+            final var collEntry = cache.getAdminCollectionEntry(dbName, collName);
+            if (collEntry != null) {
+                highest = Math.max(highest, collEntry.getIncarnation());
+            }
+            for (final var pkEntry : fs.readWholePkIndexFile(dbName, collName)) {
+                highest = Math.max(highest, pkEntry.getVersion());
+            }
+            for (final var tombstoneVersion : fs.tombstones().read(dbName, collName).values()) {
+                highest = Math.max(highest, tombstoneVersion);
+            }
+        } catch (Exception e) {
+            logger.error("Could not seed the write clock from " + dbName + "|" + collName
+                    + "; versions written to it could regress after this restart", e);
+        }
+        return highest;
     }
 
     private static void relistUnlistedCollections() {

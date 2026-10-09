@@ -83,6 +83,16 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
     }
 
+    public <T> List<FieldIndexEntry<T>> getFieldIndexForMaintenance(String dbName, String collName, String fieldName,
+            Class<T> indexType) throws IOException {
+        return userCache.getFieldIndexForMaintenance(dbName, collName, fieldName, indexType);
+    }
+
+    public List<FieldIndexEntry<String>> getHashIndexForMaintenance(String dbName, String collName, String fieldName,
+            IndexKind kind) throws IOException {
+        return userCache.getHashIndexForMaintenance(dbName, collName, fieldName, kind);
+    }
+
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,
             T value) throws IOException {
         return userCache.getIdsFromIndex(dbName, collName, fieldName, operator, value);

@@ -2412,8 +2412,9 @@ reads are forwarded to the collection's owner, admin operations to the admin coo
 - `503-9` — no admin coordinator could be resolved from this node's view of the cluster.
 - `503-12` — another admin operation still holds the coordinator's admin lane past `adminLaneTimeoutMs`.
 - `503-10` — the collection exists on the cluster but has not reached this node yet.
-- `421-1` — the node stopped owning the collection while the write waited for its lock, or an admin
-  operation reached a node that is no longer the coordinator. Retry, and it is routed to the new one.
+- `421-1` — the node stopped owning the collection while the write waited for its lock (or, for a `DELETE`,
+  while its before-hook ran; the document is left untouched), or an admin operation reached a node that is no
+  longer the coordinator. Retry, and it is routed to the new one.
 
 Every `500-*` answer is a failure inside the server — a disk that is full or unwritable, a file that could not
 be read — and cannot be provoked from this playbook; the server log names the cause. That includes a
@@ -2421,4 +2422,6 @@ be read — and cannot be provoked from this playbook; the server log names the 
 (`500-28`, `500-32`, `500-30`, `500-26`): the definition is still in force, where it used to answer `OK` and come
 back on the next load. One of them changes what a
 client does next: `500-33` is a commit that failed after its commit point. The transaction stays open and keeps
-its locks, and re-sending `COMMIT_TRANSACTION` finishes it once the fault is gone.
+its locks, and re-sending `COMMIT_TRANSACTION` finishes it once the fault is gone. Until then a `SAVE`,
+`BULK_SAVE` or `DELETE` sent on that connection answers `500-33` too and is not buffered: an op added after the
+commit point would be applied by recovery although the client never committed it, and could never be rolled back.

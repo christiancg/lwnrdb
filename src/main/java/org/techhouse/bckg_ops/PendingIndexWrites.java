@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 
@@ -96,6 +97,17 @@ public class PendingIndexWrites {
             }
         } finally {
             markerLock.unlock();
+        }
+    }
+
+    public void clearDatabase(String dbName) {
+        final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
+        final var collIds = new HashSet<>(pending.keySet());
+        collIds.addAll(generations.keySet());
+        for (final var collId : collIds) {
+            if (collId.startsWith(prefix)) {
+                clearCollection(dbName, collId.substring(prefix.length()));
+            }
         }
     }
 

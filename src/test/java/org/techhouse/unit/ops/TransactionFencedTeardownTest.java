@@ -21,6 +21,8 @@ import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
+import org.techhouse.ops.req.BulkSaveRequest;
+import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -87,6 +89,24 @@ public class TransactionFencedTeardownTest {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         return transaction != null && !transaction.getBufferedOpIds().isEmpty()
                 && transaction.getBufferedOpIds().stream().allMatch(id -> cache.getPkIndexTransaction(id) != null);
+    }
+
+    private void assertEveryWriteIsRefusedAsHalfApplied(UUID clientId) {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+        final var save = new SaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        save.setObject(document("late"));
+        save.set_id("late");
+        final var bulk = new BulkSaveRequest(TestGlobals.DB, TestGlobals.COLL);
+        bulk.setObjects(List.of(document("late_bulk")));
+        final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        delete.set_id("late");
+
+        assertEquals("500-33", TransactionOperationHelper.bufferSave(save, transaction).getErrorCode());
+        assertEquals("500-33", TransactionOperationHelper.bufferBulkSave(bulk, transaction).getErrorCode());
+        assertEquals("500-33", TransactionOperationHelper.bufferDelete(delete, transaction).getErrorCode());
+        assertEquals(opIds, transaction.getBufferedOpIds(),
+                "an op buffered after the commit point would be replayed although the client never committed it");
     }
 
     private void discardFence(UUID clientId) throws Exception {
@@ -212,6 +232,41 @@ public class TransactionFencedTeardownTest {
                 "a transaction with no commit marker must still roll back cleanly");
         assertFalse(opIds.stream().anyMatch(id -> cache.getPkIndexTransaction(id) != null),
                 "an ordinary rollback must still discard its buffered ops");
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void test_a_write_into_a_locally_fenced_transaction_answers_500_33_and_buffers_nothing() throws Exception {
+        final var clientId = fencedTransaction("fenced_writes");
+
+        assertEveryWriteIsRefusedAsHalfApplied(clientId);
+
+        discardFence(clientId);
+    }
+
+    @Test
+    public void test_a_write_into_a_prepared_2pc_slice_answers_500_33() throws Exception {
+        final var clientId = preparedTransaction("prepared_writes");
+
+        assertEveryWriteIsRefusedAsHalfApplied(clientId);
+
+        Tx2pcLog.deleteParticipantMarker(txIdOf(clientId));
+        TransactionOperationHelper.abortInPlace(clientId);
+        clientTracker.removeById(clientId);
+    }
+
+    @Test
+    public void test_abort_in_place_keeps_a_prepared_slice() throws Exception {
+        final var clientId = preparedTransaction("prepared_kept");
+        final var txId = txIdOf(clientId);
+
+        TransactionOperationHelper.abortInPlace(clientId);
+
+        assertTrue(Tx2pcLog.isPrepared(txId), "the prepared marker must survive an in-place abort");
+        assertTrue(sliceSurvives(clientId), "a decided 2PC slice must not be discarded by a lock timeout");
+        assertFalse(clientTracker.getActiveTransaction(clientId).isAborted());
+        Tx2pcLog.deleteParticipantMarker(txId);
+        TransactionOperationHelper.abortInPlace(clientId);
         clientTracker.removeById(clientId);
     }
 }

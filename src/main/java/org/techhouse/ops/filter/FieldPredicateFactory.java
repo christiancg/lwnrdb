@@ -8,6 +8,7 @@ import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ops.req.agg.FieldOperatorType;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
+import org.techhouse.utils.CaseFolding;
 import org.techhouse.utils.JsonUtils;
 
 public final class FieldPredicateFactory {
@@ -132,7 +133,7 @@ public final class FieldPredicateFactory {
     }
 
     private static boolean stringsAreEqual(String operand, String stored, boolean exactStrings) {
-        return exactStrings ? operand.equals(stored) : operand.equalsIgnoreCase(stored);
+        return exactStrings ? operand.equals(stored) : CaseFolding.equal(operand, stored);
     }
 
     private static boolean arrayOperandMatches(JsonBaseElement operatorElement, JsonBaseElement toTestElement,

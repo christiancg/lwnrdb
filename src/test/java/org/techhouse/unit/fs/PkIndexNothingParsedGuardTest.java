@@ -102,4 +102,21 @@ public class PkIndexNothingParsedGuardTest {
         assertEquals(1, remaining.size());
         assertEquals("good1", remaining.getFirst().getValue());
     }
+
+    @Test
+    public void test_reading_an_old_grammar_pk_index_fails_and_leaves_it_intact()
+            throws IOException, NoSuchFieldException, IllegalAccessException {
+        final var fs = new FileSystem();
+        TestUtils.setDbPath(fs, TestGlobals.PATH);
+        fs.insertIntoCollection(document("good1"));
+        Files.writeString(pkIndexFile().toPath(), "a|0|20|0|0\nb|20|20|0|0\n", StandardCharsets.UTF_8,
+                StandardOpenOption.TRUNCATE_EXISTING);
+        final var planted = Files.readAllBytes(pkIndexFile().toPath());
+
+        final var failure = assertThrows(IOException.class,
+                () -> fs.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL));
+
+        assertTrue(failure.getMessage().contains(pkIndexFile().getName()));
+        assertArrayEquals(planted, Files.readAllBytes(pkIndexFile().toPath()));
+    }
 }

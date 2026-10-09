@@ -100,13 +100,18 @@ public final class PageOccupancyReconciler {
     public static boolean reconcile(String dbName, String collName) throws Exception {
         fs.healTornPageTails(Globals.ADMIN_PAGES_DB_NAME, pageRowCollectionOf(dbName, collName));
         fs.healTornPageTails(dbName, collName);
+        final var retired = fs.retireDanglingPkEntries(dbName, collName);
+        if (!retired.isEmpty()) {
+            fs.healTornPageTails(dbName, collName);
+            scheduleIndexCleanupFor(retired);
+        }
         final var adopted = fs.adoptOrphanedRecords(dbName, collName);
         if (!adopted.isEmpty()) {
             scheduleIndexMaintenanceFor(dbName, collName, adopted);
         }
         final var fileLengths = fs.pageFileLengths(dbName, collName);
         final var rows = rowsByPage(cache.getAdminPageEntries(dbName, collName));
-        if (adopted.isEmpty() && agreesWithFiles(rows, fileLengths)) {
+        if (adopted.isEmpty() && retired.isEmpty() && agreesWithFiles(rows, fileLengths)) {
             return false;
         }
         final var counts = entryCountsByPage(dbName, collName);

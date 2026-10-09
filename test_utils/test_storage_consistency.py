@@ -96,6 +96,9 @@ LEFTOVER_ROWS_COLL = "leftover_row_docs"
 LEFTOVER_ROWS_COPY = "leftover_rows_copy"
 BULK_GROWTH_COLL = "bulk_growth_docs"
 BULK_GROWTH_DOCS = 10
+DANGLING_COLL = "dangling_pk_docs"
+OLD_GRAMMAR_COLL = "old_grammar_pk_docs"
+OLD_GRAMMAR_PK = "first|0|20|0|0\nsecond|20|20|0|0\n"
 UNLISTED_DB = "unlisted_db"
 UNLISTED_COLL = "unlisted_docs"
 UNLISTED_GHOST = "unlisted_docX"
@@ -609,6 +612,78 @@ def test_a_torn_page_tail_is_healed_at_startup(conn: Conn, work_dir: str):
           f"expected {expected} got {scanned}")
     pk = conn.count_via_pk(coll=TORN_COLL)
     check("the index-only COUNT agrees with the scan", pk == len(expected), f"count={pk} scan={len(scanned)}")
+
+
+def seed_collections_for_a_lost_record_and_an_unrecognised_pk_index(conn: Conn):
+    section("Seed a collection whose last record a crash will lose, and one whose pk.idx will be unreadable")
+    for coll in (DANGLING_COLL, OLD_GRAMMAR_COLL):
+        check_status(f"create {coll}",
+                     conn.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+        for doc_id in ("first", "second"):
+            check_status(f"save {doc_id} into {coll}", conn.save({"_id": doc_id, "pad": doc_id}, coll=coll), "OK")
+
+
+def lose_the_last_record(work_dir: str):
+    folder = os.path.join(work_dir, "db", DB, DANGLING_COLL)
+    path = os.path.join(folder, page_files(work_dir, DB, DANGLING_COLL)[0])
+    with open(path, "rb+") as page:
+        content = page.read()
+        page.truncate(content.rstrip(b"\n").rfind(b"\n") + 1)
+
+
+def old_grammar_pk_index(work_dir: str) -> str:
+    return pk_index_file(work_dir, DB, OLD_GRAMMAR_COLL)
+
+
+def plant_an_old_grammar_pk_index(work_dir: str):
+    shutil.copyfile(old_grammar_pk_index(work_dir), old_grammar_pk_index(work_dir) + ".original")
+    with open(old_grammar_pk_index(work_dir), "w") as index:
+        index.write(OLD_GRAMMAR_PK)
+
+
+def restore_the_old_grammar_pk_index(work_dir: str):
+    shutil.move(old_grammar_pk_index(work_dir) + ".original", old_grammar_pk_index(work_dir))
+
+
+def test_a_pk_entry_past_its_page_is_retired_at_startup(conn: Conn):
+    section("A pk.idx entry whose record a crash lost is retired at startup, so no write lands on its neighbour")
+    check_status("FIND_BY_ID of the lost record answers NOT_FOUND",
+                 conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": DANGLING_COLL,
+                            "_id": "second"}), "NOT_FOUND")
+    check_status("its neighbour still reads back",
+                 conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": DANGLING_COLL,
+                            "_id": "first"}), "OK")
+    check_status("the lost id can be saved again", conn.save({"_id": "second", "pad": "again"}, coll=DANGLING_COLL),
+                 "OK")
+    for doc_id in ("first", "second"):
+        check_status(f"{doc_id} reads back after the save",
+                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": DANGLING_COLL,
+                                "_id": doc_id}), "OK")
+    pk = conn.count_via_pk(coll=DANGLING_COLL)
+    scan = conn.count_via_scan(coll=DANGLING_COLL)
+    check("the index-only COUNT agrees with the scan", pk == scan == 2, f"pk={pk} scan={scan}")
+
+
+def test_an_unrecognised_pk_index_is_never_overwritten(conn: Conn, work_dir: str):
+    section("A pk.idx in which no line parses fails loudly and is never overwritten by a write")
+    check("a SAVE into the collection is refused",
+          conn.save({"_id": "third", "pad": "third"}, coll=OLD_GRAMMAR_COLL).get("status") != "OK")
+    check_status("a FIND_BY_ID answers an error, not NOT_FOUND",
+                 conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": OLD_GRAMMAR_COLL,
+                            "_id": "first"}), "ERROR")
+    with open(old_grammar_pk_index(work_dir)) as index:
+        check("the unreadable pk.idx is byte-identical to the planted one", index.read() == OLD_GRAMMAR_PK)
+
+
+def test_a_restored_pk_index_serves_every_document(conn: Conn):
+    section("Once the pk.idx is restored, every document it named reads back")
+    for doc_id in ("first", "second"):
+        check_status(f"{doc_id} reads back",
+                     conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": OLD_GRAMMAR_COLL,
+                                "_id": doc_id}), "OK")
+    pk = conn.count_via_pk(coll=OLD_GRAMMAR_COLL)
+    scan = conn.count_via_scan(coll=OLD_GRAMMAR_COLL)
+    check("no write landed while it was unreadable", pk == scan == 2, f"pk={pk} scan={scan}")
 
 
 def seed_collections_for_a_lost_line_end_and_a_half_built_index(conn: Conn):
@@ -2176,6 +2251,7 @@ def main():
             seed_a_collection_whose_page_rows_will_be_lost(conn, work_dir)
             seed_a_collection_whose_page_tail_will_tear(conn)
             seed_collections_for_a_lost_line_end_and_a_half_built_index(conn)
+            seed_collections_for_a_lost_record_and_an_unrecognised_pk_index(conn)
             seed_a_collection_that_will_hold_an_unindexed_record(conn)
             seed_collections_whose_compactions_a_kill_will_interrupt(conn)
             seed_drops_a_kill_will_interrupt(conn, work_dir)
@@ -2193,6 +2269,8 @@ def main():
         lose_the_page_rows(work_dir)
         tear_the_page_tail(work_dir)
         lose_the_last_line_end(work_dir)
+        lose_the_last_record(work_dir)
+        plant_an_old_grammar_pk_index(work_dir)
         leave_the_index_half_built(work_dir)
         leave_an_unindexed_record(work_dir)
         interrupt_the_compactions(work_dir)
@@ -2208,6 +2286,8 @@ def main():
             test_lost_page_rows_are_rebuilt_at_startup(conn, work_dir)
             test_a_torn_page_tail_is_healed_at_startup(conn, work_dir)
             test_a_lost_line_end_is_restored_at_startup(conn, work_dir)
+            test_a_pk_entry_past_its_page_is_retired_at_startup(conn)
+            test_an_unrecognised_pk_index_is_never_overwritten(conn, work_dir)
             test_an_unindexed_record_is_adopted_at_startup(conn)
             test_an_update_killed_mid_compaction_is_undone_at_startup(conn, work_dir)
             test_a_delete_killed_mid_compaction_is_completed_at_startup(conn, work_dir)
@@ -2225,11 +2305,13 @@ def main():
             test_an_unlisted_collection_is_relisted_at_startup(conn, work_dir)
         bu.stop_server(proc)
         proc = None
+        restore_the_old_grammar_pk_index(work_dir)
 
         print(f"  Restarting server on {HOST}:{PORT} ...")
         proc = bu.start_server(work_dir, log_path)
         with admin_conn() as conn:
             test_the_admin_write_after_the_tear_is_still_there(conn)
+            test_a_restored_pk_index_serves_every_document(conn)
             seed_a_database_with_a_dropped_collection(conn)
         acknowledged = stop_the_node_under_a_connected_writer(proc)
         proc = None

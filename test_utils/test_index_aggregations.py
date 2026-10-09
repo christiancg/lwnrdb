@@ -790,6 +790,7 @@ AGREE_CUSTOM_SORT = "idxagg_agree_custom_sort"
 AGREE_CUSTOM_TIES = "idxagg_agree_custom_ties"
 AGREE_SURROGATE = "idxagg_agree_surrogate"
 AGREE_SURROGATE_CONTAINER = "idxagg_agree_surrogate_container"
+AGREE_SURROGATE_FOLD = "idxagg_agree_surrogate_fold"
 AGREE_ARRAY_CUSTOM = "idxagg_agree_array_custom"
 AGREE_OBJECT_CUSTOM = "idxagg_agree_object_custom"
 AGREE_CONTAINS_CUSTOM = "idxagg_agree_contains_custom"
@@ -803,7 +804,7 @@ AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, 
                      AGREE_SORT_BOOL, AGREE_SORT_BOOL_DESC, AGREE_SORT_MIXED, AGREE_SORT_TIES,
                      AGREE_SIBLING, AGREE_OBJ_SORT, AGREE_CUSTOM, AGREE_MIXED_BOX, AGREE_GEO,
                      AGREE_IN_CASE, AGREE_NOT_IN_CASE, AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM,
-                     AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES, AGREE_SURROGATE, AGREE_SURROGATE_CONTAINER,
+                     AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES, AGREE_SURROGATE, AGREE_SURROGATE_CONTAINER, AGREE_SURROGATE_FOLD,
                      AGREE_ARRAY_CUSTOM,
                      AGREE_OBJECT_CUSTOM, AGREE_CONTAINS_CUSTOM, AGREE_NOT_EQUALS_MIXED,
                      AGREE_NOT_EQUALS_HOMOGENEOUS, AGREE_DOTTED_GROUP, AGREE_DOTTED_DISTINCT)
@@ -1182,6 +1183,39 @@ def probe_lone_surrogates_inside_containers_index_the_same_as_they_scan(c):
           agree_ids(agg(c, AGREE_SURROGATE_CONTAINER, steps)) == ["hi", "hi2"])
 
 
+def probe_lone_surrogate_before_a_pair_orders_the_index_consistently(c):
+    """compareToIgnoreCase merges a surrogate pair into one code point only when the chars differ, so a
+    lone high surrogate right before a pair broke transitivity: the loader sorted the String index into
+    an order binary search could not walk, and an index-backed EQUALS missed a document the scan found."""
+    values = {"emoji": "\U0001f600", "fullwidth": "\uff21", "prefixed": "aa\uff21", "lone": "\ud83d\U0001f600"}
+    for doc_id, value in values.items():
+        save_doc(c, AGREE_SURROGATE_FOLD, {"_id": doc_id, "v": value})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SURROGATE_FOLD, "fieldName": "v"})
+    wait_for_indexes(c, [(AGREE_SURROGATE_FOLD, "v")])
+
+    def compare_every_operator(label):
+        for doc_id, value in values.items():
+            for operator, operand in (("EQUALS", value), ("NOT_EQUALS", value), ("IN", [value])):
+                steps = [{"type": "FILTER", "operator": {"fieldOperatorType": operator, "field": "v",
+                                                         "value": operand}}]
+                indexed = agree_ids(agg(c, AGREE_SURROGATE_FOLD, steps))
+                scanned = agree_ids(agg(c, AGREE_SURROGATE_FOLD, [{"type": "SKIP", "skip": 0}] + steps))
+                check(f"{label}: an index-backed {operator} on the {doc_id} value equals the scan",
+                      indexed == scanned, f"index={indexed!r} scan={scanned!r}")
+            steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "v", "value": value}}]
+            counted = ((agg(c, AGREE_SURROGATE_FOLD, steps + [{"type": "COUNT"}]).get("results") or [{}])[0]
+                       ).get("count")
+            scanned_count = ((agg(c, AGREE_SURROGATE_FOLD, [{"type": "SKIP", "skip": 0}] + steps
+                                  + [{"type": "COUNT"}]).get("results") or [{}])[0]).get("count")
+            check(f"{label}: index-only COUNT on the {doc_id} value equals the scan count",
+                  counted == scanned_count, f"index={counted} scan={scanned_count}")
+
+    compare_every_operator("after CREATE_INDEX")
+    save_doc(c, AGREE_SURROGATE_FOLD, {"_id": "late", "v": "b\ud83d\ud83d"})
+    wait_for_indexes(c, [(AGREE_SURROGATE_FOLD, "v")])
+    compare_every_operator("after a save rewrote the index file")
+
+
 def not_equals_filter(value):
     return [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "x", "value": value}}]
 
@@ -1248,6 +1282,7 @@ def agreement_suite(c):
     probe_mixed_number_boxes_group_the_same_either_way(c)
     probe_lone_surrogate_values_index_the_same_as_they_scan(c)
     probe_lone_surrogates_inside_containers_index_the_same_as_they_scan(c)
+    probe_lone_surrogate_before_a_pair_orders_the_index_consistently(c)
     probe_not_equals_matches_every_other_kind(c)
     probe_dotted_group_by_and_distinct_agree_with_scan(c)
 

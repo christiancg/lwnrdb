@@ -222,7 +222,7 @@ public final class TransactionOperationHelper {
 
     public static void abortInPlace(UUID clientId) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
-        if (transaction == null || isLocalCommitFenced(transaction)) {
+        if (transaction == null || isFenced(transaction)) {
             return;
         }
         transaction.markAborted();
@@ -395,14 +395,23 @@ public final class TransactionOperationHelper {
     }
 
     public static OperationResponse bufferSave(SaveRequest request, Transaction transaction) {
+        if (isFenced(transaction)) {
+            return new OperationResponse(OperationType.SAVE, ErrorCode.TRANSACTION_HALF_APPLIED);
+        }
         return TransactionBuffer.bufferSave(request, transaction, () -> abortInPlace(transaction.getClientId()));
     }
 
     public static OperationResponse bufferBulkSave(BulkSaveRequest request, Transaction transaction) {
+        if (isFenced(transaction)) {
+            return new OperationResponse(OperationType.BULK_SAVE, ErrorCode.TRANSACTION_HALF_APPLIED);
+        }
         return TransactionBuffer.bufferBulkSave(request, transaction, () -> abortInPlace(transaction.getClientId()));
     }
 
     public static OperationResponse bufferDelete(DeleteRequest request, Transaction transaction) {
+        if (isFenced(transaction)) {
+            return new OperationResponse(OperationType.DELETE, ErrorCode.TRANSACTION_HALF_APPLIED);
+        }
         return TransactionBuffer.bufferDelete(request, transaction, () -> abortInPlace(transaction.getClientId()));
     }
 

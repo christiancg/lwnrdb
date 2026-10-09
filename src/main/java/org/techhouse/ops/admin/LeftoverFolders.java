@@ -1,5 +1,6 @@
 package org.techhouse.ops.admin;
 
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
@@ -14,6 +15,7 @@ public final class LeftoverFolders {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
+    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
     private LeftoverFolders() {
     }
@@ -25,6 +27,7 @@ public final class LeftoverFolders {
         }
         final var moved = fs.folderQuarantine().moveCollectionAside(dbName, collName, 0);
         cache.evictCollection(dbName, collName);
+        pendingIndexWrites.clearCollection(dbName, collName);
         logOutcome("collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName, moved);
         return moved;
     }
@@ -35,6 +38,7 @@ public final class LeftoverFolders {
         }
         final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
         cache.evictDatabase(dbName);
+        pendingIndexWrites.clearDatabase(dbName);
         compiledProcedures.invalidateDatabase(dbName);
         scheduleRegistry.removeDatabase(dbName);
         logOutcome("database " + dbName, moved);

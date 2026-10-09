@@ -15,6 +15,7 @@ public class NodeInfo {
     private volatile int scriptCapacity;
     private volatile boolean adminSyncing;
     private volatile long adminEpoch;
+    private volatile boolean adminEpochUnconfirmed;
 
     public NodeInfo() {
     }
@@ -124,6 +125,14 @@ public class NodeInfo {
         this.adminEpoch = adminEpoch;
     }
 
+    public boolean isAdminEpochUnconfirmed() {
+        return adminEpochUnconfirmed;
+    }
+
+    public void setAdminEpochUnconfirmed(boolean adminEpochUnconfirmed) {
+        this.adminEpochUnconfirmed = adminEpochUnconfirmed;
+    }
+
     /**
      * Deliberately separate from the membership fields: a change here is not a membership change, so it must
      * not fire the membership listeners.
@@ -133,6 +142,7 @@ public class NodeInfo {
         scriptCapacity = incoming.getScriptCapacity();
         adminSyncing = incoming.isAdminSyncing();
         adminEpoch = incoming.getAdminEpoch();
+        adminEpochUnconfirmed = incoming.isAdminEpochUnconfirmed();
     }
 
     @Override
@@ -144,19 +154,21 @@ public class NodeInfo {
         return port == that.port && incarnation == that.incarnation && heartbeat == that.heartbeat
                 && scriptLoad == that.scriptLoad && scriptCapacity == that.scriptCapacity
                 && adminSyncing == that.adminSyncing && adminEpoch == that.adminEpoch
-                && Objects.equals(nodeId, that.nodeId) && Objects.equals(host, that.host) && state == that.state;
+                && adminEpochUnconfirmed == that.adminEpochUnconfirmed && Objects.equals(nodeId, that.nodeId)
+                && Objects.equals(host, that.host) && state == that.state;
     }
 
     @Override
     public int hashCode() {
         return Objects.hash(nodeId, host, port, state, incarnation, heartbeat, scriptLoad, scriptCapacity, adminSyncing,
-                adminEpoch);
+                adminEpoch, adminEpochUnconfirmed);
     }
 
     @Override
     public String toString() {
         return "NodeInfo(nodeId=" + nodeId + ", host=" + host + ", port=" + port + ", state=" + state + ", incarnation="
                 + incarnation + ", heartbeat=" + heartbeat + ", scriptLoad=" + scriptLoad + ", scriptCapacity="
-                + scriptCapacity + ", adminSyncing=" + adminSyncing + ", adminEpoch=" + adminEpoch + ")";
+                + scriptCapacity + ", adminSyncing=" + adminSyncing + ", adminEpoch=" + adminEpoch
+                + ", adminEpochUnconfirmed=" + adminEpochUnconfirmed + ")";
     }
 }

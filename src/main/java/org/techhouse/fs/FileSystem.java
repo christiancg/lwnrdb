@@ -418,6 +418,10 @@ public class FileSystem {
                 () -> readWholePkIndexFile(dbName, collName));
     }
 
+    public List<PkIndexEntry> retireDanglingPkEntries(String dbName, String collName) throws IOException {
+        return DanglingPkEntries.retireAll(pkIndexStore, dbName, collName, pageFileLengths(dbName, collName));
+    }
+
     public List<DbEntry> adoptOrphanedRecords(String dbName, String collName) throws IOException {
         return OrphanedPageRecords.adoptAll(paths, pkIndexStore, dbName, collName,
                 pageFileLengths(dbName, collName).keySet());

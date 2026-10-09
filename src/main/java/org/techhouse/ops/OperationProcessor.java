@@ -389,13 +389,17 @@ public class OperationProcessor {
                         return hookError;
                     }
                     final var staged = TriggerHelper.stageDelete(deleteRequest, deleted, actingUser);
-                    final var reservedVersion = TriggerHelper.discardingOnFailure(staged,
+                    final var reservation = TriggerHelper.discardingOnFailure(staged,
                             () -> ClusterWriteHelper.reserveDelete(dbName, collName, deleteRequest.get_id()));
+                    if (reservation.ownerLost()) {
+                        staged.discard();
+                        return new OperationResponse(OperationType.DELETE, ErrorCode.NOT_COLLECTION_OWNER);
+                    }
                     final var local = TriggerHelper.runStaged(staged, dbName, collName, actingUser,
                             deleteRequest.getTriggerDepth(),
-                            () -> ClusterWriteHelper.deleteOrRetract(deleteRequest, reservedVersion));
-                    return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(), reservedVersion,
-                            local);
+                            () -> ClusterWriteHelper.deleteOrRetract(deleteRequest, reservation.version()));
+                    return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
+                            reservation.version(), local);
                 });
     }
 

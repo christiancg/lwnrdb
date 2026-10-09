@@ -2,6 +2,7 @@ package org.techhouse.fs;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
@@ -139,5 +140,23 @@ public class TornPageTailTest {
         assertFalse(TornPageTail.heal(file, 0, List.of(entryAtStart("a", unterminated.length() + 5, 0))));
 
         assertEquals(unterminated, Files.readString(file.toPath(), StandardCharsets.UTF_8));
+    }
+
+    @Test
+    public void test_an_unreadable_pk_index_leaves_an_unterminated_tail_untouched(@TempDir File tmp)
+            throws IOException {
+        final var paths = new FilePaths();
+        paths.useDbPath(tmp.getAbsolutePath());
+        assertTrue(paths.collectionFolder("db", "coll").mkdirs());
+        final var unterminated = "{\"_id\":\"a\"}";
+        Files.writeString(paths.collectionPage("db", "coll", 0).toPath(), unterminated, StandardCharsets.UTF_8);
+        Files.writeString(paths.pkIndexFile("db", "coll").toPath(), "garbage\n", StandardCharsets.UTF_8);
+        final var store = new PkIndexStore(paths);
+
+        assertThrows(IOException.class, () -> TornPageTail.healAll(paths, "db", "coll", List.of(0L),
+                () -> store.readWholePkIndexFile("db", "coll")));
+
+        assertEquals(unterminated,
+                Files.readString(paths.collectionPage("db", "coll", 0).toPath(), StandardCharsets.UTF_8));
     }
 }

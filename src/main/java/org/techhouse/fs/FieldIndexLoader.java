@@ -10,6 +10,7 @@ import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.data.IndexKind;
 import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.log.Logger;
+import org.techhouse.utils.CaseFolding;
 
 // Index files are written non-atomically, so a crash mid-write can leave a torn line: every loader
 // here drops it and rewrites the survivors, rather than failing every later read.
@@ -122,7 +123,7 @@ final class FieldIndexLoader {
                 //noinspection unchecked
                 yield customClass.cast(c).compareToCustom(customClass.cast(o2.getValue()));
             }
-            default -> ((String) o1.getValue()).compareToIgnoreCase((String) o2.getValue());
+            default -> CaseFolding.compare((String) o1.getValue(), (String) o2.getValue());
         };
     }
 }

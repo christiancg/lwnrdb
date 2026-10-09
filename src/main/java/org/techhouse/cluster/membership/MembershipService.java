@@ -130,7 +130,9 @@ public class MembershipService {
         self.setScriptLoad(scriptLoad.current());
         self.setScriptCapacity(scriptAdmission.capacity());
         self.setAdminSyncing(adminSyncing);
-        self.setAdminEpoch(adminEpoch.current());
+        final var epochState = adminEpoch.state();
+        self.setAdminEpoch(epochState.epoch());
+        self.setAdminEpochUnconfirmed(!epochState.confirmed());
         lastSeen.put(self.getNodeId(), now);
         gossipToPeers();
         detectFailures(now);

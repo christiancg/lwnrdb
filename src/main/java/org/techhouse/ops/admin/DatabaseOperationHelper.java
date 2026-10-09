@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -36,6 +37,7 @@ public final class DatabaseOperationHelper {
     private static final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private static final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private static final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
+    private static final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
     private DatabaseOperationHelper() {
     }
@@ -181,6 +183,7 @@ public final class DatabaseOperationHelper {
             final var result = fs.deleteDatabase(dbName);
             if (result) {
                 cache.evictDatabase(dbName);
+                pendingIndexWrites.clearDatabase(dbName);
                 AdminOperationHelper.deleteDatabaseEntry(dbName);
                 compiledProcedures.invalidateDatabase(dbName);
                 scheduleRegistry.removeDatabase(dbName);

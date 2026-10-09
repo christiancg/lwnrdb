@@ -36,7 +36,10 @@ Three mechanisms bound the damage rather than eliminate the disagreement:
   so ownership can move while a write waits for it. The write handlers therefore re-check
   `isOwner` *after* acquiring the lock and refuse with `421-1` if it moved, and a write that
   commits locally but can no longer be replicated answers `421-1` rather than `OK` — that
-  silent success was the defect this closes.
+  silent success was the defect this closes. A `DELETE` is checked once more when it reserves its
+  tombstone, after its before-hook ran: if ownership moved by then it answers `421-1` without
+  deleting, because a local delete with no tombstone would be undone by anti-entropy while its
+  `DELETED` trigger still fired.
 - **Version-checked applies**: a replica refuses any upsert or delete older than what it stores,
   which makes an out-of-order arrival and a stale anti-entropy decision harmless.
 
@@ -853,7 +856,14 @@ until it has completed one admin reconciliation since starting. That alone cover
 node that stayed up, missed one op and then became coordinator when the old one died or a partition
 healed: committing there would land at the epoch its peers already hold, without the op they hold
 there, and win the conform. So a coordinator also answers `503-5` — and schedules a conform — while
-any ALIVE peer gossips a higher admin epoch than its own. A replica that refused an op because the
+any ALIVE peer gossips a higher admin epoch than its own, or the same epoch confirmed while its own is
+unconfirmed. Gossip carries the confirmed flag beside the epoch (`adminEpochUnconfirmed`, absent and so
+confirmed on an older peer) for exactly that tie: a coordinator that lost quorum mid-broadcast holds `(N,
+unconfirmed)` while the majority side committed a different op N and confirmed it, and once the partition heals
+the ring can hand coordination back to it. Comparing epochs alone let it commit N+1 on a base without the
+majority's op N, reach quorum, and erase that op cluster-wide in the next conform. A node that took over
+coordination with only a broadcast-adopted epoch therefore conforms once before its first op whenever the
+confirmed holder is still alive. A replica that refused an op because the
 admin lane stayed busy schedules a conform too, as one that saw an epoch gap does. A peer definition that stays
 unreadable keeps a coordinator conforming to that peer refusing admin ops until the file is
 repaired; the conform's warning names the key.

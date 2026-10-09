@@ -79,6 +79,7 @@ final class PageCompactor {
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
+            PageRegions.requireWithinPage(pkIndexEntry, totalFileLength);
             final var tail = PageRegions.readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
             final var marker = journal.begin(kind, pkIndexEntry, totalFileLength, tail);
             try {
@@ -160,6 +161,7 @@ final class PageCompactor {
         lock.lock();
         try (var writer = new RandomAccessFile(file, Globals.RW_PERMISSIONS)) {
             final long totalFileLength = file.length();
+            PageRegions.requireWithinPage(pkIndexEntry, totalFileLength);
             final var tail = PageRegions.readRegion(writer, pkIndexEntry.getPosition(), totalFileLength);
             final var marker = journal.begin(Kind.UPDATE, pkIndexEntry, totalFileLength, tail);
             try {

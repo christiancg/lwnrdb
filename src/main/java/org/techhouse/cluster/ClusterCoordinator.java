@@ -64,9 +64,14 @@ public class ClusterCoordinator {
         }
     }
 
-    public Long reserveDelete(String dbName, String collName, List<String> ids) throws java.io.IOException {
-        if (documentReplicationOutcome(dbName, collName) != null) {
-            return null;
+    public DeleteReservation reserveDelete(String dbName, String collName, List<String> ids)
+            throws java.io.IOException {
+        final var applicability = documentReplicationOutcome(dbName, collName);
+        if (applicability == ReplicationOutcome.NOT_OWNER) {
+            return DeleteReservation.lostOwnership();
+        }
+        if (applicability != null) {
+            return DeleteReservation.notClustered();
         }
         final var version = hybridClock.next();
         final var present = cache.getPkIndexAndLoadIfNecessary(dbName, collName).stream().map(PkIndexEntry::getValue)
@@ -76,7 +81,7 @@ public class ClusterCoordinator {
                 fs.tombstones().append(dbName, collName, id, version);
             }
         }
-        return version;
+        return DeleteReservation.reserved(version);
     }
 
     public void retractDelete(String dbName, String collName, List<String> ids, Long reservedVersion)

@@ -244,23 +244,6 @@ public class UserCacheEntryTest {
         assertEquals(expectedEntry, result);
     }
 
-    @Test
-    public void test_listCacheableResources_excludes_admin_entries() throws Exception {
-        UserCache cache = IocContainer.get(UserCache.class);
-        final var collType = new ReflectionUtils.TypeToken<Map<String, Map<String, DbEntry>>>() {
-        };
-        final var collectionMap = TestUtils.getPrivateField(cache, "collectionMap", collType);
-        final var inner = new ConcurrentHashMap<String, DbEntry>();
-        final var obj = new JsonObject();
-        obj.addProperty(Globals.PK_FIELD, "id1");
-        inner.put("id1", DbEntry.fromJsonObject("userDb", "c1", obj));
-        collectionMap.put(Cache.getCollectionIdentifier("userDb", "c1"), inner);
-        collectionMap.put(Cache.getCollectionIdentifier(Globals.ADMIN_DB_NAME, "databases"), new ConcurrentHashMap<>());
-        final var resources = cache.listCacheableResources();
-        assertTrue(resources.stream().anyMatch(r -> r.dbName().equals("userDb")));
-        assertTrue(resources.stream().noneMatch(r -> r.dbName().equals(Globals.ADMIN_DB_NAME)));
-    }
-
     private static void injectPkIndex(UserCache cache, String collId, List<PkIndexEntry> entries)
             throws NoSuchFieldException, IllegalAccessException {
         final var type = new ReflectionUtils.TypeToken<Map<String, List<PkIndexEntry>>>() {

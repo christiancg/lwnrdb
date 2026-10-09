@@ -135,7 +135,7 @@ public class FileSystemPkIndexTest {
     }
 
     @Test
-    public void test_delete_with_over_eof_position_does_not_throw()
+    public void test_delete_with_over_eof_position_is_refused_and_leaves_the_page_intact()
             throws IOException, NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
@@ -144,12 +144,14 @@ public class FileSystemPkIndexTest {
         final var entry = DbEntry.fromJsonObject(TestGlobals.DB, TestGlobals.COLL, data);
         entry.set_id("1");
         final var pk = fileSystem.insertIntoCollection(entry);
-        // Same id as the inserted row (so the PK-index removal succeeds) but a position past EOF,
-        // simulating a stale cached position; the over-EOF guard must avoid the negative-array crash.
         final var stale = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "1", pk.getPosition() + 1000,
                 pk.getLength(), pk.getPage());
+        final var pageBefore = java.nio.file.Files.readAllBytes(pageFile().toPath());
 
-        assertDoesNotThrow(() -> fileSystem.deleteFromCollection(stale));
+        assertThrows(RuntimeException.class, () -> fileSystem.deleteFromCollection(stale));
+
+        assertArrayEquals(pageBefore, java.nio.file.Files.readAllBytes(pageFile().toPath()));
+        assertEquals(1, fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL).size());
     }
 
     @Test
@@ -313,6 +315,11 @@ public class FileSystemPkIndexTest {
                 .anyMatch(e -> e.getValue().equals("seed")));
     }
 
+    private File pageFile() {
+        return new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator + TestGlobals.COLL
+                + File.separator + TestGlobals.COLL + "-0.dat");
+    }
+
     private File pkIndexFile() {
         return new File(TestGlobals.PATH + File.separator + TestGlobals.DB + File.separator + TestGlobals.COLL
                 + File.separator + TestGlobals.COLL + "-pk.idx");
@@ -339,9 +346,8 @@ public class FileSystemPkIndexTest {
                 "not a pk line at all" + System.lineSeparator() + "nor is this one" + System.lineSeparator());
         final var before = java.nio.file.Files.readAllBytes(file.toPath());
 
-        final var read = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
+        assertThrows(IOException.class, () -> fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL));
 
-        assertTrue(read.isEmpty());
         assertArrayEquals(before, java.nio.file.Files.readAllBytes(file.toPath()),
                 "nothing rebuilds the pk index, so a read that understood none of it must never rewrite it");
     }
@@ -354,9 +360,8 @@ public class FileSystemPkIndexTest {
                 "a|0|20|0|0" + System.lineSeparator() + "b|20|20|0|0" + System.lineSeparator());
         final var before = java.nio.file.Files.readAllBytes(file.toPath());
 
-        final var read = fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL);
-
-        assertTrue(read.isEmpty(), "a file in the pre-change grammar is unparseable, not half-readable");
+        assertThrows(IOException.class, () -> fileSystem.readWholePkIndexFile(TestGlobals.DB, TestGlobals.COLL),
+                "a file in the pre-change grammar is unparseable, not half-readable");
         assertArrayEquals(before, java.nio.file.Files.readAllBytes(file.toPath()),
                 "an old data directory must fail loudly, never destructively");
     }

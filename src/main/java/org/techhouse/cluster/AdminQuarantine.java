@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Set;
+import org.techhouse.bckg_ops.PendingIndexWrites;
 import org.techhouse.bckg_ops.ScheduleRegistry;
 import org.techhouse.cache.Cache;
 import org.techhouse.concurrency.ResourceLocking;
@@ -26,6 +27,7 @@ final class AdminQuarantine {
     private final ListenManager listenManager = IocContainer.get(ListenManager.class);
     private final CompiledProcedureCache compiledProcedures = IocContainer.get(CompiledProcedureCache.class);
     private final ScheduleRegistry scheduleRegistry = IocContainer.get(ScheduleRegistry.class);
+    private final PendingIndexWrites pendingIndexWrites = IocContainer.get(PendingIndexWrites.class);
 
     void quarantineStaleIncarnation(String dbName, String collName, long snapshotIncarnation) throws Exception {
         final var localEntry = cache.getAdminCollectionEntry(dbName, collName);
@@ -47,6 +49,7 @@ final class AdminQuarantine {
         listenManager.endAllForCollection(dbName, collName, ListenManager.COLLECTION_DROPPED);
         final var moved = fs.folderQuarantine().moveCollectionAside(dbName, collName, incarnation);
         cache.evictCollection(dbName, collName);
+        pendingIndexWrites.clearCollection(dbName, collName);
         return moved;
     }
 
@@ -162,6 +165,7 @@ final class AdminQuarantine {
             listenManager.endAllForDatabase(dbName, ListenManager.DATABASE_DROPPED);
             final var moved = fs.folderQuarantine().moveDatabaseAside(dbName);
             cache.evictDatabase(dbName);
+            pendingIndexWrites.clearDatabase(dbName);
             compiledProcedures.invalidateDatabase(dbName);
             scheduleRegistry.removeDatabase(dbName);
             logger.warning("Quarantined database " + dbName + ": it is absent from the winning admin snapshot. Its"

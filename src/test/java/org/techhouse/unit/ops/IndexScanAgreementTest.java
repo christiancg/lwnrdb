@@ -276,6 +276,27 @@ public class IndexScanAgreementTest {
     }
 
     @Test
+    public void test_lone_surrogate_before_a_pair_index_and_scan_agree() throws Exception {
+        final var values = List.of("😀", "Ａ", "aaＡ", "\ud83d😀");
+        for (var i = 0; i < values.size(); i++) {
+            insert("u_" + i, "folded", new JsonString(values.get(i)));
+        }
+        final var queries = new LinkedHashMap<String, Supplier<BaseAggregationStep[]>>();
+        for (final var value : values) {
+            for (final var type : List.of(FieldOperatorType.EQUALS, FieldOperatorType.NOT_EQUALS)) {
+                queries.put(type + " folded " + value,
+                        () -> new BaseAggregationStep[]{filter(type, "folded", new JsonString(value))});
+            }
+            queries.put("IN folded " + value, () -> new BaseAggregationStep[]{
+                    filter(FieldOperatorType.IN, "folded", array(new JsonString(value)))});
+            queries.put("COUNT EQUALS folded " + value, () -> new BaseAggregationStep[]{
+                    filter(FieldOperatorType.EQUALS, "folded", new JsonString(value)), new CountAggregationStep()});
+        }
+
+        assertEveryQueryAgrees("folded", queries);
+    }
+
+    @Test
     public void test_every_boolean_query_agrees_between_index_and_scan() throws Exception {
         seedBooleans();
 

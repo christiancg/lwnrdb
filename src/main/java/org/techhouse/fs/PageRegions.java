@@ -26,6 +26,18 @@ final class PageRegions {
         }
     }
 
+    static boolean reachesPastEnd(PkIndexEntry entry, long pageLength) {
+        return entry.getPosition() + entry.getLength() > pageLength;
+    }
+
+    static void requireWithinPage(PkIndexEntry entry, long pageLength) throws IOException {
+        if (reachesPastEnd(entry, pageLength)) {
+            throw new IOException("The PK index places '" + entry.getValue() + "' at " + entry.getPosition() + "+"
+                    + entry.getLength() + " on page " + entry.getPage() + ", past its " + pageLength
+                    + "-byte end; refusing to shift the page around a record that is not there");
+        }
+    }
+
     static byte[] readRegion(RandomAccessFile writer, long from, long to) throws IOException {
         final var length = (int) (to - from);
         if (length <= 0) {

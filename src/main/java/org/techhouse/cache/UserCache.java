@@ -78,17 +78,15 @@ public class UserCache {
     }
 
     public boolean isCachingDisabled(String dbName) {
-        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return false;
-        }
-        return configuration.isCachingDisabled();
+        return isReservedDatabase(dbName) || configuration.isCachingDisabled();
+    }
+
+    private static boolean isReservedDatabase(String dbName) {
+        return Globals.ADMIN_DB_NAME.equals(dbName) || Globals.ADMIN_PAGES_DB_NAME.equals(dbName);
     }
 
     private boolean shouldCache(String dbName, long estimatedBytes) {
-        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return true;
-        }
-        if (configuration.isCachingDisabled()) {
+        if (isCachingDisabled(dbName)) {
             return false;
         }
         if (configuration.isCacheUnlimited()) {
@@ -135,17 +133,29 @@ public class UserCache {
     public <T> List<FieldIndexEntry<T>> getFieldIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, Class<T> indexType) throws IOException {
         return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType),
-                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType));
+                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType), true);
     }
 
     public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, IndexKind kind) throws IOException {
         return loadIndex(dbName, collName, Cache.getHashIndexIdentifier(fieldName, kind.label()),
-                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind));
+                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind), true);
+    }
+
+    public <T> List<FieldIndexEntry<T>> getFieldIndexForMaintenance(String dbName, String collName, String fieldName,
+            Class<T> indexType) throws IOException {
+        return loadIndex(dbName, collName, Cache.getIndexIdentifier(fieldName, indexType),
+                () -> fs.readWholeFieldIndexFiles(dbName, collName, fieldName, indexType), false);
+    }
+
+    public List<FieldIndexEntry<String>> getHashIndexForMaintenance(String dbName, String collName, String fieldName,
+            IndexKind kind) throws IOException {
+        return loadIndex(dbName, collName, Cache.getHashIndexIdentifier(fieldName, kind.label()),
+                () -> fs.readWholeHashIndexFile(dbName, collName, fieldName, kind), false);
     }
 
     private <T> List<FieldIndexEntry<T>> loadIndex(String dbName, String collName, String indexIdentifier,
-            IndexLoader<T> loader) throws IOException {
+            IndexLoader<T> loader, boolean admit) throws IOException {
         final var collectionIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var index = fieldIndexMap.get(collectionIdentifier);
         if (index == null || !index.containsKey(indexIdentifier)) {
@@ -153,7 +163,7 @@ public class UserCache {
             if (indexEntries == null) {
                 return null;
             }
-            if (rl.holdsCollectionLock(dbName, collName)
+            if (admit && rl.holdsCollectionLock(dbName, collName)
                     && shouldCache(dbName, CacheSizeEstimator.estimateFieldIndexSize(new ArrayList<>(indexEntries)))) {
                 fieldIndexMap.computeIfAbsent(collectionIdentifier, _ -> new ConcurrentHashMap<>()).put(indexIdentifier,
                         new ArrayList<>(indexEntries));
@@ -188,9 +198,7 @@ public class UserCache {
                 return null;
             }
             final var snapshot = new HashSet<>(result);
-            if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
-                recordFieldIndexAccess(dbName, collName, fieldName);
-            }
+            recordFieldIndexAccess(dbName, collName, fieldName);
             return snapshot;
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);
@@ -202,6 +210,9 @@ public class UserCache {
     }
 
     public void addEntryToCache(String dbName, String collName, DbEntry entry) {
+        if (isReservedDatabase(dbName)) {
+            return;
+        }
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
         final var existing = collectionMap.get(collId);
         // Refreshing a resident document must be unconditional: the admission check governs only new
@@ -218,6 +229,9 @@ public class UserCache {
     }
 
     public void addEntriesToCache(String dbName, String collName, List<DbEntry> entries) {
+        if (isReservedDatabase(dbName)) {
+            return;
+        }
         final var collId = Cache.getCollectionIdentifier(dbName, collName);
         final var existing = collectionMap.get(collId);
         final var newEntries = new ArrayList<DbEntry>();
@@ -358,26 +372,17 @@ public class UserCache {
     }
 
     public void evictCollectionDocuments(String dbName, String collName) {
-        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return;
-        }
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         collectionMap.remove(collIdentifier);
         collectionBytes.remove(collIdentifier);
     }
 
     public void evictPkIndex(String dbName, String collName) {
-        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return;
-        }
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         pkIndexMap.remove(collIdentifier);
     }
 
     public void evictFieldIndex(String dbName, String collName, String indexKey) {
-        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return;
-        }
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var indexes = fieldIndexMap.get(collIdentifier);
         if (indexes != null) {
@@ -391,9 +396,6 @@ public class UserCache {
     // The background index writer calls this after rewriting a field's .idx files, so the next read
     // reloads from disk instead of answering from the now-stale cached lists.
     public void evictFieldIndexAllTypes(String dbName, String collName, String fieldName) {
-        if (Globals.ADMIN_DB_NAME.equals(dbName)) {
-            return;
-        }
         final var collIdentifier = Cache.getCollectionIdentifier(dbName, collName);
         final var indexes = fieldIndexMap.get(collIdentifier);
         if (indexes != null) {
@@ -409,21 +411,21 @@ public class UserCache {
         final var result = new ArrayList<CacheableResource>();
         for (var entry : pkIndexMap.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
-            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0]))
+            if (parts.length < 2)
                 continue;
             result.add(new CacheableResource(AccessKind.PK_INDEX, parts[0], parts[1], null,
                     CacheSizeEstimator.estimatePkIndexSize(entry.getValue())));
         }
         for (var entry : collectionMap.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
-            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0]))
+            if (parts.length < 2)
                 continue;
             result.add(new CacheableResource(AccessKind.COLLECTION, parts[0], parts[1], null,
                     trackedBytes(entry.getKey())));
         }
         for (var entry : fieldIndexMap.entrySet()) {
             final var parts = entry.getKey().split(Globals.COLL_IDENTIFIER_SEPARATOR_REGEX, 2);
-            if (parts.length < 2 || Globals.ADMIN_DB_NAME.equals(parts[0]))
+            if (parts.length < 2)
                 continue;
             for (var inner : entry.getValue().entrySet()) {
                 result.add(new CacheableResource(AccessKind.FIELD_INDEX, parts[0], parts[1], inner.getKey(),

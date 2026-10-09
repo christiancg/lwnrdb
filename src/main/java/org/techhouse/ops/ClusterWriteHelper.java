@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.cluster.ClusterCoordinator;
+import org.techhouse.cluster.DeleteReservation;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.WriteGuard;
 import org.techhouse.ioc.IocContainer;
@@ -50,7 +51,8 @@ public final class ClusterWriteHelper {
         return response;
     }
 
-    public static Long reserveDelete(String dbName, String collName, String id) throws java.io.IOException {
+    public static DeleteReservation reserveDelete(String dbName, String collName, String id)
+            throws java.io.IOException {
         return coordinator.reserveDelete(dbName, collName, List.of(id));
     }
 

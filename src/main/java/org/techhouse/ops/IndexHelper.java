@@ -285,7 +285,7 @@ public class IndexHelper {
     // The id has already been cleared from every hash family by internalSelectIndexType, so this only adds.
     private static void addToHashIndex(String dbName, String collName, String fieldName, String entryId, IndexKind kind,
             String hash) throws IOException {
-        final var entries = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+        final var entries = cache.getHashIndexForMaintenance(dbName, collName, fieldName, kind);
         final var found = entries == null
                 ? null
                 : entries.stream().filter(e -> e.getValue().equals(hash)).findFirst().orElse(null);
@@ -294,7 +294,7 @@ public class IndexHelper {
             fs.updateHashIndexFiles(dbName, collName, fieldName, kind, found, null);
         } else {
             final var indexEntry = new FieldIndexEntry<>(dbName, collName, hash, new HashSet<>(Set.of(entryId)));
-            final var cached = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+            final var cached = cache.getHashIndexForMaintenance(dbName, collName, fieldName, kind);
             if (cached != null) {
                 cached.add(indexEntry);
             }
@@ -305,7 +305,7 @@ public class IndexHelper {
     private static void removeIdFromHashIndexes(String dbName, String collName, String fieldName, String entryId)
             throws IOException {
         for (var kind : HASH_INDEX_KINDS) {
-            final var entries = cache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+            final var entries = cache.getHashIndexForMaintenance(dbName, collName, fieldName, kind);
             if (entries != null) {
                 for (var entry : entries) {
                     if (entry.getIds().remove(entryId)) {
@@ -412,7 +412,7 @@ public class IndexHelper {
             FieldIndexEntry<?> indexEntry) throws IOException {
         @SuppressWarnings("unchecked")
         final var lookupType = (Class<Object>) tClass;
-        final var cached = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, lookupType);
+        final var cached = cache.getFieldIndexForMaintenance(dbName, collName, fieldName, lookupType);
         if (cached != null) {
             @SuppressWarnings("unchecked")
             final var typed = (FieldIndexEntry<Object>) indexEntry;
@@ -422,7 +422,7 @@ public class IndexHelper {
 
     private static FieldIndexEntry<?> findMatchingEntryFromCustomJson(String dbName, String collName, String fieldName,
             JsonCustom<?> value) throws IOException {
-        final var indexEntries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, value.getClass());
+        final var indexEntries = cache.getFieldIndexForMaintenance(dbName, collName, fieldName, value.getClass());
         if (indexEntries != null) {
             return indexEntries.stream().filter(indexEntry -> indexEntry.getValue().getValue().equals(value.getValue()))
                     .findFirst().orElse(null);
@@ -432,7 +432,7 @@ public class IndexHelper {
 
     private static <T> FieldIndexEntry<T> findMatchingEntry(String dbName, String collName, String fieldName, T value,
             Class<T> tClass) throws IOException {
-        final var indexEntries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, tClass);
+        final var indexEntries = cache.getFieldIndexForMaintenance(dbName, collName, fieldName, tClass);
         if (indexEntries != null) {
             return indexEntries.stream()
                     .filter(indexEntry -> FieldIndexEntry.sameIndexedValue(indexEntry.getValue(), value)).findFirst()
@@ -458,7 +458,7 @@ public class IndexHelper {
 
     private static <T> FieldIndexEntry<T> getExistingFieldIndexEntry(String dbName, String collName, String fieldName,
             String entityId, Class<T> tClass) throws IOException {
-        final var fieldIndexEntry = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, tClass);
+        final var fieldIndexEntry = cache.getFieldIndexForMaintenance(dbName, collName, fieldName, tClass);
         if (fieldIndexEntry != null) {
             return fieldIndexEntry.stream().filter(tFieldIndexEntry -> tFieldIndexEntry.getIds().contains(entityId))
                     .findFirst().map(tFieldIndexEntry -> {

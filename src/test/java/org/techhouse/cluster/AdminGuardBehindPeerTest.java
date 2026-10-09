@@ -35,6 +35,7 @@ public class AdminGuardBehindPeerTest {
     private CoalescingSweep realSweep;
     private Map<String, NodeInfo> members;
     private boolean origEnabled;
+    private boolean origConfirmed;
     private int origExpected;
 
     private static NodeInfo node(String id, int port, NodeState state, long adminEpoch) {
@@ -61,6 +62,8 @@ public class AdminGuardBehindPeerTest {
         realSweep = TestUtils.getPrivateField(adminAntiEntropyService, "sweep", CoalescingSweep.class);
         TestUtils.setPrivateField(adminAntiEntropyService, "sweep", sweep);
         TestUtils.setPrivateField(adminEpoch, "epoch", LOCAL_EPOCH);
+        origConfirmed = adminEpoch.isConfirmed();
+        TestUtils.setPrivateField(adminEpoch, "confirmed", true);
     }
 
     @AfterEach
@@ -73,6 +76,7 @@ public class AdminGuardBehindPeerTest {
         ownership.setSelfNodeId(null);
         ownership.onMembershipChanged(new MembershipView(List.of()));
         TestUtils.setPrivateField(adminEpoch, "epoch", 0L);
+        TestUtils.setPrivateField(adminEpoch, "confirmed", origConfirmed);
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
     }
@@ -87,6 +91,16 @@ public class AdminGuardBehindPeerTest {
 
     private void peer(NodeState state, long epoch) {
         members.put("peer", node("peer", 9991, state, epoch));
+    }
+
+    private void unconfirmedPeerAtLocalEpoch() {
+        final var peer = node("peer", 9991, NodeState.ALIVE, LOCAL_EPOCH);
+        peer.setAdminEpochUnconfirmed(true);
+        members.put("peer", peer);
+    }
+
+    private void unconfirmLocal() throws Exception {
+        TestUtils.setPrivateField(adminEpoch, "confirmed", false);
     }
 
     @Test
@@ -125,5 +139,43 @@ public class AdminGuardBehindPeerTest {
 
         assertNull(ClusterAdminHelper.guard(request));
         verify(sweep, never()).schedule();
+    }
+
+    @Test
+    public void test_an_equal_epoch_confirmed_peer_refuses_an_unconfirmed_coordinator() throws Exception {
+        unconfirmLocal();
+        peer(NodeState.ALIVE, LOCAL_EPOCH);
+
+        final var response = admittedGuard(adminOp());
+
+        assertEquals(ErrorCode.ADMIN_SYNCING.getCode(), response.getErrorCode(),
+                "a confirmed peer at the same epoch holds the op a majority acknowledged, which this node may lack");
+        verify(sweep).schedule();
+    }
+
+    @Test
+    public void test_an_equal_epoch_unconfirmed_peer_passes_an_unconfirmed_coordinator() throws Exception {
+        unconfirmLocal();
+        unconfirmedPeerAtLocalEpoch();
+
+        assertNull(admittedGuard(adminOp()));
+        verify(sweep, never()).schedule();
+    }
+
+    @Test
+    public void test_an_equal_epoch_peer_passes_a_confirmed_coordinator() {
+        unconfirmedPeerAtLocalEpoch();
+        assertNull(admittedGuard(adminOp()));
+
+        peer(NodeState.ALIVE, LOCAL_EPOCH);
+        assertNull(admittedGuard(adminOp()));
+    }
+
+    @Test
+    public void test_a_lower_confirmed_peer_passes_an_unconfirmed_coordinator() throws Exception {
+        unconfirmLocal();
+        peer(NodeState.ALIVE, LOCAL_EPOCH - 1);
+
+        assertNull(admittedGuard(adminOp()));
     }
 }
