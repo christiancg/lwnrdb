@@ -21,6 +21,7 @@ import org.techhouse.ops.CompiledProcedureCache;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.DropDatabaseRequest;
@@ -47,8 +48,7 @@ public final class DatabaseOperationHelper {
         final var dbName = createDatabaseRequest.getDatabaseName();
         return OperationResponse.respondOrError(OperationType.CREATE_DATABASE, ErrorCode.ERROR_CREATING_DATABASE,
                 () -> {
-                    if (!locks.tryLockDatabaseExclusive(dbName,
-                            OperationLocks.lockBudgetMillis(createDatabaseRequest.isReplicated()))) {
+                    if (!locks.tryLockDatabaseExclusive(dbName, OperationLocks.lockBudgetMillis(false))) {
                         return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
                     }
                     try {
@@ -64,9 +64,6 @@ public final class DatabaseOperationHelper {
         final var dbName = createDatabaseRequest.getDatabaseName();
         if (cache.getAdminDbEntry(dbName) != null) {
             return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
-        }
-        if (createDatabaseRequest.isReplicated()) {
-            return register(createDatabaseRequest, clientId);
         }
         return registerUnderNameLock(createDatabaseRequest, clientId);
     }
@@ -96,9 +93,6 @@ public final class DatabaseOperationHelper {
         }
         if (fs.createDatabaseFolder(dbName)) {
             final var username = clientTracker.getAuthenticatedUsername(clientId);
-            if (createDatabaseRequest.isReplicated()) {
-                return saveNewDatabaseEntry(dbName, username);
-            }
             return AdminOperationHelper.withUsersLock(() -> saveNewDatabaseEntry(dbName, existingUser(username)));
         }
         return new OperationResponse(OperationType.CREATE_DATABASE, ErrorCode.DATABASE_ALREADY_EXISTS);
@@ -123,11 +117,8 @@ public final class DatabaseOperationHelper {
                         return databaseNotFound(dbName);
                     }
                     return OperationLocks.withDatabaseShared(dbName, OperationType.SET_DATABASE_OWNERS,
-                            ErrorCode.ERROR_UPDATING_DATABASE_OWNERS, request.isReplicated(),
-                            () -> request.isReplicated()
-                                    ? updateOwnersUnderDatabaseBarrier(dbName, request.getOwners())
-                                    : AdminOperationHelper.withUsersLock(
-                                            () -> updateOwnersOfExistingUsers(dbName, request.getOwners())));
+                            ErrorCode.ERROR_UPDATING_DATABASE_OWNERS, () -> AdminOperationHelper
+                                    .withUsersLock(() -> updateOwnersOfExistingUsers(dbName, request.getOwners())));
                 });
     }
 
@@ -159,8 +150,19 @@ public final class DatabaseOperationHelper {
 
     public static OperationResponse processDropDatabaseOperation(DropDatabaseRequest dropDatabaseRequest) {
         final var dbName = dropDatabaseRequest.getDatabaseName();
-        final var deadline = System.currentTimeMillis()
-                + OperationLocks.lockBudgetMillis(dropDatabaseRequest.isReplicated());
+        final var dropped = dropDatabase(dbName, false);
+        if (dropped.getStatus() == OperationStatus.OK) {
+            return OperationResponse.respondOrError(OperationType.DROP_DATABASE, ErrorCode.ERROR_DROPPING_DATABASE,
+                    () -> {
+                        AdminTombstone.record(AdminRecordKey.database(dbName));
+                        return dropped;
+                    });
+        }
+        return dropped;
+    }
+
+    public static OperationResponse dropDatabase(String dbName, boolean bounded) {
+        final var deadline = System.currentTimeMillis() + OperationLocks.lockBudgetMillis(bounded);
         final var lockedColls = new ArrayList<String>();
         var barrierHeld = false;
         try {

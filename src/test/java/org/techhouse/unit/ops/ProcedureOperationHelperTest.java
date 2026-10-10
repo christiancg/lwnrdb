@@ -159,51 +159,6 @@ public class ProcedureOperationHelperTest {
     }
 
     @Test
-    public void test_save_stamps_request_for_deterministic_re_execution() throws Exception {
-        final var request = saveRequest("return 1;");
-        ProcedureOperationHelper.executeSave(request, ACTOR);
-        final var stored = cache.getProcedure(TestGlobals.DB, "p");
-        assertEquals(stored.getVersion(), request.getStampedVersion());
-        assertEquals(stored.getUpdatedAt(), request.getStampedUpdatedAt());
-        assertEquals(stored.getUpdatedBy(), request.getStampedUpdatedBy());
-    }
-
-    @Test
-    public void test_a_client_stamp_is_ignored() throws Exception {
-        final var request = saveRequest("return 1;");
-        request.setStampedVersion(9L);
-        request.setStampedUpdatedBy("admin");
-        request.setStampedUpdatedAt(1L);
-
-        ProcedureOperationHelper.executeSave(request, ACTOR);
-
-        final var stored = cache.getProcedure(TestGlobals.DB, "p");
-        assertEquals(1L, stored.getVersion());
-        assertEquals(ACTOR, stored.getUpdatedBy());
-    }
-
-    @Test
-    public void test_a_client_stamp_does_not_skip_the_import_check() throws Exception {
-        final var request = saveRequest("import { x } from 'procedures/missing'; return 1;");
-        request.setStampedVersion(9L);
-
-        final var response = ProcedureOperationHelper.executeSave(request, ACTOR);
-
-        assertEquals(ErrorCode.PROCEDURE_IMPORT_NOT_FOUND.getCode(), response.getErrorCode());
-    }
-
-    @Test
-    public void test_re_executing_a_stamped_request_is_idempotent() throws Exception {
-        final var request = saveRequest("return 1;");
-        ProcedureOperationHelper.executeSave(request, ACTOR);
-        final var first = cache.getProcedure(TestGlobals.DB, "p");
-        request.setReplicated(true);
-        ProcedureOperationHelper.executeSave(request, "someone-else");
-        final var second = cache.getProcedure(TestGlobals.DB, "p");
-        assertEquals(first, second);
-    }
-
-    @Test
     public void test_delete_is_idempotent_when_absent() throws Exception {
         final var response = ProcedureOperationHelper
                 .executeDelete(new DeleteProcedureRequest(TestGlobals.DB, "never-existed"));
@@ -268,31 +223,4 @@ public class ProcedureOperationHelperTest {
         assertEquals("recalculates the totals", cache.getProcedure(TestGlobals.DB, "p").getDescription());
     }
 
-    @Test
-    public void test_replicated_save_ignores_a_stale_if_version() throws Exception {
-        save("return 1;");
-        final var request = saveRequest("return 2;");
-        request.setIfVersion(5L);
-        request.setReplicated(true);
-        request.setStampedVersion(6L);
-        request.setStampedUpdatedBy(ACTOR);
-        request.setStampedUpdatedAt(42L);
-
-        assertInstanceOf(SaveProcedureResponse.class, ProcedureOperationHelper.executeSave(request, ACTOR));
-
-        final var stored = cache.getProcedure(TestGlobals.DB, "p");
-        assertEquals("return 2;", stored.getSource(), "a replica applies what the coordinator decided");
-        assertEquals(6L, stored.getVersion());
-    }
-
-    @Test
-    public void test_replicated_save_without_a_stamp_is_not_refused_by_if_version() throws Exception {
-        save("return 1;");
-        final var request = saveRequest("return 2;");
-        request.setIfVersion(5L);
-        request.setReplicated(true);
-
-        assertInstanceOf(SaveProcedureResponse.class, ProcedureOperationHelper.executeSave(request, ACTOR));
-        assertEquals("return 2;", cache.getProcedure(TestGlobals.DB, "p").getSource());
-    }
 }

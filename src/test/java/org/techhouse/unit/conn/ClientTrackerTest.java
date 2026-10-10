@@ -12,11 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
-import org.techhouse.conn.FinishedSlice;
 import org.techhouse.data.Client;
 import org.techhouse.data.Transaction;
-import org.techhouse.ops.OperationType;
-import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
@@ -274,48 +271,5 @@ public class ClientTrackerTest {
 
         assertTrue(clientTracker.transactionWriteHolders(null, List.of("db|a")).isEmpty());
         assertTrue(clientTracker.transactionWriteHolders(UUID.randomUUID(), List.of("db|a")).isEmpty());
-    }
-
-    private static FinishedSlice finishedAt(long finishedAtMillis) {
-        return new FinishedSlice(UUID.randomUUID().toString(), OperationType.COMMIT_TRANSACTION,
-                OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed"), finishedAtMillis);
-    }
-
-    private static long longAgo() {
-        return System.currentTimeMillis() - Configuration.getInstance().getFinishedSliceRetentionMs() - 1_000L;
-    }
-
-    @Test
-    public void test_removing_a_session_keeps_its_finished_slice() {
-        final var clientTracker = new ClientTracker();
-        clientTracker.registerTxSession("s", "u", null);
-        final var finished = finishedAt(System.currentTimeMillis());
-        clientTracker.recordFinishedSlice("s", finished);
-
-        clientTracker.removeTxSession("s");
-
-        assertSame(finished, clientTracker.finishedSlice("s"));
-    }
-
-    @Test
-    public void test_an_expired_finished_slice_is_forgotten() {
-        final var clientTracker = new ClientTracker();
-        clientTracker.recordFinishedSlice("s", finishedAt(longAgo()));
-
-        assertNull(clientTracker.finishedSlice("s"));
-        assertNull(clientTracker.finishedSlice(null));
-    }
-
-    @Test
-    public void test_recording_prunes_expired_slices_of_other_sessions() throws Exception {
-        final var clientTracker = new ClientTracker();
-        clientTracker.recordFinishedSlice("old", finishedAt(longAgo()));
-        final var fresh = finishedAt(System.currentTimeMillis());
-
-        clientTracker.recordFinishedSlice("new", fresh);
-
-        final Map<?, ?> slices = TestUtils.getPrivateField(clientTracker, "finishedSlices", Map.class);
-        assertEquals(1, slices.size());
-        assertSame(fresh, clientTracker.finishedSlice("new"));
     }
 }

@@ -22,6 +22,8 @@ import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.TwoPhaseParticipant;
 import org.techhouse.ops.Tx2pcLog;
+import org.techhouse.ops.TxCommitLog;
+import org.techhouse.ops.tx.SliceStates;
 
 public class Tx2pcRecovery implements MembershipListener {
     private final Logger logger = Logger.logFor(Tx2pcRecovery.class);
@@ -143,7 +145,24 @@ public class Tx2pcRecovery implements MembershipListener {
             return;
         }
         recoverParticipants();
+        recoverCommitting();
         recoverCoordinator();
+    }
+
+    private void recoverCommitting() {
+        for (final var txId : TxCommitLog.localCommitTxIds()) {
+            if (clientTracker.hasActiveTransaction(txId)) {
+                continue;
+            }
+            try {
+                TwoPhaseParticipant.resolveFromDurable(txId, true, clusterConfig.replicationAckTimeoutMs());
+            } catch (CollectionBusyException | TimeoutException | DurableReplayIncompleteException busy) {
+                logger.warning("Skipped finishing decided transaction " + txId + " this round: " + busy.getMessage());
+            } catch (Throwable failure) {
+                restoreInterruptFrom(failure);
+                logger.warning("Failed to finish decided transaction " + txId + ": " + failure.getMessage());
+            }
+        }
     }
 
     private void recoverParticipants() {
@@ -290,7 +309,7 @@ public class Tx2pcRecovery implements MembershipListener {
             return;
         }
         final var dtxId = transaction.getTransactionId().toString();
-        if (TransactionOperationHelper.isFenced(dtxId)) {
+        if (SliceStates.isFenced(dtxId)) {
             return;
         }
         final var edge = session.edgeNodeId() != null ? view.find(session.edgeNodeId()) : null;

@@ -114,8 +114,7 @@ public class TransactionCrashAtomicityTest {
         TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(),
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
         // Simulates the crash: the first op landed, the rest did not.
-        TransactionOperationHelper.commitLocalFromDurable(txId,
-                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+        assertTrue(TransactionRecovery.finishLocalCommit(txId));
 
         assertTrue(documentExists("a"));
         assertTrue(documentExists("b"));
@@ -149,10 +148,8 @@ public class TransactionCrashAtomicityTest {
         final var ops = AdminOperationHelper.readTransactionOps(opIds);
         assertEquals(1, ops.size());
 
-        TransactionOperationHelper.commitLocalFromDurable(txId,
-                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
-        TransactionOperationHelper.commitLocalFromDurable(txId,
-                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+        assertTrue(TransactionRecovery.finishLocalCommit(txId));
+        assertTrue(TransactionRecovery.finishLocalCommit(txId));
 
         assertEquals(1, cache.getEntriesByIds(TestGlobals.DB, TestGlobals.COLL, java.util.Set.of("dup")).size());
     }
@@ -169,8 +166,7 @@ public class TransactionCrashAtomicityTest {
         TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(), List.of(collId));
         TestUtils.releaseAllLocks();
 
-        assertThrows(DurableReplayIncompleteException.class,
-                () -> TransactionOperationHelper.commitLocalFromDurable(txId, List.of(collId)));
+        assertFalse(TransactionRecovery.finishLocalCommit(txId));
 
         final var locks = IocContainer.get(ResourceLocking.class);
         try {
@@ -207,8 +203,8 @@ public class TransactionCrashAtomicityTest {
             assertTrue(documentExists("prepared-doc"), "the op that landed before the corrupt one stays applied");
             assertTrue(locks.isWriteLockedByCurrentThread(collId),
                     "a 2PC recovery replay that could not finish applying must keep its collection locked");
-            assertTrue(Tx2pcLog.isPrepared(dtxId),
-                    "the PREPARED marker must survive so the next recovery round can retry the slice");
+            assertTrue(TxCommitLog.isLocallyCommitted(dtxId),
+                    "the decided marker must survive so the next recovery round can retry the slice");
         } finally {
             locks.releaseWrite(collId);
             Tx2pcLog.deleteParticipantMarker(dtxId);
@@ -224,7 +220,7 @@ public class TransactionCrashAtomicityTest {
         TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(), List.of(collId));
         TestUtils.releaseAllLocks();
 
-        TransactionOperationHelper.commitLocalFromDurable(txId, List.of(collId));
+        assertTrue(TransactionRecovery.finishLocalCommit(txId));
 
         final var locks = IocContainer.get(ResourceLocking.class);
         assertTrue(documentExists("released-at-startup"));
@@ -252,24 +248,5 @@ public class TransactionCrashAtomicityTest {
     @Test
     public void test_reading_a_missing_marker_returns_null() throws Exception {
         org.junit.jupiter.api.Assertions.assertNull(TxCommitLog.readLocalCommitMarker(UUID.randomUUID().toString()));
-    }
-
-    @Test
-    public void test_the_local_commit_marker_records_the_write_version() throws Exception {
-        final var clock = IocContainer.get(org.techhouse.cluster.HybridClock.class);
-        clock.observe(clock.next());
-        final var txId = UUID.randomUUID().toString();
-        TxCommitLog.recordLocalCommit(txId, List.of("op1"), List.of("db|coll"));
-        try {
-            final var marker = TxCommitLog.readLocalCommitMarker(txId);
-            assertNotNull(marker);
-
-            assertTrue(marker.writeVersion() > 0,
-                    "without a recorded version the restart replay skips nothing and overwrites every write made"
-                            + " on the new owner while this node was down");
-            assertTrue(marker.writeVersion() <= clock.current());
-        } finally {
-            TxCommitLog.clearLocalCommit(txId);
-        }
     }
 }

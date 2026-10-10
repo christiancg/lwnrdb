@@ -23,6 +23,7 @@ public class Transaction {
     private final List<String> bufferedOpIds = new ArrayList<>();
     // LinkedHashMap, not HashMap: inserts must stream in a stable order after the committed documents.
     private final Map<String, LinkedHashMap<String, JsonObject>> overlay = new HashMap<>();
+    private final Map<String, Map<String, Long>> versions = new HashMap<>();
     private final Map<Long, Set<String>> insertedIdsByOp = new HashMap<>();
     private boolean aborted;
 
@@ -91,12 +92,33 @@ public class Transaction {
         return insertedIdsByOp.getOrDefault(seq, Set.of());
     }
 
-    public void recordSave(String collId, String id, JsonObject doc) {
+    public void recordSave(String collId, String id, JsonObject doc, long version) {
         overlay.computeIfAbsent(collId, _ -> new LinkedHashMap<>()).put(id, doc.deepCopy());
+        recordVersion(collId, id, version);
     }
 
-    public void recordDelete(String collId, String id) {
+    public void recordDelete(String collId, String id, long version) {
         overlay.computeIfAbsent(collId, _ -> new LinkedHashMap<>()).put(id, TOMBSTONE);
+        recordVersion(collId, id, version);
+    }
+
+    private void recordVersion(String collId, String id, long version) {
+        versions.computeIfAbsent(collId, _ -> new HashMap<>()).put(id, version);
+    }
+
+    public long versionOf(String collId, String id) {
+        return versions.getOrDefault(collId, Map.of()).getOrDefault(id, 0L);
+    }
+
+    public void forget(String collId, String id) {
+        final var collOverlay = overlay.get(collId);
+        if (collOverlay != null) {
+            collOverlay.remove(id);
+        }
+        final var collVersions = versions.get(collId);
+        if (collVersions != null) {
+            collVersions.remove(id);
+        }
     }
 
     public Map<String, JsonObject> overlayFor(String collId) {

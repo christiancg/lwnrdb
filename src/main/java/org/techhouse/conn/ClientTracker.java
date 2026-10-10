@@ -21,7 +21,6 @@ public class ClientTracker {
     private final Map<UUID, Client> clients = new ConcurrentHashMap<>();
     private final Map<UUID, Runnable> disconnectSignals = new ConcurrentHashMap<>();
     private final Map<String, TxSession> txSessions = new ConcurrentHashMap<>();
-    private final Map<String, FinishedSlice> finishedSlices = new ConcurrentHashMap<>();
     private final Configuration configuration = Configuration.getInstance();
 
     public UUID addClient(Socket socket) {
@@ -83,25 +82,6 @@ public class ClientTracker {
             clients.remove(session.clientId());
             session.shutdown();
         }
-    }
-
-    public void recordFinishedSlice(String sessionId, FinishedSlice slice) {
-        final var now = System.currentTimeMillis();
-        final var retention = configuration.getFinishedSliceRetentionMs();
-        finishedSlices.values().removeIf(finished -> finished.expiredAt(now, retention));
-        finishedSlices.put(sessionId, slice);
-    }
-
-    public FinishedSlice finishedSlice(String sessionId) {
-        final var finished = sessionId != null ? finishedSlices.get(sessionId) : null;
-        if (finished == null) {
-            return null;
-        }
-        if (finished.expiredAt(System.currentTimeMillis(), configuration.getFinishedSliceRetentionMs())) {
-            finishedSlices.remove(sessionId, finished);
-            return null;
-        }
-        return finished;
     }
 
     public TxSession txSession(String sessionId) {

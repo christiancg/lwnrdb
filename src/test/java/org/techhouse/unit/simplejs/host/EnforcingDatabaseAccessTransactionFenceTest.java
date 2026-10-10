@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mockStatic;
@@ -20,7 +21,6 @@ import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.tx.TransactionRecovery;
@@ -69,7 +69,7 @@ public class EnforcingDatabaseAccessTransactionFenceTest {
         final var transaction = clientTracker.getActiveTransaction(sessionClientId);
         assertNotNull(transaction, "the failed commit must not erase the Client that names the held locks");
         assertFalse(transaction.getHeldLocks().isEmpty(), "the collection stays fenced until recovery finishes");
-        assertTrue(TransactionOperationHelper.isFenced(transaction.getTransactionId().toString()));
+        assertTrue(org.techhouse.ops.tx.SliceStates.isFenced(transaction.getTransactionId().toString()));
 
         AdminOperationHelper.deleteTransactionOps(List.copyOf(transaction.getBufferedOpIds()));
         TestUtils.releaseAllLocks();
@@ -86,7 +86,7 @@ public class EnforcingDatabaseAccessTransactionFenceTest {
         database.save(TestGlobals.DB, TestGlobals.COLL, document("fence-a"));
 
         try (var recovery = mockStatic(TransactionRecovery.class)) {
-            recovery.when(() -> TransactionRecovery.applyAllWithRetry(anyList(), anyString()))
+            recovery.when(() -> TransactionRecovery.applyAllWithRetry(anyList(), anyString(), any()))
                     .thenThrow(new OutOfMemoryError("simulated"));
             assertThrows(OutOfMemoryError.class, database::commitTransaction);
         }
@@ -102,7 +102,7 @@ public class EnforcingDatabaseAccessTransactionFenceTest {
         database.save(TestGlobals.DB, TestGlobals.COLL, document("fence-b"));
 
         try (var recovery = mockStatic(TransactionRecovery.class)) {
-            recovery.when(() -> TransactionRecovery.applyAllWithRetry(anyList(), anyString()))
+            recovery.when(() -> TransactionRecovery.applyAllWithRetry(anyList(), anyString(), any()))
                     .thenThrow(new RuntimeException("simulated"));
             assertThrows(JsThrowException.class, database::commitTransaction);
         }

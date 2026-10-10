@@ -13,6 +13,8 @@ import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.data.auth.PasswordHasher;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.admin.AdminTombstone;
 import org.techhouse.ops.admin.GrantPruner;
 import org.techhouse.ops.req.AuthenticateRequest;
 import org.techhouse.ops.req.ChangePermissionsRequest;
@@ -83,6 +85,7 @@ public class UserOperationHelper {
                         return new OperationResponse(OperationType.DELETE_USER, ErrorCode.CANNOT_DELETE_LAST_ADMIN);
                     }
                     AdminOperationHelper.deleteUserEntry(username);
+                    AdminTombstone.record(AdminRecordKey.user(username));
                     GrantPruner.forDeletedUser(username);
                     return OperationResponse.ok(OperationType.DELETE_USER, "User deleted successfully");
                 }));

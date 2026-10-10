@@ -312,7 +312,7 @@ public class TransactionClusteringTest {
         final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
         final var worker = new Thread(() -> {
             try {
-                TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
+                TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections(), 0L);
                 resolved.set(true);
             } catch (Throwable t) {
                 failure.compareAndSet(null, t);
@@ -347,7 +347,7 @@ public class TransactionClusteringTest {
         final var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
         final var worker = new Thread(() -> {
             try {
-                TwoPhaseParticipant.abortFromDurable(dtxId);
+                TwoPhaseParticipant.abortFromDurable(dtxId, 0L);
                 resolved.set(true);
             } catch (Throwable t) {
                 failure.compareAndSet(null, t);

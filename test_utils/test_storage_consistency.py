@@ -1483,6 +1483,67 @@ def test_the_committed_transaction_is_all_there_after_the_restart(conn: Conn):
           len(found) == 5, f"present after restart: {found}")
 
 
+REPLAY_COLL = "replayed_repeated_ids"
+REPLAY_FENCE_COLL = "replay_fence"
+
+
+def replay_fence_folder(work_dir: str) -> str:
+    return os.path.join(work_dir, "db", DB, REPLAY_FENCE_COLL)
+
+
+def local_commit_markers(work_dir: str) -> int:
+    folder = os.path.join(work_dir, "db", "admin", "transactions")
+    if not os.path.isdir(folder):
+        return 0
+    total = 0
+    for name in sorted(os.listdir(folder)):
+        if name.endswith(".dat"):
+            with open(os.path.join(folder, name), "r", encoding="utf-8", errors="replace") as fp:
+                total += sum(1 for line in fp if "|localcommit" in line)
+    return total
+
+
+def arrange_a_killed_commit_with_repeated_ids(conn: Conn, work_dir: str):
+    section("A commit with several ops on one id stops past its commit point")
+    for coll in (REPLAY_COLL, REPLAY_FENCE_COLL):
+        check_status(f"create {coll}", conn.send(
+            {"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll}), "OK")
+    check_status("seed r1 before the transaction", conn.send(
+        {"type": "SAVE", "databaseName": DB, "collectionName": REPLAY_COLL, "object": {"_id": "r1", "v": 0}}), "OK")
+    check_status("start the transaction", conn.send({"type": "START_TRANSACTION"}), "OK")
+    for value in (1, 2, 3):
+        check_status(f"buffer r1 v={value}", conn.send(
+            {"type": "SAVE", "databaseName": DB, "collectionName": REPLAY_COLL,
+             "object": {"_id": "r1", "v": value}}), "OK")
+    check_status("buffer r2", conn.send(
+        {"type": "SAVE", "databaseName": DB, "collectionName": REPLAY_COLL, "object": {"_id": "r2", "v": 1}}), "OK")
+    check_status("buffer the delete of r2", conn.send(
+        {"type": "DELETE", "databaseName": DB, "collectionName": REPLAY_COLL, "_id": "r2"}), "OK")
+    check_status("buffer the op that will not apply", conn.send(
+        {"type": "SAVE", "databaseName": DB, "collectionName": REPLAY_FENCE_COLL,
+         "object": {"_id": "blocker", "v": 1}}), "OK")
+    os.chmod(replay_fence_folder(work_dir), 0o000)
+    check_code("the commit fences past its commit point",
+               conn.send({"type": "COMMIT_TRANSACTION"}), "ERROR", "500-33")
+
+
+def release_the_replay_fence(work_dir: str):
+    os.chmod(replay_fence_folder(work_dir), 0o755)
+    check("the commit marker outlived the kill", local_commit_markers(work_dir) == 1,
+          "with no marker the restart has nothing to replay, so the checks after it would be vacuous")
+
+
+def test_a_killed_commit_with_repeated_ids_replays_to_its_last_value(conn: Conn, work_dir: str):
+    r1 = conn.send({"type": "FIND_BY_ID", "databaseName": DB, "collectionName": REPLAY_COLL, "_id": "r1"})
+    check_field("an id saved three times ends at its last value", r1, "object.v", 3)
+    check_status("an id saved then deleted ends deleted", conn.send(
+        {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": REPLAY_COLL, "_id": "r2"}), "NOT_FOUND")
+    check_status("the op that could not apply before the kill landed", conn.send(
+        {"type": "FIND_BY_ID", "databaseName": DB, "collectionName": REPLAY_FENCE_COLL, "_id": "blocker"}), "OK")
+    check("the replay retired its commit marker", local_commit_markers(work_dir) == 0,
+          f"markers left: {local_commit_markers(work_dir)}")
+
+
 def test_writes_to_an_unknown_collection_are_refused_cleanly(conn: Conn):
     section("writes naming a collection that does not exist")
     for op, request in (
@@ -2256,6 +2317,8 @@ def main():
             seed_collections_whose_compactions_a_kill_will_interrupt(conn)
             seed_drops_a_kill_will_interrupt(conn, work_dir)
             seed_a_collection_its_database_will_stop_listing(conn)
+            interrupted = admin_conn()
+            arrange_a_killed_commit_with_repeated_ids(interrupted, work_dir)
 
             print("\n  Killing the server without a drain ...")
             check("the unclean stop left an index-dirty marker on disk",
@@ -2264,6 +2327,8 @@ def main():
         proc.wait(timeout=30)
         log_offset = os.path.getsize(log_path)
         proc = None
+        interrupted.close()
+        release_the_replay_fence(work_dir)
 
         append_torn_pk_line(work_dir, DB, HEAL_COLL)
         lose_the_page_rows(work_dir)
@@ -2303,6 +2368,7 @@ def main():
             test_a_self_heal_never_erases_a_committed_write(conn, work_dir, log_path)
             test_an_admin_write_after_a_torn_admin_tail_lands_on_its_own_line(conn, work_dir)
             test_an_unlisted_collection_is_relisted_at_startup(conn, work_dir)
+            test_a_killed_commit_with_repeated_ids_replays_to_its_last_value(conn, work_dir)
         bu.stop_server(proc)
         proc = None
         restore_the_old_grammar_pk_index(work_dir)

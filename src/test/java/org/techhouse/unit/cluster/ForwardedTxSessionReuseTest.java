@@ -194,7 +194,8 @@ public class ForwardedTxSessionReuseTest extends ClusterConnectionHandlerTestBas
 
         final var rollback = send(tx2, control("ROLLBACK_TRANSACTION"));
 
-        assertEquals(ErrorCode.NO_ACTIVE_TRANSACTION.getCode(), rollback.getErrorCode());
+        assertEquals(ErrorCode.TRANSACTION_SLICE_LOST.getCode(), rollback.getErrorCode(),
+                "this node never held a slice of the transaction being rolled back");
         assertNull(clientTracker.txSession(sessionId));
         assertEquals(OperationStatus.NOT_FOUND, findById("abandoned").getStatus());
     }

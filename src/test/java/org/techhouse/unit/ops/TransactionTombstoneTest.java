@@ -103,7 +103,7 @@ public class TransactionTombstoneTest {
     @Test
     public void test_tombstones_are_written_even_when_ownership_moved() throws Exception {
         final var transaction = new Transaction(UUID.randomUUID(), UUID.randomUUID());
-        transaction.recordDelete(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL), "moved");
+        transaction.recordDelete(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL), "moved", 0L);
         ownership.setSelfNodeId("someone-else");
         ownership.onMembershipChanged(
                 new MembershipView(List.of(new NodeInfo("someone-else", "127.0.0.1", 5001, NodeState.ALIVE, 1L, 1L))));
@@ -142,7 +142,7 @@ public class TransactionTombstoneTest {
         TestUtils.releaseAllLocks();
         save("survivor", "after-prepare");
 
-        org.techhouse.ops.TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
+        org.techhouse.ops.TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections(), 0L);
 
         assertFalse(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("survivor"),
                 "the replay skipped this delete because the document was written after the prepare, so reserving a"
@@ -170,9 +170,41 @@ public class TransactionTombstoneTest {
         clientTracker.clearTransactionState(clientId);
         TestUtils.releaseAllLocks();
 
-        org.techhouse.ops.TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections());
+        org.techhouse.ops.TwoPhaseParticipant.commitPreparedFromDurable(dtxId, marker.collections(), 0L);
 
         assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("doomed"),
                 "a delete the replay actually applies must still leave its tombstone");
+    }
+
+    @Test
+    public void test_a_delete_reserves_its_own_op_version() throws Exception {
+        saveGone();
+        final var clientId = clientTracker.registerForwardedClient("own-version");
+        TransactionOperationHelper.start(clientId);
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var delete = new DeleteRequest(TestGlobals.DB, TestGlobals.COLL);
+        delete.set_id("gone");
+        TransactionOperationHelper.bufferDelete(delete, transaction);
+        final var opVersion = transaction.versionOf(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL),
+                "gone");
+
+        assertEquals(OperationStatus.OK, TransactionOperationHelper.commit(clientId).getStatus());
+
+        assertEquals(opVersion, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get("gone"));
+    }
+
+    @Test
+    public void test_a_replay_reserves_the_same_tombstone_again() throws Exception {
+        save("twice-reserved", "before");
+        final var transaction = new Transaction(UUID.randomUUID(), UUID.randomUUID());
+        final var collId = Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL);
+        final var version = IocContainer.get(org.techhouse.cluster.HybridClock.class).next();
+        transaction.recordDelete(collId, "twice-reserved", version);
+
+        coordinator.reserveTransactionTombstones(transaction);
+        coordinator.reserveTransactionTombstones(transaction);
+
+        assertEquals(version, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get("twice-reserved"),
+                "a replay re-appends the op's own version, so the tombstone never moves above it");
     }
 }

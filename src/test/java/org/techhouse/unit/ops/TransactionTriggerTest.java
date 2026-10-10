@@ -295,7 +295,7 @@ public class TransactionTriggerTest {
         TestUtils.releaseAllLocks();
         captured.clear();
 
-        org.techhouse.ops.tx.TransactionRecovery.commitLocalFromDurable(txId, collections);
+        org.techhouse.ops.tx.TransactionRecovery.finishLocalCommit(txId);
 
         final var events = settle();
         assertEquals(1, events.size(),

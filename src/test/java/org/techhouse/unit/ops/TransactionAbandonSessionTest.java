@@ -22,13 +22,10 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
-import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.req.SaveRequest;
-import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -111,24 +108,16 @@ public class TransactionAbandonSessionTest {
     @Test
     public void test_is_fenced_conjoins_both_markers() throws Exception {
         final var txId = UUID.randomUUID().toString();
-        assertFalse(TransactionOperationHelper.isFenced(txId));
+        assertFalse(org.techhouse.ops.tx.SliceStates.isFenced(txId));
         TxCommitLog.recordLocalCommit(txId, List.of(), List.of());
         try {
-            assertTrue(TransactionOperationHelper.isFenced(txId),
+            assertTrue(org.techhouse.ops.tx.SliceStates.isFenced(txId),
                     "a single-owner forwarded transaction fences through the commit log and never prepares");
         } finally {
             TxCommitLog.clearLocalCommit(txId);
         }
     }
 
-    @Test
-    public void test_released_its_locks_reads_the_half_applied_code() {
-        assertTrue(TransactionOperationHelper.releasedItsLocks(null));
-        assertTrue(TransactionOperationHelper
-                .releasedItsLocks(OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "done")));
-        assertFalse(TransactionOperationHelper.releasedItsLocks(
-                new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED)));
-    }
     @Test
     public void test_abandon_session_keeps_the_session_when_the_rollback_outcome_is_unknown() throws Exception {
         final var sessionId = "slow-session";

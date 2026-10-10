@@ -27,6 +27,7 @@ import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TxCommitLog;
@@ -89,10 +90,6 @@ public class TransactionFencedResendTest {
         cluster.configureMembership(3, node("self", cluster.serverPort()));
     }
 
-    private void regainQuorum() throws Exception {
-        cluster.configureMembership(1, node("self", cluster.serverPort()));
-    }
-
     private String collectionOwnedByOther() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         cluster.configureMembership(2, node("self", cluster.serverPort()), node("other", 19991));
@@ -110,68 +107,65 @@ public class TransactionFencedResendTest {
         fs.createCollectionFile(TestGlobals.DB, coll);
     }
 
-    private void assertSliceRetained(UUID clientId, String txId, List<String> opIds, String coll) {
+    private void assertSliceRetained(UUID clientId, String txId, List<String> opIds) {
         assertTrue(TxCommitLog.isLocallyCommitted(txId), "the commit marker must survive the refused re-send");
         assertTrue(opIds.stream().allMatch(id -> cache.getPkIndexTransaction(id) != null),
                 "every op the marker names must survive the refused re-send");
         assertNotNull(clientTracker.getActiveTransaction(clientId),
                 "the transaction stays registered so its locks keep an owner");
-        assertTrue(locks.isWriteLockedByCurrentThread(Cache.getCollectionIdentifier(TestGlobals.DB, coll)),
+        assertTrue(locks.isWriteLockedByCurrentThread(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)),
                 "the half-applied collection must stay locked");
     }
 
+    private void assertFinished(UUID clientId, String txId, String coll, String id) throws Exception {
+        assertFalse(TxCommitLog.isLocallyCommitted(txId), "a finished commit clears its marker");
+        assertNull(clientTracker.getActiveTransaction(clientId), "a finished commit deregisters the transaction");
+        assertFalse(locks.isWriteLockedByCurrentThread(Cache.getCollectionIdentifier(TestGlobals.DB, coll)),
+                "a finished commit releases its locks");
+        assertNotNull(
+                cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, coll).stream()
+                        .filter(entry -> entry.getValue().equals(id)).findFirst().orElse(null),
+                "the committed document must be present");
+    }
+
     @Test
-    public void test_resent_commit_without_quorum_keeps_the_fenced_slice() throws Exception {
+    public void test_resent_commit_without_quorum_finishes_the_decided_slice() throws Exception {
         final var clientId = fencedTransaction(TestGlobals.COLL, "no-quorum");
-        final var transaction = clientTracker.getActiveTransaction(clientId);
-        final var txId = transaction.getTransactionId().toString();
-        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+        final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
         loseQuorum();
 
         final var response = TransactionOperationHelper.commit(clientId);
 
-        assertEquals("500-33", response.getErrorCode(),
-                "a decided commit that cannot finish yet is still half applied, not refused");
-        assertSliceRetained(clientId, txId, opIds, TestGlobals.COLL);
+        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(), response.getErrorCode(),
+                "the decision is binding, so the slice lands and only its replication waits for the quorum");
+        assertFinished(clientId, txId, TestGlobals.COLL, "no-quorum");
     }
 
     @Test
-    public void test_resent_commit_after_ownership_moved_keeps_the_fenced_slice() throws Exception {
+    public void test_resent_commit_after_ownership_moved_finishes_the_decided_slice() throws Exception {
         final var coll = collectionOwnedByOther();
         TestUtils.setPrivateField(config, "clusterEnabled", false);
         createCollection(coll);
         final var clientId = fencedTransaction(coll, "moved");
-        final var transaction = clientTracker.getActiveTransaction(clientId);
-        final var txId = transaction.getTransactionId().toString();
-        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+        final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
         TestUtils.setPrivateField(config, "clusterEnabled", true);
 
         final var response = TransactionOperationHelper.commit(clientId);
 
-        assertEquals("500-33", response.getErrorCode(),
-                "a decided commit on a collection this node no longer owns must stay half applied");
-        assertSliceRetained(clientId, txId, opIds, coll);
+        assertEquals(OperationStatus.OK, response.getStatus(),
+                "the versioned apply leaves newer writes alone, so a decided slice finishes wherever it is");
+        assertFinished(clientId, txId, coll, "moved");
     }
 
     @Test
-    public void test_resent_commit_finishes_once_quorum_returns() throws Exception {
+    public void test_resent_commit_with_quorum_finishes_the_decided_slice() throws Exception {
         final var clientId = fencedTransaction(TestGlobals.COLL, "healed");
         final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
-        loseQuorum();
-        TransactionOperationHelper.commit(clientId);
-        regainQuorum();
 
         final var response = TransactionOperationHelper.commit(clientId);
 
         assertEquals(OperationStatus.OK, response.getStatus(), "the re-send must finish the decided commit");
-        assertFalse(TxCommitLog.isLocallyCommitted(txId), "a finished commit clears its marker");
-        assertNull(clientTracker.getActiveTransaction(clientId), "a finished commit deregisters the transaction");
-        assertFalse(locks.isWriteLockedByCurrentThread(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)),
-                "a finished commit releases its locks");
-        assertNotNull(
-                cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
-                        .filter(entry -> entry.getValue().equals("healed")).findFirst().orElse(null),
-                "the committed document must be present");
+        assertFinished(clientId, txId, TestGlobals.COLL, "healed");
     }
 
     @Test
@@ -189,21 +183,17 @@ public class TransactionFencedResendTest {
     }
 
     @Test
-    public void test_resent_commit_whose_marker_rewrite_fails_keeps_the_fenced_slice() throws Exception {
-        final var clientId = fencedTransaction(TestGlobals.COLL, "marker-io");
-        final var transaction = clientTracker.getActiveTransaction(clientId);
-        final var txId = transaction.getTransactionId().toString();
-        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+    public void test_resent_commit_does_not_rewrite_the_decided_marker() throws Exception {
+        final var clientId = fencedTransaction(TestGlobals.COLL, "marker-once");
+        final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
 
         try (var log = Mockito.mockStatic(TxCommitLog.class, Mockito.CALLS_REAL_METHODS)) {
-            log.when(() -> TxCommitLog.recordLocalCommit(ArgumentMatchers.anyString(), ArgumentMatchers.anyList(),
-                    ArgumentMatchers.anyList())).thenThrow(new IOException("disk full"));
-            final var response = TransactionOperationHelper.commit(clientId);
+            assertEquals(OperationStatus.OK, TransactionOperationHelper.commit(clientId).getStatus());
 
-            assertEquals("500-33", response.getErrorCode(),
-                    "a decided commit that fails before applying is still half applied, not failed");
+            log.verify(() -> TxCommitLog.recordLocalCommit(ArgumentMatchers.anyString(), ArgumentMatchers.anyList(),
+                    ArgumentMatchers.anyList()), Mockito.never());
         }
-        assertSliceRetained(clientId, txId, opIds, TestGlobals.COLL);
+        assertFinished(clientId, txId, TestGlobals.COLL, "marker-once");
     }
 
     @Test
@@ -221,7 +211,7 @@ public class TransactionFencedResendTest {
             assertEquals("500-33", response.getErrorCode(),
                     "a decided commit whose ops cannot be read is still half applied, not failed");
         }
-        assertSliceRetained(clientId, txId, opIds, TestGlobals.COLL);
+        assertSliceRetained(clientId, txId, opIds);
     }
 
     @Test
@@ -238,7 +228,7 @@ public class TransactionFencedResendTest {
             assertEquals("500-33", response.getErrorCode(),
                     "a decided commit missing a buffered op must stay fenced for recovery");
         }
-        assertSliceRetained(clientId, txId, opIds, TestGlobals.COLL);
+        assertSliceRetained(clientId, txId, opIds);
     }
 
     @Test

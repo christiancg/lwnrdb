@@ -18,7 +18,7 @@ final class PeerShutdownGate {
 
     static boolean carriesWrite(ClusterMessage request) {
         return switch (request.getType()) {
-            case REPLICATE, REPLICATE_TX, REPLICATE_ADMIN, REPLICATE_USER, FORWARD_REQUEST, PREPARE_TX, COMMIT_TX ->
+            case REPLICATE, REPLICATE_TX, REPLICATE_ADMIN, REINDEX_BROADCAST, FORWARD_REQUEST, PREPARE_TX, COMMIT_TX ->
                 true;
             case FORWARD_TX_REQUEST -> forwardedType(request) != OperationType.ROLLBACK_TRANSACTION;
             default -> false;

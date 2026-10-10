@@ -103,16 +103,6 @@ public class GrantPrunerTest {
     }
 
     @Test
-    public void test_a_replicated_database_drop_prunes_too() {
-        final var request = new DropDatabaseRequest(TestGlobals.DB);
-        request.setReplicated(true);
-
-        DatabaseOperationHelper.processDropDatabaseOperation(request);
-
-        assertFalse(bob().getDatabasePermissions().containsKey(TestGlobals.DB));
-    }
-
-    @Test
     public void test_dropping_a_collection_removes_only_its_collection_grant() {
         final var response = CollectionOperationHelper
                 .processDropCollectionOperation(new DropCollectionRequest(TestGlobals.DB, TestGlobals.COLL));

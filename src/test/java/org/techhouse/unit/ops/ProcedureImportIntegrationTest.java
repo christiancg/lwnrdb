@@ -426,21 +426,6 @@ public class ProcedureImportIntegrationTest {
     }
 
     @Test
-    public void test_a_replicated_save_skips_the_import_check() throws Exception {
-        // A stamped request is a peer re-executing REPLICATE_ADMIN. It must not reject a save the
-        // coordinator accepted just because its own copy of the library has not arrived yet.
-        final var request = new SaveProcedureRequest(TestGlobals.DB, "caller",
-                "import { missing } from \"procedures/absent\"; export const x = missing;");
-        request.setStampedVersion(7L);
-        request.setStampedUpdatedAt(System.currentTimeMillis());
-        request.setStampedUpdatedBy(OWNER);
-        request.setReplicated(true);
-        final var response = ProcedureOperationHelper.executeSave(request, OWNER);
-        assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
-        assertNotNull(cache.getProcedure(TestGlobals.DB, "caller"));
-    }
-
-    @Test
     public void test_library_of_only_exports_is_storable() throws Exception {
         final var response = ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, "lib", LIB),
                 OWNER);

@@ -136,19 +136,6 @@ public class CreateNameRaceTest {
     }
 
     @Test
-    public void test_a_replicated_collection_create_does_not_take_the_registration_lock() throws Exception {
-        holdNameLock(TestGlobals.DB, Globals.COLLECTION_NAMES_LOCK);
-        final var request = new CreateCollectionRequest(TestGlobals.DB, "replicated");
-        request.setReplicated(true);
-        request.setIncarnation(1L);
-
-        final var response = CollectionOperationHelper.processCreateCollectionOperation(request);
-
-        assertEquals(OperationStatus.OK, response.getStatus());
-        assertNotNull(cache.getAdminCollectionEntry(TestGlobals.DB, "replicated"));
-    }
-
-    @Test
     public void test_a_database_case_variant_created_concurrently_is_refused() throws Exception {
         holdNameLock(Globals.ADMIN_DB_NAME, Globals.DATABASE_NAMES_LOCK);
         final var raced = new AtomicReference<OperationResponse>();
@@ -177,15 +164,4 @@ public class CreateNameRaceTest {
                 "a create that never got the registration lock must leave no folder behind");
     }
 
-    @Test
-    public void test_a_replicated_database_create_does_not_take_the_registration_lock() throws Exception {
-        holdNameLock(Globals.ADMIN_DB_NAME, Globals.DATABASE_NAMES_LOCK);
-        final var request = new CreateDatabaseRequest("replicadb");
-        request.setReplicated(true);
-
-        final var response = DatabaseOperationHelper.processCreateDatabaseOperation(request, null);
-
-        assertEquals(OperationStatus.OK, response.getStatus());
-        assertNotNull(cache.getAdminDbEntry("replicadb"));
-    }
 }

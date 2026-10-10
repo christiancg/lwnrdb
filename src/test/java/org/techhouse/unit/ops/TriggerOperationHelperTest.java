@@ -65,77 +65,6 @@ public class TriggerOperationHelperTest {
         return new SaveTriggerRequest(TestGlobals.DB, TestGlobals.COLL, name, List.of("CREATED"), "recalc");
     }
 
-    @Test
-    public void test_a_client_cannot_forge_the_stamped_definer() throws Exception {
-        final var request = request("forged");
-        request.setStampedVersion(9L);
-        request.setStampedDefiner("admin");
-        request.setStampedUpdatedBy("admin");
-        request.setStampedUpdatedAt(1L);
-
-        final var response = save(request);
-
-        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
-        assertEquals(ACTOR, stored.getDefiner());
-        assertEquals(ACTOR, stored.getUpdatedBy());
-        assertEquals(1L, response.getVersion());
-    }
-
-    @Test
-    public void test_a_replicated_save_honours_the_stamped_definer() throws Exception {
-        final var request = request("replicated");
-        request.setStampedVersion(9L);
-        request.setStampedDefiner("admin");
-        request.setStampedUpdatedBy("admin");
-        request.setStampedUpdatedAt(5L);
-        request.setReplicated(true);
-
-        save(request);
-
-        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
-        assertEquals("admin", stored.getDefiner());
-        assertEquals(9L, stored.getVersion());
-    }
-
-    @Test
-    public void test_a_replicated_save_honours_the_stamped_created_at() throws Exception {
-        save(request("adopted"));
-        final var replicated = request("adopted");
-        replicated.setStampedVersion(9L);
-        replicated.setStampedDefiner(ACTOR);
-        replicated.setStampedUpdatedBy(ACTOR);
-        replicated.setStampedUpdatedAt(5L);
-        replicated.setStampedCreatedAt(3L);
-        replicated.setReplicated(true);
-
-        save(replicated);
-
-        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
-        assertEquals(3L, stored.getCreatedAt(),
-                "a replica already holding the trigger must take the coordinator's creation time, not keep its own");
-    }
-
-    @Test
-    public void test_a_client_cannot_forge_the_stamped_created_at() throws Exception {
-        final var request = request("forged-created");
-        request.setStampedCreatedAt(3L);
-
-        save(request);
-
-        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
-        assertEquals(stored.getUpdatedAt(), stored.getCreatedAt());
-    }
-
-    @Test
-    public void test_created_at_is_stamped_on_the_request_for_deterministic_re_execution() throws Exception {
-        final var request = request("created-audit");
-
-        save(request);
-
-        final var stored = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
-        assertEquals(stored.getCreatedAt(), request.getStampedCreatedAt());
-    }
-
     private SaveTriggerResponse save(SaveTriggerRequest request) throws Exception {
         final var response = TriggerOperationHelper.executeSave(request, ACTOR);
         assertInstanceOf(SaveTriggerResponse.class, response, response.getMessage());
@@ -259,21 +188,6 @@ public class TriggerOperationHelperTest {
     }
 
     @Test
-    public void test_definer_is_stamped_on_the_request_for_deterministic_re_execution() throws Exception {
-        final var request = request("audit");
-        TriggerOperationHelper.executeSave(request, ACTOR);
-        assertEquals(ACTOR, request.getStampedDefiner());
-        assertEquals(1L, request.getStampedVersion());
-        assertTrue(request.getStampedUpdatedAt() > 0);
-        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        request.setReplicated(true);
-        TriggerOperationHelper.executeSave(request, "peer-has-no-acting-user");
-        final var replicated = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
-        assertEquals(ACTOR, replicated.getDefiner());
-        assertEquals(1L, replicated.getVersion());
-    }
-
-    @Test
     public void test_delete_is_idempotent_when_absent() throws Exception {
         assertEquals(OperationStatus.OK, TriggerOperationHelper
                 .executeDelete(new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "never")).getStatus());
@@ -346,16 +260,4 @@ public class TriggerOperationHelperTest {
         assertEquals(OperationType.SAVE_TRIGGER, save(request("audit")).getType());
     }
 
-    @Test
-    public void test_replicated_save_ignores_a_stale_if_version() throws Exception {
-        save(request("audit"));
-        final var request = request("audit");
-        request.setIfVersion(99L);
-        request.setReplicated(true);
-
-        final var response = TriggerOperationHelper.executeSave(request, ACTOR);
-
-        assertEquals(OperationStatus.OK, response.getStatus(), "a replica applies what the coordinator decided");
-        assertEquals(2L, cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst().getVersion());
-    }
 }

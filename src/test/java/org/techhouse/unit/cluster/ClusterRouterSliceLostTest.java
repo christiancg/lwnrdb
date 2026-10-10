@@ -2,7 +2,6 @@ package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.techhouse.test.ClusterTestHarness.node;
@@ -180,11 +179,12 @@ public class ClusterRouterSliceLostTest {
     }
 
     private void awaitTheOwnersLateFinish() throws Exception {
-        for (final var entry : clientTracker.txSessionsSnapshot().entrySet()) {
-            entry.getValue().submit(() -> null).get(10, TimeUnit.SECONDS);
-            assertNotNull(clientTracker.finishedSlice(entry.getKey()),
-                    "the owner finished the commit it stopped waiting for, on the session's own thread");
+        for (final var session : clientTracker.txSessionsSnapshot().values()) {
+            session.submit(() -> null).get(10, TimeUnit.SECONDS);
         }
+        final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
+        assertTrue(org.techhouse.ops.Tx2pcLog.hasOutcome(txId),
+                "the owner finished the commit it stopped waiting for and recorded how it ended");
     }
 
     @Test

@@ -18,6 +18,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.HybridClock;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeAddress;
 import org.techhouse.cluster.NodeInfo;
@@ -99,8 +100,10 @@ public class Tx2pcRecoveryTest {
             throws Exception {
         final var obj = new JsonObject();
         obj.add("_id", new JsonString(id));
-        AdminOperationHelper.saveTransactionOp(new AdminTransactionEntry(dtxId, "client", 0,
-                AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL, obj));
+        final var op = new AdminTransactionEntry(dtxId, "client", 0, AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB,
+                TestGlobals.COLL, obj);
+        op.setVersions(List.of(IocContainer.get(HybridClock.class).next()));
+        AdminOperationHelper.saveTransactionOp(op);
         Tx2pcLog.recordParticipantPrepared(dtxId, coordinatorAddress, participants,
                 List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
     }

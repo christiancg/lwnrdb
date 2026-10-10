@@ -48,8 +48,8 @@ public class Tx2pcLogTest {
         final var committed = "aaaa1111-0000-0000-0000-000000000000";
         final var aborted = "bbbb2222-0000-0000-0000-000000000000";
         assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(committed));
-        Tx2pcLog.recordOutcome(committed, true);
-        Tx2pcLog.recordOutcome(aborted, false);
+        Tx2pcLog.recordOutcome(committed, true, null);
+        Tx2pcLog.recordOutcome(aborted, false, null);
         assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(committed));
         assertEquals(Tx2pcLog.Status.ABORTED, Tx2pcLog.status(aborted));
         assertTrue(Tx2pcLog.outcomeDtxIds().contains(committed));
@@ -60,7 +60,7 @@ public class Tx2pcLogTest {
     @Test
     public void test_garbage_collect_outcomes_drops_aged_keeps_recent() throws Exception {
         final var dtxId = "cccc3333-0000-0000-0000-000000000000";
-        Tx2pcLog.recordOutcome(dtxId, true);
+        Tx2pcLog.recordOutcome(dtxId, true, null);
         Tx2pcLog.garbageCollectOutcomes(Long.MAX_VALUE / 2);
         assertTrue(Tx2pcLog.outcomeDtxIds().contains(dtxId));
         Tx2pcLog.garbageCollectOutcomes(-1000L);
@@ -110,7 +110,7 @@ public class Tx2pcLogTest {
         final var dtxId = "eeee5555-0000-0000-0000-000000000000";
         try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
             log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false);
-            Tx2pcLog.recordOutcome(dtxId, false);
+            Tx2pcLog.recordOutcome(dtxId, false, null);
 
             assertEquals(Tx2pcLog.Status.ABORTED, Tx2pcLog.status(dtxId));
         }

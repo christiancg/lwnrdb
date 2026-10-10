@@ -257,6 +257,27 @@ def test_bulk_save_in_transaction(c):
         check_status("bulk-saved doc b2 is committed", find_by_id(oc, "b2"), "OK")
 
 
+def test_several_ops_on_one_id_commit_in_buffer_order(c):
+    section("Several ops on one id commit in the order they were buffered")
+
+    check_status("seed B outside the transaction", save(c, {"_id": "ord_b", "v": 0}), "OK")
+    check_status("START_TRANSACTION", start_txn(c), "OK")
+    check_status("SAVE A v=1", save(c, {"_id": "ord_a", "v": 1}), "OK")
+    check_status("DELETE A", delete(c, "ord_a"), "OK")
+    check_status("SAVE A v=2", save(c, {"_id": "ord_a", "v": 2}), "OK")
+    check_status("SAVE B v=1", save(c, {"_id": "ord_b", "v": 1}), "OK")
+    check_status("DELETE B", delete(c, "ord_b"), "OK")
+    check_status("BULK_SAVE C and D", bulk_save(c, [{"_id": "ord_c", "v": 1}, {"_id": "ord_d", "v": 1}]), "OK")
+    check_status("SAVE C v=3", save(c, {"_id": "ord_c", "v": 3}), "OK")
+    check_status("COMMIT_TRANSACTION", commit_txn(c), "OK")
+
+    with authed_conn() as oc:
+        check_field("A ends at its last save", find_by_id(oc, "ord_a"), "object.v", 2)
+        check_status("B ends deleted", find_by_id(oc, "ord_b"), "NOT_FOUND")
+        check_field("C ends at the save after the bulk", find_by_id(oc, "ord_c"), "object.v", 3)
+        check_field("D keeps its bulk value", find_by_id(oc, "ord_d"), "object.v", 1)
+
+
 def test_control_operation_errors(c):
     section("Transaction control errors (409-3 / 409-4)")
 
@@ -595,6 +616,8 @@ def main():
         test_join_reads_your_own_writes(c)
     with authed_conn() as (c):
         test_bulk_save_in_transaction(c)
+    with authed_conn() as (c):
+        test_several_ops_on_one_id_commit_in_buffer_order(c)
     with authed_conn() as (c):
         test_control_operation_errors(c)
     with authed_conn() as (c):

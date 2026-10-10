@@ -1950,12 +1950,13 @@ In a cluster a transaction can touch collections owned by different nodes, and a
 - `409-7` — a participant could not prepare (it lost quorum, lost ownership of a collection it buffered, or
   never answered), so the commit was aborted everywhere.
 - `409-10` — part of the commit did not apply, the owner stopped waiting for it, or its answer never reached
-  this node. Recovery re-drives it; re-sending `COMMIT_TRANSACTION` within `finishedSliceRetentionMs` (one
-  hour by default) reports how it ended.
+  this node. Recovery re-drives it; re-sending `COMMIT_TRANSACTION` finishes a commit that was already decided
+  (even without a quorum, answering `503-3` until the replicas are reachable), and within `tombstoneRetentionMs`
+  (one day by default) a re-send reports how it ended, also after the owner restarted.
 - `409-12` — a previous transaction on this connection is still being resolved on a participant; retry
   once it finishes.
 - `409-13` — a participant no longer holds this transaction's writes (it restarted, or reaped the session
-  of an edge it saw as gone). The transaction can only be rolled back and retried.
+  of an edge it saw as gone), or never saw them. The transaction can only be rolled back and retried.
 - `409-14` — a `ROLLBACK_TRANSACTION` sent after a `409-10` commit that in fact committed on its owner.
 - `421-3` — a read inside the transaction (a `JOIN` included) touches collections whose buffered writes
   live on different nodes, so no single node can answer it with the transaction's own writes.
@@ -2406,11 +2407,10 @@ reads are forwarded to the collection's owner, admin operations to the admin coo
 - `503-8` — a forwarded write whose owner did not report an outcome. It may already have applied, so check
   before retrying.
 - `503-7` — the same for a script placed on another node.
-- `503-5` — the admin coordinator is still catching up with its peers (right after it starts, or while a
-  peer holds a newer admin epoch — including a fresh node that joined one which held data before it was
-  clustered, until it has copied that node's state). Retry shortly.
+- `503-5` — the admin coordinator has not yet completed an admin anti-entropy round with a peer since it
+  started, so it may not hold every admin record the cluster has (a fresh node that joined one which held
+  data before it was clustered answers this until it has merged that node's records). Retry shortly.
 - `503-9` — no admin coordinator could be resolved from this node's view of the cluster.
-- `503-12` — another admin operation still holds the coordinator's admin lane past `adminLaneTimeoutMs`.
 - `503-10` — the collection exists on the cluster but has not reached this node yet.
 - `421-1` — the node stopped owning the collection while the write waited for its lock (or, for a `DELETE`,
   while its before-hook ran; the document is left untouched), or an admin operation reached a node that is no

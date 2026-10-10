@@ -1,44 +1,28 @@
 package org.techhouse.ops.tx;
 
-import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.UUID;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterConfig;
-import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.data.Transaction;
 import org.techhouse.data.admin.AdminTransactionEntry;
-import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.DurableReplayIncompleteException;
-import org.techhouse.ex.TransactionOpFailedException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AdminOperationHelper;
-import org.techhouse.ops.DeleteOperationHelper;
-import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.SaveOperationHelper;
-import org.techhouse.ops.TriggerRunLog;
 import org.techhouse.ops.TriggerRunRecovery;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.TxCommitLog;
-import org.techhouse.ops.req.BulkSaveRequest;
-import org.techhouse.ops.req.DeleteRequest;
-import org.techhouse.ops.req.SaveRequest;
-import org.techhouse.ops.resp.OperationResponse;
 
 public final class TransactionRecovery {
     private static final int COMMIT_APPLY_ATTEMPTS = 3;
-    private static final org.techhouse.listen.ListenManager listenManager = org.techhouse.ioc.IocContainer
-            .get(org.techhouse.listen.ListenManager.class);
     private static final Logger logger = Logger.logFor(TransactionRecovery.class);
     private static final Cache cache = IocContainer.get(Cache.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
-    private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
     private static final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private static final String OBJECTS_FIELD = "objects";
     private static final String OPS_NOT_APPLIED = "its ops did not all apply";
@@ -48,67 +32,42 @@ public final class TransactionRecovery {
 
     public static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
             throws Exception {
-        final var marker = Tx2pcLog.readParticipantMarker(dtxId);
-        if (!replayDurableSlice(dtxId, collections, marker != null ? marker.preparedVersion() : 0L, timeoutMillis,
-                () -> resolveMarkers(dtxId, true))) {
+        SliceCommit.beginFromDurable(dtxId);
+        if (!replayDurableSlice(dtxId, collections, timeoutMillis)) {
             throw new DurableReplayIncompleteException(dtxId, OPS_NOT_APPLIED);
         }
     }
 
-    private static long startupFenceFor(TxCommitLog.LocalCommitMarker marker) {
-        return marker == null || !clusterConfig.isEnabled() ? 0L : marker.writeVersion();
-    }
-
-    private static boolean replayUnfenced(String txId, List<String> collections, ThrowingRunnable markerCleanup)
+    private static boolean replayDurableSlice(String txId, List<String> collections, long timeoutMillis)
             throws Exception {
-        return replayDurableSlice(txId, collections, 0L, 0L, markerCleanup);
-    }
-
-    private static boolean replayDurableSlice(String txId, List<String> collections, long preparedVersion,
-            long timeoutMillis, ThrowingRunnable markerCleanup) throws Exception {
         if (timeoutMillis > 0) {
             locks.acquireWriteLocksNotHeld(collections, timeoutMillis);
         } else {
             locks.acquireWriteLocksNotHeld(collections);
         }
-        var applied = false;
+        var finished = false;
         try {
-            final var opIds = Tx2pcLog.sliceOpIds(txId);
-            final var ops = AdminOperationHelper.readTransactionOps(opIds);
+            final var ops = AdminOperationHelper.readTransactionOps(Tx2pcLog.sliceOpIds(txId));
             ops.sort(Comparator.comparingLong(AdminTransactionEntry::getSeq));
             final var reconstructed = new Transaction(UUID.fromString(txId), UUID.randomUUID());
             reconstructed.setTriggerDepth(triggerDepthOf(ops));
+            collections.forEach(reconstructed::addHeldLock);
             for (final var op : ops) {
                 recordIntoOverlay(reconstructed, op);
             }
-            final var fencedIds = ReplayFence.fencedIds(ops, reconstructed, preparedVersion);
-            dropTombstonesWrittenSincePrepare(reconstructed, fencedIds);
-            final var reservedTombstones = coordinator.reserveTransactionTombstones(reconstructed);
-            listenManager.deferNotifications(collections);
-            try {
-                applied = applyAllWithRetry(ops, txId, fencedIds);
-            } finally {
-                listenManager.flushDeferredNotifications();
-            }
-            if (!applied) {
+            finished = SliceCommit.finish(reconstructed, ops, actingUserOf(ops),
+                    clusterConfig.isEnabled()) != SliceCommit.Result.HALF_APPLIED;
+            if (!finished) {
                 logger.error("Transaction " + txId
                         + " could not finish its durable replay; its collections stay locked pending a retry");
-                return false;
             }
-            final var stagedTriggers = CommittedOpTriggers.stage(ops, actingUserOf(ops),
-                    reconstructed.getTriggerDepth(), reconstructed, fencedIds, txId);
-            markerCleanup.run();
-            discardAppliedOps(txId, opIds);
-            stagedTriggers.submitAll();
-            coordinator.replicateTransaction(reconstructed, reservedTombstones);
-            return true;
+            return finished;
         } catch (Exception e) {
-            applied = false;
             logger.error("Transaction " + txId
                     + " could not finish its durable replay; its collections stay locked pending a retry", e);
             throw e;
         } finally {
-            if (applied) {
+            if (finished) {
                 locks.releaseWriteLocksHeldByCurrentThread(collections);
             }
         }
@@ -121,10 +80,6 @@ public final class TransactionRecovery {
             }
         }
         return null;
-    }
-
-    private interface ThrowingRunnable {
-        void run() throws Exception;
     }
 
     public static void discardAppliedOps(String txId, List<String> opIds) {
@@ -146,53 +101,31 @@ public final class TransactionRecovery {
     public static void abortFromDurable(String dtxId) throws Exception {
         final var orphanedRuns = FencedTriggerRuns.consumedBySlice(dtxId);
         AdminOperationHelper.deleteTransactionOps(Tx2pcLog.sliceOpIds(dtxId));
-        resolveMarkers(dtxId, false);
+        recordAborted(dtxId);
         TriggerRunRecovery.requeueRuns(orphanedRuns);
     }
 
     public static void resolveFromDurable(String dtxId, boolean commit, long timeoutMillis) throws Exception {
-        if (!Tx2pcLog.isPrepared(dtxId)) {
-            return;
+        final var state = SliceStates.stateOf(dtxId, null);
+        if (state == SliceStateMachine.State.COMMITTING && !commit) {
+            throw new DurableReplayIncompleteException(dtxId, "its commit was already decided");
         }
-        if (commit) {
+        if (state == SliceStateMachine.State.COMMITTING) {
+            final var marker = TxCommitLog.readLocalCommitMarker(dtxId);
+            if (!replayDurableSlice(dtxId, marker == null ? List.of() : marker.collections(), timeoutMillis)) {
+                throw new DurableReplayIncompleteException(dtxId, OPS_NOT_APPLIED);
+            }
+        } else if (state == SliceStateMachine.State.PREPARED && commit) {
             final var marker = Tx2pcLog.readParticipantMarker(dtxId);
             commitPreparedFromDurable(dtxId, marker != null ? marker.collections() : List.of(), timeoutMillis);
-        } else {
+        } else if (state == SliceStateMachine.State.PREPARED) {
             abortFromDurable(dtxId);
         }
     }
 
-    // The OUTCOME marker is retained so a peer can still report the decision during another
-    // participant's cooperative termination.
-    public static void resolveMarkers(String dtxId, boolean committed) throws Exception {
+    public static void recordAborted(String dtxId) throws Exception {
         Tx2pcLog.deleteParticipantMarker(dtxId);
-        Tx2pcLog.recordOutcome(dtxId, committed);
-    }
-
-    static String fenceKey(String dbName, String collName, String id) {
-        return Cache.getCollectionIdentifier(dbName, collName) + Globals.COLL_IDENTIFIER_SEPARATOR + id;
-    }
-
-    private static void dropTombstonesWrittenSincePrepare(Transaction transaction, Set<String> fencedIds) {
-        if (fencedIds.isEmpty()) {
-            return;
-        }
-        for (final var collId : transaction.touchedCollections()) {
-            final var overlay = transaction.overlayFor(collId);
-            if (overlay == null) {
-                continue;
-            }
-            final var stale = new ArrayList<String>();
-            for (final var overlayEntry : overlay.entrySet()) {
-                if (Transaction.isTombstone(overlayEntry.getValue())
-                        && fencedIds.contains(collId + Globals.COLL_IDENTIFIER_SEPARATOR + overlayEntry.getKey())) {
-                    stale.add(overlayEntry.getKey());
-                }
-            }
-            for (final var id : stale) {
-                overlay.remove(id);
-            }
-        }
+        Tx2pcLog.recordOutcome(dtxId, false, null);
     }
 
     private static int triggerDepthOf(List<AdminTransactionEntry> ops) {
@@ -210,15 +143,17 @@ public final class TransactionRecovery {
         }
         switch (op.getOpType()) {
             case AdminTransactionEntry.OP_TYPE_SAVE -> transaction.recordSave(collId,
-                    op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue(), op.getPayload());
+                    op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue(), op.getPayload(), op.versionAt(0));
             case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
-                for (final var element : op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList()) {
-                    final var obj = element.asJsonObject();
-                    transaction.recordSave(collId, obj.get(Globals.PK_FIELD).asJsonString().getValue(), obj);
+                final var elements = op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList();
+                for (var i = 0; i < elements.size(); i++) {
+                    final var obj = elements.get(i).asJsonObject();
+                    transaction.recordSave(collId, obj.get(Globals.PK_FIELD).asJsonString().getValue(), obj,
+                            op.versionAt(i));
                 }
             }
-            case AdminTransactionEntry.OP_TYPE_DELETE ->
-                transaction.recordDelete(collId, op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue());
+            case AdminTransactionEntry.OP_TYPE_DELETE -> transaction.recordDelete(collId,
+                    op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue(), op.versionAt(0));
             default -> {
                 // markers never appear in the slice op id list
             }
@@ -250,10 +185,7 @@ public final class TransactionRecovery {
     private static void finishLocalCommitsAtStartup() {
         for (final var txId : TxCommitLog.localCommitTxIds()) {
             try {
-                final var marker = TxCommitLog.readLocalCommitMarker(txId);
-                final var finished = replayDurableSlice(txId, marker == null ? List.of() : marker.collections(),
-                        startupFenceFor(marker), 0L, () -> TxCommitLog.clearLocalCommit(txId));
-                if (finished) {
+                if (finishLocalCommit(txId)) {
                     logger.info("Finished transaction " + txId + " that was interrupted mid-commit at startup");
                 } else {
                     logger.warning("Transaction " + txId
@@ -265,12 +197,9 @@ public final class TransactionRecovery {
         }
     }
 
-    // Idempotent: buffered ops carry whole values, so re-applying the prefix a crash already applied
-    // converges to the same state rather than compounding.
-    public static void commitLocalFromDurable(String txId, List<String> collections) throws Exception {
-        if (!replayUnfenced(txId, collections, () -> TxCommitLog.clearLocalCommit(txId))) {
-            throw new DurableReplayIncompleteException(txId, OPS_NOT_APPLIED);
-        }
+    public static boolean finishLocalCommit(String txId) throws Exception {
+        final var marker = TxCommitLog.readLocalCommitMarker(txId);
+        return replayDurableSlice(txId, marker == null ? List.of() : marker.collections(), 0L);
     }
 
     private static String dtxIdOf(String recordId) {
@@ -278,23 +207,12 @@ public final class TransactionRecovery {
         return sep > 0 ? recordId.substring(0, sep) : recordId;
     }
 
-    private static void requireApplied(String opType, OperationResponse response) {
-        if (response == null || response.getStatus() == OperationStatus.OK) {
-            return;
-        }
-        throw new TransactionOpFailedException(opType, response.getErrorCode(), response.getMessage());
-    }
-
-    public static boolean applyAllWithRetry(List<AdminTransactionEntry> ops, String txId) {
-        return applyAllWithRetry(ops, txId, Set.of());
-    }
-
-    public static boolean applyAllWithRetry(List<AdminTransactionEntry> ops, String txId, Set<String> fencedIds) {
+    public static boolean applyAllWithRetry(List<AdminTransactionEntry> ops, String txId, VersionedApply applier) {
         var next = 0;
         for (var attempt = 1; attempt <= COMMIT_APPLY_ATTEMPTS; attempt++) {
             try {
                 while (next < ops.size()) {
-                    TransactionRecovery.applyBufferedOp(ops.get(next), fencedIds);
+                    applier.apply(ops.get(next));
                     next++;
                 }
                 return true;
@@ -304,64 +222,5 @@ public final class TransactionRecovery {
             }
         }
         return false;
-    }
-
-    public static void applyBufferedOp(AdminTransactionEntry op, Set<String> fencedIds) throws Exception {
-        final var dbName = op.getTargetDb();
-        final var collName = op.getTargetColl();
-        switch (op.getOpType()) {
-            case AdminTransactionEntry.OP_TYPE_SAVE -> {
-                final var object = op.getPayload();
-                final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
-                if (fencedIds.contains(fenceKey(dbName, collName, id))) {
-                    logger.warning("Skipping the replay of " + id + " in " + dbName + "|" + collName
-                            + ": it was written after the transaction was prepared");
-                    return;
-                }
-                final var saveRequest = new SaveRequest(dbName, collName);
-                saveRequest.setObject(object);
-                saveRequest.set_id(id);
-                requireApplied(AdminTransactionEntry.OP_TYPE_SAVE, SaveOperationHelper.executeSave(saveRequest));
-            }
-            case AdminTransactionEntry.OP_TYPE_BULK_SAVE -> {
-                final var objects = new ArrayList<JsonObject>();
-                for (final var element : op.getPayload().get(OBJECTS_FIELD).asJsonArray().asList()) {
-                    final var object = element.asJsonObject();
-                    final var id = object.get(Globals.PK_FIELD).asJsonString().getValue();
-                    if (fencedIds.contains(fenceKey(dbName, collName, id))) {
-                        logger.warning("Skipping the replay of " + id + " in " + dbName + "|" + collName
-                                + ": it was written after the transaction was prepared");
-                        continue;
-                    }
-                    objects.add(object);
-                }
-                if (objects.isEmpty()) {
-                    return;
-                }
-                final var bulkSaveRequest = new BulkSaveRequest(dbName, collName);
-                bulkSaveRequest.setObjects(objects);
-                requireApplied(AdminTransactionEntry.OP_TYPE_BULK_SAVE,
-                        SaveOperationHelper.executeBulkSave(bulkSaveRequest));
-            }
-            case AdminTransactionEntry.OP_TYPE_DELETE -> {
-                final var id = op.getPayload().get(Globals.PK_FIELD).asJsonString().getValue();
-                if (fencedIds.contains(fenceKey(dbName, collName, id))) {
-                    logger.warning("Skipping the replayed delete of " + id + " in " + dbName + "|" + collName
-                            + ": it was written after the transaction was prepared");
-                    return;
-                }
-                final var deleteRequest = new DeleteRequest(dbName, collName);
-                deleteRequest.set_id(id);
-                DeleteOperationHelper.executeDelete(deleteRequest);
-            }
-            // Consuming the pending trigger run in the same commit as the run's effects is what makes a
-            // trigger exactly-once: the record that would replay it disappears if and only if it landed.
-            case AdminTransactionEntry.OP_TYPE_DELETE_TRIGGER_RUN -> {
-                final var runId = op.getPayload().get(AdminTransactionEntry.TRIGGER_RUN_ID_FIELD).asJsonString()
-                        .getValue();
-                AdminOperationHelper.deleteTriggerRuns(TriggerRunLog.recordIdsFor(runId));
-            }
-            default -> throw new IllegalStateException("Unknown transaction op type: " + op.getOpType());
-        }
     }
 }

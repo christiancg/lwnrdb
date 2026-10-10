@@ -189,14 +189,6 @@ public final class Configuration {
         return longValue(ConfigKey.REPLICATION_ACK_TIMEOUT_MS);
     }
 
-    public long getFinishedSliceRetentionMs() {
-        return longValue(ConfigKey.FINISHED_SLICE_RETENTION_MS);
-    }
-
-    public long getAdminLaneTimeoutMs() {
-        return longValue(ConfigKey.ADMIN_LANE_TIMEOUT_MS);
-    }
-
     public int getVirtualNodesPerNode() {
         return intValue(ConfigKey.VIRTUAL_NODES_PER_NODE);
     }

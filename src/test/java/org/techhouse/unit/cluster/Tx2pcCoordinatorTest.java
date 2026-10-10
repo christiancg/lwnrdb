@@ -200,7 +200,8 @@ public class Tx2pcCoordinatorTest {
                 "a decided slice is not refused for quorum: the decision is already binding");
         assertTrue(Tx2pcLog.sliceOpIds(txId).containsAll(opIds),
                 "deleting the slice leaves recovery an empty replay it records as committed");
-        assertTrue(Tx2pcLog.isPrepared(txId), "the prepared marker must survive the re-sent commit");
+        assertTrue(org.techhouse.ops.TxCommitLog.isLocallyCommitted(txId),
+                "the decided marker must survive the re-sent commit");
         assertFalse(transaction.getHeldLocks().isEmpty(), "the half-applied slice stays fenced");
         assertEquals(transaction, clientTracker.getActiveTransaction(clientId));
     }
@@ -218,7 +219,8 @@ public class Tx2pcCoordinatorTest {
 
         final var response = resendCommitWithoutQuorum(clientId);
 
-        assertEquals(OperationStatus.OK, response.getStatus(), "the re-sent commit finishes the decided slice");
+        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(), response.getErrorCode(),
+                "the re-sent commit finishes the decided slice; only its replication waits for the quorum");
         assertEquals(OperationStatus.OK, findStatus("tpc-resent-finish"));
         assertFalse(Tx2pcLog.isPrepared(txId), "finishing the slice resolves its prepared marker");
         assertNull(clientTracker.getActiveTransaction(clientId));
@@ -249,7 +251,8 @@ public class Tx2pcCoordinatorTest {
 
         assertEquals("500-33", response.getErrorCode(),
                 "a rollback after the commit decision must not report a clean rollback");
-        assertTrue(org.techhouse.ops.Tx2pcLog.isPrepared(txId), "the prepared marker must survive the rollback");
+        assertTrue(org.techhouse.ops.TxCommitLog.isLocallyCommitted(txId),
+                "the decided marker must survive the rollback");
         assertTrue(org.techhouse.ops.Tx2pcLog.isCommitted(txId), "the commit decision must survive the rollback");
         assertTrue(org.techhouse.ops.Tx2pcLog.sliceOpIds(txId).containsAll(opIds),
                 "the slice recovery re-drives must survive the rollback");
@@ -328,7 +331,7 @@ public class Tx2pcCoordinatorTest {
         final var response = coordinator.forceResolve(dtxId, true);
 
         assertEquals("500-24", response.getErrorCode(), "an incomplete local replay is not a resolved transaction");
-        assertTrue(org.techhouse.ops.Tx2pcLog.isPrepared(dtxId));
+        assertTrue(org.techhouse.ops.TxCommitLog.isLocallyCommitted(dtxId));
     }
 
     @Test

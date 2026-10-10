@@ -71,14 +71,6 @@ public class IndexOperationHelperReadinessTest {
     }
 
     @Test
-    public void replicated_create_index_on_missing_collection_keeps_answering_ok() {
-        final var replicated = createIndexOn(ABSENT_COLL);
-        replicated.setReplicated(true);
-
-        assertEquals(OperationStatus.OK, IndexOperationHelper.processCreateIndex(replicated).getStatus());
-    }
-
-    @Test
     public void create_index_on_missing_collection_leaves_nothing_behind() {
         processor.processMessage(createIndexOn(ABSENT_COLL));
 

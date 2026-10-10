@@ -15,7 +15,6 @@ import org.techhouse.ioc.IocContainer;
 public class ScriptPlacement {
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
-    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Cache cache = IocContainer.get(Cache.class);
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private final LongAdder forwarded = new LongAdder();
@@ -77,11 +76,9 @@ public class ScriptPlacement {
     }
 
     private List<NodeInfo> eligibleMembers(NodeInfo self) {
-        final var selfEpoch = adminEpoch.current();
         final var eligible = new ArrayList<NodeInfo>();
         for (final var member : membershipService.membershipView().aliveMembers()) {
-            if (member.getNodeId().equals(self.getNodeId())
-                    || (!member.isAdminSyncing() && member.getAdminEpoch() >= selfEpoch)) {
+            if (member.getNodeId().equals(self.getNodeId()) || !member.isAdminSyncing()) {
                 eligible.add(member);
             }
         }

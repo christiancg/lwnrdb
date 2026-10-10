@@ -65,13 +65,6 @@ public class CreateCollectionDatabaseCheckTest {
     }
 
     @Test
-    public void test_replicated_create_collection_without_its_database_writes_nothing() {
-        final var request = new CreateCollectionRequest(UNREGISTERED_DB, COLLECTION);
-        request.setReplicated(true);
-        assertNothingWritten(unregisteredDatabaseFolder(), request);
-    }
-
-    @Test
     public void test_create_collection_in_a_registered_database_still_succeeds() {
         final var response = processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, COLLECTION));
 

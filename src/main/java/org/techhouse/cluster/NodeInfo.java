@@ -14,8 +14,6 @@ public class NodeInfo {
     private volatile int scriptLoad;
     private volatile int scriptCapacity;
     private volatile boolean adminSyncing;
-    private volatile long adminEpoch;
-    private volatile boolean adminEpochUnconfirmed;
 
     public NodeInfo() {
     }
@@ -117,22 +115,6 @@ public class NodeInfo {
         this.adminSyncing = adminSyncing;
     }
 
-    public long getAdminEpoch() {
-        return adminEpoch;
-    }
-
-    public void setAdminEpoch(long adminEpoch) {
-        this.adminEpoch = adminEpoch;
-    }
-
-    public boolean isAdminEpochUnconfirmed() {
-        return adminEpochUnconfirmed;
-    }
-
-    public void setAdminEpochUnconfirmed(boolean adminEpochUnconfirmed) {
-        this.adminEpochUnconfirmed = adminEpochUnconfirmed;
-    }
-
     /**
      * Deliberately separate from the membership fields: a change here is not a membership change, so it must
      * not fire the membership listeners.
@@ -141,8 +123,6 @@ public class NodeInfo {
         scriptLoad = incoming.getScriptLoad();
         scriptCapacity = incoming.getScriptCapacity();
         adminSyncing = incoming.isAdminSyncing();
-        adminEpoch = incoming.getAdminEpoch();
-        adminEpochUnconfirmed = incoming.isAdminEpochUnconfirmed();
     }
 
     @Override
@@ -153,22 +133,20 @@ public class NodeInfo {
             return false;
         return port == that.port && incarnation == that.incarnation && heartbeat == that.heartbeat
                 && scriptLoad == that.scriptLoad && scriptCapacity == that.scriptCapacity
-                && adminSyncing == that.adminSyncing && adminEpoch == that.adminEpoch
-                && adminEpochUnconfirmed == that.adminEpochUnconfirmed && Objects.equals(nodeId, that.nodeId)
+                && adminSyncing == that.adminSyncing && Objects.equals(nodeId, that.nodeId)
                 && Objects.equals(host, that.host) && state == that.state;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(nodeId, host, port, state, incarnation, heartbeat, scriptLoad, scriptCapacity, adminSyncing,
-                adminEpoch, adminEpochUnconfirmed);
+        return Objects.hash(nodeId, host, port, state, incarnation, heartbeat, scriptLoad, scriptCapacity,
+                adminSyncing);
     }
 
     @Override
     public String toString() {
         return "NodeInfo(nodeId=" + nodeId + ", host=" + host + ", port=" + port + ", state=" + state + ", incarnation="
                 + incarnation + ", heartbeat=" + heartbeat + ", scriptLoad=" + scriptLoad + ", scriptCapacity="
-                + scriptCapacity + ", adminSyncing=" + adminSyncing + ", adminEpoch=" + adminEpoch
-                + ", adminEpochUnconfirmed=" + adminEpochUnconfirmed + ")";
+                + scriptCapacity + ", adminSyncing=" + adminSyncing + ")";
     }
 }

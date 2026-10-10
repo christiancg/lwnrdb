@@ -10,10 +10,12 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
-import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.StoredDefinitions;
 import org.techhouse.ops.req.DeleteTriggerRequest;
 import org.techhouse.ops.req.ListTriggersRequest;
 import org.techhouse.ops.req.SaveTriggerRequest;
@@ -26,7 +28,6 @@ import org.techhouse.ops.resp.TestTriggerResponse;
 public final class TriggerOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
-    private static final EJson eJson = IocContainer.get(EJson.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
 
     private TriggerOperationHelper() {
@@ -106,7 +107,7 @@ public final class TriggerOperationHelper {
         if (request.conflictsWith(existing == null ? 0L : existing.getVersion())) {
             return new OperationResponse(OperationType.SAVE_TRIGGER, ErrorCode.PROCEDURE_VERSION_CONFLICT);
         }
-        final var definition = stampedDefinition(request, existing, actingUser, mode, timing, events);
+        final var definition = newDefinition(request, existing, actingUser, mode, timing, events);
         existingList.removeIf(trigger -> trigger.getName().equals(definition.getName()));
         existingList.add(definition);
         persist(dbName, collName, existingList);
@@ -136,26 +137,13 @@ public final class TriggerOperationHelper {
         return null;
     }
 
-    private static TriggerDefinition stampedDefinition(SaveTriggerRequest request, TriggerDefinition existing,
+    private static TriggerDefinition newDefinition(SaveTriggerRequest request, TriggerDefinition existing,
             String actingUser, String mode, String timing, LinkedHashSet<EventType> events) {
-        final var alreadyStamped = request.carriesCoordinatorStamp();
-        final var version = alreadyStamped
-                ? request.getStampedVersion()
-                : (existing == null ? 1L : existing.getVersion() + 1);
-        final var updatedAt = alreadyStamped ? request.getStampedUpdatedAt() : System.currentTimeMillis();
-        final var updatedBy = alreadyStamped ? request.getStampedUpdatedBy() : actingUser;
-        final var definer = alreadyStamped ? request.getStampedDefiner() : actingUser;
-        final var localCreatedAt = existing == null ? updatedAt : existing.getCreatedAt();
-        final var createdAt = alreadyStamped && request.getStampedCreatedAt() > 0
-                ? request.getStampedCreatedAt()
-                : localCreatedAt;
-        request.setStampedVersion(version);
-        request.setStampedUpdatedAt(updatedAt);
-        request.setStampedUpdatedBy(updatedBy);
-        request.setStampedDefiner(definer);
-        request.setStampedCreatedAt(createdAt);
+        final var version = existing == null ? 1L : existing.getVersion() + 1;
+        final var updatedAt = System.currentTimeMillis();
+        final var createdAt = existing == null ? updatedAt : existing.getCreatedAt();
         return new TriggerDefinition(request.getName(), events, request.getProcedureName(), mode, timing,
-                request.isAllowCascade(), request.isEnabled(), definer, version, createdAt, updatedAt, updatedBy);
+                request.isAllowCascade(), request.isEnabled(), actingUser, version, createdAt, updatedAt, actingUser);
     }
 
     public static OperationResponse executeTest(TestTriggerRequest request, String actingUser) {
@@ -281,11 +269,13 @@ public final class TriggerOperationHelper {
     private static void persist(String dbName, String collName, List<TriggerDefinition> definitions)
             throws IOException {
         if (definitions.isEmpty()) {
-            fs.deleteTriggers(dbName, collName);
+            if (fs.deleteTriggers(dbName, collName)) {
+                AdminTombstone.record(AdminRecordKey.triggers(dbName, collName));
+            }
             cache.removeTriggers(dbName, collName);
             return;
         }
-        fs.writeTriggers(dbName, collName, eJson.toJson(TriggerDefinition.toFileJson(definitions)));
+        StoredDefinitions.writeTriggers(dbName, collName, TriggerDefinition.toFileJson(definitions));
         cache.putTriggers(dbName, collName, definitions);
     }
 

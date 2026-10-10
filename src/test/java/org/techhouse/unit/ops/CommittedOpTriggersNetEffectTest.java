@@ -71,7 +71,8 @@ public class CommittedOpTriggersNetEffectTest {
     }
 
     private void commit(AdminTransactionEntry... ops) {
-        CommittedOpTriggers.stage(List.of(ops), "user", 0, transaction, transaction.getTransactionId().toString());
+        CommittedOpTriggers.stage(List.of(ops), "user", 0, transaction, java.util.Map.of(),
+                transaction.getTransactionId().toString());
     }
 
     private static void verifyDeletedFired(MockedStatic<TriggerHelper> triggers, String coll, int count) {

@@ -9,7 +9,6 @@ import java.util.random.RandomGenerator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.ScriptPlacement;
@@ -19,22 +18,17 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.test.TestUtils;
 
 public class ScriptPlacementCapacityTest {
-    private static final long EPOCH = 42L;
     private static final String DB = "placement_db";
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
-    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Configuration config = Configuration.getInstance();
     private ScriptedRandom scriptedRandom;
     private ScriptPlacement placement;
     private boolean origEnabled;
     private boolean origRouting;
     private int origWeight;
-    private long origEpoch;
 
     private static NodeInfo node(String id, int port, int scriptLoad, int scriptCapacity) {
-        final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, scriptCapacity);
-        node.setAdminEpoch(EPOCH);
-        return node;
+        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, scriptCapacity);
     }
 
     private void membership(NodeInfo self, NodeInfo... others) throws Exception {
@@ -54,8 +48,6 @@ public class ScriptPlacementCapacityTest {
         origEnabled = config.isClusterEnabled();
         origRouting = config.isScriptRoutingEnabled();
         origWeight = config.getScriptLocalityWeight();
-        origEpoch = adminEpoch.current();
-        TestUtils.setPrivateField(adminEpoch, "epoch", EPOCH);
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
         TestUtils.setPrivateField(config, "scriptLocalityWeight", 0);
@@ -68,7 +60,6 @@ public class ScriptPlacementCapacityTest {
         TestUtils.setPrivateField(config, "scriptLocalityWeight", origWeight);
         TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(membershipService, "self", null);
-        TestUtils.setPrivateField(adminEpoch, "epoch", origEpoch);
     }
 
     @Test

@@ -3,6 +3,7 @@ package org.techhouse;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import javax.net.ssl.SSLServerSocketFactory;
 import org.techhouse.bckg_ops.BackgroundTaskManager;
 import org.techhouse.bckg_ops.ScheduleExecutor;
@@ -11,15 +12,15 @@ import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cache.Cache;
 import org.techhouse.cache.MemoryManagement;
 import org.techhouse.cluster.AdminAntiEntropyService;
-import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.AntiEntropyService;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.ClusterServer;
 import org.techhouse.cluster.HybridClock;
 import org.techhouse.cluster.MetadataCachePruner;
-import org.techhouse.cluster.StandaloneEpochSeed;
 import org.techhouse.cluster.TransactionSessionReaper;
 import org.techhouse.cluster.Tx2pcRecovery;
+import org.techhouse.cluster.admin.AdminRecords;
+import org.techhouse.cluster.admin.UnversionedRecords;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
@@ -40,6 +41,7 @@ import org.techhouse.ops.ScriptRunHistory;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TriggerDispatcher;
 import org.techhouse.ops.TriggerRunRecovery;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.PageOccupancyReconciler;
 
 public class Main {
@@ -62,7 +64,6 @@ public class Main {
     private static final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private static final AdminAntiEntropyService adminAntiEntropyService = IocContainer
             .get(AdminAntiEntropyService.class);
-    private static final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private static final TransactionSessionReaper transactionSessionReaper = IocContainer
             .get(TransactionSessionReaper.class);
     private static final Tx2pcRecovery tx2pcRecovery = IocContainer.get(Tx2pcRecovery.class);
@@ -89,6 +90,7 @@ public class Main {
         StartupWarnings.warnIfCompactionsLeftUnrecovered();
         cache.loadAdminData();
         seedHybridClock();
+        UnversionedRecords.stampAll();
         StartupWarnings.retainAndReportUncleanStops();
         PageOccupancyReconciler.reconcileAll();
         relistUnlistedCollections();
@@ -146,8 +148,6 @@ public class Main {
             final var factory = clusterConfig.tlsEnabled() ? TlsContextFactory.createServerSocketFactory(config) : null;
             clusterServer = new ClusterServer(clusterConfig.clusterPort(), clusterConfig.bindAddress(), factory);
             clusterServer.start();
-            adminEpoch.load();
-            StandaloneEpochSeed.seedIfPopulated();
             membershipService.addListener(ownershipManager);
             // Listeners fire in registration order: this must follow the ownership manager to read the rebuilt ring.
             membershipService.addListener(metadataCachePruner);
@@ -177,10 +177,7 @@ public class Main {
     }
 
     private static void seedHybridClock() {
-        if (!clusterConfig.isEnabled()) {
-            return;
-        }
-        var highest = 0L;
+        var highest = Math.max(highestBufferedOpVersionOrZero(), highestAdminVersionOrZero());
         try {
             for (final var dbName : cache.getUserDatabaseNames()) {
                 for (final var collName : cache.getCollectionNamesForDatabase(dbName)) {
@@ -193,6 +190,36 @@ public class Main {
         }
         hybridClock.seed(highest);
         logger.info("Seeded the write clock from disk at version " + highest);
+    }
+
+    private static long highestAdminVersionOrZero() {
+        var highest = 0L;
+        try {
+            for (final var record : AdminRecords.all()) {
+                highest = Math.max(highest, record.version());
+            }
+        } catch (Exception e) {
+            logger.error("Could not seed the write clock from the admin records; an admin write after this restart"
+                    + " could be stamped below a version it replaces", e);
+        }
+        return highest;
+    }
+
+    private static long highestBufferedOpVersionOrZero() {
+        var highest = 0L;
+        try {
+            final var ops = AdminOperationHelper
+                    .readTransactionOps(List.copyOf(cache.getTransactionPkIndexes().keySet()));
+            for (final var op : ops) {
+                for (final var version : op.getVersions()) {
+                    highest = Math.max(highest, version);
+                }
+            }
+        } catch (Exception e) {
+            logger.error("Could not seed the write clock from the buffered transaction ops; a replay after this"
+                    + " restart could compare against regressed versions", e);
+        }
+        return highest;
     }
 
     private static long highestVersionOrZero(String dbName, String collName) {
@@ -257,6 +284,7 @@ public class Main {
                 new HashMap<>());
 
         try {
+            adminUser.setVersion(AdminStamp.BOOTSTRAP_VERSION);
             AdminOperationHelper.saveUserEntry(adminUser);
             logger.info("Bootstrapped default admin user: " + defaultUsername);
         } catch (InterruptedException e) {

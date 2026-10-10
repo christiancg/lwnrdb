@@ -5,6 +5,7 @@ import java.util.HashSet;
 import java.util.List;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
+import org.techhouse.cluster.HybridClock;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -33,6 +34,7 @@ public final class TransactionBuffer {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final Configuration configuration = Configuration.getInstance();
+    private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
     private static final String OBJECTS_FIELD = "objects";
     private static final String DELETED_DOCUMENT_FIELD = "deletedDocument";
 
@@ -42,7 +44,8 @@ public final class TransactionBuffer {
     public static void bufferTriggerRunConsume(Transaction transaction, String runId) throws Exception {
         final var payload = new JsonObject();
         payload.addProperty(AdminTransactionEntry.TRIGGER_RUN_ID_FIELD, runId);
-        bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE_TRIGGER_RUN, "", "", payload);
+        bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE_TRIGGER_RUN, "", "", payload, List.of(),
+                List.of());
     }
 
     public static OperationResponse bufferSave(SaveRequest request, Transaction transaction, Runnable onLockTimeout) {
@@ -77,12 +80,13 @@ public final class TransactionBuffer {
             if (sizeError != null) {
                 return sizeError;
             }
+            final var version = hybridClock.next();
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_SAVE, dbName, collName,
-                    effective, insert ? List.of(id) : List.of());
+                    effective, insert ? List.of(id) : List.of(), List.of(version));
             if (insert) {
                 transaction.recordInserts(seq, List.of(id));
             }
-            transaction.recordSave(collId, id, effective);
+            transaction.recordSave(collId, id, effective, version);
             return new SaveResponse("Successfully saved", id, insert);
         });
     }
@@ -140,9 +144,14 @@ public final class TransactionBuffer {
                 }
             }
             payload.add(OBJECTS_FIELD, array);
+            final var versions = new ArrayList<Long>();
+            for (var i = 0; i < overlayUpdates.size(); i++) {
+                versions.add(hybridClock.next());
+            }
             final var seq = bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_BULK_SAVE, dbName, collName,
-                    payload, inserted);
-            overlayUpdates.forEach((id, document) -> transaction.recordSave(collId, id, document));
+                    payload, inserted, versions);
+            final var nextVersion = versions.iterator();
+            overlayUpdates.forEach((id, document) -> transaction.recordSave(collId, id, document, nextVersion.next()));
             transaction.recordInserts(seq, inserted);
             return new BulkSaveResponse("Successfully saved entries", inserted, updated);
         });
@@ -179,24 +188,22 @@ public final class TransactionBuffer {
             if (deletedDocument != null) {
                 payload.add(DELETED_DOCUMENT_FIELD, deletedDocument);
             }
-            bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE, dbName, collName, payload);
-            transaction.recordDelete(collId, id);
+            final var version = hybridClock.next();
+            bufferOperation(transaction, AdminTransactionEntry.OP_TYPE_DELETE, dbName, collName, payload, List.of(),
+                    List.of(version));
+            transaction.recordDelete(collId, id, version);
             return new DeleteResponse("Entry with id " + id + " deleted successfully");
         });
     }
 
-    private static void bufferOperation(Transaction transaction, String opType, String dbName, String collName,
-            JsonObject payload) throws Exception {
-        bufferOperation(transaction, opType, dbName, collName, payload, List.of());
-    }
-
     private static long bufferOperation(Transaction transaction, String opType, String dbName, String collName,
-            JsonObject payload, List<String> insertedIds) throws Exception {
+            JsonObject payload, List<String> insertedIds, List<Long> versions) throws Exception {
         final var seq = transaction.nextSeq();
         final var opEntry = new AdminTransactionEntry(transaction.getTransactionId().toString(),
                 transaction.getClientId().toString(), seq, opType, dbName, collName, payload);
         opEntry.setTriggerContext(insertedIds, clientTracker.getAuthenticatedUsername(transaction.getClientId()),
                 transaction.getTriggerDepth());
+        opEntry.setVersions(versions);
         AdminOperationHelper.saveTransactionOp(opEntry);
         transaction.addBufferedOpId(opEntry.get_id());
         return seq;

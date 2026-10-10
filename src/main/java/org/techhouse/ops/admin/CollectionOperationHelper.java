@@ -14,6 +14,7 @@ import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationLocks;
+import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.DropCollectionRequest;
@@ -37,25 +38,18 @@ public final class CollectionOperationHelper {
     public static OperationResponse processCreateCollectionOperation(CreateCollectionRequest createCollectionRequest) {
         final var dbName = createCollectionRequest.getDatabaseName();
         return OperationLocks.withDatabaseShared(dbName, OperationType.CREATE_COLLECTION,
-                ErrorCode.ERROR_CREATING_COLLECTION, createCollectionRequest.isReplicated(),
-                () -> createUnderDatabaseBarrier(createCollectionRequest));
+                ErrorCode.ERROR_CREATING_COLLECTION, () -> createUnderDatabaseBarrier(createCollectionRequest));
     }
 
     private static OperationResponse createUnderDatabaseBarrier(CreateCollectionRequest createCollectionRequest) {
         final var dbName = createCollectionRequest.getDatabaseName();
         final var collName = createCollectionRequest.getCollectionName();
-        if (!createCollectionRequest.isReplicated()) {
-            createCollectionRequest.setIncarnation(0);
-        }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_COLLECTION,
-                ErrorCode.ERROR_CREATING_COLLECTION, createCollectionRequest.isReplicated(), () -> {
+                ErrorCode.ERROR_CREATING_COLLECTION, () -> {
                     if (cache.getAdminDbEntry(dbName) == null) {
                         return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.DATABASE_NOT_FOUND);
                     }
                     fs.createDatabaseFolder(dbName);
-                    if (createCollectionRequest.isReplicated()) {
-                        return register(createCollectionRequest);
-                    }
                     return registerUnderNameLock(createCollectionRequest);
                 });
     }
@@ -87,21 +81,12 @@ public final class CollectionOperationHelper {
         if (!result) {
             return new OperationResponse(OperationType.CREATE_COLLECTION, ErrorCode.ERROR_CREATING_COLLECTION);
         }
-        final var existingEntry = AdminOperationHelper.getCollectionEntry(dbName, collName);
-        if (existingEntry != null) {
-            if (createCollectionRequest.getIncarnation() == 0) {
-                createCollectionRequest.setIncarnation(existingEntry.getIncarnation());
-            }
+        if (AdminOperationHelper.getCollectionEntry(dbName, collName) != null) {
             return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
-        }
-        if (createCollectionRequest.getIncarnation() == 0 && !createCollectionRequest.isReplicated()) {
-            createCollectionRequest.setIncarnation(hybridClock.next());
-        } else if (createCollectionRequest.getIncarnation() != 0) {
-            hybridClock.observe(createCollectionRequest.getIncarnation());
         }
         AdminOperationHelper.createPageCollections(dbName, collName);
         final var entry = new AdminCollEntry(dbName, collName);
-        entry.setIncarnation(createCollectionRequest.getIncarnation());
+        entry.setIncarnation(hybridClock.next());
         AdminOperationHelper.saveCollectionEntry(entry);
         return OperationResponse.ok(OperationType.CREATE_COLLECTION, "Collection created successfully");
     }
@@ -113,7 +98,19 @@ public final class CollectionOperationHelper {
     public static OperationResponse processDropCollectionOperation(DropCollectionRequest dropCollectionRequest) {
         final var dbName = dropCollectionRequest.getDatabaseName();
         final var collName = dropCollectionRequest.getCollectionName();
-        final var lockBudget = OperationLocks.lockBudgetMillis(dropCollectionRequest.isReplicated());
+        final var dropped = dropCollection(dbName, collName, false);
+        if (dropped.getStatus() == OperationStatus.OK) {
+            return OperationResponse.respondOrError(OperationType.DROP_COLLECTION, ErrorCode.ERROR_DROPPING_COLLECTION,
+                    () -> {
+                        AdminTombstone.record(AdminRecordKey.collection(dbName, collName));
+                        return dropped;
+                    });
+        }
+        return dropped;
+    }
+
+    public static OperationResponse dropCollection(String dbName, String collName, boolean bounded) {
+        final var lockBudget = OperationLocks.lockBudgetMillis(bounded);
         boolean dropSucceeded = false;
         boolean namesLocked = false;
         try {

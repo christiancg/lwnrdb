@@ -37,26 +37,25 @@ public final class OperationLocks {
 
     private static boolean acquireWriteLock(String dbName, String collName, boolean bounded)
             throws InterruptedException {
-        if (!bounded && !ClusterAdminHelper.holdsAdminLane()) {
+        if (!bounded) {
             locks.lock(dbName, collName);
             return true;
         }
         return locks.tryLockWrite(dbName, collName, clusterConfig.replicationAckTimeoutMs());
     }
 
-    public static long lockBudgetMillis(boolean replicated) {
-        if (replicated || ClusterAdminHelper.holdsAdminLane()) {
-            return clusterConfig.replicationAckTimeoutMs();
-        }
-        return Configuration.getInstance().getTransactionLockTimeoutMs();
+    public static long lockBudgetMillis(boolean bounded) {
+        return bounded
+                ? clusterConfig.replicationAckTimeoutMs()
+                : Configuration.getInstance().getTransactionLockTimeoutMs();
     }
 
     public static OperationResponse withDatabaseShared(String dbName, OperationType type, ErrorCode errorCode,
-            boolean replicated, OperationResponse.Attempt attempt) {
+            OperationResponse.Attempt attempt) {
         final var held = new AtomicBoolean();
         try {
             return OperationResponse.respondOrError(type, errorCode, () -> {
-                if (!locks.tryLockDatabaseShared(dbName, lockBudgetMillis(replicated))) {
+                if (!locks.tryLockDatabaseShared(dbName, lockBudgetMillis(false))) {
                     return new OperationResponse(type, ErrorCode.TRANSACTION_LOCK_TIMEOUT);
                 }
                 held.set(true);

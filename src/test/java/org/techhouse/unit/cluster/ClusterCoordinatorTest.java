@@ -17,7 +17,7 @@ import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -141,8 +141,9 @@ public class ClusterCoordinatorTest {
     }
 
     @Test
-    public void test_replicate_admin_op_not_applicable_when_disabled() {
+    public void test_admin_records_and_reindex_are_not_replicated_when_disabled() {
+        assertEquals(ReplicationOutcome.NOT_CLUSTERED, coordinator.replicateAdminRecords(List.of()));
         assertEquals(ReplicationOutcome.NOT_CLUSTERED,
-                coordinator.replicateAdminOp(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "alice"));
+                coordinator.broadcastReindex(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null)));
     }
 }

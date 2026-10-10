@@ -554,9 +554,9 @@ admin, owner or `MANAGE` user can install one. Two consequences: a definer who n
 falling back to an admin would let *deleting* a user widen a trigger's authority), and a definer
 whose permissions are later reduced silently narrows it.
 
-The definer is always the saving user for a client request. The `stamped*` fields on
-`SAVE_TRIGGER`, `SAVE_SCHEDULE` and `SAVE_PROCEDURE` are coordinator-internal and are honoured only
-when the request is a replicated apply, so a client cannot install a trigger that runs as someone else.
+The definer is always the saving user: no request field can name another one, so a client cannot
+install a trigger that runs as someone else. Peers never derive it either — they receive the
+coordinator's definition file, definer included, as a versioned admin record.
 
 **An after trigger runs exactly once, not at least once.** Before an event is queued,
 `TriggerRunLog` persists a pending-run record in `admin/trigger_runs`; `TriggerDispatcher` then
@@ -701,7 +701,7 @@ While the view is still converging after a join or leave, two nodes can each bel
 same key and both hold quorum, so an occurrence can still fire twice; a job that must not run
 twice has to be idempotent. `nextRunAt` is
 therefore never persisted — a durable `lastRunAt` would mean a DDL write per run and would churn
-the admin epoch. Missed runs while a node was down are skipped, not caught up, so a job that must
+the schedule's replicated admin record. Missed runs while a node was down are skipped, not caught up, so a job that must
 not miss an occurrence should be idempotent and driven off data rather than off the clock. A run
 is deliberately **not** transactional (there is no run record to consume atomically); a job
 wanting atomicity opens its own `db.transaction(…)`, which — unlike inside a trigger — is

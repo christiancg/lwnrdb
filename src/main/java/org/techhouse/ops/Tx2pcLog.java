@@ -14,19 +14,20 @@ import org.techhouse.ioc.IocContainer;
 // The coordinator marker's presence is the commit point: present means committed, absent means presumed-abort.
 public final class Tx2pcLog {
     private static final Cache cache = IocContainer.get(Cache.class);
-    private static final org.techhouse.cluster.HybridClock hybridClock = IocContainer
-            .get(org.techhouse.cluster.HybridClock.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final String COORDINATOR_ADDRESS_FIELD = "coordinatorAddress";
     private static final String COLLECTIONS_FIELD = "collections";
     private static final String PARTICIPANTS_FIELD = "participants";
     private static final String SESSION_ID_FIELD = "sessionId";
     private static final String PREPARED_AT_FIELD = "preparedAt";
-    private static final String PREPARED_VERSION_FIELD = "preparedVersion";
     private static final String OUTCOME_FIELD = "outcome";
     private static final String RESOLVED_AT_FIELD = "resolvedAt";
     private static final String OUTCOME_COMMITTED = "committed";
     private static final String OUTCOME_ABORTED = "aborted";
+    private static final String REPLY_CODE_FIELD = "replyCode";
+
+    public record Outcome(boolean committed, String replyCode) {
+    }
 
     public enum Status {
         COMMITTED, ABORTED, PREPARED, UNKNOWN, NO_RECORD
@@ -46,14 +47,14 @@ public final class Tx2pcLog {
         payload.add(PARTICIPANTS_FIELD, stringArray(participants));
         payload.add(COLLECTIONS_FIELD, stringArray(collections));
         payload.addProperty(PREPARED_AT_FIELD, Long.toString(System.currentTimeMillis()));
-        payload.addProperty(PREPARED_VERSION_FIELD, Long.toString(hybridClock.current()));
         AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId,
                 AdminTransactionEntry.MARKER_PARTICIPANT, AdminTransactionEntry.OP_TYPE_PARTICIPANT_PREPARED, payload));
     }
 
-    public static void recordOutcome(String dtxId, boolean committed) throws Exception {
+    public static void recordOutcome(String dtxId, boolean committed, String replyCode) throws Exception {
         final var payload = new JsonObject();
         payload.addProperty(OUTCOME_FIELD, committed ? OUTCOME_COMMITTED : OUTCOME_ABORTED);
+        payload.addProperty(REPLY_CODE_FIELD, replyCode == null ? "" : replyCode);
         payload.addProperty(RESOLVED_AT_FIELD, Long.toString(System.currentTimeMillis()));
         AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(dtxId, AdminTransactionEntry.MARKER_OUTCOME,
                 AdminTransactionEntry.OP_TYPE_TRANSACTION_OUTCOME, payload));
@@ -68,12 +69,12 @@ public final class Tx2pcLog {
     }
 
     public static Status status(String dtxId, String selfAddress) throws Exception {
-        if (isCommitted(dtxId)) {
+        if (isCommitted(dtxId) || TxCommitLog.isLocallyCommitted(dtxId)) {
             return Status.COMMITTED;
         }
         final var outcome = readOutcome(dtxId);
         if (outcome != null) {
-            return OUTCOME_COMMITTED.equals(outcome) ? Status.COMMITTED : Status.ABORTED;
+            return outcome.committed() ? Status.COMMITTED : Status.ABORTED;
         }
         if (isPrepared(dtxId)) {
             return coordinatorRestartedUndecided(dtxId, selfAddress) ? Status.NO_RECORD : Status.PREPARED;
@@ -92,7 +93,7 @@ public final class Tx2pcLog {
         if (outcome == null) {
             return Status.NO_RECORD;
         }
-        return OUTCOME_COMMITTED.equals(outcome) ? Status.COMMITTED : Status.ABORTED;
+        return outcome.committed() ? Status.COMMITTED : Status.ABORTED;
     }
 
     private static boolean coordinatorRestartedUndecided(String dtxId, String selfAddress) throws Exception {
@@ -103,10 +104,24 @@ public final class Tx2pcLog {
         return marker != null && selfAddress.equals(marker.coordinatorAddress());
     }
 
-    private static String readOutcome(String dtxId) throws Exception {
+    public static boolean hasOutcome(String dtxId) {
+        return cache.getPkIndexTransaction(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)) != null;
+    }
+
+    public static Outcome readOutcome(String dtxId) throws Exception {
+        if (!hasOutcome(dtxId)) {
+            return null;
+        }
         final var entries = AdminOperationHelper
                 .readTransactionOps(List.of(markerId(dtxId, AdminTransactionEntry.MARKER_OUTCOME)));
-        return entries.isEmpty() ? null : entries.getFirst().getPayload().get(OUTCOME_FIELD).asJsonString().getValue();
+        if (entries.isEmpty()) {
+            return null;
+        }
+        final var payload = entries.getFirst().getPayload();
+        final var replyCode = payload.has(REPLY_CODE_FIELD)
+                ? payload.get(REPLY_CODE_FIELD).asJsonString().getValue()
+                : "";
+        return new Outcome(OUTCOME_COMMITTED.equals(payload.get(OUTCOME_FIELD).asJsonString().getValue()), replyCode);
     }
 
     public static void garbageCollectOutcomes(long retentionMs) throws Exception {
@@ -150,10 +165,6 @@ public final class Tx2pcLog {
         return cache.getPkIndexTransaction(markerId(dtxId, AdminTransactionEntry.MARKER_PARTICIPANT)) != null;
     }
 
-    public static boolean isDecidedCommit(String dtxId) {
-        return isPrepared(dtxId) && isCommitted(dtxId);
-    }
-
     public static List<String> preparedDtxIds() {
         return dtxIdsWithSuffix(AdminTransactionEntry.MARKER_PARTICIPANT);
     }
@@ -176,12 +187,8 @@ public final class Tx2pcLog {
         final var preparedAt = payload.has(PREPARED_AT_FIELD)
                 ? Long.parseLong(payload.get(PREPARED_AT_FIELD).asJsonString().getValue())
                 : 0L;
-        final var preparedVersion = payload.has(PREPARED_VERSION_FIELD)
-                ? Long.parseLong(payload.get(PREPARED_VERSION_FIELD).asJsonString().getValue())
-                : 0L;
         return new ParticipantMarker(payload.get(COORDINATOR_ADDRESS_FIELD).asJsonString().getValue(),
-                readStringArray(payload, PARTICIPANTS_FIELD), readStringArray(payload, COLLECTIONS_FIELD), preparedAt,
-                preparedVersion);
+                readStringArray(payload, PARTICIPANTS_FIELD), readStringArray(payload, COLLECTIONS_FIELD), preparedAt);
     }
 
     public static List<String> readCoordinatorParticipants(String dtxId) throws Exception {
@@ -251,6 +258,6 @@ public final class Tx2pcLog {
     }
 
     public record ParticipantMarker(String coordinatorAddress, List<String> participants, List<String> collections,
-            long preparedAt, long preparedVersion) {
+            long preparedAt) {
     }
 }

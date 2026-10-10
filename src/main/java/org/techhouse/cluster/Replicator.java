@@ -6,6 +6,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 import org.techhouse.cluster.membership.MembershipService;
+import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
@@ -21,7 +22,6 @@ public class Replicator {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
-    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
 
     public ReplicationOutcome broadcast(ReplicationPayload payload) {
         return awaitQuorum(ClusterMessageType.REPLICATE_ACK, () -> {
@@ -39,21 +39,18 @@ public class Replicator {
         });
     }
 
-    public ReplicationOutcome broadcastUser(ReplicationPayload payload) {
-        return awaitQuorum(ClusterMessageType.REPLICATE_USER_ACK, () -> {
-            final var message = replicateMessage(ClusterMessageType.REPLICATE_USER);
-            message.setReplication(payload);
-            message.setAdminEpoch(adminEpoch.current());
+    public ReplicationOutcome broadcastAdmin(AdminSnapshotPayload records) {
+        return awaitQuorum(ClusterMessageType.REPLICATE_ADMIN_ACK, () -> {
+            final var message = replicateMessage(ClusterMessageType.REPLICATE_ADMIN);
+            message.setAdminSnapshot(records);
             return message;
         });
     }
 
-    public ReplicationOutcome broadcastAdmin(String rawJson, String actingUser) {
-        return awaitQuorum(ClusterMessageType.REPLICATE_ADMIN_ACK, () -> {
-            final var message = replicateMessage(ClusterMessageType.REPLICATE_ADMIN);
-            message.setForwardBody(ForwardBody.encode(rawJson));
-            message.setActingUser(actingUser);
-            message.setAdminEpoch(adminEpoch.current());
+    public ReplicationOutcome broadcastReindex(String rawRequest) {
+        return awaitQuorum(ClusterMessageType.REINDEX_BROADCAST_ACK, () -> {
+            final var message = replicateMessage(ClusterMessageType.REINDEX_BROADCAST);
+            message.setForwardBody(ForwardBody.encode(rawRequest));
             return message;
         });
     }

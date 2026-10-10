@@ -35,21 +35,17 @@ public final class IndexOperationHelper {
         final var collName = createIndexRequest.getCollectionName();
         final var fieldName = createIndexRequest.getFieldName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.CREATE_INDEX,
-                ErrorCode.ERROR_CREATING_INDEX, createIndexRequest.isReplicated(), () -> {
-                    if (!createIndexRequest.isReplicated()) {
-                        final var readinessError = CollectionReadinessGuard.check(OperationType.CREATE_INDEX, dbName,
-                                collName);
-                        if (readinessError != null) {
-                            return readinessError;
-                        }
+                ErrorCode.ERROR_CREATING_INDEX, () -> {
+                    final var readinessError = CollectionReadinessGuard.check(OperationType.CREATE_INDEX, dbName,
+                            collName);
+                    if (readinessError != null) {
+                        return readinessError;
                     }
                     if (!cache.hasNoIndex(dbName, collName, fieldName)) {
                         return OperationResponse.ok(OperationType.CREATE_INDEX,
                                 "Index already exists for field: " + fieldName);
                     }
-                    final var colliding = createIndexRequest.isReplicated()
-                            ? null
-                            : OnDiskNameRegistry.collidingIndexField(dbName, collName, fieldName);
+                    final var colliding = OnDiskNameRegistry.collidingIndexField(dbName, collName, fieldName);
                     if (colliding != null) {
                         return new OperationResponse(OperationType.CREATE_INDEX, ErrorCode.NAME_COLLIDES_ON_DISK,
                                 colliding);
@@ -69,7 +65,7 @@ public final class IndexOperationHelper {
         // The collection write lock makes the file deletion and the unregistration atomic with respect to
         // saves and the background indexer.
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DROP_INDEX,
-                ErrorCode.ERROR_DROPPING_INDEX, dropIndexRequest.isReplicated(), () -> {
+                ErrorCode.ERROR_DROPPING_INDEX, () -> {
                     if (cache.getIndexesForCollection(dbName, collName).contains(fieldName)) {
                         fs.indexBuildMarkers().mark(dbName, collName, fieldName);
                     }
@@ -86,10 +82,14 @@ public final class IndexOperationHelper {
     }
 
     public static OperationResponse processReindex(ReindexRequest request) {
+        return processReindex(request, false);
+    }
+
+    public static OperationResponse processReindex(ReindexRequest request, boolean bounded) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.REINDEX, ErrorCode.ERROR_REINDEXING,
-                request.isReplicated(), () -> {
+                bounded, () -> {
                     final var registeredIndexes = cache.getIndexesForCollection(dbName, collName);
                     final List<String> targets;
                     if (request.getFieldNames().isEmpty()) {

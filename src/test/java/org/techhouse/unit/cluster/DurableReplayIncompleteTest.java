@@ -146,7 +146,7 @@ public class DurableReplayIncompleteTest {
                 () -> TransactionRecovery.commitPreparedFromDurable(dtxId, List.of(collectionId()), 0L));
 
         assertTrue(thrown.getMessage().contains(dtxId));
-        assertTrue(Tx2pcLog.isPrepared(dtxId), "the participant marker is kept for the next attempt");
+        assertTrue(TxCommitLog.isLocallyCommitted(dtxId), "the decided slice is kept for the next attempt");
         assertFalse(Tx2pcLog.sliceOpIds(dtxId).isEmpty(), "the slice's op records are kept for the next attempt");
     }
 
@@ -157,8 +157,7 @@ public class DurableReplayIncompleteTest {
         AdminOperationHelper.saveTransactionOp(unappliable);
         TxCommitLog.recordLocalCommit(txId, List.of(unappliable.get_id()), List.of(collectionId()));
 
-        assertThrows(DurableReplayIncompleteException.class,
-                () -> TransactionOperationHelper.commitLocalFromDurable(txId, List.of(collectionId())));
+        assertFalse(org.techhouse.ops.tx.TransactionRecovery.finishLocalCommit(txId));
 
         assertTrue(TxCommitLog.isLocallyCommitted(txId), "the local-commit marker is kept for the next attempt");
     }
@@ -185,7 +184,7 @@ public class DurableReplayIncompleteTest {
 
         assertTrue(Tx2pcLog.isCommitted(dtxId),
                 "a coordinator whose own slice did not apply must not forget that the transaction committed");
-        assertTrue(Tx2pcLog.isPrepared(dtxId), "the incomplete slice stays in doubt rather than being aborted");
+        assertTrue(TxCommitLog.isLocallyCommitted(dtxId), "the incomplete slice stays decided rather than aborted");
     }
 
     @Test
@@ -210,7 +209,7 @@ public class DurableReplayIncompleteTest {
         final var dtxId = seedUnappliablePreparedSlice();
         Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of(SELF_ADDRESS));
         recovery.recoverNow();
-        assertTrue(Tx2pcLog.isPrepared(dtxId), "the first round could not apply the slice");
+        assertTrue(TxCommitLog.isLocallyCommitted(dtxId), "the first round could not apply the slice");
 
         createAbsentCollection();
         recovery.recoverNow();
@@ -237,7 +236,7 @@ public class DurableReplayIncompleteTest {
                     () -> TwoPhaseParticipant.resolveFromDurable(dtxId, true, 5000L));
 
             assertTrue(thrown.getMessage().contains(dtxId));
-            assertTrue(Tx2pcLog.isPrepared(dtxId), "the fenced slice keeps its marker");
+            assertTrue(TxCommitLog.isLocallyCommitted(dtxId), "the fenced slice keeps its marker");
             assertNotNull(clientTracker.txSession(sessionId), "the session naming the fenced slice's locks is kept");
         } finally {
             clientTracker.removeTxSession(sessionId);

@@ -20,6 +20,7 @@ public class AdminTransactionEntry extends DbEntry {
     private static final String INSERTED_IDS_FIELD = "insertedIds";
     private static final String ACTING_USER_FIELD = "actingUser";
     private static final String TRIGGER_DEPTH_FIELD = "triggerDepth";
+    private static final String VERSIONS_FIELD = "versions";
 
     public static final String OP_TYPE_SAVE = "SAVE";
     public static final String OP_TYPE_BULK_SAVE = "BULK_SAVE";
@@ -49,6 +50,7 @@ public class AdminTransactionEntry extends DbEntry {
     private List<String> insertedIds = List.of();
     private String actingUser = "";
     private int triggerDepth;
+    private List<Long> versions = List.of();
 
     private AdminTransactionEntry() {
         setDatabaseName(Globals.ADMIN_DB_NAME);
@@ -77,6 +79,19 @@ public class AdminTransactionEntry extends DbEntry {
         this.actingUser = user == null ? "" : user;
         this.triggerDepth = Math.max(0, depth);
         syncData();
+    }
+
+    public void setVersions(List<Long> opVersions) {
+        this.versions = opVersions == null ? List.of() : List.copyOf(opVersions);
+        syncData();
+    }
+
+    public List<Long> getVersions() {
+        return versions;
+    }
+
+    public long versionAt(int index) {
+        return index < versions.size() ? versions.get(index) : 0L;
     }
 
     public List<String> getInsertedIds() {
@@ -121,7 +136,8 @@ public class AdminTransactionEntry extends DbEntry {
         result.targetDb = object.get(TARGET_DB_FIELD).asJsonString().getValue();
         result.targetColl = object.get(TARGET_COLL_FIELD).asJsonString().getValue();
         result.payload = object.get(PAYLOAD_FIELD).asJsonObject();
-        result.insertedIds = readStringArray(object);
+        result.insertedIds = readStringArray(object, INSERTED_IDS_FIELD);
+        result.versions = readStringArray(object, VERSIONS_FIELD).stream().map(Long::parseLong).toList();
         result.actingUser = object.has(ACTING_USER_FIELD)
                 ? object.get(ACTING_USER_FIELD).asJsonString().getValue()
                 : "";
@@ -150,15 +166,20 @@ public class AdminTransactionEntry extends DbEntry {
         data.add(INSERTED_IDS_FIELD, ids);
         data.addProperty(ACTING_USER_FIELD, actingUser);
         data.addProperty(TRIGGER_DEPTH_FIELD, triggerDepth);
+        final var opVersions = new JsonArray();
+        for (final var version : versions) {
+            opVersions.add(new JsonString(Long.toString(version)));
+        }
+        data.add(VERSIONS_FIELD, opVersions);
         setData(data);
     }
 
-    private static List<String> readStringArray(JsonObject object) {
-        if (!object.has(INSERTED_IDS_FIELD) || !object.get(INSERTED_IDS_FIELD).isJsonArray()) {
+    private static List<String> readStringArray(JsonObject object, String field) {
+        if (!object.has(field) || !object.get(field).isJsonArray()) {
             return List.of();
         }
         final var result = new ArrayList<String>();
-        for (final var element : object.get(INSERTED_IDS_FIELD).asJsonArray().asList()) {
+        for (final var element : object.get(field).asJsonArray().asList()) {
             result.add(element.asJsonString().getValue());
         }
         return result;

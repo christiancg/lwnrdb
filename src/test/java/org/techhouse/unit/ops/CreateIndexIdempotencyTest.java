@@ -148,11 +148,4 @@ public class CreateIndexIdempotencyTest {
         assertEquals(ErrorCode.NAME_COLLIDES_ON_DISK.getCode(), colliding.getErrorCode());
     }
 
-    @Test
-    public void test_replicated_create_index_skips_the_collision_check() {
-        createIndex();
-        final var replicated = new CreateIndexRequest(TestGlobals.DB, TestGlobals.COLL, "STATUS");
-        replicated.setReplicated(true);
-        assertEquals(OperationStatus.OK, processor.processMessage(replicated).getStatus());
-    }
 }

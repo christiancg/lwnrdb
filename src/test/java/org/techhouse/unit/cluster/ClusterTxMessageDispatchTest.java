@@ -125,7 +125,8 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
         assertEquals(ClusterMessageType.ERROR, response.getType(),
                 "a slice that did not apply must not be acknowledged, or the coordinator forgets the commit");
         assertTrue(response.getErrorMessage().contains(dtxId));
-        assertTrue(Tx2pcLog.isPrepared(dtxId), "the slice stays in doubt for the coordinator to re-drive");
+        assertTrue(org.techhouse.ops.TxCommitLog.isLocallyCommitted(dtxId),
+                "the decided slice stays fenced for the coordinator to re-drive");
     }
 
     @Test
@@ -238,7 +239,8 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
     }
 
     @Test
-    public void test_resolve_tx_times_out_when_the_session_is_slow() throws Exception {
+    public void test_resolve_tx_for_a_slice_the_busy_session_does_not_hold_is_answered_without_waiting()
+            throws Exception {
         TestUtils.setPrivateField(config, "replicationAckTimeoutMs", SHORT_ACK_TIMEOUT_MS);
         final var sessionId = UUID.randomUUID().toString();
         final var releaseWork = new CountDownLatch(1);
@@ -251,8 +253,8 @@ public class ClusterTxMessageDispatchTest extends ClusterConnectionHandlerTestBa
             final var response = pool.request(cluster.serverAddress(), message, SHORT_ACK_TIMEOUT_MS + 5000L);
             final var elapsed = System.currentTimeMillis() - started;
 
-            assertEquals(ClusterMessageType.ERROR, response.getType(),
-                    "a session whose executor cannot resolve the transaction in time must not block the lane");
+            assertEquals(ClusterMessageType.COMMIT_TX_ACK, response.getType(),
+                    "a transaction this node holds no record of is already resolved here, whatever the session does");
             assertTrue(elapsed < SHORT_ACK_TIMEOUT_MS + 3000L, "the handler must give up within its own ack budget");
         } finally {
             releaseWork.countDown();

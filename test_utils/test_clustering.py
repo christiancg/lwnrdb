@@ -244,9 +244,9 @@ def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.
                     min_rounds: int = 3):
     """Repeat attempt(round) until at least one of its runs was forwarded, or time runs out.
 
-    Absorbs both the placement randomness (two random samples per run) and the gossip lag right
-    after a DDL: a peer is skipped until it reports an admin epoch at least as high as this node's,
-    which takes up to one gossipIntervalMs to propagate.
+    Absorbs both the placement randomness (two random samples per run) and the window right after a
+    peer (re)starts: a peer is skipped while it gossips that its admin metadata is still syncing,
+    which lasts until its first admin anti-entropy round completes.
 
     min_rounds is what makes that meaningful on a loaded runner. Placement is sampled per round, so
     a single round proves nothing about randomness; when one attempt happens to outlast the whole
@@ -268,10 +268,10 @@ def until_forwarded(port, attempt: Callable[[int], list], timeout_s: float = 25.
 def wait_until_forwarding_is_live(port, timeout_s: float = 60.0) -> bool:
     """Block until a run submitted to `port` is actually forwarded to some peer.
 
-    ScriptPlacement.eligibleMembers() skips any peer whose gossiped admin epoch trails this
-    node's, so for up to a gossip round after a DDL every peer is ineligible and every run stays
+    ScriptPlacement.eligibleMembers() skips any peer that gossips its admin metadata as still
+    syncing, so until a restarted peer's first admin anti-entropy round completes every run stays
     local. A test that needs to observe forwarding has to wait that out first, or it measures the
-    epoch lag instead of the behaviour it is asserting.
+    sync window instead of the behaviour it is asserting.
     """
     conn = authed(port)
     try:
@@ -824,6 +824,41 @@ def test_index_replication():
                    for p in all_ports())
 
     check("index-backed query is correct on every node", wait_until(_query_ok, timeout_s=15.0))
+
+
+def _index_file(node, coll, field) -> str:
+    folder = os.path.join(node.work_dir, "db", DB, coll)
+    names = [n for n in os.listdir(folder) if n.startswith(f"{coll}-{field}-") and n.endswith(".idx")]
+    return os.path.join(folder, names[0]) if names else ""
+
+
+def _index_lines(node, coll, field) -> list:
+    path = _index_file(node, coll, field)
+    if not path:
+        return []
+    with open(path, encoding="utf-8") as fp:
+        return [line for line in fp.read().split("\n") if line]
+
+
+def test_reindex_rebuilds_the_index_on_every_node():
+    section("REINDEX is cluster-wide: it rebuilds a damaged index on a node that did not receive it")
+
+    victim = nodes[2]
+    check("the replicated index holds both values on node-2",
+          wait_until(lambda: len(_index_lines(victim, "indexed", "email")) == 2, timeout_s=20.0),
+          detail=str(_index_lines(victim, "indexed", "email")))
+    lines = _index_lines(victim, "indexed", "email")
+    damaged = [line for line in lines if not line.startswith("a@x.io")]
+    with open(_index_file(victim, "indexed", "email"), "w", encoding="utf-8") as fp:
+        fp.write("".join(line + "\n" for line in damaged))
+    check("node-2's index file lost the a@x.io line", len(_index_lines(victim, "indexed", "email")) == 1)
+
+    check_status("REINDEX via node-1", op_with_retry(lambda: op(nodes[1].client_port, {
+        "type": "REINDEX", "databaseName": DB, "collectionName": "indexed"})), "OK")
+
+    check("node-2 rebuilt the line it lost",
+          wait_until(lambda: sorted(_index_lines(victim, "indexed", "email")) == sorted(lines), timeout_s=20.0),
+          detail=str(_index_lines(victim, "indexed", "email")))
 
 
 def test_user_and_permission_replication():
@@ -1527,7 +1562,7 @@ def test_long_forwarded_script_is_not_cut_off():
                    detail=f"responses={[(r.get('status'), r.get('result'), r.get('message')) for r in out][:3]}")
         return out
 
-    # Wait out the admin-epoch lag on cheap runs first. until_forwarded's rounds cost 6s each here,
+    # Wait out the admin-sync window on cheap runs first. until_forwarded's rounds cost 6s each here,
     # so a cold start burns most of its budget proving nothing about the long-script path.
     check("forwarding is live before the long runs",
                wait_until_forwarding_is_live(driver, timeout_s=60.0))
@@ -1619,8 +1654,8 @@ def test_script_placement_falls_back_when_the_target_dies():
     # the load-only node, which makes every peer a fair candidate and the crash below observable.
     driver = nodes[1].client_port
 
-    # Precondition, not decoration: a peer is skipped until its gossiped admin epoch catches up with
-    # the driver's, so straight after the preceding tests' DDL every peer is ineligible and every run
+    # Precondition, not decoration: a peer is skipped while it gossips that its admin metadata is still
+    # syncing, so straight after the preceding tests' restarts every peer can be ineligible and every run
     # stays local. Killing node-2 in that state produces no failed forward to count, however long we
     # wait. Gate on forwarding being live rather than on catching node-2 in the listing: which peer a
     # given run lands on is random, and a 2s run is easy to miss between two polls.
@@ -1859,6 +1894,117 @@ def test_node_rejoin():
                wait_until(_rejoined, timeout_s=45.0, interval_s=1.0))
 
 
+DOWN_COLL = "changed_while_down"
+DOWN_PROC = "deleted_while_down"
+DOWN_USER = "changed_while_down_user"
+
+
+def _admin(payload: dict) -> dict:
+    return op_with_retry(lambda: op(nodes[0].client_port, payload))
+
+
+def arrange_admin_changes_for_a_downed_node():
+    section("Admin records that will change while node-2 is down")
+
+    check_status("CREATE_COLLECTION", _admin({"type": "CREATE_COLLECTION", "databaseName": DB,
+                                                "collectionName": DOWN_COLL}), "OK")
+    check_status("CREATE_INDEX", _admin({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": DOWN_COLL,
+                                          "fieldName": "f"}), "OK")
+    check_status("SAVE_PROCEDURE", _admin({"type": "SAVE_PROCEDURE", "databaseName": DB, "name": DOWN_PROC,
+                                            "script": "return 1;"}), "OK")
+    _admin({"type": "DELETE_USER", "username": DOWN_USER})
+    check_status("CREATE_USER", _admin({"type": "CREATE_USER", "username": DOWN_USER,
+                                         "password": "before_the_outage1", "admin": False, "globalPermissions": [],
+                                         "databasePermissions": {DB: "READ"}, "collectionPermissions": {}}), "OK")
+    check("node-2 holds every record before the outage",
+          wait_until(lambda: os.path.isfile(procedure_file(nodes[2], DOWN_PROC))
+                     and _authenticates(nodes[2].client_port, DOWN_USER, "before_the_outage1"), timeout_s=20.0))
+
+
+def make_admin_changes_while_a_node_is_down():
+    section("Admin changes made while node-2 is down")
+
+    check("node-2 is down", not nodes[2].alive)
+    check_status("SAVE_SCHEMA", _admin({"type": "SAVE_SCHEMA", "databaseName": DB, "collectionName": DOWN_COLL,
+                                         "schema": {"type": "object", "required": ["f"]}}), "OK")
+    check_status("DELETE_PROCEDURE", _admin({"type": "DELETE_PROCEDURE", "databaseName": DB,
+                                              "name": DOWN_PROC}), "OK")
+    check_status("SET_PASSWORD", _admin({"type": "SET_PASSWORD", "username": DOWN_USER,
+                                          "newPassword": "after_the_outage1"}), "OK")
+    check_status("CHANGE_PERMISSIONS", _admin({"type": "CHANGE_PERMISSIONS", "username": DOWN_USER,
+                                                "admin": False, "globalPermissions": [],
+                                                "databasePermissions": {DB: "READ_WRITE"},
+                                                "collectionPermissions": {}}), "OK")
+    check_status("DROP_INDEX", _admin({"type": "DROP_INDEX", "databaseName": DB, "collectionName": DOWN_COLL,
+                                        "fieldName": "f"}), "OK")
+
+
+def _schema_file(node) -> str:
+    return os.path.join(node.work_dir, "db", DB, DOWN_COLL, f"{DOWN_COLL}-schema.json")
+
+
+def test_a_schema_saved_while_a_node_is_down_reaches_it():
+    section("A schema saved while a node was down reaches it once it rejoins")
+
+    def _has_schema():
+        if not os.path.isfile(_schema_file(nodes[2])):
+            return False
+        with open(_schema_file(nodes[2]), encoding="utf-8") as fp:
+            return '"required"' in fp.read()
+
+    check("node-2 holds the schema saved during its outage", wait_until(_has_schema, timeout_s=60.0))
+
+
+def test_a_procedure_deleted_while_a_node_is_down_stays_deleted():
+    section("A procedure deleted while a node was down stays deleted once it rejoins")
+
+    check("node-2 deleted the procedure removed during its outage",
+          wait_until(lambda: not os.path.isfile(procedure_file(nodes[2], DOWN_PROC)), timeout_s=60.0))
+    time.sleep(3 * ANTI_ENTROPY_INTERVAL_S)
+    check("no node brought it back after several admin sweeps",
+          all(not os.path.isfile(procedure_file(node, DOWN_PROC)) for node in nodes if node.alive))
+
+
+def test_a_password_changed_while_a_node_is_down_reaches_it():
+    section("A password changed while a node was down reaches it once it rejoins")
+
+    check("node-2 accepts the new password",
+          wait_until(lambda: _authenticates(nodes[2].client_port, DOWN_USER, "after_the_outage1"), timeout_s=60.0))
+    check("node-2 refuses the old password",
+          not _authenticates(nodes[2].client_port, DOWN_USER, "before_the_outage1"))
+
+
+def test_permission_changes_and_dropped_indexes_replicate():
+    section("Permission changes and a dropped index made while a node was down reach it")
+
+    def _writes_through_node_2():
+        c = Conn(port=nodes[2].client_port)
+        try:
+            if c.send({"type": "AUTHENTICATE", "username": DOWN_USER,
+                       "password": "after_the_outage1"}).get("status") != "OK":
+                return False
+            return c.send({"type": "SAVE", "databaseName": DB, "collectionName": DOWN_COLL,
+                           "object": {"_id": "w1", "f": 1}}).get("status") == "OK"
+        finally:
+            c.close()
+
+    check("node-2 lets the user write with the permission granted during its outage",
+          wait_until(_writes_through_node_2, timeout_s=60.0))
+
+    def _index_dropped_on_node_2():
+        r = op(nodes[2].client_port, {"type": "GET_DATABASE_STATS"})
+        for d in bu.dig(r, "stats.databases") or []:
+            if d.get("name") != DB:
+                continue
+            for c in d.get("collections") or []:
+                if c.get("name") == DOWN_COLL:
+                    return "f" not in (c.get("indexes") or [])
+        return False
+
+    check("node-2 dropped the index removed during its outage", wait_until(_index_dropped_on_node_2, timeout_s=60.0))
+    _admin({"type": "DELETE_USER", "username": DOWN_USER})
+
+
 def test_a_restarted_participant_does_not_commit_half_a_transaction():
     section("A participant that restarted mid-transaction refuses to continue the slice it lost")
 
@@ -2010,9 +2156,9 @@ def _commit_and_kill_mid_apply(victim, coll, ids):
 def check_a_mid_commit_restart_keeps_the_newer_values():
     section("A commit interrupted mid-apply does not replay over newer writes")
 
-    # The local-commit marker carries the write-clock version the commit started from. Without it the
-    # restart's replay reapplied the transaction's own values over everything the new owner had
-    # written while the node was down -- at a fresh version, which then won cluster-wide.
+    # Every buffered op carries the version it was minted at. Without that the restart's replay
+    # reapplied the transaction's own values over everything the new owner had written while the node
+    # was down -- at a fresh version, which then won cluster-wide.
     owners = collections_by_owner(nodes[0].client_port, DB, "midcommit")
     # node-0 is the seed and the only node with no clusterSeeds of its own: once the others mark it
     # dead they stop gossiping to it and it can never rejoin, so it is never the one killed here.
@@ -2055,6 +2201,67 @@ def check_a_mid_commit_restart_keeps_the_newer_values():
     for doc_id in ids:
         check(f"{doc_id} still does after several anti-entropy sweeps",
               all_nodes_see(DB, coll, doc_id, 3, ports=all_ports(), timeout_s=5.0))
+
+
+def test_a_participant_killed_mid_commit_finishes_without_its_coordinator():
+    section("A participant killed while applying a decided 2PC slice finishes it on restart")
+
+    owners = collections_by_owner(nodes[0].client_port, DB, "midtwopc")
+    if not check("found a collection owned by each node", all(i in owners for i in range(NODE_COUNT)),
+                 f"owners={owners}"):
+        return
+    edge, victim = nodes[2], nodes[1]
+    slow, quick = owners[victim.index][0], owners[edge.index][0]
+    if not check("the ring is healthy before the transaction starts", wait_until_cluster_is_healthy()):
+        return
+
+    conn = authed(edge.client_port)
+    caught = False
+    try:
+        tx_id = conn.send({"type": "START_TRANSACTION"}).get("transactionId")
+        check_status("a write to the coordinator's own collection", conn.send({
+            "type": "SAVE", "databaseName": DB, "collectionName": quick, "object": {"_id": "mt_edge", "v": 1}}), "OK")
+        check_status("a write the participant applies first", conn.send({
+            "type": "SAVE", "databaseName": DB, "collectionName": slow, "object": {"_id": "mt_first", "v": 1}}), "OK")
+        pad_the_commit(conn, slow, "mtpad")
+        pending = BackgroundOp(conn, {"type": "COMMIT_TRANSACTION"})
+        caught = wait_until(lambda: holds_tx_record(victim, tx_id, "localcommit"), timeout_s=120.0, interval_s=0.02)
+        if caught:
+            print(f"  Killing participant node-{victim.index} while it applies the decided slice ...")
+            victim.kill()
+        pending.join(180.0)
+    finally:
+        conn.close()
+    if not check("the participant was killed while applying the decided slice", caught,
+                 "no decided marker was ever observed on the participant, so the commit outran the harness"):
+        return
+    check("it kept its decided marker", holds_tx_record(victim, tx_id, "localcommit"), f"transaction={tx_id}")
+    check("and holds no prepared marker, so no coordinator has to repeat the decision",
+          not holds_tx_record(victim, tx_id, "part"), f"transaction={tx_id}")
+
+    print(f"  Killing coordinator node-{edge.index} so nothing can re-drive the commit ...")
+    edge.kill()
+    print(f"  Restarting node-{victim.index} ...")
+    victim.start()
+
+    def _finished():
+        return (stored_documents(victim, DB, slow).get("mt_first", {}).get("v") == 1
+                and not holds_tx_record(victim, tx_id, "localcommit"))
+
+    check("the restarted participant finished the slice on its own", wait_until(_finished, timeout_s=90.0),
+          f"transaction={tx_id}")
+    held = stored_documents(victim, DB, slow)
+    missing = [f"mtpad{f}_{n}" for f in range(MID_COMMIT_FILLER_OPS) for n in range(MID_COMMIT_FILLER_SIZE)
+               if f"mtpad{f}_{n}" not in held]
+    check("including every op it had not applied before the kill", not missing, f"{len(missing)} missing")
+    check("and lists nothing in doubt", in_doubt_row(victim.client_port, tx_id) is None, f"transaction={tx_id}")
+
+    print(f"  Restarting node-{edge.index} ...")
+    edge.start()
+    check("every node sees the participant's slice", all_nodes_see(DB, slow, "mt_first", 1, ports=all_ports(),
+                                                                   timeout_s=60.0))
+    check("and the coordinator's own slice", all_nodes_see(DB, quick, "mt_edge", 1, ports=all_ports(),
+                                                         timeout_s=60.0))
 
 
 def tombstone_ids(node, db, coll):
@@ -3058,7 +3265,7 @@ def test_drop_database_then_rejoin_then_recreate_does_not_resurrect_documents():
 
 
 def test_a_node_that_missed_the_last_database_drop_converges():
-    section("A node that missed the drop of the cluster's last database conforms to the empty snapshot")
+    section("A node that missed the drop of the cluster's last database merges the database tombstones")
     victim = nodes[2]
     print(f"  Killing node-{victim.index} so it misses every drop ...")
     victim.kill()
@@ -3079,7 +3286,7 @@ def test_a_node_that_missed_the_last_database_drop_converges():
         response = list_databases(victim.client_port)
         return response.get("status") == "OK" and not (response.get("databases") or [])
 
-    check("the rejoined node conforms to the confirmed empty snapshot instead of keeping the dropped databases",
+    check("the rejoined node merges the database tombstones instead of keeping the dropped databases",
           wait_until(_victim_holds_nothing, timeout_s=60.0, interval_s=1.0),
           f"node-{victim.index} still lists {list_databases(victim.client_port).get('databases')!r}")
 
@@ -3125,7 +3332,7 @@ def test_rapid_collection_creates_are_not_quarantined():
                     return False
         return True
 
-    # Spans several antiEntropyIntervalMs sweeps: a quarantine fires from the admin conform, so if a
+    # Spans several antiEntropyIntervalMs sweeps: a quarantine fires from the admin anti-entropy merge, so if a
     # rounded incarnation were going to strip one of these it would have done so inside this window.
     ok = wait_until(_all_nodes_hold_every_burst_collection, timeout_s=90.0, interval_s=1.0)
     missing = {}
@@ -3145,7 +3352,7 @@ def test_recreating_an_existing_collection_keeps_its_documents():
     section("CREATE_COLLECTION on a populated collection is a safe no-op")
     # Pins the user-visible behaviour: a duplicate create must never cost documents. It does not
     # reproduce the mint-locally defect, which needs a node that is up, still lacks the collection,
-    # and receives the duplicate create before its first admin conform hands it the real incarnation
+    # and receives the duplicate create before its first admin anti-entropy round hands it the real incarnation
     # - a window this harness cannot hold open. CollectionIncarnationTest covers that deterministically.
     coll = "recreate_coll"
     check_status("create the collection", create_coll(nodes[0].client_port, DB, coll), "OK")
@@ -3263,17 +3470,13 @@ def test_a_populated_standalone_node_keeps_its_data_when_a_fresh_node_joins():
 
         populated.cluster_it()
         populated.start()
-        epoch_file = os.path.join(populated.work_dir, "db", "cluster", "admin.epoch")
-        seeded = ""
-        if os.path.isfile(epoch_file):
-            with open(epoch_file) as fp:
-                seeded = fp.read().strip()
-        check("a populated node's first clustered start seeds its admin epoch", seeded == "1|false", seeded)
+        check("a populated node's first clustered start keeps no admin epoch",
+              not os.path.exists(os.path.join(populated.work_dir, "db", "cluster", "admin.epoch")))
 
         fresh.cluster_it()
         fresh.start()
 
-        check("the fresh coordinator commits its first CREATE_DATABASE once it has conformed",
+        check("the fresh coordinator commits its first CREATE_DATABASE once it has synced its admin records",
               wait_until(lambda: create_db(fresh.client_port, "fresh_db").get("status") == "OK", timeout_s=60.0))
         ports = [populated.client_port, fresh.client_port]
         check("both nodes list the standalone database and the new one",
@@ -3319,6 +3522,7 @@ def main():
         test_write_replication_and_read_routing()
         test_bulk_delete_and_upsert()
         test_index_replication()
+        test_reindex_rebuilds_the_index_on_every_node()
         test_user_and_permission_replication()
         test_grants_are_pruned_on_every_node()
         test_a_deleted_users_ownership_is_pruned_on_every_node()
@@ -3345,9 +3549,15 @@ def main():
         test_an_unreadable_definition_is_not_deleted_on_peers()
         test_schedule_replication_and_single_firing()
         # Failure / rejoin last: they degrade then restore the cluster.
+        arrange_admin_changes_for_a_downed_node()
         test_node_failure_quorum_maintained()
         test_schedule_failover()
+        make_admin_changes_while_a_node_is_down()
         test_node_rejoin()
+        test_a_schema_saved_while_a_node_is_down_reaches_it()
+        test_a_procedure_deleted_while_a_node_is_down_stays_deleted()
+        test_a_password_changed_while_a_node_is_down_reaches_it()
+        test_permission_changes_and_dropped_indexes_replicate()
         test_a_restarted_participant_does_not_commit_half_a_transaction()
         test_restart_does_not_regress_write_versions()
         test_forwarded_write_ignores_a_client_supplied_trigger_depth()
@@ -3356,6 +3566,7 @@ def main():
         test_a_rejoining_node_repairs_one_change_among_many_documents()
         test_a_prepared_participant_resolves_without_its_coordinator()
         test_a_post_prepare_write_survives_2pc_recovery()
+        test_a_participant_killed_mid_commit_finishes_without_its_coordinator()
         test_a_trigger_fires_once_despite_a_replication_timeout()
         test_a_trigger_writing_only_to_another_owner_consumes_its_run()
         test_drop_and_recreate_does_not_resurrect_documents()

@@ -31,21 +31,6 @@ public class CollectionIncarnationClockTest {
     }
 
     @Test
-    public void test_a_replicated_create_advances_the_write_clock_past_its_incarnation() {
-        final var ahead = clock.next() + 1_000_000_000L;
-        final var request = new CreateCollectionRequest(TestGlobals.DB, "replicated_coll");
-        request.setReplicated(true);
-        request.setIncarnation(ahead);
-
-        assertEquals(OperationStatus.OK,
-                CollectionOperationHelper.processCreateCollectionOperation(request).getStatus());
-
-        assertEquals(ahead, cache.getAdminCollectionEntry(TestGlobals.DB, "replicated_coll").getIncarnation());
-        assertTrue(clock.next() > ahead,
-                "a coordinator taking over later must mint an incarnation above every one it has seen");
-    }
-
-    @Test
     public void test_a_local_create_mints_an_incarnation_from_the_clock() {
         final var before = clock.current();
 

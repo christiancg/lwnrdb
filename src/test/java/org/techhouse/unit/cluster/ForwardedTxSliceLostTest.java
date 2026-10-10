@@ -11,11 +11,9 @@ import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.conn.ClientTracker;
-import org.techhouse.conn.FinishedSlice;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.OperationType;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.ops.resp.OperationResponse;
@@ -131,15 +129,14 @@ public class ForwardedTxSliceLostTest extends ClusterConnectionHandlerTestBase {
         return "{\"type\":\"ROLLBACK_TRANSACTION\"}";
     }
 
-    private void finishedWith(String id, OperationType type, OperationResponse response) {
+    private void finishedWith(String id, boolean committed, ErrorCode reply) throws Exception {
         clientTracker.registerTxSession(sessionId, "admin", null);
-        clientTracker.recordFinishedSlice(sessionId, new FinishedSlice(id, type, response, System.currentTimeMillis()));
+        Tx2pcLog.recordOutcome(id, committed, reply == null ? null : reply.getCode());
     }
 
     @Test
     public void test_a_rollback_after_a_commit_that_applied_nothing_answers_ok() throws Exception {
-        finishedWith(txId, OperationType.COMMIT_TRANSACTION,
-                new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_QUORUM));
+        finishedWith(txId, false, null);
 
         assertEquals(OperationStatus.OK, send(txId, rollback(), true).getStatus());
         assertNull(clientTracker.txSession(sessionId));
@@ -147,8 +144,7 @@ public class ForwardedTxSliceLostTest extends ClusterConnectionHandlerTestBase {
 
     @Test
     public void test_a_rollback_after_a_commit_that_timed_out_replicating_answers_already_committed() throws Exception {
-        finishedWith(txId, OperationType.COMMIT_TRANSACTION,
-                new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT));
+        finishedWith(txId, true, ErrorCode.REPLICATION_TIMEOUT);
 
         assertEquals(ErrorCode.TRANSACTION_ALREADY_COMMITTED.getCode(), send(txId, rollback(), true).getErrorCode(),
                 "the local commit stands on a replication timeout");
@@ -156,36 +152,32 @@ public class ForwardedTxSliceLostTest extends ClusterConnectionHandlerTestBase {
 
     @Test
     public void test_a_resent_rollback_answers_the_recorded_rollback() throws Exception {
-        finishedWith(txId, OperationType.ROLLBACK_TRANSACTION,
-                OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction aborted"));
+        finishedWith(txId, false, null);
 
         assertEquals(OperationStatus.OK, send(txId, rollback(), true).getStatus());
     }
 
     @Test
     public void test_a_commit_after_a_finished_rollback_is_still_slice_lost() throws Exception {
-        finishedWith(txId, OperationType.ROLLBACK_TRANSACTION,
-                OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction aborted"));
+        finishedWith(txId, false, null);
 
         assertEquals(ErrorCode.TRANSACTION_SLICE_LOST.getCode(), send(txId, commit(), true).getErrorCode());
     }
 
     @Test
     public void test_a_finished_slice_never_answers_for_another_transaction() throws Exception {
-        finishedWith(otherTxId, OperationType.COMMIT_TRANSACTION,
-                OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed"));
+        finishedWith(otherTxId, true, null);
 
         assertEquals(ErrorCode.TRANSACTION_SLICE_LOST.getCode(), send(txId, commit(), true).getErrorCode());
     }
 
     @Test
-    public void test_removing_the_session_keeps_its_finished_slice() {
-        finishedWith(txId, OperationType.COMMIT_TRANSACTION,
-                OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed"));
+    public void test_removing_the_session_keeps_its_recorded_outcome() throws Exception {
+        finishedWith(txId, true, null);
 
         clientTracker.removeTxSession(sessionId);
 
-        assertNotNull(clientTracker.finishedSlice(sessionId),
+        assertEquals(OperationStatus.OK, send(txId, commit(), true).getStatus(),
                 "the edge may still re-send a commit whose answer never reached it");
     }
 

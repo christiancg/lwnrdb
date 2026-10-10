@@ -11,6 +11,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 import javax.net.ssl.SSLException;
+import org.techhouse.cluster.admin.AdminRecordMerge;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
@@ -24,10 +25,11 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ReplicatedApplyHelper;
-import org.techhouse.ops.ReplicatedUserApplyHelper;
 import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.ScriptRunRegistry;
 import org.techhouse.ops.TriggerRunResolution;
+import org.techhouse.ops.index.IndexOperationHelper;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.resp.OperationResponse;
 
@@ -38,8 +40,6 @@ public class ClusterConnectionHandler implements Runnable {
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private final AdminAntiEntropyService adminAntiEntropyService = IocContainer.get(AdminAntiEntropyService.class);
-    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
-    private final AdminLane adminLane = IocContainer.get(AdminLane.class);
     private final ScriptRunDirectory scriptRunDirectory = IocContainer.get(ScriptRunDirectory.class);
     private final TriggerRunDirectory triggerRunDirectory = IocContainer.get(TriggerRunDirectory.class);
     private final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
@@ -142,7 +142,7 @@ public class ClusterConnectionHandler implements Runnable {
             case GOSSIP -> membershipService.handleGossip(request);
             case REPLICATE -> handleReplicate(request);
             case REPLICATE_ADMIN -> handleReplicateAdmin(request);
-            case REPLICATE_USER -> handleReplicateUser(request);
+            case REINDEX_BROADCAST -> handleReindexBroadcast(request);
             case REPLICATE_TX -> ClusterTxMessageHandler.handleReplicateTx(request);
             case FORWARD_REQUEST -> handleForward(request);
             case FORWARD_TX_REQUEST -> ClusterTxMessageHandler.handleForwardTx(request);
@@ -169,8 +169,7 @@ public class ClusterConnectionHandler implements Runnable {
 
     private ClusterMessage handleForward(ClusterMessage request) {
         return ClusterMessages.reply(ClusterMessageType.FORWARD_RESPONSE, "Failed to execute forwarded request",
-                response -> response
-                        .setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request, false)))));
+                response -> response.setForwardBody(ForwardBody.encode(eJson.toJson(executeForwarded(request)))));
     }
 
     private ClusterMessage handleListScripts() {
@@ -214,43 +213,37 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handleReplicateAdmin(ClusterMessage request) {
-        return adminLane.within(clusterConfig.replicationAckTimeoutMs(), () -> applyReplicatedAdmin(request),
-                this::adminLaneBusy);
-    }
-
-    private ClusterMessage adminLaneBusy() {
-        adminAntiEntropyService.reconcileSoon();
-        final var response = new ClusterMessage();
-        response.setType(ClusterMessageType.ERROR);
-        response.setErrorMessage("The admin lane stayed busy past replicationAckTimeoutMs: an admin conform or another"
-                + " admin op holds it");
-        return response;
-    }
-
-    private ClusterMessage applyReplicatedAdmin(ClusterMessage request) {
-        if (adminEpoch.skipsAhead(request.getAdminEpoch())) {
-            return epochGap(request.getAdminEpoch());
-        }
-        return ClusterMessages.reply(ClusterMessageType.REPLICATE_ADMIN_ACK, "Failed to apply replicated admin op",
+        return ClusterMessages.reply(ClusterMessageType.REPLICATE_ADMIN_ACK, "Failed to apply the admin records",
                 response -> {
-                    final var result = executeForwarded(request, true);
-                    if (result.getStatus() == OperationStatus.OK) {
-                        adoptReplicatedEpoch(request.getAdminEpoch());
-                    } else {
+                    if (!AdminRecordMerge.apply(request.getAdminSnapshot().getRecords(), true).complete()) {
+                        adminAntiEntropyService.reconcileSoon();
                         response.setType(ClusterMessageType.ERROR);
-                        response.setErrorMessage("Replicated admin op failed: " + result.getMessage());
+                        response.setErrorMessage("Could not apply every replicated admin record; an admin"
+                                + " anti-entropy round retries the rest");
+                    }
+                });
+    }
+
+    private ClusterMessage handleReindexBroadcast(ClusterMessage request) {
+        return ClusterMessages.reply(ClusterMessageType.REINDEX_BROADCAST_ACK, "Failed to rebuild the indexes",
+                response -> {
+                    final var reindex = (ReindexRequest) RequestParser
+                            .parseRequest(ForwardBody.decode(request.getForwardBody()));
+                    final var result = IndexOperationHelper.processReindex(reindex, true);
+                    if (result.getStatus() != OperationStatus.OK) {
+                        response.setType(ClusterMessageType.ERROR);
+                        response.setErrorMessage("Rebuilding the indexes failed: " + result.getMessage());
                     }
                 });
     }
 
     // Goes straight to OperationProcessor, bypassing the router, so a forwarded request cannot forward
     // again. The synthetic client carries the acting user so admin ops apply with the correct identity.
-    private OperationResponse executeForwarded(ClusterMessage request, boolean replicated) {
+    private OperationResponse executeForwarded(ClusterMessage request) {
         final var actingUser = request.getActingUser();
         final var clientId = actingUser != null ? clientTracker.registerForwardedClient(actingUser) : null;
         try {
             final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
-            parsed.setReplicated(replicated);
             final var schemaError = SchemaValidationHelper.check(parsed);
             if (schemaError != null) {
                 return schemaError;
@@ -261,42 +254,6 @@ public class ClusterConnectionHandler implements Runnable {
                 clientTracker.removeById(clientId);
             }
         }
-    }
-
-    private ClusterMessage handleReplicateUser(ClusterMessage request) {
-        return adminLane.within(clusterConfig.replicationAckTimeoutMs(), () -> applyReplicatedUser(request),
-                this::adminLaneBusy);
-    }
-
-    private ClusterMessage applyReplicatedUser(ClusterMessage request) {
-        if (adminEpoch.skipsAhead(request.getAdminEpoch())) {
-            return epochGap(request.getAdminEpoch());
-        }
-        final var response = new ClusterMessage();
-        if (ReplicatedUserApplyHelper.apply(request.getReplication())) {
-            adoptReplicatedEpoch(request.getAdminEpoch());
-            response.setType(ClusterMessageType.REPLICATE_USER_ACK);
-        } else {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to apply replicated user mutation");
-        }
-        return response;
-    }
-
-    private void adoptReplicatedEpoch(long candidate) {
-        adminEpoch.adoptNext(candidate);
-    }
-
-    private ClusterMessage epochGap(long candidate) {
-        final var current = adminEpoch.current();
-        logger.warning("Refusing a replicated admin op at epoch " + candidate + ": this node is at epoch " + current
-                + " and missed " + (candidate - current - 1) + " op(s); conforming before it acknowledges another");
-        adminAntiEntropyService.reconcileSoon();
-        final var response = new ClusterMessage();
-        response.setType(ClusterMessageType.ERROR);
-        response.setErrorMessage("Admin epoch gap: this node is at epoch " + current + " and cannot apply the op at"
-                + " epoch " + candidate + " until it conforms");
-        return response;
     }
 
     private ClusterMessage handleReplicate(ClusterMessage request) {
@@ -319,7 +276,7 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handleDigest(ClusterMessage request) {
-        if (adminAntiEntropyService.hasNotConformedSinceStart()) {
+        if (adminAntiEntropyService.hasNotSyncedSinceStart()) {
             return notAdminSyncedYet();
         }
         return ClusterMessages.reply(ClusterMessageType.DIGEST_ACK, "Failed to build digest", response -> {
@@ -330,7 +287,7 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handlePull(ClusterMessage request) {
-        if (adminAntiEntropyService.hasNotConformedSinceStart()) {
+        if (adminAntiEntropyService.hasNotSyncedSinceStart()) {
             return notAdminSyncedYet();
         }
         return ClusterMessages.reply(ClusterMessageType.PULL_ACK, "Failed to build pull response", response -> {

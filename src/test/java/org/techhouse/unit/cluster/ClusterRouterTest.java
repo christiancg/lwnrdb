@@ -12,7 +12,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
@@ -74,7 +73,6 @@ public class ClusterRouterTest {
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
         final var self = new NodeInfo("self", "127.0.0.1", 9990, NodeState.ALIVE, 1L, 1L, 9);
         final var other = new NodeInfo("other", "127.0.0.1", 1, NodeState.ALIVE, 1L, 1L, 0);
-        other.setAdminEpoch(IocContainer.get(AdminEpoch.class).current());
         final var members = new LinkedHashMap<String, NodeInfo>();
         members.put(self.getNodeId(), self);
         members.put(other.getNodeId(), other);

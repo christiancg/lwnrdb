@@ -198,7 +198,7 @@ public class Tx2pcRecoveryResilienceTest {
         seedPreparedSlice(dtxId, "startup-doc");
 
         TwoPhaseParticipant.commitPreparedFromDurable(dtxId,
-                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)));
+                List.of(Cache.getCollectionIdentifier(TestGlobals.DB, TestGlobals.COLL)), 0L);
 
         final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         request.set_id("startup-doc");

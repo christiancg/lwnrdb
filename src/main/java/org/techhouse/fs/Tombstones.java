@@ -18,6 +18,16 @@ public final class Tombstones {
         TombstoneStore.retract(paths.tombstoneFile(dbName, collName), id, version);
     }
 
+    public void appendAdmin(String key, long version) throws IOException {
+        final var file = paths.adminTombstoneFile();
+        MetadataFileStore.ensureFolder(file.getParentFile(), "cluster", "admin");
+        TombstoneStore.append(file, key, version);
+    }
+
+    public Map<String, Long> readAdmin() throws IOException {
+        return TombstoneStore.read(paths.adminTombstoneFile());
+    }
+
     public Map<String, Long> read(String dbName, String collName) throws IOException {
         return TombstoneStore.read(paths.tombstoneFile(dbName, collName));
     }

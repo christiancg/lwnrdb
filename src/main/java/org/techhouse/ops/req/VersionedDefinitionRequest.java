@@ -5,10 +5,6 @@ import org.techhouse.ops.OperationType;
 public abstract class VersionedDefinitionRequest extends OperationRequest {
     private Boolean enabled;
     private Long ifVersion;
-    private long stampedVersion;
-    private long stampedUpdatedAt;
-    private String stampedUpdatedBy;
-    private long stampedCreatedAt;
 
     protected VersionedDefinitionRequest(OperationType type, String databaseName, String collectionName) {
         super(type, databaseName, collectionName);
@@ -31,42 +27,6 @@ public abstract class VersionedDefinitionRequest extends OperationRequest {
     }
 
     public boolean conflictsWith(long existingVersion) {
-        return !isReplicated() && ifVersion != null && ifVersion != existingVersion;
-    }
-
-    public boolean carriesCoordinatorStamp() {
-        return isReplicated() && stampedVersion > 0;
-    }
-
-    public long getStampedVersion() {
-        return stampedVersion;
-    }
-
-    public void setStampedVersion(long stampedVersion) {
-        this.stampedVersion = stampedVersion;
-    }
-
-    public long getStampedUpdatedAt() {
-        return stampedUpdatedAt;
-    }
-
-    public void setStampedUpdatedAt(long stampedUpdatedAt) {
-        this.stampedUpdatedAt = stampedUpdatedAt;
-    }
-
-    public String getStampedUpdatedBy() {
-        return stampedUpdatedBy;
-    }
-
-    public void setStampedUpdatedBy(String stampedUpdatedBy) {
-        this.stampedUpdatedBy = stampedUpdatedBy;
-    }
-
-    public long getStampedCreatedAt() {
-        return stampedCreatedAt;
-    }
-
-    public void setStampedCreatedAt(long stampedCreatedAt) {
-        this.stampedCreatedAt = stampedCreatedAt;
+        return ifVersion != null && ifVersion != existingVersion;
     }
 }

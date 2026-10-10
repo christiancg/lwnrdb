@@ -112,13 +112,17 @@ public class MainStartupOrderTest {
     }
 
     @Test
-    public void test_the_admin_epoch_is_seeded_after_loading_and_before_the_first_gossip() throws IOException {
+    public void test_the_clock_is_seeded_from_the_admin_records_before_the_first_admin_write() throws IOException {
         final var body = mainBody();
-        final var seed = positionOf(body, "StandaloneEpochSeed.seedIfPopulated();");
+        final var seed = positionOf(body, "seedHybridClock();");
 
-        assertTrue(positionOf(body, "adminEpoch.load();") < seed, "the seed decides from the epoch file it loaded");
-        assertTrue(seed < positionOf(body, "membershipService.start();"),
-                "a fresh peer must see the seeded epoch in the first gossip, before it can coordinate an op");
+        assertTrue(positionOf(body, "cache.loadAdminData();") < seed, "the seed reads the admin records it loaded");
+        assertTrue(seed < positionOf(body, "bootstrapDefaultAdmin();"),
+                "an admin write stamped by an unseeded clock could land below the version it replaces");
+        final var stamping = positionOf(body, "UnversionedRecords.stampAll();");
+        assertTrue(seed < stamping && stamping < positionOf(body, "bootstrapDefaultAdmin();"),
+                "records written before versioning must outrank a fresh peer's bootstrap admin before this node"
+                        + " writes its own");
         assertTrue(positionOf(body, "bootstrapDefaultAdmin();") < positionOf(body, "startClusterIfEnabled();"),
                 "a fresh node's own bootstrap admin must already exist, or it would be counted as missing data");
     }

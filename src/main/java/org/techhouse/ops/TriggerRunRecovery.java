@@ -19,6 +19,7 @@ import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.tx.FencedTriggerRuns;
+import org.techhouse.ops.tx.SliceStates;
 
 public final class TriggerRunRecovery {
     private static final Logger logger = Logger.logFor(TriggerRunRecovery.class);
@@ -35,7 +36,7 @@ public final class TriggerRunRecovery {
             final var startup = new HashSet<String>();
             for (final var entry : TriggerRunLog.pending()) {
                 final var txId = entry.getTxId();
-                if (txId != null && TransactionOperationHelper.isFenced(txId)) {
+                if (txId != null && SliceStates.isFenced(txId)) {
                     ownedByReplay.add(entry.getRunId());
                 } else {
                     startup.add(entry.getRunId());

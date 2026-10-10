@@ -24,8 +24,6 @@ public enum ConfigKey {
     DEAD_EVICTION_MS("deadEvictionMs", ValueType.LONG, "86400000", Rule.atLeast(1)),
     DEAD_PROBE_INTERVAL_MS("deadProbeIntervalMs", ValueType.LONG, "10000", Rule.atLeast(1)),
     REPLICATION_ACK_TIMEOUT_MS("replicationAckTimeoutMs", ValueType.LONG, "5000", Rule.atLeast(1)),
-    ADMIN_LANE_TIMEOUT_MS("adminLaneTimeoutMs", ValueType.LONG, "15000", Rule.atLeast(1)),
-    FINISHED_SLICE_RETENTION_MS("finishedSliceRetentionMs", ValueType.LONG, "3600000", Rule.atLeast(1)),
     VIRTUAL_NODES_PER_NODE("virtualNodesPerNode", ValueType.INT, "128", Rule.atLeast(1)),
     READ_FALLBACK_TO_LOCAL("readFallbackToLocal", ValueType.BOOLEAN, "true", Rule.bool()),
     SCRIPT_ROUTING_ENABLED("scriptRoutingEnabled", ValueType.BOOLEAN, "true", Rule.bool()),

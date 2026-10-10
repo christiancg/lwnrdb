@@ -120,7 +120,6 @@ public enum ErrorCode {
             + " retry shortly", OperationStatus.ERROR),
     COLLECTION_NOT_READY("503-10", "The collection has not reached this node yet, retry shortly",
             OperationStatus.ERROR),
-    ADMIN_LANE_BUSY("503-12", "Another admin operation is still in progress; retry", OperationStatus.ERROR),
     SERVER_SHUTTING_DOWN("503-13", "The server is shutting down, retry against another node or later",
             OperationStatus.ERROR);
     // @formatter:on

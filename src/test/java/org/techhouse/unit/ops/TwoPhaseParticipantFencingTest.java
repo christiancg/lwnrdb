@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mockStatic;
@@ -162,7 +163,7 @@ public class TwoPhaseParticipantFencingTest {
         TransactionOperationHelper.bufferSave(request, transaction);
 
         try (var recovery = mockStatic(TransactionRecovery.class)) {
-            recovery.when(() -> TransactionRecovery.applyAllWithRetry(anyList(), anyString()))
+            recovery.when(() -> TransactionRecovery.applyAllWithRetry(anyList(), anyString(), any()))
                     .thenThrow(new StackOverflowError("the apply blew the stack"));
             assertThrows(StackOverflowError.class, () -> TwoPhaseParticipant.commitPrepared(clientId));
         }

@@ -12,14 +12,11 @@ import org.techhouse.ex.DurableReplayIncompleteException;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.resp.OperationResponse;
-import org.techhouse.ops.tx.CommittedOpTriggers;
 import org.techhouse.ops.tx.TransactionRecovery;
 
 public final class TwoPhaseParticipant {
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
-    private static final org.techhouse.listen.ListenManager listenManager = IocContainer
-            .get(org.techhouse.listen.ListenManager.class);
     private static final Logger logger = Logger.logFor(TwoPhaseParticipant.class);
 
     private TwoPhaseParticipant() {
@@ -42,59 +39,7 @@ public final class TwoPhaseParticipant {
     }
 
     public static OperationResponse commitPrepared(UUID clientId) {
-        final var transaction = clientTracker.getActiveTransaction(clientId);
-        if (transaction == null) {
-            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
-        }
-        if (transaction.isAborted()) {
-            clientTracker.clearActiveTransaction(clientId);
-            clientTracker.clearTransactionState(clientId);
-            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_NOT_USABLE);
-        }
-        var fenced = false;
-        try {
-            final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
-            if (ops.size() != transaction.getBufferedOpIds().size()) {
-                logger.error("Transaction " + transaction.getTransactionId() + " lost "
-                        + (transaction.getBufferedOpIds().size() - ops.size()) + " buffered op(s) before commit");
-                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
-            }
-            final var txId = transaction.getTransactionId().toString();
-            final var reservedTombstones = coordinator.reserveTransactionTombstones(transaction);
-            listenManager.deferNotifications(transaction.getHeldLocks());
-            final boolean applied;
-            try {
-                applied = TransactionRecovery.applyAllWithRetry(ops, txId);
-            } finally {
-                listenManager.flushDeferredNotifications();
-            }
-            if (!applied) {
-                fenced = true;
-                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
-            }
-            final var stagedTriggers = CommittedOpTriggers.stage(ops, clientTracker.getAuthenticatedUsername(clientId),
-                    transaction.getTriggerDepth(), transaction, txId);
-            TransactionRecovery.resolveMarkers(txId, true);
-            TransactionRecovery.discardAppliedOps(txId, transaction.getBufferedOpIds());
-            // After the durable commit, so a trigger never observes a transaction that later rolled back.
-            stagedTriggers.submitAll();
-            // A replication timeout does not fail the commit; anti-entropy reconciles the lagging replicas.
-            coordinator.replicateTransaction(transaction, reservedTombstones);
-            return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
-        } catch (Exception e) {
-            logger.error(OperationType.COMMIT_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(), e);
-            fenced = true;
-            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
-        } catch (Throwable t) {
-            fenced = true;
-            throw t;
-        } finally {
-            if (!fenced) {
-                TransactionOperationHelper.releaseHeldLocks(transaction);
-                clientTracker.clearActiveTransaction(clientId);
-                clientTracker.clearTransactionState(clientId);
-            }
-        }
+        return TransactionOperationHelper.commitDecided(clientId);
     }
 
     // The durable replay takes the slice's collection write locks. A prepared session that never died still
@@ -121,17 +66,18 @@ public final class TwoPhaseParticipant {
                 ? commitPrepared(session.clientId())
                 : TransactionOperationHelper.abort(session.clientId()));
         final var result = timeoutMillis > 0 ? future.get(timeoutMillis, TimeUnit.MILLISECONDS) : future.get();
-        if (TransactionOperationHelper.releasedItsLocks(result)) {
+        if (clientTracker.getActiveTransaction(session.clientId()) == null) {
             clientTracker.removeTxSession(entry.getKey());
         }
-        if (result.getStatus() != OperationStatus.OK) {
+        if (!resolved(result)) {
             throw new DurableReplayIncompleteException(dtxId, result.getMessage());
         }
         return true;
     }
 
-    public static void commitPreparedFromDurable(String dtxId, List<String> collections) throws Exception {
-        commitPreparedFromDurable(dtxId, collections, 0L);
+    public static boolean resolved(OperationResponse response) {
+        return response.getStatus() == OperationStatus.OK
+                || ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode());
     }
 
     public static void commitPreparedFromDurable(String dtxId, List<String> collections, long timeoutMillis)
@@ -142,10 +88,6 @@ public final class TwoPhaseParticipant {
         TransactionRecovery.commitPreparedFromDurable(dtxId, collections, timeoutMillis);
     }
 
-    public static void abortFromDurable(String dtxId) throws Exception {
-        abortFromDurable(dtxId, 0L);
-    }
-
     public static void abortFromDurable(String dtxId, long timeoutMillis) throws Exception {
         if (resolvedThroughLiveSession(dtxId, false, timeoutMillis)) {
             return;
@@ -153,14 +95,7 @@ public final class TwoPhaseParticipant {
         TransactionRecovery.abortFromDurable(dtxId);
     }
 
-    public static void resolveFromDurable(String dtxId, boolean commit) throws Exception {
-        resolveFromDurable(dtxId, commit, 0L);
-    }
-
     public static void resolveFromDurable(String dtxId, boolean commit, long timeoutMillis) throws Exception {
-        if (!Tx2pcLog.isPrepared(dtxId)) {
-            return;
-        }
         if (resolvedThroughLiveSession(dtxId, commit, timeoutMillis)) {
             return;
         }

@@ -13,7 +13,6 @@ import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeState;
-import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
@@ -28,7 +27,8 @@ import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.StartTransactionResponse;
-import org.techhouse.ops.tx.CommittedOpTriggers;
+import org.techhouse.ops.tx.SliceCommit;
+import org.techhouse.ops.tx.SliceStates;
 import org.techhouse.ops.tx.TransactionBuffer;
 import org.techhouse.ops.tx.TransactionRecovery;
 
@@ -41,8 +41,6 @@ public final class TransactionOperationHelper {
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     @SuppressWarnings("FieldMayBeFinal")
     private static ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
-    private static final org.techhouse.listen.ListenManager listenManager = IocContainer
-            .get(org.techhouse.listen.ListenManager.class);
     private static final ClusterRouter clusterRouter = IocContainer.get(ClusterRouter.class);
     private static final Logger logger = Logger.logFor(TransactionOperationHelper.class);
 
@@ -87,10 +85,6 @@ public final class TransactionOperationHelper {
         return true;
     }
 
-    private static boolean isLocalCommitFenced(Transaction transaction) {
-        return TxCommitLog.isLocallyCommitted(transaction.getTransactionId().toString());
-    }
-
     private static ErrorCode preApplyRefusal(Transaction transaction) {
         if (coordinator.hasNotTransactionQuorum()) {
             return ErrorCode.NO_QUORUM;
@@ -99,11 +93,7 @@ public final class TransactionOperationHelper {
     }
 
     private static boolean isFenced(Transaction transaction) {
-        return isFenced(transaction.getTransactionId().toString());
-    }
-
-    public static boolean isFenced(String txId) {
-        return TxCommitLog.isLocallyCommitted(txId) || Tx2pcLog.isPrepared(txId);
+        return SliceStates.isFenced(transaction.getTransactionId().toString());
     }
 
     public static OperationResponse abort(UUID clientId) {
@@ -111,12 +101,12 @@ public final class TransactionOperationHelper {
         if (transaction == null) {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
         }
-        if (isLocalCommitFenced(transaction)) {
+        if (TxCommitLog.isLocallyCommitted(transaction.getTransactionId().toString())) {
             return new OperationResponse(OperationType.ROLLBACK_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
         }
         try {
             AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
-            TransactionRecovery.resolveMarkers(transaction.getTransactionId().toString(), false);
+            TransactionRecovery.recordAborted(transaction.getTransactionId().toString());
             return OperationResponse.ok(OperationType.ROLLBACK_TRANSACTION, "Transaction aborted");
         } catch (Exception e) {
             logger.error(OperationType.ROLLBACK_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(),
@@ -131,11 +121,23 @@ public final class TransactionOperationHelper {
         TransactionRecovery.cleanupOrphansAtStartup();
     }
 
-    public static void commitLocalFromDurable(String txId, List<String> collections) throws Exception {
-        TransactionRecovery.commitLocalFromDurable(txId, collections);
+    public static OperationResponse commit(UUID clientId) {
+        return commit(clientId, false, false);
     }
 
-    public static OperationResponse commit(UUID clientId) {
+    public static OperationResponse commitForwarded(UUID clientId) {
+        return commit(clientId, false, true);
+    }
+
+    static OperationResponse commitDecided(UUID clientId) {
+        return commit(clientId, true, true);
+    }
+
+    private static boolean isDecided(String txId) {
+        return TxCommitLog.isLocallyCommitted(txId) || Tx2pcLog.isPrepared(txId) && Tx2pcLog.isCommitted(txId);
+    }
+
+    private static OperationResponse commit(UUID clientId, boolean decidedElsewhere, boolean recordsOutcome) {
         final var transaction = clientTracker.getActiveTransaction(clientId);
         if (transaction == null) {
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.NO_ACTIVE_TRANSACTION);
@@ -145,19 +147,10 @@ public final class TransactionOperationHelper {
             clientTracker.clearTransactionState(clientId);
             return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_NOT_USABLE);
         }
-        if (Tx2pcLog.isDecidedCommit(transaction.getTransactionId().toString())) {
-            return TwoPhaseParticipant.commitPrepared(clientId);
-        }
-        var fenced = false;
-        var pastCommitPoint = false;
+        final var decided = decidedElsewhere || isDecided(transaction.getTransactionId().toString());
+        var fenced = decided;
         try {
-            final var decided = isLocalCommitFenced(transaction);
-            pastCommitPoint = decided;
-            final var refusal = preApplyRefusal(transaction);
-            if (refusal != null && decided) {
-                fenced = true;
-                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
-            }
+            final var refusal = decided ? null : preApplyRefusal(transaction);
             if (refusal != null) {
                 AdminOperationHelper.deleteTransactionOps(transaction.getBufferedOpIds());
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, refusal);
@@ -166,53 +159,24 @@ public final class TransactionOperationHelper {
             if (ops.size() != transaction.getBufferedOpIds().size()) {
                 logger.error("Transaction " + transaction.getTransactionId() + " lost "
                         + (transaction.getBufferedOpIds().size() - ops.size()) + " buffered op(s) before commit");
-                if (decided) {
-                    fenced = true;
-                    return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
-                }
-                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
+                return new OperationResponse(OperationType.COMMIT_TRANSACTION,
+                        fenced ? ErrorCode.TRANSACTION_HALF_APPLIED : ErrorCode.ERROR_TRANSACTION);
             }
-            final var txId = transaction.getTransactionId().toString();
-            // The commit point: durable before the first op is applied, so a crash after this is finished by
-            // cleanupOrphansAtStartup instead of leaving the transaction half-applied.
-            TxCommitLog.recordLocalCommit(txId, transaction.getBufferedOpIds(),
-                    new ArrayList<>(transaction.getHeldLocks()));
-            pastCommitPoint = true;
-            final var reservedTombstones = coordinator.reserveTransactionTombstones(transaction);
-            listenManager.deferNotifications(transaction.getHeldLocks());
-            final boolean applied;
-            try {
-                applied = TransactionRecovery.applyAllWithRetry(ops, txId);
-            } finally {
-                listenManager.flushDeferredNotifications();
-            }
-            if (!applied) {
-                fenced = true;
+            SliceCommit.begin(transaction);
+            fenced = true;
+            final var result = SliceCommit.finish(transaction, ops, clientTracker.getAuthenticatedUsername(clientId),
+                    recordsOutcome);
+            if (result == SliceCommit.Result.HALF_APPLIED) {
                 return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
             }
-            final var stagedTriggers = CommittedOpTriggers.stage(ops, clientTracker.getAuthenticatedUsername(clientId),
-                    transaction.getTriggerDepth(), transaction, txId);
-            TxCommitLog.clearLocalCommit(txId);
-            pastCommitPoint = false;
-            TransactionRecovery.discardAppliedOps(txId, transaction.getBufferedOpIds());
-            // After the durable commit, so a trigger never observes a transaction that later rolled back. The
-            // transaction's own depth is used, not zero, or allowCascade=true would cascade forever.
-            stagedTriggers.submitAll();
-            // The local commit stands even on a replication timeout; anti-entropy reconciles the replicas.
-            if (coordinator.replicateTransaction(transaction, reservedTombstones) == ReplicationOutcome.TIMEOUT) {
-                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT);
-            }
-            return OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
+            fenced = false;
+            return result == SliceCommit.Result.REPLICATION_TIMEOUT
+                    ? new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.REPLICATION_TIMEOUT)
+                    : OperationResponse.ok(OperationType.COMMIT_TRANSACTION, "Transaction committed");
         } catch (Exception e) {
-            logger.error(OperationType.COMMIT_TRANSACTION + " failed with " + ErrorCode.ERROR_TRANSACTION.getCode(), e);
-            if (pastCommitPoint) {
-                fenced = true;
-                return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.TRANSACTION_HALF_APPLIED);
-            }
-            return new OperationResponse(OperationType.COMMIT_TRANSACTION, ErrorCode.ERROR_TRANSACTION);
-        } catch (Throwable t) {
-            fenced = pastCommitPoint;
-            throw t;
+            logger.error(OperationType.COMMIT_TRANSACTION + " failed", e);
+            return new OperationResponse(OperationType.COMMIT_TRANSACTION,
+                    fenced ? ErrorCode.TRANSACTION_HALF_APPLIED : ErrorCode.ERROR_TRANSACTION);
         } finally {
             if (!fenced) {
                 releaseAndDeregister(transaction, clientId);
@@ -360,7 +324,7 @@ public final class TransactionOperationHelper {
             return;
         }
         final var rollbackResult = rollbackOnSessionThread(session);
-        if (rollbackResult.isPresent() && releasedItsLocks(rollbackResult.get())) {
+        if (rollbackResult.isPresent() && clientTracker.getActiveTransaction(session.clientId()) == null) {
             clientTracker.removeTxSession(sessionId);
             return;
         }
@@ -384,10 +348,6 @@ public final class TransactionOperationHelper {
         final var held = transaction == null ? List.<String>of() : new ArrayList<>(transaction.getHeldLocks());
         logger.warning("Kept transaction session " + session.clientId() + " registered; it still holds " + held.size()
                 + " write lock(s) " + held + " that only recovery or its own thread can release");
-    }
-
-    public static boolean releasedItsLocks(OperationResponse response) {
-        return response == null || !ErrorCode.TRANSACTION_HALF_APPLIED.getCode().equals(response.getErrorCode());
     }
 
     public static void bufferTriggerRunConsume(Transaction transaction, String runId) throws Exception {

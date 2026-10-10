@@ -3,7 +3,6 @@ package org.techhouse.ops;
 import java.util.ArrayList;
 import java.util.List;
 import org.techhouse.cache.Cache;
-import org.techhouse.cluster.HybridClock;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminTransactionEntry;
 import org.techhouse.ejson.elements.JsonArray;
@@ -16,10 +15,8 @@ public final class TxCommitLog {
     private static final String COLLECTIONS_FIELD = "collections";
     private static final String OP_IDS_FIELD = "opIds";
     private static final String COMMITTED_AT_FIELD = "committedAt";
-    private static final String WRITE_VERSION_FIELD = "writeVersion";
-    private static final HybridClock hybridClock = IocContainer.get(HybridClock.class);
 
-    public record LocalCommitMarker(List<String> opIds, List<String> collections, long committedAt, long writeVersion) {
+    public record LocalCommitMarker(List<String> opIds, List<String> collections, long committedAt) {
     }
 
     private TxCommitLog() {
@@ -34,7 +31,6 @@ public final class TxCommitLog {
         payload.add(OP_IDS_FIELD, stringArray(opIds));
         payload.add(COLLECTIONS_FIELD, stringArray(collections));
         payload.addProperty(COMMITTED_AT_FIELD, Long.toString(System.currentTimeMillis()));
-        payload.addProperty(WRITE_VERSION_FIELD, Long.toString(hybridClock.current()));
         AdminOperationHelper.saveTransactionOp(AdminTransactionEntry.marker(txId,
                 AdminTransactionEntry.MARKER_LOCAL_COMMIT, AdminTransactionEntry.OP_TYPE_LOCAL_COMMIT, payload));
     }
@@ -67,11 +63,8 @@ public final class TxCommitLog {
         final var committedAt = payload.has(COMMITTED_AT_FIELD)
                 ? Long.parseLong(payload.get(COMMITTED_AT_FIELD).asJsonString().getValue())
                 : 0L;
-        final var writeVersion = payload.has(WRITE_VERSION_FIELD)
-                ? Long.parseLong(payload.get(WRITE_VERSION_FIELD).asJsonString().getValue())
-                : 0L;
         return new LocalCommitMarker(readStringArray(payload, OP_IDS_FIELD),
-                readStringArray(payload, COLLECTIONS_FIELD), committedAt, writeVersion);
+                readStringArray(payload, COLLECTIONS_FIELD), committedAt);
     }
 
     private static JsonArray stringArray(List<String> values) {

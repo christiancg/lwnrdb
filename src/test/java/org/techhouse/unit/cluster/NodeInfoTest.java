@@ -1,14 +1,12 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
-import org.techhouse.ejson.EJson;
 
 public class NodeInfoTest {
 
@@ -59,14 +57,11 @@ public class NodeInfoTest {
     public void test_telemetry_is_copied_from_a_peer_report() {
         final var incoming = new NodeInfo("node-1", "127.0.0.1", 9990, NodeState.ALIVE, 100L, 5L, 4);
         incoming.setAdminSyncing(true);
-        incoming.setAdminEpoch(9L);
         final var local = sample();
         local.copyTelemetryFrom(incoming);
         assertEquals(4, local.getScriptLoad());
         assertTrue(local.isAdminSyncing());
-        assertEquals(9L, local.getAdminEpoch());
         assertTrue(local.toString().contains("adminSyncing=true"));
-        assertTrue(local.toString().contains("adminEpoch=9"));
     }
 
     @Test
@@ -85,11 +80,8 @@ public class NodeInfoTest {
         assertEquals(a, b);
         b.setAdminSyncing(true);
         assertNotEquals(a, b);
-        b.setAdminSyncing(false);
-        b.setAdminEpoch(3L);
-        assertNotEquals(a, b);
         assertNotEquals(a.hashCode(), b.hashCode());
-        b.setAdminEpoch(0L);
+        b.setAdminSyncing(false);
         assertEquals(a, b);
         b.setHeartbeat(6L);
         assertNotEquals(null, a);
@@ -97,21 +89,4 @@ public class NodeInfoTest {
         assertTrue(a.toString().contains("node-1"));
     }
 
-    @Test
-    public void test_the_unconfirmed_admin_epoch_flag_travels_and_defaults_to_confirmed() {
-        final var incoming = sample();
-        incoming.setAdminEpochUnconfirmed(true);
-        final var local = sample();
-        assertFalse(local.isAdminEpochUnconfirmed());
-        assertNotEquals(local, incoming);
-
-        local.copyTelemetryFrom(incoming);
-
-        assertTrue(local.isAdminEpochUnconfirmed());
-        assertEquals(local, incoming);
-        assertEquals(local.hashCode(), incoming.hashCode());
-        assertTrue(local.toString().contains("adminEpochUnconfirmed=true"));
-        final var decoded = new EJson().fromJson("{\"nodeId\":\"node-1\",\"adminEpoch\":3}", NodeInfo.class);
-        assertFalse(decoded.isAdminEpochUnconfirmed());
-    }
 }

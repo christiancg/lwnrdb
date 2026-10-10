@@ -97,65 +97,6 @@ public class ScheduleOperationHelperTest {
                 "February 29 falls within the search horizon");
     }
 
-    @Test
-    public void test_created_at_is_stamped_onto_the_request_for_re_execution() throws Exception {
-        final var request = cronRequest("stamped", "0 3 * * *");
-
-        save(request);
-
-        assertTrue(request.getStampedCreatedAt() > 0,
-                "a locally computed createdAt diverges per node and makes the admin conform rewrite the file");
-    }
-
-    @Test
-    public void test_a_replayed_save_adopts_the_coordinator_createdAt() throws Exception {
-        final var request = cronRequest("replayed", "0 3 * * *");
-        request.setStampedVersion(7L);
-        request.setStampedUpdatedAt(1_700_000_000_000L);
-        request.setStampedUpdatedBy(ACTOR);
-        request.setStampedDefiner(ACTOR);
-        request.setStampedCreatedAt(1_600_000_000_000L);
-        request.setReplicated(true);
-
-        save(request);
-
-        assertEquals(1_600_000_000_000L, cache.getSchedule(TestGlobals.DB, "replayed").getCreatedAt());
-    }
-
-    @Test
-    public void test_a_client_cannot_forge_the_stamped_definer() throws Exception {
-        final var request = intervalRequest("forged");
-        request.setStampedVersion(9L);
-        request.setStampedDefiner("admin");
-        request.setStampedUpdatedBy("admin");
-        request.setStampedUpdatedAt(1L);
-        request.setStampedCreatedAt(1L);
-
-        final var response = save(request);
-
-        final var stored = cache.getSchedule(TestGlobals.DB, "forged");
-        assertEquals(ACTOR, stored.getDefiner());
-        assertEquals(ACTOR, stored.getUpdatedBy());
-        assertEquals(1L, response.getVersion());
-        assertTrue(stored.getCreatedAt() > 1L);
-    }
-
-    @Test
-    public void test_a_replicated_save_honours_the_stamped_definer() throws Exception {
-        final var request = intervalRequest("replicated");
-        request.setStampedVersion(9L);
-        request.setStampedDefiner("admin");
-        request.setStampedUpdatedBy("admin");
-        request.setStampedUpdatedAt(5L);
-        request.setReplicated(true);
-
-        save(request);
-
-        final var stored = cache.getSchedule(TestGlobals.DB, "replicated");
-        assertEquals("admin", stored.getDefiner());
-        assertEquals(9L, stored.getVersion());
-    }
-
     private SaveScheduleResponse save(SaveScheduleRequest request) throws Exception {
         final var response = ScheduleOperationHelper.executeSave(request, ACTOR);
         assertInstanceOf(SaveScheduleResponse.class, response, response.getMessage());
@@ -186,23 +127,6 @@ public class ScheduleOperationHelperTest {
         assertEquals(1L, save(intervalRequest("s")).getVersion());
         assertEquals(2L, save(intervalRequest("s")).getVersion());
         assertEquals(2L, cache.getSchedule(TestGlobals.DB, "s").getVersion());
-    }
-
-    @Test
-    public void test_save_stamps_derived_fields_onto_the_request() throws Exception {
-        final var request = intervalRequest("s");
-        save(request);
-        assertEquals(1L, request.getStampedVersion());
-        assertTrue(request.getStampedUpdatedAt() > 0);
-        assertEquals(ACTOR, request.getStampedUpdatedBy());
-        assertEquals(ACTOR, request.getStampedDefiner());
-
-        fs.deleteSchedule(TestGlobals.DB, "s");
-        cache.removeSchedule(TestGlobals.DB, "s");
-        request.setReplicated(true);
-        final var replayed = ScheduleOperationHelper.executeSave(request, "somebody-else");
-        assertEquals(1L, ((SaveScheduleResponse) replayed).getVersion());
-        assertEquals(ACTOR, cache.getSchedule(TestGlobals.DB, "s").getDefiner());
     }
 
     @Test
@@ -338,13 +262,4 @@ public class ScheduleOperationHelperTest {
                 ScheduleOperationHelper.executeList(new ListSchedulesRequest(TestGlobals.DB)).getErrorCode());
     }
 
-    @Test
-    public void test_replicated_save_ignores_a_stale_if_version() throws Exception {
-        save(intervalRequest("s"));
-        final var replicated = intervalRequest("s");
-        replicated.setIfVersion(5L);
-        replicated.setReplicated(true);
-
-        assertEquals(2L, save(replicated).getVersion(), "a replica applies what the coordinator decided");
-    }
 }

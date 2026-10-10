@@ -11,11 +11,13 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.ScheduleDefinition;
-import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.InvalidCronException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.StoredDefinitions;
 import org.techhouse.ops.req.DeleteScheduleRequest;
 import org.techhouse.ops.req.ListSchedulesRequest;
 import org.techhouse.ops.req.SaveScheduleRequest;
@@ -27,7 +29,6 @@ import org.techhouse.ops.schedule.CronExpression;
 public final class ScheduleOperationHelper {
     private static final FileSystem fs = IocContainer.get(FileSystem.class);
     private static final Cache cache = IocContainer.get(Cache.class);
-    private static final EJson eJson = IocContainer.get(EJson.class);
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ScheduleRegistry registry = IocContainer.get(ScheduleRegistry.class);
     private static final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
@@ -57,7 +58,7 @@ public final class ScheduleOperationHelper {
             return procedureNotFound(request);
         }
         return OperationLocks.withDatabaseShared(dbName, OperationType.SAVE_SCHEDULE, ErrorCode.ERROR_SAVING_SCHEDULE,
-                request.isReplicated(), () -> saveUnderDatabaseBarrier(request, actingUser));
+                () -> saveUnderDatabaseBarrier(request, actingUser));
     }
 
     private static OperationResponse saveUnderDatabaseBarrier(SaveScheduleRequest request, String actingUser)
@@ -80,14 +81,12 @@ public final class ScheduleOperationHelper {
             if (existing == null && scheduleNames.size() >= configuration.getScheduleMaxPerDatabase()) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.TOO_MANY_SCHEDULES);
             }
-            final var colliding = request.isReplicated()
-                    ? null
-                    : OnDiskNameRegistry.collidingDefinition(scheduleNames, request.getName());
+            final var colliding = OnDiskNameRegistry.collidingDefinition(scheduleNames, request.getName());
             if (colliding != null) {
                 return new OperationResponse(OperationType.SAVE_SCHEDULE, ErrorCode.NAME_COLLIDES_ON_DISK, colliding);
             }
-            final var definition = stampedDefinition(request, existing, actingUser);
-            fs.writeSchedule(dbName, definition.getName(), eJson.toJson(definition.toJsonObject()));
+            final var definition = newDefinition(request, existing, actingUser);
+            StoredDefinitions.writeSchedule(dbName, definition.getName(), definition.toJsonObject());
             cache.putSchedule(dbName, definition);
             registry.reload(dbName);
             return new SaveScheduleResponse("Schedule saved successfully", definition.getVersion());
@@ -135,27 +134,14 @@ public final class ScheduleOperationHelper {
                 ErrorCode.INVALID_SCHEDULE.getDefaultMessage() + ": " + reason, ErrorCode.INVALID_SCHEDULE);
     }
 
-    private static ScheduleDefinition stampedDefinition(SaveScheduleRequest request, ScheduleDefinition existing,
+    private static ScheduleDefinition newDefinition(SaveScheduleRequest request, ScheduleDefinition existing,
             String actingUser) {
-        final var alreadyStamped = request.carriesCoordinatorStamp();
-        final var version = alreadyStamped
-                ? request.getStampedVersion()
-                : (existing == null ? 1L : existing.getVersion() + 1);
-        final var updatedAt = alreadyStamped ? request.getStampedUpdatedAt() : System.currentTimeMillis();
-        final var updatedBy = alreadyStamped ? request.getStampedUpdatedBy() : actingUser;
-        final var definer = alreadyStamped ? request.getStampedDefiner() : actingUser;
-        request.setStampedVersion(version);
-        request.setStampedUpdatedAt(updatedAt);
-        request.setStampedUpdatedBy(updatedBy);
-        request.setStampedDefiner(definer);
-        final var localCreatedAt = existing == null ? updatedAt : existing.getCreatedAt();
-        final var createdAt = alreadyStamped && request.getStampedCreatedAt() > 0
-                ? request.getStampedCreatedAt()
-                : localCreatedAt;
-        request.setStampedCreatedAt(createdAt);
+        final var version = existing == null ? 1L : existing.getVersion() + 1;
+        final var updatedAt = System.currentTimeMillis();
+        final var createdAt = existing == null ? updatedAt : existing.getCreatedAt();
         return new ScheduleDefinition(request.getName(), request.getProcedureName(), request.getCron(),
-                request.getIntervalMs(), request.getArgs(), request.getTimeoutMs(), request.isEnabled(), definer,
-                request.getDescription(), version, createdAt, updatedAt, updatedBy);
+                request.getIntervalMs(), request.getArgs(), request.getTimeoutMs(), request.isEnabled(), actingUser,
+                request.getDescription(), version, createdAt, updatedAt, actingUser);
     }
 
     public static OperationResponse executeDelete(DeleteScheduleRequest request)
@@ -170,7 +156,9 @@ public final class ScheduleOperationHelper {
         }
         locks.lock(dbName, Globals.SCHEDULES_FOLDER);
         try {
-            fs.deleteSchedule(dbName, request.getName());
+            if (fs.deleteSchedule(dbName, request.getName())) {
+                AdminTombstone.record(AdminRecordKey.schedule(dbName, request.getName()));
+            }
             cache.removeSchedule(dbName, request.getName());
             registry.reload(dbName);
             return OperationResponse.ok(OperationType.DELETE_SCHEDULE, "Schedule deleted successfully");

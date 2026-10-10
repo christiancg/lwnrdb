@@ -19,7 +19,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
-import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.cluster.MembershipListener;
 import org.techhouse.cluster.MembershipView;
@@ -42,7 +41,6 @@ public class MembershipService {
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final ScriptLoad scriptLoad = IocContainer.get(ScriptLoad.class);
     private final ScriptAdmission scriptAdmission = IocContainer.get(ScriptAdmission.class);
-    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final Map<String, NodeInfo> members = new ConcurrentHashMap<>();
     private final Map<String, Long> lastSeen = new ConcurrentHashMap<>();
     private final Map<String, Long> lastProbe = new ConcurrentHashMap<>();
@@ -130,9 +128,6 @@ public class MembershipService {
         self.setScriptLoad(scriptLoad.current());
         self.setScriptCapacity(scriptAdmission.capacity());
         self.setAdminSyncing(adminSyncing);
-        final var epochState = adminEpoch.state();
-        self.setAdminEpoch(epochState.epoch());
-        self.setAdminEpochUnconfirmed(!epochState.confirmed());
         lastSeen.put(self.getNodeId(), now);
         gossipToPeers();
         detectFailures(now);

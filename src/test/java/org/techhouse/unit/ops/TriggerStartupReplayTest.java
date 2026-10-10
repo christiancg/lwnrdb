@@ -120,8 +120,9 @@ public class TriggerStartupReplayTest {
         }
         final var ops = AdminOperationHelper.readTransactionOps(transaction.getBufferedOpIds());
         ops.sort(Comparator.comparingLong(AdminTransactionEntry::getSeq));
-        assertTrue(TransactionRecovery.applyAllWithRetry(ops, txId), "the slice's ops must apply");
-        CommittedOpTriggers.stage(ops, "admin", 0, transaction, txId);
+        final var applier = new org.techhouse.ops.tx.VersionedApply();
+        assertTrue(TransactionRecovery.applyAllWithRetry(ops, txId, applier), "the slice's ops must apply");
+        CommittedOpTriggers.stage(ops, "admin", 0, transaction, applier.outcomes(), txId);
         if (!prepared) {
             TransactionRecovery.discardAppliedOps(txId, transaction.getBufferedOpIds());
         }
@@ -161,7 +162,7 @@ public class TriggerStartupReplayTest {
         assertTrue(startupRuns.stream().noneMatch(staged::contains),
                 "a run of a still-prepared slice belongs to its replay, not to startup recovery");
 
-        TwoPhaseParticipant.commitPreparedFromDurable(txId, collections());
+        TwoPhaseParticipant.commitPreparedFromDurable(txId, collections(), 0L);
         TriggerRunRecovery.recoverLocal(startupRuns);
 
         final var queued = queuedRunIds();
@@ -177,7 +178,7 @@ public class TriggerStartupReplayTest {
         TriggerRunRecovery.recoverLocal(TriggerRunRecovery.startupRunIds());
         assertTrue(queuedRunIds().isEmpty(), "startup recovery must leave an unresolved slice's run to its replay");
 
-        TwoPhaseParticipant.commitPreparedFromDurable(txId, collections());
+        TwoPhaseParticipant.commitPreparedFromDurable(txId, collections(), 0L);
         assertEquals(staged, new HashSet<>(queuedRunIds()), "the replay must queue the run once");
         assertEquals(staged.size(), captured.size());
     }
@@ -234,6 +235,6 @@ public class TriggerStartupReplayTest {
 
     @Test
     public void test_unknown_transaction_id_is_not_fenced() {
-        assertFalse(TransactionOperationHelper.isFenced(UUID.randomUUID().toString()));
+        assertFalse(org.techhouse.ops.tx.SliceStates.isFenced(UUID.randomUUID().toString()));
     }
 }

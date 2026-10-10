@@ -373,6 +373,9 @@ The response lists the fields that were rebuilt:
 ```
 Returns `404-6` if a named field has no registered index.
 
+Under clustering, `REINDEX` rebuilds on every node: the coordinator rebuilds its own indexes, then asks every
+peer to do the same, and answers `503-3` when a majority did not confirm (the rebuild still stands where it ran).
+
 #### `SAVE_SCHEMA`
 Attaches (create-or-replace) a **JSON Schema (draft 2020-12)** to a collection so that every subsequent `SAVE`/`BULK_SAVE` document must comply (see [Schema validation](#schema-validation)). A collection has **at most one** schema. Requires admin privileges or database ownership.
 ```json
@@ -908,7 +911,7 @@ The reserved `_id` field is **excluded** from validation (it is a system-assigne
 
 **Custom (EJson) types.** Beyond the standard `type`, a dedicated `customType` keyword asserts one of the extended types (`geo`, `vector`, `datetime`, `time`), e.g. `{"customType":"geo"}` requires a `#geo(lat,lng)` value. Custom-typed values also satisfy `"type":"string"` (they are stored as strings), but only `customType` distinguishes a geo from an arbitrary string.
 
-Schemas are **user data**: each is stored as `{collection}-schema.json` in the collection's folder and cached in memory so validation adds negligible per-write cost. Under clustering they are replicated to every node (the schema op is coordinator-serialized DDL, re-executed on peers) and reconciled by admin anti-entropy, so a node that was down during a `SAVE_SCHEMA`/`DELETE_SCHEMA` catches up on rejoin.
+Schemas are **user data**: each is stored as `{collection}-schema.json` in the collection's folder and cached in memory so validation adds negligible per-write cost. Under clustering they are replicated to every node (the schema op is coordinator-serialized DDL, and the coordinator ships the resulting versioned schema record to its peers) and reconciled by admin anti-entropy, so a node that was down during a `SAVE_SCHEMA`/`DELETE_SCHEMA` catches up on rejoin; a deleted schema leaves a permanent tombstone, so it is never brought back.
 
 ### Users & Permissions
 

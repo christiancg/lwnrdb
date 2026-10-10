@@ -77,8 +77,7 @@ public class OperationProcessor {
             return new OperationResponse(operationRequest.getType(), ErrorCode.TRANSACTION_NOT_USABLE);
         }
         final var actingUser = clientTracker.getAuthenticatedUsername(clientId);
-        return ClusterAdminHelper.inAdminLane(operationRequest,
-                () -> processOperation(operationRequest, clientId, activeTransaction, actingUser));
+        return processOperation(operationRequest, clientId, activeTransaction, actingUser);
     }
 
     private OperationResponse processOperation(OperationRequest operationRequest, UUID clientId,
@@ -142,7 +141,7 @@ public class OperationProcessor {
             case LIST_TRIGGER_RUNS -> processListTriggerRuns((ListTriggerRunsRequest) operationRequest);
             case RESOLVE_TRIGGER_RUN -> processResolveTriggerRun((ResolveTriggerRunRequest) operationRequest);
         };
-        return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
+        return ClusterAdminHelper.afterAdminOp(operationRequest, response);
     }
 
     private OperationResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
@@ -253,16 +252,14 @@ public class OperationProcessor {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_TRIGGER,
-                ErrorCode.ERROR_SAVING_TRIGGER, request.isReplicated(),
-                () -> TriggerOperationHelper.executeSave(request, actingUser));
+                ErrorCode.ERROR_SAVING_TRIGGER, () -> TriggerOperationHelper.executeSave(request, actingUser));
     }
 
     private OperationResponse processDeleteTrigger(DeleteTriggerRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_TRIGGER,
-                ErrorCode.ERROR_DELETING_TRIGGER, request.isReplicated(),
-                () -> TriggerOperationHelper.executeDelete(request));
+                ErrorCode.ERROR_DELETING_TRIGGER, () -> TriggerOperationHelper.executeDelete(request));
     }
 
     private OperationResponse processListTriggers(ListTriggersRequest request) {
@@ -423,16 +420,14 @@ public class OperationProcessor {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE_SCHEMA,
-                ErrorCode.ERROR_SAVING_SCHEMA, request.isReplicated(),
-                () -> SchemaOperationHelper.executeSaveSchema(request));
+                ErrorCode.ERROR_SAVING_SCHEMA, () -> SchemaOperationHelper.executeSaveSchema(request));
     }
 
     private OperationResponse processDeleteSchema(DeleteSchemaRequest request) {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE_SCHEMA,
-                ErrorCode.ERROR_DELETING_SCHEMA, request.isReplicated(),
-                () -> SchemaOperationHelper.executeDeleteSchema(request));
+                ErrorCode.ERROR_DELETING_SCHEMA, () -> SchemaOperationHelper.executeDeleteSchema(request));
     }
 
 }

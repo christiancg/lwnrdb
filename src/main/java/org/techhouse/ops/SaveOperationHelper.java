@@ -70,6 +70,10 @@ public final class SaveOperationHelper {
 
     // The caller must already hold the collection write lock.
     public static OperationResponse executeSave(SaveRequest saveRequest) throws Exception {
+        return executeSave(saveRequest, 0L);
+    }
+
+    public static OperationResponse executeSave(SaveRequest saveRequest, long version) throws Exception {
         final var dbName = saveRequest.getDatabaseName();
         final var collName = saveRequest.getCollectionName();
         final var idError = reconcileSaveId(saveRequest);
@@ -77,7 +81,7 @@ public final class SaveOperationHelper {
             return idError;
         }
         final var entry = DbEntry.fromJsonObject(dbName, collName, saveRequest.getObject());
-        entry.setVersion(hybridClock.next());
+        entry.setVersion(stampFor(version));
         final var sizeError = EntrySizeGuard.check(entry, OperationType.SAVE);
         if (sizeError != null) {
             return sizeError;
@@ -128,6 +132,14 @@ public final class SaveOperationHelper {
         return new SaveResponse("Successfully saved", savedPkIndexEntry.getValue(), eventType == EventType.CREATED);
     }
 
+    private static long stampFor(long version) {
+        if (version <= 0) {
+            return hybridClock.next();
+        }
+        hybridClock.observe(version);
+        return version;
+    }
+
     // The caller must already hold the collection write lock.
     public static OperationResponse executeBulkSave(BulkSaveRequest bulkSaveRequest) throws Exception {
         return executeBulkSave(bulkSaveRequest, null);
@@ -143,12 +155,7 @@ public final class SaveOperationHelper {
         for (var i = 0; i < objects.size(); i++) {
             final var entry = DbEntry.fromJsonObject(dbName, collName, objects.get(i));
             final var version = versions != null ? versions.get(i) : null;
-            if (version != null) {
-                entry.setVersion(version);
-                hybridClock.observe(version);
-            } else {
-                entry.setVersion(hybridClock.next());
-            }
+            entry.setVersion(stampFor(version != null ? version : 0L));
             entries.add(entry);
         }
         for (var entry : entries) {

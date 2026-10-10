@@ -27,6 +27,7 @@ import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.admin.AdminStamp;
 
 public class AdminCache {
     private static final Logger logger = Logger.logFor(AdminCache.class);
@@ -272,7 +273,7 @@ public class AdminCache {
             if (raw == null || raw.isBlank()) {
                 return null;
             }
-            return eJson.fromJson(raw, JsonObject.class);
+            return AdminStamp.unwrappedSchema(eJson.fromJson(raw, JsonObject.class));
         } catch (Exception e) {
             logger.warning("Failed to load schema for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
                     + e.getMessage());

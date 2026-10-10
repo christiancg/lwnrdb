@@ -34,7 +34,6 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.TxCommitLog;
 import org.techhouse.ops.UserOperationHelper;
 import org.techhouse.ops.req.CommitTransactionRequest;
@@ -150,8 +149,8 @@ public class EnforcingDatabaseAccessRemoteFenceTest {
     }
 
     private static void commitOnAnEdgeSharingNoDiskWithTheOwner(EnforcingDatabaseAccess database) {
-        try (var edgeMarkers = Mockito.mockStatic(TransactionOperationHelper.class, Mockito.CALLS_REAL_METHODS)) {
-            edgeMarkers.when(() -> TransactionOperationHelper.isFenced(anyString())).thenReturn(false);
+        try (var edgeMarkers = Mockito.mockStatic(org.techhouse.ops.tx.SliceStates.class, Mockito.CALLS_REAL_METHODS)) {
+            edgeMarkers.when(() -> org.techhouse.ops.tx.SliceStates.isFenced(anyString())).thenReturn(false);
             assertThrows(JsThrowException.class, database::commitTransaction);
         }
     }

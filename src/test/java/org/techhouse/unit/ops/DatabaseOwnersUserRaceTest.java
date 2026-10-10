@@ -72,10 +72,9 @@ public class DatabaseOwnersUserRaceTest {
         assertEquals(OperationStatus.OK, UserOperationHelper.processCreateUser(request).getStatus());
     }
 
-    private static SetDatabaseOwnersRequest ownersRequest(List<String> owners, boolean replicated) {
+    private static SetDatabaseOwnersRequest ownersRequest(List<String> owners) {
         final var request = new SetDatabaseOwnersRequest(TestGlobals.DB);
         request.setOwners(owners);
-        request.setReplicated(replicated);
         return request;
     }
 
@@ -130,7 +129,7 @@ public class DatabaseOwnersUserRaceTest {
         holdUsersLock();
         final var result = new AtomicReference<OperationResponse>();
         final var setOwners = startParked(
-                () -> DatabaseOperationHelper.processSetDatabaseOwners(ownersRequest(List.of("gamma"), false)), result);
+                () -> DatabaseOperationHelper.processSetDatabaseOwners(ownersRequest(List.of("gamma"))), result);
 
         deleteUserOnHolder("gamma");
         releaseUsersLock();
@@ -167,18 +166,8 @@ public class DatabaseOwnersUserRaceTest {
     }
 
     @Test
-    public void test_replicated_set_owners_is_not_filtered() {
-        final var response = DatabaseOperationHelper
-                .processSetDatabaseOwners(ownersRequest(List.of("not_on_this_node"), true));
-
-        assertEquals(OperationStatus.OK, response.getStatus());
-        assertEquals(List.of("not_on_this_node"), cache.getAdminDbEntry(TestGlobals.DB).getOwners());
-    }
-
-    @Test
     public void test_set_owners_of_existing_users_is_written() {
-        final var response = DatabaseOperationHelper
-                .processSetDatabaseOwners(ownersRequest(List.of("gamma", "delta"), false));
+        final var response = DatabaseOperationHelper.processSetDatabaseOwners(ownersRequest(List.of("gamma", "delta")));
 
         assertEquals(OperationStatus.OK, response.getStatus());
         assertEquals(List.of("gamma", "delta"), cache.getAdminDbEntry(TestGlobals.DB).getOwners());

@@ -23,19 +23,22 @@ import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.Replicator;
+import org.techhouse.cluster.admin.AdminRecord;
+import org.techhouse.cluster.admin.AdminRecords;
 import org.techhouse.cluster.membership.MembershipService;
+import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ReplicatedApplyHelper;
-import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -58,8 +61,8 @@ public class ClusterReplicationCoverageTest {
         return object;
     }
 
-    private static AdminUserEntry user(String username) {
-        return new AdminUserEntry(username, "hash-" + username, false, Set.of(), new HashMap<>(), new HashMap<>());
+    private static AdminUserEntry bob() {
+        return new AdminUserEntry("bob", "hash-bob", false, Set.of(), new HashMap<>(), new HashMap<>());
     }
 
     @BeforeEach
@@ -106,21 +109,24 @@ public class ClusterReplicationCoverageTest {
     }
 
     @Test
-    public void test_replicate_admin_op_meets_quorum() {
+    public void test_replicate_admin_records_meets_quorum() throws Exception {
+        assertEquals(ReplicationOutcome.QUORUM_MET, coordinator.replicateAdminRecords(
+                AdminRecords.of(List.of(AdminRecordKey.collection(TestGlobals.DB, TestGlobals.COLL)))));
+    }
+
+    @Test
+    public void test_replicate_user_record_and_its_tombstone_meet_quorum() throws Exception {
+        AdminOperationHelper.saveUserEntry(bob());
         assertEquals(ReplicationOutcome.QUORUM_MET,
-                coordinator.replicateAdminOp(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "alice"));
+                coordinator.replicateAdminRecords(AdminRecords.of(List.of(AdminRecordKey.user("bob")))));
+        assertEquals(ReplicationOutcome.QUORUM_MET, coordinator
+                .replicateAdminRecords(List.of(AdminRecord.tombstone(AdminRecordKey.user("bob"), Long.MAX_VALUE))));
     }
 
     @Test
-    public void test_replicate_user_op_upsert_and_delete_meet_quorum() throws Exception {
-        AdminOperationHelper.saveUserEntry(user("bob"));
-        assertEquals(ReplicationOutcome.QUORUM_MET, coordinator.replicateUserOp("bob", false));
-        assertEquals(ReplicationOutcome.QUORUM_MET, coordinator.replicateUserOp("bob", true));
-    }
-
-    @Test
-    public void test_replicate_user_op_not_applicable_for_unknown_user() {
-        assertEquals(ReplicationOutcome.NOT_COORDINATOR, coordinator.replicateUserOp("nobody", false));
+    public void test_broadcast_reindex_meets_quorum() {
+        assertEquals(ReplicationOutcome.QUORUM_MET,
+                coordinator.broadcastReindex(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null)));
     }
 
     @Test
@@ -128,10 +134,8 @@ public class ClusterReplicationCoverageTest {
         final var docPayload = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
                 List.of(doc("b1")), null);
         assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcast(docPayload));
-        final var userPayload = new ReplicationPayload(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
-                ReplicationOp.UPSERT, List.of(user("carol").getData()), null);
-        assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcastUser(userPayload));
-        assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcastAdmin("{\"type\":\"REINDEX\"}", "alice"));
+        assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcastAdmin(new AdminSnapshotPayload(List.of())));
+        assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcastReindex("{\"type\":\"REINDEX\"}"));
     }
 
     @Test

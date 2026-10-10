@@ -8,7 +8,10 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.config.Globals;
+import org.techhouse.data.admin.AdminCollEntry;
+import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.OnDiskNameRegistry;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
@@ -38,10 +41,8 @@ public class OnDiskNameRegistryTest {
         assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
     }
 
-    private void createCollectionAsReplica(String collName) {
-        final var request = new CreateCollectionRequest(TestGlobals.DB, collName);
-        request.setReplicated(true);
-        assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+    private void registerGroupedPairBehindTheNameCheck() throws Exception {
+        AdminOperationHelper.saveCollectionEntry(new AdminCollEntry(TestGlobals.DB, "GroupedPair"));
     }
 
     @Test
@@ -94,11 +95,9 @@ public class OnDiskNameRegistryTest {
     }
 
     @Test
-    public void test_only_a_database_named_like_the_cluster_folder_is_listed_as_in_it() {
+    public void test_only_a_database_named_like_the_cluster_folder_is_listed_as_in_it() throws Exception {
         assertEquals(List.of(), OnDiskNameRegistry.registeredDatabasesInTheClusterFolder());
-        final var request = new CreateDatabaseRequest("CLUSTER");
-        request.setReplicated(true);
-        assertEquals(OperationStatus.OK, processor.processMessage(request).getStatus());
+        AdminOperationHelper.saveDatabaseEntry(new AdminDbEntry("CLUSTER"));
         assertEquals(List.of("CLUSTER"), OnDiskNameRegistry.registeredDatabasesInTheClusterFolder());
     }
 
@@ -133,9 +132,9 @@ public class OnDiskNameRegistryTest {
     }
 
     @Test
-    public void test_grouped_by_on_disk_key_reports_a_case_differing_collection_pair() {
+    public void test_grouped_by_on_disk_key_reports_a_case_differing_collection_pair() throws Exception {
         createCollection("groupedPair");
-        createCollectionAsReplica("GroupedPair");
+        registerGroupedPairBehindTheNameCheck();
         final var groups = OnDiskNameRegistry.groupedByOnDiskKey();
         assertEquals(1, groups.size());
         assertEquals(List.of("groupedPair", "GroupedPair"), groups.getFirst());
@@ -151,10 +150,4 @@ public class OnDiskNameRegistryTest {
         assertTrue(OnDiskNameRegistry.groupedByOnDiskKey().isEmpty());
     }
 
-    @Test
-    public void test_replicated_create_collection_bypasses_the_guard() {
-        createCollection("replicaPair");
-        createCollectionAsReplica("ReplicaPair");
-        assertNotNull(OnDiskNameRegistry.collidingCollection(TestGlobals.DB, "REPLICAPAIR"));
-    }
 }

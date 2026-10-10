@@ -123,9 +123,8 @@ public class ClusterServerIntegrationTest {
     }
 
     @Test
-    public void test_replicate_user_with_invalid_payload_is_nacked() throws Exception {
-        final var request = message(ClusterMessageType.REPLICATE_USER, SECRET, node("I", 9998), null);
-        request.setReplication(new ReplicationPayload());
+    public void test_replicate_admin_without_records_is_nacked() throws Exception {
+        final var request = message(ClusterMessageType.REPLICATE_ADMIN, SECRET, node("I", 9998), null);
         final var response = pool.request(serverAddress(), request, 3000);
         assertEquals(ClusterMessageType.ERROR, response.getType());
     }

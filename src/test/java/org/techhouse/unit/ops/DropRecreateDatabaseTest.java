@@ -99,10 +99,4 @@ public class DropRecreateDatabaseTest {
                 processor.processMessage(new CreateDatabaseRequest(TestGlobals.DB)).getStatus());
     }
 
-    @Test
-    public void test_replicated_create_database_skips_the_collision_check() {
-        final var replicated = new CreateDatabaseRequest(TestGlobals.DB.toUpperCase(Locale.ROOT));
-        replicated.setReplicated(true);
-        assertEquals(OperationStatus.OK, processor.processMessage(replicated).getStatus());
-    }
 }

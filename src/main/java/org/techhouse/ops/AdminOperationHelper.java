@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.function.UnaryOperator;
 import org.techhouse.bckg_ops.events.CollectionUsageEvent;
 import org.techhouse.bckg_ops.events.EventType;
@@ -23,6 +24,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.admin.AdminPageHelper;
 import org.techhouse.ops.admin.AdminRecordStore;
+import org.techhouse.ops.admin.AdminStamp;
 import org.techhouse.ops.admin.AdminUsageHelper;
 import org.techhouse.ops.resp.OperationResponse;
 
@@ -34,6 +36,8 @@ public final class AdminOperationHelper {
     private static final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
     private static final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private static final Logger logger = Logger.logFor(AdminOperationHelper.class);
+    private static final Set<String> VERSIONED_RECORDS = Set.of(Globals.ADMIN_DATABASES_COLLECTION_NAME,
+            Globals.ADMIN_COLLECTIONS_COLLECTION_NAME, Globals.ADMIN_USERS_COLLECTION_NAME);
 
     private static final AdminRecordStore<AdminTransactionEntry> TRANSACTION_OPS = new AdminRecordStore<>(
             Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, "transaction op", cache::getPkIndexTransaction,
@@ -84,6 +88,9 @@ public final class AdminOperationHelper {
     // The caller owns the lock: policy differs per collection (saveCollectionEntry also holds databases).
     private static PkIndexEntry writeAdminEntry(String collName, DbEntry entry, PkIndexEntry existingPk)
             throws IOException {
+        if (VERSIONED_RECORDS.contains(collName) && entry.getVersion() <= 0) {
+            entry.setVersion(AdminStamp.over(versionOf(existingPk)));
+        }
         if (existingPk != null) {
             entry.setPage(existingPk.getPage());
             final var updateResult = fs.updateFromCollection(entry, existingPk);
@@ -95,6 +102,10 @@ public final class AdminOperationHelper {
         final var pk = fs.insertIntoCollection(entry);
         applyAdminPageDelta(collName, EventType.CREATED, entry);
         return pk;
+    }
+
+    public static long versionOf(PkIndexEntry pk) {
+        return pk == null ? 0L : pk.getVersion();
     }
 
     private static void applyAdminPageDelta(String collName, EventType type, DbEntry entry) {
@@ -210,6 +221,7 @@ public final class AdminOperationHelper {
 
     private static void publishDatabaseEntry(AdminDbEntry updated) throws IOException {
         final var pk = cache.getPkIndexAdminDbEntry(updated.get_id());
+        updated.setVersion(versionOf(pk));
         cache.putAdminDbEntry(updated, writeAdminEntry(Globals.ADMIN_DATABASES_COLLECTION_NAME, updated, pk));
     }
 
@@ -270,6 +282,7 @@ public final class AdminOperationHelper {
                 }
                 final var adminCollEntry = new AdminCollEntry(dbName, collName, indexes);
                 adminCollEntry.setIncarnation(cachedEntry.getIncarnation());
+                adminCollEntry.setVersion(AdminStamp.over(versionOf(adminIndexPkCollEntry)));
                 adminCollEntry.setPage(adminIndexPkCollEntry.getPage());
                 final var updateResult = fs.updateFromCollection(adminCollEntry, adminIndexPkCollEntry);
                 adminIndexPkCollEntry = updateResult.indexEntry();
@@ -317,6 +330,7 @@ public final class AdminOperationHelper {
             for (final var user : new ArrayList<>(cache.getAllAdminUserEntries())) {
                 final var rewritten = rewrite.apply(user);
                 if (rewritten != null) {
+                    rewritten.setVersion(versionOf(cache.getPkIndexAdminUserEntry(user.get_id())));
                     saveUserEntry(rewritten);
                 }
             }

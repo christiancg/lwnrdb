@@ -28,7 +28,6 @@ public class ClusterMessage {
     private boolean triggerRunResolved;
     private boolean cancelledRun;
     private AdminSnapshotPayload adminSnapshot;
-    private long adminEpoch;
     private String errorMessage;
 
     public List<TriggerRunRow> getTriggerRuns() {
@@ -233,14 +232,6 @@ public class ClusterMessage {
 
     public void setAdminSnapshot(AdminSnapshotPayload adminSnapshot) {
         this.adminSnapshot = adminSnapshot;
-    }
-
-    public long getAdminEpoch() {
-        return adminEpoch;
-    }
-
-    public void setAdminEpoch(long adminEpoch) {
-        this.adminEpoch = adminEpoch;
     }
 
     public String getErrorMessage() {

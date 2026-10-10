@@ -13,6 +13,7 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.admin.CollectionOperationHelper;
 import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.req.RequestParser;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -34,52 +35,41 @@ public class ClientSuppliedIncarnationTest {
         TestUtils.standardTearDown();
     }
 
-    private CreateCollectionRequest create(long incarnation, boolean replicated) {
-        final var request = new CreateCollectionRequest(TestGlobals.DB, COLLECTION);
-        request.setIncarnation(incarnation);
-        request.setReplicated(replicated);
-        return request;
+    private static CreateCollectionRequest create(long incarnation) {
+        return (CreateCollectionRequest) RequestParser
+                .parseRequest("{\"type\":\"CREATE_COLLECTION\",\"databaseName\":\"" + TestGlobals.DB
+                        + "\",\"collectionName\":\"" + COLLECTION + "\",\"incarnation\":" + incarnation
+                        + ",\"incarnationText\":\"" + incarnation + "\"}");
+    }
+
+    private long storedIncarnation() {
+        return cache.getAdminCollectionEntry(TestGlobals.DB, COLLECTION).getIncarnation();
     }
 
     @Test
-    public void test_a_client_supplied_incarnation_is_replaced_by_a_minted_one() {
-        final var request = create(FORGED, false);
-
-        final var response = CollectionOperationHelper.processCreateCollectionOperation(request);
+    public void test_a_client_supplied_incarnation_is_ignored_and_one_is_minted() {
+        final var response = CollectionOperationHelper.processCreateCollectionOperation(create(FORGED));
 
         assertEquals(OperationStatus.OK, response.getStatus());
-        final var stored = cache.getAdminCollectionEntry(TestGlobals.DB, COLLECTION).getIncarnation();
-        assertNotEquals(FORGED, stored);
-        assertTrue(stored > 0);
-        assertEquals(stored, request.getIncarnation());
+        assertNotEquals(FORGED, storedIncarnation());
+        assertTrue(storedIncarnation() > 0);
     }
 
     @Test
     public void test_a_client_supplied_incarnation_does_not_advance_the_clock() {
-        CollectionOperationHelper.processCreateCollectionOperation(create(FORGED, false));
+        CollectionOperationHelper.processCreateCollectionOperation(create(FORGED));
 
         assertTrue(clock.current() < FORGED);
         assertTrue(clock.next() > 0);
     }
 
     @Test
-    public void test_a_replicated_incarnation_is_kept_and_observed() {
-        final var replicated = HybridClock.pack(System.currentTimeMillis() + 5000, 7);
+    public void test_a_duplicate_client_create_keeps_the_existing_incarnation() {
+        CollectionOperationHelper.processCreateCollectionOperation(create(0));
+        final var first = storedIncarnation();
 
-        CollectionOperationHelper.processCreateCollectionOperation(create(replicated, true));
+        CollectionOperationHelper.processCreateCollectionOperation(create(FORGED));
 
-        assertEquals(replicated, cache.getAdminCollectionEntry(TestGlobals.DB, COLLECTION).getIncarnation());
-        assertTrue(clock.current() >= replicated);
-    }
-
-    @Test
-    public void test_a_duplicate_client_create_reports_the_existing_incarnation() {
-        final var first = create(0, false);
-        CollectionOperationHelper.processCreateCollectionOperation(first);
-        final var second = create(FORGED, false);
-
-        CollectionOperationHelper.processCreateCollectionOperation(second);
-
-        assertEquals(first.getIncarnation(), second.getIncarnation());
+        assertEquals(first, storedIncarnation());
     }
 }
