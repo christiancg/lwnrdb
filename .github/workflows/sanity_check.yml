@@ -204,8 +204,12 @@ jobs:
         run: pkill -f lwnrdb-1.0-SNAPSHOT.jar || true
 
   test262:
-    name: test262 Conformance
+    name: test262 Conformance (${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
     permissions:
       contents: read
       actions: read
@@ -232,11 +236,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          setsid python3 test_utils/test262/test262.py --gate baseline --require-corpus --timeout 20 &
+          setsid python3 test_utils/test262/test262.py --gate baseline --require-corpus --timeout 20 \
+            --shard "${{ matrix.shard }}/4" &
           conformance=$!
           while kill -0 "$conformance" 2>/dev/null; do
             failed=$(gh api "repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/jobs" --paginate \
-              --jq '.jobs[] | select(.conclusion == "failure" and .name != "test262 Conformance" and .name != "Verify") | .name' \
+              --jq '.jobs[] | select(.conclusion == "failure" and (.name | startswith("test262") | not) and .name != "Verify") | .name' \
               2>/dev/null | head -n 1 || true)
             if [ -n "$failed" ]; then
               echo "::error::Stopping test262 Conformance because $failed failed"
@@ -251,7 +256,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: test262-report
+          name: test262-report-${{ matrix.shard }}
           path: test_log/test262-report.md
           retention-days: 7
 

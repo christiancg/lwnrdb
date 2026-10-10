@@ -349,14 +349,29 @@ def write_features(collected, commit):
 # ---------------------------------------------------------------------------
 
 
-def collect(test_root, harness_dir, exclusions, name_filter, known):
+def parse_shard(text):
+    match = re.fullmatch(r"(\d+)/(\d+)", text or "")
+    if not match or not 1 <= int(match.group(1)) <= int(match.group(2)):
+        raise HarnessError(f"--shard must be K/N with 1 <= K <= N, got {text!r}")
+    return int(match.group(1)), int(match.group(2))
+
+
+def in_shard(position, shard):
+    return shard is None or position % shard[1] == shard[0] - 1
+
+
+def collect(test_root, harness_dir, exclusions, name_filter, known, shard=None):
     """Walk the corpus and split it into runnable jobs, skips and exclusions."""
     jobs, skipped, excluded, unknown_features, undecodable = [], [], [], {}, []
+    position = -1
     for path in sorted(test_root.rglob("*.js")):
         test_id = path.relative_to(test_root).as_posix()
         if test_id.endswith("_FIXTURE.js"):
             continue
         if name_filter and name_filter not in test_id:
+            continue
+        position += 1
+        if not in_shard(position, shard):
             continue
         raw = path.read_bytes()
         try:
@@ -654,7 +669,7 @@ def area_of(test_id):
     return "/".join(parts[:2]) if len(parts) > 2 else parts[0]
 
 
-def build_report(results, collected, commit, elapsed, gate_messages):
+def build_report(results, collected, commit, elapsed, gate_messages, shard=None):
     counts = {}
     for test_id, outcome in results.items():
         area = counts.setdefault(area_of(test_id), {"PASS": 0, "FAIL": 0, "HANG": 0})
@@ -665,7 +680,7 @@ def build_report(results, collected, commit, elapsed, gate_messages):
             total[status] += area[status]
     denominator = sum(total.values())
     lines = [
-        "# test262 conformance report",
+        "# test262 conformance report" + (f" — shard {shard[0]}/{shard[1]}" if shard else ""),
         "",
         f"- corpus: `{commit}`",
         f"- generated: {datetime.now(timezone.utc).isoformat(timespec='seconds')}",
@@ -892,6 +907,7 @@ def self_test():
     ok = self_test_classify() and ok
     ok = self_test_robustness() and ok
     ok = self_test_gate() and ok
+    ok = self_test_shard() and ok
     print(f"\nself-test: {'all checks passed' if ok else 'FAILURES above'}")
     return ok
 
@@ -1023,6 +1039,23 @@ def self_test_gate():
     return ok_check
 
 
+def self_test_shard():
+    print("self-test — sharding")
+    shards = [parse_shard(f"{index}/3") for index in (1, 2, 3)]
+    owners = [[shard for shard in shards if in_shard(position, shard)] for position in range(10)]
+    ok = report_check("every position lands in exactly one shard", all(len(found) == 1 for found in owners),
+                      str(owners))
+    ok = report_check("an unsharded run keeps every position", all(in_shard(position, None) for position in range(10))
+                      ) and ok
+    rejected = []
+    for bad in ("0/3", "4/3", "3", "a/b", ""):
+        try:
+            parse_shard(bad)
+        except HarnessError:
+            rejected.append(bad)
+    return report_check("malformed shards are refused", len(rejected) == 5, str(rejected)) and ok
+
+
 def report_check(label, ok, detail=""):
     colour = PASS_COLOUR if ok else FAIL_COLOUR
     print(f"  [{colour}{'ok' if ok else 'FAIL'}{RESET}] {label}" + ("" if ok else f"  {detail[:160]}"))
@@ -1056,6 +1089,11 @@ def parse_args(argv):
         help="abort after this many workers die in a row (timeouts do not count)",
     )
     parser.add_argument("--require-corpus", action="store_true", help="fail instead of skipping when absent")
+    parser.add_argument(
+        "--shard",
+        default=None,
+        help="run only shard K of N (K/N), every Nth test of the sorted corpus; the gate then judges that shard",
+    )
     return parser.parse_args(argv)
 
 
@@ -1090,9 +1128,14 @@ def main(argv=None):
 
 
 def run(args, commit):
+    shard = parse_shard(args.shard) if args.shard else None
+    if shard and args.update_baseline:
+        raise HarnessError("--update-baseline needs the whole corpus; drop --shard")
     exclusions = load_exclusions()
-    print(f"collecting tests from {CORPUS.relative_to(ROOT)}/test")
-    collected = collect(CORPUS / "test", CORPUS / "harness", exclusions, args.filter, known_features(exclusions))
+    print(f"collecting tests from {CORPUS.relative_to(ROOT)}/test" + (f", shard {shard[0]}/{shard[1]}" if shard else ""))
+    collected = collect(
+        CORPUS / "test", CORPUS / "harness", exclusions, args.filter, known_features(exclusions), shard
+    )
     print(
         f"  {len(collected['jobs'])} to run, {len(collected['skipped'])} skipped, "
         f"{len(collected['excluded'])} excluded"
@@ -1110,7 +1153,7 @@ def run(args, commit):
     gate_ok, gate_messages = (True, [])
     if args.gate == "baseline" and not args.update_baseline:
         gate_ok, gate_messages = gate(results, filtered, commit)
-    report = build_report(results, collected, commit, elapsed, gate_messages)
+    report = build_report(results, collected, commit, elapsed, gate_messages, shard)
     print(f"\nreport written to {REPORT.relative_to(ROOT)}")
     print(summary_block(report))
     write_step_summary(report)
