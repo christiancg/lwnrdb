@@ -1584,8 +1584,11 @@ What a single node promises, and what it deliberately does not. The multi-node m
 ## Code quality
 
 Formatting and static analysis run as part of `mvn verify`, so a violation
-fails the build (and therefore blocks a merge). All four tools are wired into
-the `verify` phase:
+fails the build (and therefore blocks a merge). All five are wired into
+the `verify` phase. The structural tests scan the source tree itself: no file may
+gain a comment (`config/comment-baseline.txt` records the existing ones and only
+goes down), and a handful of architectural rules — package boundaries, the single
+`maxEntrySize` check, where triggers may be staged — are checked on every build:
 
 | Tool | Goal | Config |
 |---|---|---|
@@ -1593,6 +1596,7 @@ the `verify` phase:
 | **Checkstyle** | `checkstyle:check` | [`config/checkstyle.xml`](config/checkstyle.xml) |
 | **PMD** | `pmd:check` | [`config/pmd-ruleset.xml`](config/pmd-ruleset.xml) |
 | **SpotBugs** | `spotbugs:check` | [`config/spotbugs-exclude.xml`](config/spotbugs-exclude.xml) |
+| **Structural tests** (JUnit, `org.techhouse.unit.structure`) | `test` | [`config/comment-baseline.txt`](config/comment-baseline.txt) |
 
 To auto-format your changes before committing:
 
