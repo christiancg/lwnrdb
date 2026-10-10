@@ -5,6 +5,7 @@ import java.util.Map;
 import org.techhouse.cache.Cache;
 import org.techhouse.cluster.ClusterConfig;
 import org.techhouse.concurrency.ResourceLocking;
+import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminDbEntry;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
@@ -36,11 +37,45 @@ final class DatabaseRecordApplier {
         if (resolution != CaseVariant.Resolution.INSTALL) {
             return resolution == CaseVariant.Resolution.BURIED;
         }
-        if (cache.getAdminDbEntry(dbName) == null && !clearedOfLeftovers(dbName)) {
+        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
+        if (!locks.tryLockDatabaseExclusive(dbName, waitMillis)) {
+            logger.warning(skipping(dbName, "it stayed locked"));
+            return false;
+        }
+        try {
+            return installUnderNamesLock(record, waitMillis);
+        } finally {
+            locks.releaseDatabaseExclusive(dbName);
+        }
+    }
+
+    private static boolean installUnderNamesLock(AdminRecord record, long waitMillis) throws Exception {
+        final var dbName = record.key().dbName();
+        if (!locks.tryLockWrite(Globals.ADMIN_DB_NAME, Globals.DATABASE_NAMES_LOCK, waitMillis)) {
+            logger.warning(skipping(dbName, "the database names lock stayed held"));
+            return false;
+        }
+        try {
+            final var sibling = caseVariantOf(dbName);
+            if (sibling != null) {
+                logger.warning("Skipping the install of database " + dbName + ": " + sibling.dbName()
+                        + " was registered under the same folder meanwhile. The next round settles the pair by"
+                        + " version.");
+                return false;
+            }
+            return installUnderLocks(record);
+        } finally {
+            locks.release(Globals.ADMIN_DB_NAME, Globals.DATABASE_NAMES_LOCK);
+        }
+    }
+
+    private static boolean installUnderLocks(AdminRecord record) throws Exception {
+        final var dbName = record.key().dbName();
+        final var local = cache.getAdminDbEntry(dbName);
+        if (local == null && !LeftoverFolders.moveAsideUnregisteredDatabase(dbName)) {
             return false;
         }
         fs.createDatabaseFolder(dbName);
-        final var local = cache.getAdminDbEntry(dbName);
         final var owners = AdminDbEntry.fromJsonObject(record.body()).getOwners();
         final var installed = new AdminDbEntry(dbName,
                 local == null ? new ArrayList<>() : new ArrayList<>(local.getCollections()), new ArrayList<>(owners));
@@ -71,17 +106,8 @@ final class DatabaseRecordApplier {
         return true;
     }
 
-    private static boolean clearedOfLeftovers(String dbName) throws InterruptedException {
-        final var waitMillis = clusterConfig.replicationAckTimeoutMs();
-        if (!locks.tryLockDatabaseExclusive(dbName, waitMillis)) {
-            logger.warning("Skipping the install of database " + dbName + ": it stayed locked for " + waitMillis
-                    + "ms. The next round retries it.");
-            return false;
-        }
-        try {
-            return LeftoverFolders.moveAsideUnregisteredDatabase(dbName);
-        } finally {
-            locks.releaseDatabaseExclusive(dbName);
-        }
+    private static String skipping(String dbName, String reason) {
+        return "Skipping the install of database " + dbName + ": " + reason + " for "
+                + clusterConfig.replicationAckTimeoutMs() + "ms. The next round retries it.";
     }
 }

@@ -390,9 +390,10 @@ membership machinery — serializes them:
    check, so a minority node that does not coordinate still says "retry elsewhere" rather than
    `503-2`. If the role moves while the op runs, the op has already committed here, so the
    client gets the outcome-unknown `503-3`, never a `421-1` that would claim it was not applied.
-5. A coordinator that has not completed an admin anti-entropy round since it started answers
-   `503-5`: it may not hold every record the cluster has, and a create it committed could
-   collide with one it has not seen yet.
+5. A coordinator that has not completed an admin anti-entropy round with a majority since it
+   started or last became coordinator answers `503-5`: it may not hold every record the cluster
+   has, a create it committed could collide with one it has not seen yet, and a write it stamped
+   could land below a version it missed.
 
 **Admin records.** Every piece of admin state is a record with a key `kind|db|name` and an HLC
 version minted from the write clock (`HybridClock`), the same clock document writes use:
@@ -771,14 +772,27 @@ out of its snapshot. That is safe now that only a tombstone deletes: its peers k
 copies, and the node itself treats the torn file as absent, so the first peer copy it merges
 replaces it. A record the merge could not apply this round — a parent this node does not hold yet, a
 lock or barrier that stayed held for `replicationAckTimeoutMs` — leaves the round incomplete and
-is retried by the next one.
+is retried by the next one. An install and an anti-entropy drop take the same name locks as the
+client DDL, in the same order (`db|.collection-names` after the collection lock,
+`admin|.database-names` inside the database barrier), and check again for a case-variant sibling
+under them, so a record install can never register a name that folds onto a folder a concurrent
+client create just claimed. A sibling that appeared in between leaves the round incomplete, and the
+next one settles the pair by version.
 
-A coordinator answers `503-5 ADMIN_SYNCING` until one admin anti-entropy round with a peer has
-completed **in full** since it started (a lone node counts as synced), and gossips `adminSyncing`
-meanwhile. That closes the window where a restarted node becomes coordinator before it has seen
-what changed while it was down: a create it committed then would collide with a record it has not
-merged yet. A node that stayed up through a partition does not need the gate, because whatever it
-missed carries a lower version than nothing it holds — the next merge simply installs it.
+A coordinator answers `503-5 ADMIN_SYNCING`, and gossips `adminSyncing`, until one admin
+anti-entropy round has merged **in full** from enough peers that they and the node itself form a
+majority (a single-node cluster is synced with no peers). The gate is armed at start and again
+every time a node *becomes* coordinator. It closes two windows. A restarted node that becomes
+coordinator before it has seen what changed while it was down would commit a create that collides
+with a record it has not merged yet. And a node that missed one admin op — its `REPLICATE_ADMIN` was
+lost — and then takes over would stamp its next write to that record from its own clock, which,
+under clock skew, could fall below the version it missed, so the acknowledged newer write would
+lose the merge everywhere. That op was acknowledged by a majority, so any majority merge holds it,
+and merging observes its version into the clock before the next stamp. A round that started before
+the handover does not count, because its snapshots may predate the old coordinator's last commit.
+Each refused op schedules a round, so the new coordinator does not wait out the sweep interval.
+For that one round, `DIGEST`/`PULL` against the new coordinator answer an error and script
+placement skips it.
 
 A populated node switched from standalone to clustered needs no special case either. Its records
 already carry versions above the bootstrap admin's `1` and above zero, and a fresh peer's merge

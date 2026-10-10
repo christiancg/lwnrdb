@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -126,7 +127,16 @@ public class ClusterAdminHelperTest {
     @Test
     public void test_guard_refuses_a_coordinator_that_has_not_synced() throws Exception {
         enable(1, false);
-        assertEquals("503-5", guardCode(adminOp()));
+        final var realSweep = TestUtils.getPrivateField(adminAntiEntropyService, "sweep", Object.class);
+        final var sweep = mock(realSweep.getClass());
+        TestUtils.setPrivateField(adminAntiEntropyService, "sweep", sweep);
+        try {
+            assertEquals("503-5", guardCode(adminOp()));
+            assertTrue(mockingDetails(sweep).getInvocations().stream()
+                    .anyMatch(invocation -> invocation.getMethod().getName().equals("schedule")));
+        } finally {
+            TestUtils.setPrivateField(adminAntiEntropyService, "sweep", realSweep);
+        }
     }
 
     @Test

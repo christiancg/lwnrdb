@@ -2407,9 +2407,10 @@ reads are forwarded to the collection's owner, admin operations to the admin coo
 - `503-8` — a forwarded write whose owner did not report an outcome. It may already have applied, so check
   before retrying.
 - `503-7` — the same for a script placed on another node.
-- `503-5` — the admin coordinator has not yet completed an admin anti-entropy round with a peer since it
-  started, so it may not hold every admin record the cluster has (a fresh node that joined one which held
-  data before it was clustered answers this until it has merged that node's records). Retry shortly.
+- `503-5` — the admin coordinator has not yet completed an admin anti-entropy round with a majority of the
+  cluster since it started or last became coordinator, so it may not hold every admin record the cluster
+  has (a fresh node that joined one which held data before it was clustered answers this until it has
+  merged that node's records, and a node that just took over answers it for one round). Retry shortly.
 - `503-9` — no admin coordinator could be resolved from this node's view of the cluster.
 - `503-10` — the collection exists on the cluster but has not reached this node yet.
 - `421-1` — the node stopped owning the collection while the write waited for its lock (or, for a `DELETE`,

@@ -54,12 +54,33 @@ final class CollectionRecordApplier {
                 return false;
             }
             try {
-                return installUnderLocks(record, AdminCollEntry.fromJsonObject(record.body()));
+                return installUnderNamesLock(record, waitMillis);
             } finally {
                 locks.release(dbName, collName);
             }
         } finally {
             locks.releaseDatabaseShared(dbName);
+        }
+    }
+
+    private static boolean installUnderNamesLock(AdminRecord record, long waitMillis) throws Exception {
+        final var dbName = record.key().dbName();
+        final var collName = record.key().name();
+        if (!locks.tryLockWrite(dbName, Globals.COLLECTION_NAMES_LOCK, waitMillis)) {
+            logger.warning(skipping(dbName, collName, "the collection names lock stayed held"));
+            return false;
+        }
+        try {
+            final var sibling = caseVariantOf(dbName, collName);
+            if (sibling != null) {
+                logger.warning("Skipping the install of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName + ": "
+                        + sibling.name() + " was registered under the same folder meanwhile. The next round"
+                        + " settles the pair by version.");
+                return false;
+            }
+            return installUnderLocks(record, AdminCollEntry.fromJsonObject(record.body()));
+        } finally {
+            locks.release(dbName, Globals.COLLECTION_NAMES_LOCK);
         }
     }
 

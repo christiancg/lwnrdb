@@ -276,7 +276,7 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handleDigest(ClusterMessage request) {
-        if (adminAntiEntropyService.hasNotSyncedSinceStart()) {
+        if (adminAntiEntropyService.isSyncing()) {
             return notAdminSyncedYet();
         }
         return ClusterMessages.reply(ClusterMessageType.DIGEST_ACK, "Failed to build digest", response -> {
@@ -287,7 +287,7 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handlePull(ClusterMessage request) {
-        if (adminAntiEntropyService.hasNotSyncedSinceStart()) {
+        if (adminAntiEntropyService.isSyncing()) {
             return notAdminSyncedYet();
         }
         return ClusterMessages.reply(ClusterMessageType.PULL_ACK, "Failed to build pull response", response -> {

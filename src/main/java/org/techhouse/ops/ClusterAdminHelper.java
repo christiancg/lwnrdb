@@ -50,6 +50,7 @@ public final class ClusterAdminHelper {
             return new OperationResponse(request.getType(), ErrorCode.NO_QUORUM);
         }
         if (clusterConfig.isEnabled() && !adminAntiEntropyService.hasCompletedAdminSync()) {
+            adminAntiEntropyService.reconcileSoon();
             return new OperationResponse(request.getType(), ErrorCode.ADMIN_SYNCING);
         }
         return null;

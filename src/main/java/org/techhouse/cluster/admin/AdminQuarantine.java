@@ -59,6 +59,20 @@ final class AdminQuarantine {
             return false;
         }
         try {
+            return dropCollectionUnderNamesLock(dbName, collName, waitMillis);
+        } finally {
+            locks.release(dbName, collName);
+            locks.removeLock(dbName, collName);
+        }
+    }
+
+    private boolean dropCollectionUnderNamesLock(String dbName, String collName, long waitMillis) throws Exception {
+        if (!locks.tryLockWrite(dbName, Globals.COLLECTION_NAMES_LOCK, waitMillis)) {
+            logger.warning("Skipping the quarantine of " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
+                    + ": the collection names lock stayed held for " + waitMillis + "ms. The next round retries it.");
+            return false;
+        }
+        try {
             final var entry = cache.getAdminCollectionEntry(dbName, collName);
             final var moved = unregisterAndMoveAside(dbName, collName, entry != null ? entry.getIncarnation() : 0);
             logger.warning("Quarantined collection " + dbName + Globals.COLL_IDENTIFIER_SEPARATOR + collName
@@ -66,8 +80,7 @@ final class AdminQuarantine {
                     + " and it no longer serves reads or writes until an operator reinstates or removes it.");
             return true;
         } finally {
-            locks.release(dbName, collName);
-            locks.removeLock(dbName, collName);
+            locks.release(dbName, Globals.COLLECTION_NAMES_LOCK);
         }
     }
 

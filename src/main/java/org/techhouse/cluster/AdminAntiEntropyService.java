@@ -2,11 +2,13 @@ package org.techhouse.cluster;
 
 import java.io.IOException;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import org.techhouse.cluster.admin.AdminRecordMerge;
 import org.techhouse.cluster.admin.AdminRecords;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ClusterMessageType;
+import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 
@@ -16,10 +18,13 @@ public class AdminAntiEntropyService implements MembershipListener {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final PeerConnectionPool pool = IocContainer.get(PeerConnectionPool.class);
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
+    private final OwnershipManager ownershipManager = IocContainer.get(OwnershipManager.class);
     private final CoalescingSweep sweep = new CoalescingSweep(logger, "cluster-admin-anti-entropy",
             "Admin anti-entropy", this::reconcile);
     private final AtomicBoolean adminSyncCompleted = new AtomicBoolean(false);
+    private final AtomicLong syncGeneration = new AtomicLong();
     private volatile boolean started;
+    private volatile boolean wasCoordinator;
 
     public void start() {
         if (!clusterConfig.isEnabled()) {
@@ -36,6 +41,7 @@ public class AdminAntiEntropyService implements MembershipListener {
 
     public void stop(long awaitMillis) {
         started = false;
+        wasCoordinator = false;
         adminSyncCompleted.set(false);
         publishSyncState();
         sweep.stop(awaitMillis);
@@ -45,7 +51,7 @@ public class AdminAntiEntropyService implements MembershipListener {
         return !started || adminSyncCompleted.get();
     }
 
-    public boolean hasNotSyncedSinceStart() {
+    public boolean isSyncing() {
         return clusterConfig.isEnabled() && !adminSyncCompleted.get();
     }
 
@@ -55,6 +61,13 @@ public class AdminAntiEntropyService implements MembershipListener {
 
     @Override
     public void onMembershipChanged(MembershipView view) {
+        final var coordinator = ownershipManager.isAdminCoordinator();
+        if (clusterConfig.isEnabled() && coordinator && !wasCoordinator) {
+            syncGeneration.incrementAndGet();
+            adminSyncCompleted.set(false);
+            publishSyncState();
+        }
+        wasCoordinator = coordinator;
         reconcileSoon();
     }
 
@@ -69,8 +82,9 @@ public class AdminAntiEntropyService implements MembershipListener {
             return;
         }
         try {
+            final var generation = syncGeneration.get();
             final var peers = membershipService.membershipView().peers(membershipService.getSelf());
-            var synced = peers.isEmpty();
+            var completePeers = 0;
             var changed = false;
             for (final var member : peers) {
                 if (Thread.currentThread().isInterrupted()) {
@@ -81,13 +95,15 @@ public class AdminAntiEntropyService implements MembershipListener {
                     continue;
                 }
                 final var merged = AdminRecordMerge.apply(snapshot.getRecords(), false);
-                synced |= merged.complete();
+                if (merged.complete()) {
+                    completePeers++;
+                }
                 changed |= merged.changed();
             }
             if (changed) {
                 antiEntropyService.reconcileNow();
             }
-            if (synced) {
+            if (completePeers + 1 >= ownershipManager.majority() && syncGeneration.get() == generation) {
                 adminSyncCompleted.set(true);
             }
         } finally {

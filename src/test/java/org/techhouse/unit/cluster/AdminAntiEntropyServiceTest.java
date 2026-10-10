@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.AfterEach;
@@ -25,6 +26,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.cluster.AdminAntiEntropyService;
 import org.techhouse.cluster.AntiEntropyService;
 import org.techhouse.cluster.HybridClock;
+import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
 import org.techhouse.cluster.PeerConnectionPool;
@@ -33,6 +35,7 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
+import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminDbEntry;
@@ -50,12 +53,14 @@ public class AdminAntiEntropyServiceTest {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final HybridClock clock = IocContainer.get(HybridClock.class);
     private final Cache cache = IocContainer.get(Cache.class);
+    private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final Configuration config = Configuration.getInstance();
     private PeerConnectionPool realPool;
     private PeerConnectionPool realDocPool;
     private PeerConnectionPool mockPool;
     private boolean origEnabled;
     private long origInterval;
+    private int origExpected;
 
     private static NodeInfo node(String id, int port) {
         return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L);
@@ -67,7 +72,11 @@ public class AdminAntiEntropyServiceTest {
         TestUtils.createTestDatabaseAndCollection();
         origEnabled = config.isClusterEnabled();
         origInterval = config.getAntiEntropyIntervalMs();
+        origExpected = config.getClusterExpectedSize();
         TestUtils.setPrivateField(config, "clusterEnabled", true);
+        TestUtils.setPrivateField(config, "clusterExpectedSize", 2);
+        ownership.setSelfNodeId("self");
+        ownership.onMembershipChanged(new MembershipView(List.of(node("peer", 19991))));
         realPool = TestUtils.getPrivateField(service, "pool", PeerConnectionPool.class);
         realDocPool = TestUtils.getPrivateField(antiEntropyService, "pool", PeerConnectionPool.class);
         mockPool = mock(PeerConnectionPool.class);
@@ -75,13 +84,8 @@ public class AdminAntiEntropyServiceTest {
         TestUtils.setPrivateField(antiEntropyService, "pool", mockPool);
         TestUtils.setPrivateField(service, "started", true);
         TestUtils.setPrivateField(service, "adminSyncCompleted", new AtomicBoolean(false));
-        final var members = new ConcurrentHashMap<String, NodeInfo>();
-        final var self = node("self", 19990);
-        final var peer = node("peer", 19991);
-        members.put(self.getNodeId(), self);
-        members.put(peer.getNodeId(), peer);
-        TestUtils.setPrivateField(membershipService, "members", members);
-        TestUtils.setPrivateField(membershipService, "self", self);
+        withPeers("peer");
+        TestUtils.setPrivateField(membershipService, "self", node("self", 19990));
     }
 
     @AfterEach
@@ -90,25 +94,69 @@ public class AdminAntiEntropyServiceTest {
         TestUtils.setPrivateField(antiEntropyService, "pool", realDocPool);
         TestUtils.setPrivateField(service, "started", false);
         TestUtils.setPrivateField(service, "adminSyncCompleted", new AtomicBoolean(false));
+        TestUtils.setPrivateField(service, "wasCoordinator", false);
         TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
         TestUtils.setPrivateField(membershipService, "self", null);
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "antiEntropyIntervalMs", origInterval);
+        TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
+        ownership.setSelfNodeId(null);
+        ownership.onMembershipChanged(new MembershipView(List.of()));
         TestUtils.releaseAllLocks();
         TestUtils.standardTearDown();
     }
 
-    private AdminRecord newDatabase() {
-        final var body = new AdminDbEntry("newdb", new ArrayList<>(), new ArrayList<>()).getData().deepCopy();
-        body.addProperty(Globals.PK_FIELD, "newdb");
-        return new AdminRecord(AdminRecordKey.database("newdb"), clock.next(), body);
+    private void withPeers(String... peerIds) throws Exception {
+        final var members = new ConcurrentHashMap<String, NodeInfo>();
+        members.put("self", node("self", 19990));
+        var port = 19991;
+        for (final var peerId : peerIds) {
+            members.put(peerId, node(peerId, port++));
+        }
+        TestUtils.setPrivateField(membershipService, "members", members);
     }
 
-    private void stubSnapshot(AdminRecord... records) throws Exception {
+    private AdminRecord newDatabase() {
+        return newDatabase(clock.next());
+    }
+
+    private static AdminRecord newDatabase(long version) {
+        final var body = new AdminDbEntry("newdb", new ArrayList<>(), new ArrayList<>()).getData().deepCopy();
+        body.addProperty(Globals.PK_FIELD, "newdb");
+        return new AdminRecord(AdminRecordKey.database("newdb"), version, body);
+    }
+
+    private AdminRecord orphanCollection() {
+        final var orphanBody = new JsonObject();
+        orphanBody.addProperty(Globals.PK_FIELD, "nodb|coll");
+        return new AdminRecord(AdminRecordKey.collection("nodb", "coll"), clock.next(), orphanBody);
+    }
+
+    private static ClusterMessage ack(AdminRecord... records) {
         final var ack = new ClusterMessage();
         ack.setType(ClusterMessageType.ADMIN_SNAPSHOT_ACK);
         ack.setAdminSnapshot(new AdminSnapshotPayload(List.of(records)));
-        when(mockPool.request(any(), any(), anyLong())).thenReturn(ack);
+        return ack;
+    }
+
+    private void stubSnapshot(AdminRecord... records) throws Exception {
+        when(mockPool.request(any(), any(), anyLong())).thenReturn(ack(records));
+    }
+
+    private void becomeCoordinator(boolean coordinator) {
+        final var view = new MembershipView(List.of(node(coordinator ? "self" : "peer", 19990)));
+        ownership.onMembershipChanged(view);
+        service.onMembershipChanged(view);
+    }
+
+    private void drainRounds() throws Exception {
+        final var sweep = TestUtils.getPrivateField(service, "sweep", Object.class);
+        final var executor = TestUtils.getPrivateField(sweep, "reconcileExecutor", ExecutorService.class);
+        try {
+            executor.submit(() -> null).get(3, TimeUnit.SECONDS);
+        } catch (RejectedExecutionException stopped) {
+            assertTrue(executor.isShutdown());
+        }
     }
 
     private boolean syncingFlag() throws Exception {
@@ -125,7 +173,7 @@ public class AdminAntiEntropyServiceTest {
         assertNotNull(cache.getAdminDbEntry("newdb"));
         assertTrue(service.hasCompletedAdminSync());
         assertFalse(syncingFlag());
-        assertFalse(service.hasNotSyncedSinceStart());
+        assertFalse(service.isSyncing());
     }
 
     @Test
@@ -140,15 +188,13 @@ public class AdminAntiEntropyServiceTest {
     @Test
     public void test_a_snapshot_that_cannot_be_fully_merged_leaves_the_node_syncing() throws Exception {
         membershipService.setAdminSyncing(true);
-        final var orphanBody = new JsonObject();
-        orphanBody.addProperty(Globals.PK_FIELD, "nodb|coll");
-        stubSnapshot(new AdminRecord(AdminRecordKey.collection("nodb", "coll"), clock.next(), orphanBody));
+        stubSnapshot(orphanCollection());
 
         service.reconcile();
 
         assertFalse(service.hasCompletedAdminSync());
         assertTrue(syncingFlag());
-        assertTrue(service.hasNotSyncedSinceStart());
+        assertTrue(service.isSyncing());
     }
 
     @Test
@@ -187,15 +233,127 @@ public class AdminAntiEntropyServiceTest {
     }
 
     @Test
-    public void test_a_lone_node_is_synced_without_asking_anyone() throws Exception {
-        final var self = node("self", 19990);
-        final var members = new ConcurrentHashMap<String, NodeInfo>();
-        members.put(self.getNodeId(), self);
-        TestUtils.setPrivateField(membershipService, "members", members);
+    public void test_a_single_node_cluster_syncs_without_peers() throws Exception {
+        TestUtils.setPrivateField(config, "clusterExpectedSize", 1);
+        withPeers();
 
         service.reconcile();
 
         assertTrue(service.hasCompletedAdminSync());
+    }
+
+    @Test
+    public void test_a_lone_node_of_a_larger_cluster_does_not_sync_alone() throws Exception {
+        withPeers();
+
+        service.reconcile();
+
+        assertFalse(service.hasCompletedAdminSync());
+    }
+
+    @Test
+    public void test_one_complete_peer_of_five_nodes_is_not_a_sync() throws Exception {
+        TestUtils.setPrivateField(config, "clusterExpectedSize", 5);
+        withPeers("p1", "p2", "p3", "p4");
+        when(mockPool.request(any(), any(), anyLong())).thenReturn(ack(newDatabase()))
+                .thenThrow(new RuntimeException("unreachable"));
+
+        service.reconcile();
+
+        assertNotNull(cache.getAdminDbEntry("newdb"));
+        assertFalse(service.hasCompletedAdminSync());
+        assertTrue(service.isSyncing());
+    }
+
+    @Test
+    public void test_a_majority_of_complete_peers_is_a_sync() throws Exception {
+        TestUtils.setPrivateField(config, "clusterExpectedSize", 5);
+        withPeers("p1", "p2", "p3", "p4");
+        final var record = newDatabase();
+        when(mockPool.request(any(), any(), anyLong())).thenReturn(ack(record), ack(record))
+                .thenThrow(new RuntimeException("unreachable"));
+
+        service.reconcile();
+
+        assertTrue(service.hasCompletedAdminSync());
+        assertFalse(service.isSyncing());
+    }
+
+    @Test
+    public void test_an_incomplete_merge_does_not_count_toward_the_majority() throws Exception {
+        TestUtils.setPrivateField(config, "clusterExpectedSize", 4);
+        withPeers("p1", "p2", "p3");
+        when(mockPool.request(any(), any(), anyLong())).thenReturn(ack(newDatabase()), ack(orphanCollection()))
+                .thenThrow(new RuntimeException("unreachable"));
+
+        service.reconcile();
+
+        assertFalse(service.hasCompletedAdminSync());
+    }
+
+    @Test
+    public void test_becoming_coordinator_clears_the_sync() throws Exception {
+        becomeCoordinator(false);
+        drainRounds();
+        TestUtils.setPrivateField(service, "adminSyncCompleted", new AtomicBoolean(true));
+        becomeCoordinator(false);
+        drainRounds();
+        assertTrue(service.hasCompletedAdminSync());
+
+        becomeCoordinator(true);
+        drainRounds();
+        assertFalse(service.hasCompletedAdminSync());
+        assertTrue(syncingFlag());
+
+        TestUtils.setPrivateField(service, "adminSyncCompleted", new AtomicBoolean(true));
+        becomeCoordinator(false);
+        drainRounds();
+        assertTrue(service.hasCompletedAdminSync());
+        becomeCoordinator(true);
+        drainRounds();
+        assertFalse(service.hasCompletedAdminSync());
+    }
+
+    @Test
+    public void test_staying_coordinator_keeps_the_sync() throws Exception {
+        becomeCoordinator(true);
+        drainRounds();
+        TestUtils.setPrivateField(service, "adminSyncCompleted", new AtomicBoolean(true));
+
+        becomeCoordinator(true);
+        becomeCoordinator(true);
+        drainRounds();
+
+        assertTrue(service.hasCompletedAdminSync());
+        assertFalse(service.isSyncing());
+    }
+
+    @Test
+    public void test_a_round_that_straddles_the_handover_does_not_sync() throws Exception {
+        when(mockPool.request(any(), any(), anyLong())).thenAnswer(_ -> {
+            becomeCoordinator(true);
+            return ack(newDatabase());
+        }).thenThrow(new RuntimeException("unreachable"));
+
+        service.reconcile();
+        drainRounds();
+
+        assertNotNull(cache.getAdminDbEntry("newdb"));
+        assertFalse(service.hasCompletedAdminSync());
+        assertTrue(syncingFlag());
+    }
+
+    @Test
+    public void test_a_resynced_coordinator_has_observed_the_missed_version() throws Exception {
+        becomeCoordinator(true);
+        drainRounds();
+        final var missed = clock.current() + 1_000_000;
+        stubSnapshot(newDatabase(missed));
+
+        service.reconcile();
+
+        assertTrue(service.hasCompletedAdminSync());
+        assertTrue(clock.next() > missed);
     }
 
     @Test
@@ -207,7 +365,7 @@ public class AdminAntiEntropyServiceTest {
         service.reconcileSoon();
 
         assertNull(cache.getAdminDbEntry("newdb"));
-        assertFalse(service.hasNotSyncedSinceStart());
+        assertFalse(service.isSyncing());
     }
 
     @Test
