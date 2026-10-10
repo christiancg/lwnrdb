@@ -586,6 +586,7 @@ class Node:
             "scheduleTickMs=200\n"
             "scheduleRefreshMs=2000\n"
             "scheduleTimeoutMs=10000\n"
+            "faultInjectionEnabled=true\n"
         )
         with open(os.path.join(self.work_dir, "lwnrdb.cfg"), "w") as fp:
             fp.write(cfg)
@@ -624,6 +625,14 @@ class Node:
             except subprocess.TimeoutExpired:
                 pass
         self.alive = False
+
+    def wait_for_exit(self, timeout_s: float) -> bool:
+        try:
+            self.proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            return False
+        self.alive = False
+        return True
 
     def suspend(self):
         """Freeze the process (SIGSTOP). Its sockets stay open and unanswered, which is what opens a
@@ -3495,6 +3504,232 @@ def test_a_populated_standalone_node_keeps_its_data_when_a_fresh_node_joins():
         populated.stop()
 
 
+FAULT_HALT_STATUS = 137
+
+
+def arm_fault(node, point, action, match=None, delay_ms=None) -> dict:
+    payload = {"type": "ARM_FAULT", "point": point, "action": action}
+    if match is not None:
+        payload["match"] = match
+    if delay_ms is not None:
+        payload["delayMs"] = delay_ms
+    return op(node.client_port, payload)
+
+
+def await_fault(node, point, timeout_ms=30000) -> dict:
+    return op(node.client_port, {"type": "AWAIT_FAULT", "point": point, "timeoutMs": timeout_ms})
+
+
+def release_fault(node, point=None) -> dict:
+    payload = {"type": "RELEASE_FAULT"}
+    if point is not None:
+        payload["point"] = point
+    return op(node.client_port, payload)
+
+
+def collection_subject(coll) -> str:
+    return f"{DB}|{coll}"
+
+
+def log_contains(node, text) -> bool:
+    try:
+        with open(node.log_path, encoding="utf-8", errors="replace") as fp:
+            return text in fp.read()
+    except OSError:
+        return False
+
+
+def nodes_agree_on(coll, _id) -> bool:
+    held = [stored_documents(n, DB, coll).get(_id) for n in nodes if n.alive]
+    answers = [find_by_id(n.client_port, DB, coll, _id).get("object") for n in nodes if n.alive]
+    return all(h == held[0] for h in held) and all(a == answers[0] for a in answers)
+
+
+def restore_after_fault_test():
+    for n in nodes:
+        if not n.alive:
+            print(f"  Restarting node-{n.index} ...")
+            n.start()
+    for n in nodes:
+        release_fault(n)
+    wait_until_cluster_is_healthy()
+
+
+def test_a_write_paused_while_its_ownership_moves_is_not_reported_unapplied():
+    section("Fault seam: a write paused after its ownership re-check while the ownership moves away")
+
+    owners = collections_by_owner(nodes[0].client_port, DB, "faultown")
+    returning = nodes[1]
+    if not check("found two collections owned by the node that will leave and return",
+                 len(owners.get(returning.index, [])) >= 2, f"owners={owners}"):
+        return
+    coll, probe = owners[returning.index][0], owners[returning.index][1]
+    point = "WRITE_OWNERSHIP_RECHECKED"
+    try:
+        print(f"  Killing node-{returning.index} so its collections move to a survivor ...")
+        returning.kill()
+        if not check("the ring settles without it", wait_until_cluster_is_healthy()):
+            return
+        interim = owner_of(nodes[0].client_port, DB, coll)
+        if not check("a survivor took the collection over", interim is not None and interim is not returning):
+            return
+        check_status("ARM_FAULT pauses the write after its ownership re-check",
+                     arm_fault(interim, point, "PAUSE", match=collection_subject(coll)), "OK")
+        conn = authed(interim.client_port)
+        try:
+            pending = BackgroundOp(conn, {"type": "SAVE", "databaseName": DB, "collectionName": coll,
+                                          "object": {"_id": "own1", "v": 1}})
+            if not check_status("the write is parked between its re-check and its apply",
+                                await_fault(interim, point), "OK"):
+                return
+            print(f"  Restarting node-{returning.index} while the write is parked ...")
+            returning.start()
+            check("the interim owner hands the collection back",
+                  wait_until(lambda: owner_of(interim.client_port, DB, probe, attempts=1) is returning,
+                             timeout_s=60.0, interval_s=1.0))
+            check_status("RELEASE_FAULT lets the parked write go on", release_fault(interim, point), "OK")
+            pending.join(60.0)
+        finally:
+            conn.close()
+        answer = pending.response or {}
+        check("the write that applied after losing ownership is not answered as refused",
+              answer.get("errorCode") != "421-1", f"answer={answer}")
+        check_code("it answers outcome unknown", answer, "ERROR", "503-8")
+        check("every node converges on one value for the write",
+              wait_until(lambda: nodes_agree_on(coll, "own1"), timeout_s=60.0, interval_s=1.0),
+              f"held={[stored_documents(n, DB, coll).get('own1') for n in nodes if n.alive]}")
+    finally:
+        restore_after_fault_test()
+
+
+def test_a_node_halted_between_a_tombstone_and_its_delete_converges():
+    section("Fault seam: a node halted between a delete's tombstone and the delete itself")
+
+    owners = collections_by_owner(nodes[0].client_port, DB, "faultdel")
+    victim = nodes[2]
+    if not check("found a collection owned by the victim", victim.index in owners, f"owners={owners}"):
+        return
+    coll = owners[victim.index][0]
+    try:
+        if not check("the document to delete is on every node",
+                     seed_documents(nodes[0].client_port, DB, coll, [{"_id": "del1", "v": 1}])
+                     and all_nodes_see(DB, coll, "del1", 1, ports=all_ports(), timeout_s=30.0)):
+            return
+        check_status("ARM_FAULT halts the owner right after the tombstone",
+                     arm_fault(victim, "DELETE_TOMBSTONE_RESERVED", "HALT", match=collection_subject(coll)), "OK")
+        answer = delete(victim.client_port, DB, coll, "del1")
+        check("the delete is never answered", answer.get("message") == "Server closed connection unexpectedly",
+              f"answer={answer}")
+        check("the owner halted", victim.wait_for_exit(30.0))
+        check("with the fault's exit status, not a crash", victim.proc.returncode == FAULT_HALT_STATUS,
+              f"returncode={victim.proc.returncode}")
+        check("its tombstone is on disk", "del1" in tombstone_ids(victim, DB, coll))
+        check("and the document is still live on it", "del1" in stored_documents(victim, DB, coll))
+        print(f"  Restarting node-{victim.index} ...")
+        victim.start()
+        check("the ring heals", wait_until_cluster_is_healthy())
+        check("every node converges on the document",
+              wait_until(lambda: nodes_agree_on(coll, "del1"), timeout_s=60.0, interval_s=1.0),
+              f"held={[stored_documents(n, DB, coll).get('del1') for n in nodes if n.alive]}")
+        resent = delete(nodes[0].client_port, DB, coll, "del1")
+        check("a re-sent delete is answered without a server error",
+              not str(resent.get("errorCode") or "").startswith("5"), f"answer={resent}")
+    finally:
+        restore_after_fault_test()
+
+
+def test_a_dropped_commit_ack_is_redriven_and_the_marker_cleared():
+    section("Fault seam: one dropped COMMIT_TX acknowledgement is re-driven by recovery")
+
+    owners = collections_by_owner(nodes[0].client_port, DB, "faultack")
+    if not check("found a collection owned by each node", all(i in owners for i in range(NODE_COUNT)),
+                 f"owners={owners}"):
+        return
+    edge, participant = nodes[2], nodes[1]
+    local, remote = owners[edge.index][0], owners[participant.index][0]
+    point = "PEER_REPLY"
+    try:
+        if not check("the ring is healthy before the transaction starts", wait_until_cluster_is_healthy()):
+            return
+        check_status("ARM_FAULT drops the participant's next COMMIT_TX acknowledgement",
+                     arm_fault(participant, point, "DROP", match="COMMIT_TX"), "OK")
+        conn = authed(edge.client_port)
+        try:
+            tx_id = conn.send({"type": "START_TRANSACTION"}).get("transactionId")
+            check_status("a write to the coordinator's own collection", conn.send({
+                "type": "SAVE", "databaseName": DB, "collectionName": local,
+                "object": {"_id": "ack_edge", "v": 1}}), "OK")
+            check_status("a write to the participant's collection", conn.send({
+                "type": "SAVE", "databaseName": DB, "collectionName": remote,
+                "object": {"_id": "ack_part", "v": 1}}), "OK")
+            check_status("the commit is answered OK", conn.send({"type": "COMMIT_TRANSACTION"}), "OK")
+        finally:
+            conn.close()
+        check_status("the acknowledgement was dropped", await_fault(participant, point, 5000), "OK")
+        check("so the coordinator kept its marker for recovery",
+              log_contains(edge, f"Not every participant acknowledged the commit of {tx_id}"),
+              f"transaction={tx_id}")
+        check("recovery re-drives the commit and clears the marker",
+              wait_until(lambda: not holds_tx_record(edge, tx_id, "coord"), timeout_s=60.0, interval_s=1.0),
+              f"transaction={tx_id}")
+        check("the participant holds no prepared marker", not holds_tx_record(participant, tx_id, "part"),
+              f"transaction={tx_id}")
+        check("every node sees the participant's write",
+              all_nodes_see(DB, remote, "ack_part", 1, ports=all_ports(), timeout_s=30.0))
+        check("and the coordinator's own write",
+              all_nodes_see(DB, local, "ack_edge", 1, ports=all_ports(), timeout_s=30.0))
+    finally:
+        restore_after_fault_test()
+
+
+def test_a_write_inside_an_anti_entropy_round_trip_is_not_undone():
+    section("Fault seam: writes landing between an anti-entropy snapshot and its repair")
+
+    owners = collections_by_owner(nodes[0].client_port, DB, "faultae")
+    owner, replica = nodes[0], nodes[1]
+    if not check("found a collection owned by node-0", owner.index in owners, f"owners={owners}"):
+        return
+    coll = owners[owner.index][0]
+    point = "ANTI_ENTROPY_SNAPSHOTTED"
+    try:
+        if not check("the starting documents are on every node",
+                     seed_documents(owner.client_port, DB, coll, [{"_id": "ae1", "v": 1}, {"_id": "ae2", "v": 1}])
+                     and all_nodes_see(DB, coll, "ae2", 1, ports=all_ports(), timeout_s=30.0)):
+            return
+        check_status("ARM_FAULT pauses the replica's next anti-entropy round after its snapshot",
+                     arm_fault(replica, point, "PAUSE", match=collection_subject(coll)), "OK")
+        if not check_status("the replica's round is parked holding a stale snapshot",
+                            await_fault(replica, point, 20000), "OK"):
+            return
+        check_status("an update lands inside the round", save(owner.client_port, DB, coll, {"_id": "ae1", "v": 2}),
+                     "OK")
+        check_status("a delete lands inside the round", delete(owner.client_port, DB, coll, "ae2"), "OK")
+        check_status("a create lands inside the round", save(owner.client_port, DB, coll, {"_id": "ae3", "v": 1}),
+                     "OK")
+
+        def _replica_has_the_writes():
+            held = stored_documents(replica, DB, coll)
+            return held.get("ae1", {}).get("v") == 2 and "ae2" not in held and "ae3" in held
+
+        check("replication reached the replica while its round was parked",
+              wait_until(_replica_has_the_writes, timeout_s=15.0))
+        check_status("RELEASE_FAULT lets the round repair from its stale snapshot", release_fault(replica, point),
+                     "OK")
+
+        def _every_node_has_the_writes():
+            for n in nodes:
+                held = stored_documents(n, DB, coll)
+                if held.get("ae1", {}).get("v") != 2 or "ae2" in held or "ae3" not in held:
+                    return False
+            return True
+
+        check("no write is undone across the next anti-entropy rounds",
+              holds_throughout(_every_node_has_the_writes, seconds=ANTI_ENTROPY_INTERVAL_S * 3),
+              f"held={[sorted(stored_documents(n, DB, coll)) for n in nodes]}")
+    finally:
+        restore_after_fault_test()
+
+
 def main():
     bu.banner("Clustering (multi-node) integration suite")
 
@@ -3548,6 +3783,10 @@ def main():
         test_admin_ops_replicate_in_commit_order()
         test_an_unreadable_definition_is_not_deleted_on_peers()
         test_schedule_replication_and_single_firing()
+        test_a_write_paused_while_its_ownership_moves_is_not_reported_unapplied()
+        test_a_node_halted_between_a_tombstone_and_its_delete_converges()
+        test_a_dropped_commit_ack_is_redriven_and_the_marker_cleared()
+        test_a_write_inside_an_anti_entropy_round_trip_is_not_undone()
         # Failure / rejoin last: they degrade then restore the cluster.
         arrange_admin_changes_for_a_downed_node()
         test_node_failure_quorum_maintained()

@@ -2,9 +2,14 @@ package org.techhouse.unit.ops;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.IntConsumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -16,11 +21,17 @@ import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fault.FaultAction;
+import org.techhouse.fault.FaultInjector;
+import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.ClusterWriteHelper;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
+import org.techhouse.ops.OperationType;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.DeleteRequest;
+import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.DeleteResponse;
@@ -33,6 +44,8 @@ public class OperationProcessorClusterWriteTest {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final Configuration config = Configuration.getInstance();
+    private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
+    private IntConsumer origHalt;
     private boolean origEnabled;
     private int origExpected;
 
@@ -56,10 +69,14 @@ public class OperationProcessorClusterWriteTest {
         origEnabled = config.isClusterEnabled();
         origExpected = config.getClusterExpectedSize();
         TestUtils.setPrivateField(config, "clusterEnabled", true);
+        origHalt = TestUtils.getPrivateField(faultInjector, "halt", IntConsumer.class);
     }
 
     @AfterEach
     public void tearDown() throws Exception {
+        faultInjector.releaseAll();
+        TestUtils.setPrivateField(faultInjector, "enabled", false);
+        TestUtils.setPrivateField(faultInjector, "halt", origHalt);
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
         ownership.setSelfNodeId(null);
@@ -128,5 +145,64 @@ public class OperationProcessorClusterWriteTest {
         request.set_id("c4");
         final var response = processor.processMessage(request);
         assertEquals("421-1", response.getErrorCode());
+    }
+
+    private String collectionOwnedByOther() {
+        for (var i = 0; i < 500; i++) {
+            if (!ownership.isOwner(TestGlobals.DB, "coll-" + i)) {
+                return "coll-" + i;
+            }
+        }
+        return null;
+    }
+
+    private NodeInfo peerOwningTheTestCollection(NodeInfo self) {
+        for (var i = 0; i < 500; i++) {
+            final var peer = node("peer-" + i, 9991);
+            ownership.onMembershipChanged(new MembershipView(List.of(self, peer)));
+            if (!ownership.isOwner(TestGlobals.DB, TestGlobals.COLL)) {
+                return peer;
+            }
+        }
+        return null;
+    }
+
+    private void armHalt(IntConsumer onHalt) throws Exception {
+        TestUtils.setPrivateField(faultInjector, "enabled", true);
+        TestUtils.setPrivateField(faultInjector, "halt", onHalt);
+        faultInjector.arm(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultAction.HALT, null, 0);
+    }
+
+    @Test
+    public void test_the_ownership_fault_point_fires_only_after_the_re_check_passes() throws Exception {
+        configureMembership(2, node("self", 9990), node("other", 9991));
+        final var halts = new CopyOnWriteArrayList<Integer>();
+        armHalt(halts::add);
+        final var refused = ClusterWriteHelper.stillOwnsOrError(OperationType.SAVE, TestGlobals.DB,
+                collectionOwnedByOther());
+        assertNotNull(refused);
+        assertEquals("421-1", refused.getErrorCode());
+        assertTrue(halts.isEmpty(), "a refused write must not reach the point");
+        configureMembership(1, node("self", 9990));
+        assertNull(ClusterWriteHelper.stillOwnsOrError(OperationType.SAVE, TestGlobals.DB, TestGlobals.COLL));
+        assertEquals(List.of(137), halts);
+    }
+
+    @Test
+    public void test_a_write_that_lost_ownership_after_applying_answers_outcome_unknown() throws Exception {
+        final var self = node("self", 9990);
+        configureMembership(1, self);
+        final var peer = peerOwningTheTestCollection(self);
+        assertNotNull(peer);
+        ownership.onMembershipChanged(new MembershipView(List.of(self)));
+        armHalt(_ -> ownership.onMembershipChanged(new MembershipView(List.of(self, peer))));
+
+        final var response = processor.processMessage(save("moved"));
+
+        assertEquals("503-8", response.getErrorCode());
+        final var find = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
+        find.set_id("moved");
+        assertEquals(OperationStatus.OK, processor.processMessage(find).getStatus(),
+                "the write applied locally, so refusing it as not applied would be a lie");
     }
 }

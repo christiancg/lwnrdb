@@ -3,12 +3,16 @@ package org.techhouse.unit.cluster;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.function.IntConsumer;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.techhouse.cache.Cache;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
@@ -18,6 +22,9 @@ import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.fault.FaultAction;
+import org.techhouse.fault.FaultInjector;
+import org.techhouse.fault.FaultPoint;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.DeleteOperationHelper;
@@ -37,6 +44,9 @@ public class TombstoneOnMissingDeleteTest {
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
+    private final Cache cache = IocContainer.get(Cache.class);
+    private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
+    private IntConsumer origHalt;
     private boolean origEnabled;
     private int origExpected;
 
@@ -56,10 +66,14 @@ public class TombstoneOnMissingDeleteTest {
         TestUtils.setPrivateField(membershipService, "self", node());
         ownership.setSelfNodeId("self");
         ownership.onMembershipChanged(membershipService.membershipView());
+        origHalt = TestUtils.getPrivateField(faultInjector, "halt", IntConsumer.class);
     }
 
     @AfterEach
     public void tearDown() throws Exception {
+        faultInjector.releaseAll();
+        TestUtils.setPrivateField(faultInjector, "enabled", false);
+        TestUtils.setPrivateField(faultInjector, "halt", origHalt);
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
         ownership.setSelfNodeId(null);
@@ -133,5 +147,31 @@ public class TombstoneOnMissingDeleteTest {
         }
 
         assertTrue(fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).isEmpty());
+    }
+
+    private boolean presentIsTombstonedAndStillLive() {
+        try {
+            return fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).containsKey("present")
+                    && cache.getPkIndexAndLoadIfNecessary(TestGlobals.DB, TestGlobals.COLL).stream()
+                            .anyMatch(entry -> "present".equals(entry.getValue()));
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    @Test
+    public void test_the_tombstone_fault_point_fires_with_the_tombstone_on_disk_and_the_document_live()
+            throws Exception {
+        save();
+        final var observed = new CopyOnWriteArrayList<Boolean>();
+        TestUtils.setPrivateField(faultInjector, "enabled", true);
+        TestUtils.setPrivateField(faultInjector, "halt",
+                (IntConsumer) _ -> observed.add(presentIsTombstonedAndStillLive()));
+        faultInjector.arm(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultAction.HALT,
+                FaultInjector.collectionSubject(TestGlobals.DB, TestGlobals.COLL), 0);
+
+        assertEquals(OperationStatus.OK, delete("present"));
+
+        assertEquals(List.of(true), observed);
     }
 }

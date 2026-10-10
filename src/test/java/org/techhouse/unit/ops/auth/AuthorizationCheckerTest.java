@@ -13,12 +13,16 @@ import org.techhouse.data.auth.PermissionLevel;
 import org.techhouse.data.auth.ScriptPermissionLevel;
 import org.techhouse.ops.auth.AuthorizationChecker;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.ArmFaultRequest;
+import org.techhouse.ops.req.AwaitFaultRequest;
 import org.techhouse.ops.req.CloseConnectionRequest;
 import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.CreateDatabaseRequest;
 import org.techhouse.ops.req.CreateUserRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.ListDatabasesRequest;
+import org.techhouse.ops.req.OperationRequest;
+import org.techhouse.ops.req.ReleaseFaultRequest;
 import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
@@ -74,6 +78,16 @@ public class AuthorizationCheckerTest {
         final var request = new org.techhouse.ops.req.ListTransactionsRequest();
         assertTrue(AuthorizationChecker.check(request, createAdminUser()).isAllowed());
         assertFalse(AuthorizationChecker.check(request, createNonAdminUser()).isAllowed());
+    }
+
+    @Test
+    public void test_fault_operations_are_admin_only() {
+        final List<OperationRequest> requests = List.of(new ArmFaultRequest(), new AwaitFaultRequest(),
+                new ReleaseFaultRequest());
+        for (final var request : requests) {
+            assertTrue(AuthorizationChecker.check(request, createAdminUser()).isAllowed());
+            assertFalse(AuthorizationChecker.check(request, createNonAdminUser()).isAllowed());
+        }
     }
 
     @Test

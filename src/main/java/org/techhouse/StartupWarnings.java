@@ -46,6 +46,13 @@ public final class StartupWarnings {
         }
     }
 
+    public static void warnIfFaultInjectionEnabled() {
+        if (config.isFaultInjectionEnabled()) {
+            logger.warning("SECURITY WARNING: faultInjectionEnabled=true, so any admin can pause or halt this node "
+                    + "over the wire. It is for testing and debugging only; turn it off in lwnrdb.cfg.");
+        }
+    }
+
     public static void warnIfScriptFetchEnabled() {
         if (!config.isScriptFetchEnabled()) {
             return;

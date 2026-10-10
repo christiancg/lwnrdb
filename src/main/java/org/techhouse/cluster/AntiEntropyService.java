@@ -18,6 +18,8 @@ import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Globals;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ex.CollectionBusyException;
+import org.techhouse.fault.FaultInjector;
+import org.techhouse.fault.FaultPoint;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -33,6 +35,7 @@ public class AntiEntropyService implements MembershipListener {
     private final Cache cache = IocContainer.get(Cache.class);
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
     private final CoalescingSweep sweep = new CoalescingSweep(logger, "cluster-anti-entropy", "Anti-entropy",
             this::reconcileAllCollections);
 
@@ -203,6 +206,7 @@ public class AntiEntropyService implements MembershipListener {
         } finally {
             locks.releaseRead(dbName, collName);
         }
+        faultInjector.at(FaultPoint.ANTI_ENTROPY_SNAPSHOTTED, FaultInjector.collectionSubject(dbName, collName));
 
         final var selfNodeId = selfNodeId();
         final var best = new HashMap<String, Best>();

@@ -14,7 +14,9 @@ import org.techhouse.ops.admin.ReadPathHelper;
 import org.techhouse.ops.admin.RunDirectoryHelper;
 import org.techhouse.ops.index.IndexOperationHelper;
 import org.techhouse.ops.req.AggregateRequest;
+import org.techhouse.ops.req.ArmFaultRequest;
 import org.techhouse.ops.req.AuthenticateRequest;
+import org.techhouse.ops.req.AwaitFaultRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CallProcedureRequest;
 import org.techhouse.ops.req.CancelScriptRequest;
@@ -42,6 +44,7 @@ import org.techhouse.ops.req.ListUsersRequest;
 import org.techhouse.ops.req.ListenRequest;
 import org.techhouse.ops.req.OperationRequest;
 import org.techhouse.ops.req.ReindexRequest;
+import org.techhouse.ops.req.ReleaseFaultRequest;
 import org.techhouse.ops.req.ResolveTransactionRequest;
 import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.ops.req.RunScriptRequest;
@@ -140,6 +143,9 @@ public class OperationProcessor {
             case CANCEL_SCRIPT -> processCancelScript((CancelScriptRequest) operationRequest);
             case LIST_TRIGGER_RUNS -> processListTriggerRuns((ListTriggerRunsRequest) operationRequest);
             case RESOLVE_TRIGGER_RUN -> processResolveTriggerRun((ResolveTriggerRunRequest) operationRequest);
+            case ARM_FAULT -> FaultOperationHelper.arm((ArmFaultRequest) operationRequest);
+            case AWAIT_FAULT -> FaultOperationHelper.await((AwaitFaultRequest) operationRequest);
+            case RELEASE_FAULT -> FaultOperationHelper.release((ReleaseFaultRequest) operationRequest);
         };
         return ClusterAdminHelper.afterAdminOp(operationRequest, response);
     }

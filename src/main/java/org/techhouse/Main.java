@@ -113,6 +113,7 @@ public class Main {
         StartupWarnings.warnIfCachesExceedHeap();
         StartupWarnings.warnIfDefaultAdminPassword();
         StartupWarnings.warnIfScriptFetchEnabled();
+        StartupWarnings.warnIfFaultInjectionEnabled();
         StartupWarnings.warnIfNamesShareAnOnDiskKey();
         StartupWarnings.warnIfDatabaseSharesTheClusterFolder();
         startClusterIfEnabled();

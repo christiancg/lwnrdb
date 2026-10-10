@@ -35,8 +35,10 @@ Three mechanisms bound the damage rather than eliminate the disagreement:
 - **An ownership re-check under the lock.** `guardWrite` runs before the collection lock is taken,
   so ownership can move while a write waits for it. The write handlers therefore re-check
   `isOwner` *after* acquiring the lock and refuse with `421-1` if it moved, and a write that
-  commits locally but can no longer be replicated answers `421-1` rather than `OK` — that
-  silent success was the defect this closes. A `DELETE` is checked once more when it reserves its
+  commits locally but can no longer be replicated answers `503-8` (outcome unknown) rather than
+  `OK` — that silent success was the defect this closes. It is not `421-1`, because the write did
+  apply here and anti-entropy spreads it: `421-1` would tell the client it was not applied, the
+  same lie the admin path already refuses to tell. A `DELETE` is checked once more when it reserves its
   tombstone, after its before-hook ran: if ownership moved by then it answers `421-1` without
   deleting, because a local delete with no tombstone would be undone by anti-entropy while its
   `DELETED` trigger still fired.
@@ -45,7 +47,7 @@ Three mechanisms bound the damage rather than eliminate the disagreement:
 
 **The transaction commit path deliberately keeps that silent success, and this is not an oversight.**
 A commit whose ownership moved between the pre-commit check and `replicateTransaction` ships nothing
-and still answers OK, where the equivalent `SAVE`/`DELETE` answers `421-1`. Reporting it was tried
+and still answers OK, where the equivalent `SAVE`/`DELETE` answers `503-8`. Reporting it was tried
 and reverted: `entries.isEmpty()` conflates three cases, and only one is a defect — an edge
 coordinator whose slice was forwarded legitimately owns nothing locally, and a forwarded 2PC
 participant legitimately touches collections it does not own, so both would have been reported as
@@ -622,6 +624,14 @@ reassigning its collections. During that window writes to those collections fail
 `503-4 OWNER_UNREACHABLE` (reads fall back locally when `readFallbackToLocal` is on).
 Adding a LEAVE message so membership reassigns immediately is a worthwhile follow-up; until
 then, drain the node's traffic at the load balancer first if that window matters.
+
+**Testing failures between two statements.** Killing a process can only land *somewhere* in a
+critical section. To stop a node at one exact statement, the engine has a test-only fault seam:
+named points (`WRITE_OWNERSHIP_RECHECKED`, `DELETE_TOMBSTONE_RESERVED`, `ANTI_ENTROPY_SNAPSHOTTED`,
+`PEER_REPLY`) that `ARM_FAULT` can make pause, halt the process, delay, or drop one peer reply. It is
+inert unless `faultInjectionEnabled=true`, which no production node should set; the integration
+suite turns it on for its throwaway nodes. See the
+[README](../README.md#fault-injection-testing-and-debugging-only) for the operations.
 
 ## Anti-entropy and versioning
 

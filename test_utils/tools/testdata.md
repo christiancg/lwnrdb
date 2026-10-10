@@ -2405,7 +2405,9 @@ reads are forwarded to the collection's owner, admin operations to the admin coo
   `replicationAckTimeoutMs`. It is not rolled back; anti-entropy brings the replicas up to date.
 - `503-4` — the owner could not be reached, and the request provably never reached it.
 - `503-8` — a forwarded write whose owner did not report an outcome. It may already have applied, so check
-  before retrying.
+  before retrying. Also a write that applied on its owner but whose ownership moved before it could replicate:
+  it is on that node and anti-entropy spreads it, so it is not answered `421-1`. Reproduce it with the fault seam
+  below (`WRITE_OWNERSHIP_RECHECKED`), pausing the write while the collection's previous owner rejoins.
 - `503-7` — the same for a script placed on another node.
 - `503-5` — the admin coordinator has not yet completed an admin anti-entropy round with a majority of the
   cluster since it started or last became coordinator, so it may not hold every admin record the cluster
@@ -2416,6 +2418,52 @@ reads are forwarded to the collection's owner, admin operations to the admin coo
 - `421-1` — the node stopped owning the collection while the write waited for its lock (or, for a `DELETE`,
   while its before-hook ran; the document is left untouched), or an admin operation reached a node that is no
   longer the coordinator. Retry, and it is routed to the new one.
+
+Fault injection (testing and debugging only)
+
+Not for applications: these let a test freeze, crash or drop a reply on one node at an exact statement.
+On a server started with the default config (`faultInjectionEnabled=false`) every one of them answers `403-3`.
+They are admin only (`403-1` otherwise) and act only on the node the client is connected to.
+
+```json
+{"type": "ARM_FAULT", "point": "PEER_REPLY", "action": "DROP", "match": "COMMIT_TX"}
+```
+
+```json
+{"type": "AWAIT_FAULT", "point": "PEER_REPLY", "timeoutMs": 100}
+```
+
+```json
+{"type": "RELEASE_FAULT"}
+```
+
+An unknown point → `400-1`
+
+```json
+{"type": "ARM_FAULT", "point": "NOPE", "action": "PAUSE"}
+```
+
+`DROP` on a point that carries no peer message → `400-1`
+
+```json
+{"type": "ARM_FAULT", "point": "WRITE_OWNERSHIP_RECHECKED", "action": "DROP"}
+```
+
+`DELAY` without a `delayMs` between 1 and 60000 → `400-1`
+
+```json
+{"type": "ARM_FAULT", "point": "ANTI_ENTROPY_SNAPSHOTTED", "action": "DELAY"}
+```
+
+With `faultInjectionEnabled=true`, waiting on a point nothing reaches → `408-3`
+
+```json
+{"type": "ARM_FAULT", "point": "WRITE_OWNERSHIP_RECHECKED", "action": "PAUSE", "match": "mydb|mycoll"}
+```
+
+```json
+{"type": "AWAIT_FAULT", "point": "WRITE_OWNERSHIP_RECHECKED", "timeoutMs": 100}
+```
 
 Every `500-*` answer is a failure inside the server — a disk that is full or unwritable, a file that could not
 be read — and cannot be provoked from this playbook; the server log names the cause. That includes a

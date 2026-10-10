@@ -448,4 +448,8 @@ public final class Configuration {
         return intValue(ConfigKey.SCHEDULE_MAX_PER_DATABASE);
     }
 
+    public boolean isFaultInjectionEnabled() {
+        return booleanValue(ConfigKey.FAULT_INJECTION_ENABLED);
+    }
+
 }

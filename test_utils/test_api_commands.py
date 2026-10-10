@@ -1023,6 +1023,26 @@ def test_operation_permissions(c):
 # Main
 # ══════════════════════════════════════════════════════════════════════════
 
+def test_fault_operations_are_disabled_by_default(c):
+    section("Fault injection operations on a server with the default configuration")
+
+    check_code("ARM_FAULT -> 403-3",
+               c.send({"type": "ARM_FAULT", "point": "PEER_REPLY", "action": "DROP", "match": "COMMIT_TX"}),
+               "FORBIDDEN", "403-3")
+    check_code("AWAIT_FAULT -> 403-3",
+               c.send({"type": "AWAIT_FAULT", "point": "PEER_REPLY", "timeoutMs": 100}), "FORBIDDEN", "403-3")
+    check_code("RELEASE_FAULT -> 403-3", c.send({"type": "RELEASE_FAULT"}), "FORBIDDEN", "403-3")
+    check_code("ARM_FAULT on an unknown point -> 400-1",
+               c.send({"type": "ARM_FAULT", "point": "NOPE", "action": "PAUSE"}), "ERROR", "400-1")
+    check_code("DROP on a point that carries no message -> 400-1",
+               c.send({"type": "ARM_FAULT", "point": "WRITE_OWNERSHIP_RECHECKED", "action": "DROP"}),
+               "ERROR", "400-1")
+    with Conn() as rc:
+        rc.authenticate("api_reader", "api_reader1234")
+        check_code("a non-admin ARM_FAULT -> 403-1",
+                   rc.send({"type": "ARM_FAULT", "point": "PEER_REPLY", "action": "DROP"}), "FORBIDDEN", "403-1")
+
+
 def test_name_case_collisions(c):
     section("A name that differs only by case is refused, on every filesystem")
     # FilePaths uses the logical name verbatim as a path segment, so on a case-insensitive volume
@@ -1132,6 +1152,7 @@ def main():
         test_index_ops,
         test_flows,
         test_operation_permissions,
+        test_fault_operations_are_disabled_by_default,
     ]
     for group in groups:
         with Conn() as c:

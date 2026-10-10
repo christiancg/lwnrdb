@@ -82,4 +82,5 @@ public final class Globals {
     public static final String CLUSTER_SEED_SEPARATOR = ",";
     public static final String CLUSTER_ADDRESS_SEPARATOR = ":";
     public static final String CLUSTER_ADMIN_COORDINATOR_KEY = "__admin_coordinator__";
+    public static final long FAULT_PAUSE_LIMIT_MS = 120_000L;
 }

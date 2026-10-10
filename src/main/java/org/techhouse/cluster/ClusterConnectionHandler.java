@@ -20,6 +20,8 @@ import org.techhouse.conn.ClientTracker;
 import org.techhouse.conn.InFlightRequests;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.EJson;
+import org.techhouse.fault.FaultInjector;
+import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.OperationProcessor;
@@ -45,6 +47,7 @@ public class ClusterConnectionHandler implements Runnable {
     private final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final InFlightRequests inFlightRequests = IocContainer.get(InFlightRequests.class);
+    private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
     private final Socket socket;
     private final BooleanSupplier refusingWrites;
@@ -99,6 +102,9 @@ public class ClusterConnectionHandler implements Runnable {
 
     private void respond(BufferedWriter writer, ReentrantLock writerLock, ClusterMessage request) throws IOException {
         final var response = handle(request);
+        if (faultInjector.dropsAt(FaultPoint.PEER_REPLY, String.valueOf(request.getType()))) {
+            return;
+        }
         response.setCorrelationId(request.getCorrelationId());
         writerLock.lock();
         try {

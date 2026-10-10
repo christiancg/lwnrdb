@@ -133,6 +133,7 @@ public class ConfigReaderTest {
         expectedConfig.put("scheduleRefreshMs", "60000");
         expectedConfig.put("scheduleTimeoutMs", "30000");
         expectedConfig.put("scheduleMaxPerDatabase", "100");
+        expectedConfig.put("faultInjectionEnabled", "false");
         expectedConfig.put("scriptTextImportEnabled", "false");
         expectedConfig.put("scriptProcedureImportEnabled", "true");
         expectedConfig.put("aggregationScriptInstructionBudget", "1000000");

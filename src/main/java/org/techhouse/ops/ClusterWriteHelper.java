@@ -6,6 +6,8 @@ import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.DeleteReservation;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.WriteGuard;
+import org.techhouse.fault.FaultInjector;
+import org.techhouse.fault.FaultPoint;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.DeleteRequest;
 import org.techhouse.ops.resp.BulkSaveResponse;
@@ -15,6 +17,7 @@ import org.techhouse.ops.resp.SaveResponse;
 
 public final class ClusterWriteHelper {
     private static final ClusterCoordinator coordinator = IocContainer.get(ClusterCoordinator.class);
+    private static final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
 
     private ClusterWriteHelper() {
     }
@@ -88,14 +91,16 @@ public final class ClusterWriteHelper {
             ReplicationOutcome outcome) {
         return switch (outcome) {
             case TIMEOUT -> new OperationResponse(type, ErrorCode.REPLICATION_TIMEOUT);
-            case NOT_OWNER, NOT_COORDINATOR -> new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
+            case NOT_OWNER, NOT_COORDINATOR -> new OperationResponse(type, ErrorCode.WRITE_OUTCOME_UNKNOWN);
             case NOT_CLUSTERED, QUORUM_MET -> success;
         };
     }
 
     public static OperationResponse stillOwnsOrError(OperationType type, String dbName, String collName) {
-        return coordinator.stillOwns(dbName, collName)
-                ? null
-                : new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
+        if (!coordinator.stillOwns(dbName, collName)) {
+            return new OperationResponse(type, ErrorCode.NOT_COLLECTION_OWNER);
+        }
+        faultInjector.at(FaultPoint.WRITE_OWNERSHIP_RECHECKED, FaultInjector.collectionSubject(dbName, collName));
+        return null;
     }
 }

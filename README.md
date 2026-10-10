@@ -1142,6 +1142,46 @@ Operations that require `READ_WRITE`: `SAVE`, `BULK_SAVE`, `DELETE`, `CREATE_COL
 | Wrong username or password | `ERROR` | `401-3` | `The user doesn't exist or the wrong credentials have been provided` |
 | Insufficient permissions | `FORBIDDEN` | `403-1` | `Action is forbidden, no permissions` |
 
+### Fault injection (testing and debugging only)
+
+These three operations are **not for applications**. They exist so the cluster test suite can make one node fail at an exact statement inside the engine — freeze there, crash there, or drop one reply to a peer — which is how it reproduces failures that only happen *between* two adjacent steps. They are inert unless the server was started with `faultInjectionEnabled=true` (default `false`); otherwise each one answers `403-3`. All three are admin only, act on the node the client is connected to (they are never forwarded), and are refused inside an open transaction.
+
+A fault is armed at a named **point**. It fires once, the first time a thread reaches the point with a matching subject, and then stays inert until it is armed again.
+
+| Point | Where it fires | Subject (`match`) |
+|---|---|---|
+| `WRITE_OWNERSHIP_RECHECKED` | A clustered write re-checked, under its collection lock, that this node owns the collection, and has not applied yet | `<db>\|<collection>` |
+| `DELETE_TOMBSTONE_RESERVED` | A clustered delete wrote its tombstone and has not deleted the document yet | `<db>\|<collection>` |
+| `ANTI_ENTROPY_SNAPSHOTTED` | An anti-entropy round took its snapshot and released its lock, and has not sent its digest yet | `<db>\|<collection>` |
+| `PEER_REPLY` | A node applied a peer's request and has not written the reply yet. The only point that can `DROP` | the request type, e.g. `COMMIT_TX` |
+
+| Action | Effect |
+|---|---|
+| `PAUSE` | Parks the thread until `RELEASE_FAULT`, for at most 120 seconds |
+| `HALT` | Stops the process at that statement with exit status `137`, skipping shutdown hooks, like `kill -9` |
+| `DELAY` | Sleeps `delayMs` (1–60000), or until released |
+| `DROP` | Skips writing the reply (`PEER_REPLY` only) |
+
+#### `ARM_FAULT` (admin only, testing only)
+`match` is optional; without it any subject fires the fault. Arming a point that is already armed releases the previous arm first.
+```json
+{"type":"ARM_FAULT","point":"PEER_REPLY","action":"DROP","match":"COMMIT_TX"}
+```
+
+#### `AWAIT_FAULT` (admin only, testing only)
+Waits until the armed point has fired, up to `timeoutMs` (1–120000). Answers `408-3` if it did not, or if the point is not armed.
+```json
+{"type":"AWAIT_FAULT","point":"WRITE_OWNERSHIP_RECHECKED","timeoutMs":30000}
+```
+
+#### `RELEASE_FAULT` (admin only, testing only)
+Lets a paused or delayed thread continue and disarms the point. Without `point` it does so for every point.
+```json
+{"type":"RELEASE_FAULT","point":"WRITE_OWNERSHIP_RECHECKED"}
+```
+
+- **Errors**: `403-3` fault injection is disabled, `403-1` not an admin, `400-1` an unknown point or action, `DROP` on a point other than `PEER_REPLY`, or a `delayMs`/`timeoutMs` out of range, `408-3` the point was not reached in time.
+
 ### Error codes
 
 Every error response includes an `errorCode` field. Codes follow the pattern `NNN-N` (HTTP-style range + sequential number). The `message` field may contain additional context (e.g. the offending id or field name) appended to the default text below.
@@ -1174,6 +1214,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `401-3` | `ERROR` | The user doesn't exist or the wrong credentials have been provided |
 | `403-1` | `FORBIDDEN` | Action is forbidden, no permissions |
 | `403-2` | `FORBIDDEN` | Script execution is disabled on this server |
+| `403-3` | `FORBIDDEN` | Fault injection is disabled on this server — a [fault injection](#fault-injection-testing-and-debugging-only) operation on a server without `faultInjectionEnabled=true` |
 | `404-1` | `NOT_FOUND` | User not found |
 | `404-2` | `NOT_FOUND` | Entry not found |
 | `404-3` | `NOT_FOUND` | No results |
@@ -1186,6 +1227,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `404-11` | `NOT_FOUND` | Collection not found — a write (`SAVE`, `BULK_SAVE`, `DELETE`) named a collection this node has no metadata for. Definitive only when clustering is off; a clustered node answers `503-10` instead, since it cannot tell "never existed" from "not replicated here yet" |
 | `408-1` | `ERROR` | Script exceeded its time budget |
 | `408-2` | `ERROR` | Script was cancelled |
+| `408-3` | `ERROR` | The armed fault point was not reached in time (`AWAIT_FAULT`, testing only) |
 | `409-1` | `ERROR` | User already exists |
 | `409-2` | `ERROR` | Database already exists |
 | `409-3` | `ERROR` | A transaction is already in progress for this connection |
@@ -1241,7 +1283,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `503-5` | `ERROR` | Admin coordinator is synchronizing, retry shortly |
 | `503-6` | `ERROR` | Too many scripts running, retry shortly *(the message names the scope that refused it: `node`, `user` or `database`)* |
 | `503-7` | `ERROR` | The node the script was placed on did not report an outcome; it was not run again in case it already had *(only raised when a placed script's outcome could not be established; it is never re-run locally, so whether to retry is the caller's decision)* |
-| `503-8` | `ERROR` | The collection's owner did not report an outcome; the write may already have been applied, so retrying is only safe for an idempotent write *(distinct from `503-4`, which means the owner was provably never reached)* |
+| `503-8` | `ERROR` | The collection's owner did not report an outcome; the write may already have been applied, so retrying is only safe for an idempotent write *(distinct from `503-4`, which means the owner was provably never reached)*. Also the answer when the collection's ownership moved after the write was applied on this node, since `421-1` would claim it was not |
 | `503-9` | `ERROR` | The admin coordinator could not be resolved, retry shortly *(a coordinated admin op is never applied locally when no coordinator can be reached: an unreplicated DDL answered with `OK` would diverge the cluster silently)* |
 | `503-10` | `ERROR` | The collection has not reached this node yet, retry shortly *(a write routed to the collection's owner can arrive before the `CREATE_COLLECTION` that created it, since admin replication only waits for a quorum and the owner need not be in it — retryable, not a server fault)* |
 | `503-13` | `ERROR` | The server is shutting down, retry against another node or later *(answered to every request on an already-open connection once shutdown has begun, except `ROLLBACK_TRANSACTION` and `CLOSE_CONNECTION`; a write acknowledged before this point is indexed and durable, and one refused with it was not applied)* |
@@ -1336,6 +1378,7 @@ Every value is **validated at startup**. If any value is invalid, the server log
 | `scheduleRefreshMs` | Valid number ≥ 1 (default `60000`). How often the whole schedule registry is rebuilt from disk. The DDL path updates it directly; this is the safety net for schedules that arrived through cluster replication or admin anti-entropy |
 | `scheduleTimeoutMs` | Valid number ≥ 1 (default `30000`). Default wall clock for one scheduled run; a schedule may override it with its own `timeoutMs` |
 | `scheduleMaxPerDatabase` | Valid number ≥ 1 (default `100`). Cap on schedules per database, so a `SAVE_SCHEDULE` loop cannot make the per-tick scan unbounded |
+| `faultInjectionEnabled` | `true` or `false` (default `false`). **Testing and debugging only — never in production.** Lets an admin arm the [fault injection](#fault-injection-testing-and-debugging-only) points over the wire, which can pause or halt the node. While off, those operations answer `403-3` and every point costs one field read. A node started with it on logs a `SECURITY WARNING` |
 
 ```
 # the port the server listens on

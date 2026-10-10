@@ -19,6 +19,8 @@ import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.Transaction;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.fault.FaultInjector;
+import org.techhouse.fault.FaultPoint;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
@@ -36,6 +38,7 @@ public class ClusterCoordinator {
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final HybridClock hybridClock = IocContainer.get(HybridClock.class);
     private final EJson eJson = IocContainer.get(EJson.class);
+    private final FaultInjector faultInjector = IocContainer.get(FaultInjector.class);
 
     public WriteGuard guardWrite(String dbName, String collName) {
         if (doesntCoordinate(dbName)) {
@@ -85,6 +88,7 @@ public class ClusterCoordinator {
                 fs.tombstones().append(dbName, collName, id, version);
             }
         }
+        faultInjector.at(FaultPoint.DELETE_TOMBSTONE_RESERVED, FaultInjector.collectionSubject(dbName, collName));
         return DeleteReservation.reserved(version);
     }
 
