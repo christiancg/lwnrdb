@@ -1,8 +1,11 @@
+import os
 import random
+import tempfile
 
 from base_utils import check, section
 
 from . import ops as op_kinds
+from . import report
 from .ops import Op, generate_plan, plan_literal, repair
 from .shrink import Budget, ddmin, matches_signature, signature_of
 from .values import RawJson, to_json_text
@@ -11,6 +14,9 @@ from .values import RawJson, to_json_text
 class FakeDivergence:
     def __init__(self, oracle: str):
         self.oracle = oracle
+
+    def describe(self) -> str:
+        return f"{self.oracle} fake"
 
 
 def _databases(count: int) -> list:
@@ -117,6 +123,59 @@ def _test_signature_matching() -> None:
     check("signature_of answers None for a clean run", signature_of([]) is None)
 
 
+def _unless(ok: bool, detail: str) -> str:
+    return "" if ok else detail
+
+
+def _reported_plan(markdown: str) -> list:
+    literal = markdown.split("```python\n")[1].split("```")[0]
+    scope = {"Op": Op, "RawJson": RawJson}
+    exec(literal, scope)
+    return scope["PLAN"]
+
+
+def _test_failure_report_names_the_seed_and_how_to_pin_it() -> None:
+    plan = repair(generate_plan(random.Random("selftest-report"), 20)[0])
+    markdown = report.failure_markdown(4242, "soak", plan, [FakeDivergence("count-vs-rows")], "tier-1")
+    named = ("4242" in markdown and "count-vs-rows" in markdown and "--seed 4242" in markdown
+             and '(4242, "' in markdown)
+    check("the failure report names the seed, its oracle, the replay and the pin line", named,
+          _unless(named, markdown))
+
+
+def _test_failure_report_carries_a_replayable_plan() -> None:
+    plan = repair(generate_plan(random.Random("selftest-report"), 20)[0])
+    markdown = report.failure_markdown(7, "soak", plan, [FakeDivergence("index-vs-scan")], "")
+    check("the failure report's reproduction replays the same plan", _reported_plan(markdown) == plan)
+
+
+def _test_failure_report_caps_the_listed_divergences() -> None:
+    divergences = [FakeDivergence(f"oracle-{index}") for index in range(7)]
+    markdown = report.failure_markdown(7, "soak", [], divergences, "")
+    capped = "oracle-4 fake" in markdown and "oracle-5 fake" not in markdown and "2 more" in markdown
+    check("the failure report lists five divergences and counts the rest", capped,
+          _unless(capped, markdown))
+
+
+def _test_clean_report_names_the_start_seed() -> None:
+    markdown = report.clean_markdown(99, 12, 1.5)
+    check("the clean soak report names its start seed and seed count",
+          "99" in markdown and "12 seed(s)" in markdown, markdown)
+
+
+def _test_report_append_writes_nothing_without_a_path() -> None:
+    work_dir = tempfile.mkdtemp(prefix="lwnrdb-report-")
+    path = os.path.join(work_dir, "summary.md")
+    report.append(None, "x")
+    report.append(path, "a")
+    report.append(path, "b")
+    with open(path, encoding="utf-8") as written:
+        content = written.read()
+    os.remove(path)
+    os.rmdir(work_dir)
+    check("append writes only with a path, and appends rather than overwrites", content == "ab", content)
+
+
 def run_self_test() -> None:
     section("Shrinker")
     _test_ddmin_finds_the_known_minimum()
@@ -135,3 +194,10 @@ def run_self_test() -> None:
     _test_namespace_is_deterministic()
     _test_plan_survives_its_literal_form()
     _test_raw_json_survives_serialisation()
+
+    section("Report")
+    _test_failure_report_names_the_seed_and_how_to_pin_it()
+    _test_failure_report_carries_a_replayable_plan()
+    _test_failure_report_caps_the_listed_divergences()
+    _test_clean_report_names_the_start_seed()
+    _test_report_append_writes_nothing_without_a_path()

@@ -9,7 +9,7 @@ import time
 import base_utils as bu
 from base_utils import check, section
 
-from fuzz import oracles, write_paths
+from fuzz import oracles, report, write_paths
 from fuzz.execute import Executor
 from fuzz.ops import generate_plan, plan_literal, repair
 from fuzz.shrink import Budget as ShrinkBudget
@@ -152,10 +152,8 @@ def report_failure(seed, label: str, plan: list, divergences: list, tier: str = 
                    budget=None) -> None:
     print(f"\n  seed {seed} ({label}) produced {len(divergences)} divergence(s) "
           f"on the full plan:")
-    for divergence in divergences[:5]:
-        print(f"      - {divergence.describe()}")
-    if len(divergences) > 5:
-        print(f"      ... and {len(divergences) - 5} more")
+    for line in report.listed_divergences(divergences):
+        print(f"      - {line}")
     if tier:
         replays = budget.replays if budget else 0
         print(f"\n  {len(plan)} ops after shrinking ({tier}, {replays} replay(s)); "
@@ -163,7 +161,7 @@ def report_failure(seed, label: str, plan: list, divergences: list, tier: str = 
     print(f"\n  reproduction ({len(plan)} ops):\n{plan_literal(plan)}")
 
 
-def run_seed(seed, label: str, ops: int, shrink_seconds: float = 0.0) -> bool:
+def run_seed(seed, label: str, ops: int, shrink_seconds: float = 0.0, report_path=None) -> bool:
     plan, namespace = build_plan(seed, ops)
     try:
         divergences, outcome, stats = run_plan(plan, namespace, seed)
@@ -179,35 +177,40 @@ def run_seed(seed, label: str, ops: int, shrink_seconds: float = 0.0) -> bool:
             minimal, budget, tier = shrink_plan(plan, namespace, seed, divergences,
                                                 shrink_seconds)
             report_failure(seed, label, minimal, divergences, tier, budget)
+            report.append(report_path,
+                          report.failure_markdown(seed, label, minimal, divergences, tier))
         else:
             report_failure(seed, label, plan, divergences)
+            report.append(report_path, report.failure_markdown(seed, label, plan, divergences, ""))
     elif stats.get("index_vs_scan_queries") == 0:
         bu.warn(f"seed {seed} ({label}) compared no index-vs-scan queries",
                 "the plan left no indexed collection alive")
     return ok
 
 
-def run_regression(budget: Budget, ops: int, shrink_seconds: float) -> None:
+def run_regression(budget: Budget, ops: int, shrink_seconds: float, report_path=None) -> None:
     section("Regression seeds")
     for seed, label in REGRESSION_SEEDS:
         if not budget.remaining():
             bu.warn(f"seed {seed} ({label}) skipped", "wall-clock budget exhausted")
             continue
-        run_seed(seed, label, ops, shrink_seconds)
+        run_seed(seed, label, ops, shrink_seconds, report_path)
 
 
-def run_soak(minutes: float, ops: int, start_seed, shrink_seconds: float) -> None:
-    section(f"Soak ({minutes} minutes)")
+def run_soak(minutes: float, ops: int, start_seed, shrink_seconds: float,
+             report_path=None) -> None:
+    section(f"Soak ({minutes} minutes from start seed {start_seed})")
     budget = Budget(minutes * 60.0)
     rng = random.Random(start_seed)
     attempts = 0
     while budget.remaining():
         seed = rng.randrange(1, 2 ** 31)
         attempts += 1
-        if not run_seed(seed, "soak", ops, shrink_seconds):
+        if not run_seed(seed, "soak", ops, shrink_seconds, report_path):
             print("\n  Stopping the soak on the first failing seed.")
             return
     print(f"\n  {attempts} seed(s) ran clean.")
+    report.append(report_path, report.clean_markdown(start_seed, attempts, minutes))
 
 
 def require_jar() -> None:
@@ -228,7 +231,8 @@ def parse_args():
                     "and one corpus written as single SAVEs, as BULK_SAVEs and in one "
                     "transaction.",
         epilog="examples: --self-test | --seeds regression --budget 240 "
-               "| --seed 12345 --ops 120 | --seed random --minutes 30")
+               "| --seed 12345 --ops 120 | --seed random --minutes 30 "
+               "| --seed random --minutes 45 --report $GITHUB_STEP_SUMMARY")
     parser.add_argument("--seed", default=None,
                         help="run one seed; 'random' picks one and prints it")
     parser.add_argument("--seeds", default=None, choices=["regression"],
@@ -246,6 +250,9 @@ def parse_args():
                         help=f"wall-clock seconds to spend reducing a failing plan to a "
                              f"minimal reproduction; 0 disables shrinking "
                              f"(default {DEFAULT_SHRINK_SECONDS:.0f})")
+    parser.add_argument("--report", default=None,
+                        help="append a Markdown report of a failing seed, or of a clean soak, "
+                             "to this file")
     parser.add_argument("--self-test", action="store_true",
                         help="check the shrinker, the plan repair and generator determinism; "
                              "needs no server and no jar")
@@ -265,16 +272,16 @@ def main():
     bu.banner("differential fuzz harness", HOST, PORT)
 
     if args.seeds == "regression":
-        run_regression(Budget(args.budget), args.ops, args.shrink)
+        run_regression(Budget(args.budget), args.ops, args.shrink, args.report)
     elif args.minutes is not None:
         seed = args.seed if args.seed not in (None, "random") else random.randrange(1, 2 ** 31)
-        run_soak(args.minutes, args.ops, seed, args.shrink)
+        run_soak(args.minutes, args.ops, seed, args.shrink, args.report)
     elif args.seed is not None:
         seed = random.randrange(1, 2 ** 31) if args.seed == "random" else int(args.seed)
         section(f"Single seed {seed}")
-        run_seed(seed, "explicit", args.ops, args.shrink)
+        run_seed(seed, "explicit", args.ops, args.shrink, args.report)
     else:
-        run_regression(Budget(args.budget), args.ops, args.shrink)
+        run_regression(Budget(args.budget), args.ops, args.shrink, args.report)
 
     bu.summary()
 
