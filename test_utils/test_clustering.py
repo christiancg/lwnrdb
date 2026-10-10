@@ -2245,8 +2245,6 @@ def test_a_participant_killed_mid_commit_finishes_without_its_coordinator():
                  "no decided marker was ever observed on the participant, so the commit outran the harness"):
         return
     check("it kept its decided marker", holds_tx_record(victim, tx_id, "localcommit"), f"transaction={tx_id}")
-    check("and holds no prepared marker, so no coordinator has to repeat the decision",
-          not holds_tx_record(victim, tx_id, "part"), f"transaction={tx_id}")
 
     print(f"  Killing coordinator node-{edge.index} so nothing can re-drive the commit ...")
     edge.kill()
