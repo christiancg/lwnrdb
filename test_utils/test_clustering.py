@@ -49,6 +49,7 @@ from the node's own files (see "node-local introspection"), so the harness waits
 needs and acts inside it rather than racing a timer.
 """
 
+import argparse
 import bisect
 import hashlib
 import json
@@ -3571,6 +3572,10 @@ def test_a_write_paused_while_its_ownership_moves_is_not_reported_unapplied():
         interim = owner_of(nodes[0].client_port, DB, coll)
         if not check("a survivor took the collection over", interim is not None and interim is not returning):
             return
+        if not check("the survivor's own view makes it the owner",
+                     wait_until(lambda: owner_of(interim.client_port, DB, coll, attempts=1) is interim,
+                                timeout_s=30.0, interval_s=0.5)):
+            return
         check_status("ARM_FAULT pauses the write after its ownership re-check",
                      arm_fault(interim, point, "PAUSE", match=collection_subject(coll)), "OK")
         conn = authed(interim.client_port)
@@ -3728,8 +3733,106 @@ def test_a_write_inside_an_anti_entropy_round_trip_is_not_undone():
         restore_after_fault_test()
 
 
+GROUPS = {
+    "replication": [
+        test_formation_and_quorum_writes,
+        test_ddl_replication,
+        test_write_replication_and_read_routing,
+        test_bulk_delete_and_upsert,
+        test_index_replication,
+        test_reindex_rebuilds_the_index_on_every_node,
+        test_user_and_permission_replication,
+        test_grants_are_pruned_on_every_node,
+        test_a_deleted_users_ownership_is_pruned_on_every_node,
+        test_a_client_cannot_advance_the_write_clock_through_an_incarnation,
+        test_a_forged_stamp_is_ignored_and_a_real_one_still_replicates,
+        test_single_node_transaction,
+        test_multi_collection_transaction,
+        test_a_transactional_join_sees_a_participants_buffered_writes,
+        test_a_transactional_join_across_two_written_nodes_is_refused,
+        test_a_replica_listener_never_sees_a_partial_transaction,
+        test_admin_transaction_ops,
+        test_lock_timeout_aborts_the_whole_transaction,
+        test_admin_ops_replicate_in_commit_order,
+        test_an_unreadable_definition_is_not_deleted_on_peers,
+        test_forwarded_write_ignores_a_client_supplied_trigger_depth,
+    ],
+    "scripts": [
+        test_formation_and_quorum_writes,
+        test_script_placement_forwards_runs,
+        test_forwarded_script_reads_and_writes,
+        test_forwarded_script_relays_its_stack,
+        test_forwarded_script_preserves_the_acting_user,
+        test_long_forwarded_script_is_not_cut_off,
+        test_script_routing_disabled_stays_local,
+        test_script_placement_prefers_the_collection_owner,
+        test_script_placement_locality_weight_zero_is_load_only,
+        test_script_placement_falls_back_when_the_target_dies,
+        test_before_hook_runs_on_the_owner,
+        test_script_control_is_cluster_wide,
+    ],
+    "failover": [
+        test_formation_and_quorum_writes,
+        test_write_replication_and_read_routing,
+        test_schedule_replication_and_single_firing,
+        arrange_admin_changes_for_a_downed_node,
+        test_node_failure_quorum_maintained,
+        test_schedule_failover,
+        make_admin_changes_while_a_node_is_down,
+        test_node_rejoin,
+        test_a_schema_saved_while_a_node_is_down_reaches_it,
+        test_a_procedure_deleted_while_a_node_is_down_stays_deleted,
+        test_a_password_changed_while_a_node_is_down_reaches_it,
+        test_permission_changes_and_dropped_indexes_replicate,
+        test_schedule_rejoin_catch_up,
+        test_a_restarted_participant_does_not_commit_half_a_transaction,
+        test_restart_does_not_regress_write_versions,
+        test_a_fresh_tombstone_survives_anti_entropy_sweeps,
+        test_delete_of_an_unreplicated_id_does_not_destroy_it,
+        test_a_rejoining_node_repairs_one_change_among_many_documents,
+    ],
+    "faults": [
+        test_formation_and_quorum_writes,
+        test_a_write_paused_while_its_ownership_moves_is_not_reported_unapplied,
+        test_a_node_halted_between_a_tombstone_and_its_delete_converges,
+        test_a_dropped_commit_ack_is_redriven_and_the_marker_cleared,
+        test_a_write_inside_an_anti_entropy_round_trip_is_not_undone,
+        test_a_prepared_participant_resolves_without_its_coordinator,
+        test_a_post_prepare_write_survives_2pc_recovery,
+        test_a_participant_killed_mid_commit_finishes_without_its_coordinator,
+        test_a_trigger_fires_once_despite_a_replication_timeout,
+        test_a_trigger_writing_only_to_another_owner_consumes_its_run,
+    ],
+    "recreate": [
+        test_formation_and_quorum_writes,
+        test_drop_and_recreate_does_not_resurrect_documents,
+        test_drop_database_and_recreate_does_not_resurrect_documents,
+        test_drop_then_rejoin_then_recreate_does_not_resurrect_documents,
+        test_drop_database_then_rejoin_then_recreate_does_not_resurrect_documents,
+        test_rapid_collection_creates_are_not_quarantined,
+        test_recreating_an_existing_collection_keeps_its_documents,
+        test_a_node_that_missed_the_last_database_drop_converges,
+        test_a_populated_standalone_node_keeps_its_data_when_a_fresh_node_joins,
+    ],
+}
+
+
+def tests_for(group):
+    if group is not None:
+        return GROUPS[group]
+    ordered = []
+    for tests in GROUPS.values():
+        ordered.extend(test for test in tests if test not in ordered)
+    return ordered
+
+
 def main():
-    bu.banner("Clustering (multi-node) integration suite")
+    parser = argparse.ArgumentParser(description="Multi-node clustering integration suite")
+    parser.add_argument("--group", choices=sorted(GROUPS),
+                        help="run one group on its own cluster (CI runs each as a clustering-<group> leg); "
+                             "omit to run every group in sequence on one cluster")
+    group = parser.parse_args().group
+    bu.banner("Clustering (multi-node) integration suite" + (f" — {group}" if group else ""))
 
     jar = os.path.join(REPO_ROOT, JAR)
     if not os.path.isfile(jar):
@@ -3742,7 +3845,6 @@ def main():
         nodes.append(Node(i, base_dir))
 
     try:
-        # Start the seed first, then the joiners.
         print("  Starting nodes ...")
         for n in nodes:
             n.start()
@@ -3750,77 +3852,8 @@ def main():
 
         wait_for_cluster()
 
-        test_formation_and_quorum_writes()
-        test_ddl_replication()
-        test_write_replication_and_read_routing()
-        test_bulk_delete_and_upsert()
-        test_index_replication()
-        test_reindex_rebuilds_the_index_on_every_node()
-        test_user_and_permission_replication()
-        test_grants_are_pruned_on_every_node()
-        test_a_deleted_users_ownership_is_pruned_on_every_node()
-        test_a_client_cannot_advance_the_write_clock_through_an_incarnation()
-        test_a_forged_stamp_is_ignored_and_a_real_one_still_replicates()
-        test_single_node_transaction()
-        test_multi_collection_transaction()
-        test_a_transactional_join_sees_a_participants_buffered_writes()
-        test_a_transactional_join_across_two_written_nodes_is_refused()
-        test_a_replica_listener_never_sees_a_partial_transaction()
-        test_admin_transaction_ops()
-        test_lock_timeout_aborts_the_whole_transaction()
-        test_script_placement_forwards_runs()
-        test_forwarded_script_reads_and_writes()
-        test_forwarded_script_relays_its_stack()
-        test_forwarded_script_preserves_the_acting_user()
-        test_long_forwarded_script_is_not_cut_off()
-        test_script_routing_disabled_stays_local()
-        test_script_placement_prefers_the_collection_owner()
-        test_script_placement_locality_weight_zero_is_load_only()
-        test_script_placement_falls_back_when_the_target_dies()
-        test_before_hook_runs_on_the_owner()
-        test_admin_ops_replicate_in_commit_order()
-        test_an_unreadable_definition_is_not_deleted_on_peers()
-        test_schedule_replication_and_single_firing()
-        test_a_write_paused_while_its_ownership_moves_is_not_reported_unapplied()
-        test_a_node_halted_between_a_tombstone_and_its_delete_converges()
-        test_a_dropped_commit_ack_is_redriven_and_the_marker_cleared()
-        test_a_write_inside_an_anti_entropy_round_trip_is_not_undone()
-        # Failure / rejoin last: they degrade then restore the cluster.
-        arrange_admin_changes_for_a_downed_node()
-        test_node_failure_quorum_maintained()
-        test_schedule_failover()
-        make_admin_changes_while_a_node_is_down()
-        test_node_rejoin()
-        test_a_schema_saved_while_a_node_is_down_reaches_it()
-        test_a_procedure_deleted_while_a_node_is_down_stays_deleted()
-        test_a_password_changed_while_a_node_is_down_reaches_it()
-        test_permission_changes_and_dropped_indexes_replicate()
-        test_a_restarted_participant_does_not_commit_half_a_transaction()
-        test_restart_does_not_regress_write_versions()
-        test_forwarded_write_ignores_a_client_supplied_trigger_depth()
-        test_a_fresh_tombstone_survives_anti_entropy_sweeps()
-        test_delete_of_an_unreplicated_id_does_not_destroy_it()
-        test_a_rejoining_node_repairs_one_change_among_many_documents()
-        test_a_prepared_participant_resolves_without_its_coordinator()
-        test_a_post_prepare_write_survives_2pc_recovery()
-        test_a_participant_killed_mid_commit_finishes_without_its_coordinator()
-        test_a_trigger_fires_once_despite_a_replication_timeout()
-        test_a_trigger_writing_only_to_another_owner_consumes_its_run()
-        test_drop_and_recreate_does_not_resurrect_documents()
-        test_drop_database_and_recreate_does_not_resurrect_documents()
-        test_drop_then_rejoin_then_recreate_does_not_resurrect_documents()
-        test_drop_database_then_rejoin_then_recreate_does_not_resurrect_documents()
-        test_rapid_collection_creates_are_not_quarantined()
-        test_recreating_an_existing_collection_keeps_its_documents()
-        test_schedule_rejoin_catch_up()
-        # Last: it parks a long run on one node, which leaves that node's gossiped script load
-        # elevated for a round or two. Placement takes the *less* loaded of two samples, so running
-        # this before the placement tests would bias which node they pick.
-        test_script_control_is_cluster_wide()
-
-        # Last: it drops every database in the cluster, which is also the suite's cleanup.
-        test_a_node_that_missed_the_last_database_drop_converges()
-        test_a_populated_standalone_node_keeps_its_data_when_a_fresh_node_joins()
+        for test in tests_for(group):
+            test()
     except BaseException:
         print("\n[ERROR] the suite raised - dumping node logs", file=sys.stderr)
         dump_all_logs()
