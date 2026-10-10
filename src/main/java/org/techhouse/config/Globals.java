@@ -1,17 +1,20 @@
 package org.techhouse.config;
 
 import java.nio.file.FileSystems;
+import java.util.List;
 
 public final class Globals {
     private Globals() {
     }
     public static final String PK_FIELD = "_id";
+    public static final String TRIGGER_DEPTH_FIELD = "triggerDepth";
     public static final String INDEX_TYPE_NUMBER = "Number";
     public static final String INDEX_TYPE_STRING = "String";
     public static final String INDEX_TYPE_BOOLEAN = "Boolean";
     public static final String INDEX_TYPE_NULL = "JsonNull";
     public static final String INDEX_TYPE_OBJECT = "Object";
     public static final String INDEX_TYPE_ARRAY = "Array";
+    public static final String HASH_INDEX_KEY_PREFIX = "#";
     public static final int BUFFER_SIZE = 32768;
     public static final String DB_FILE_EXTENSION = ".dat";
     public static final String JSON_FILE_EXTENSION = ".json";
@@ -22,6 +25,8 @@ public final class Globals {
     public static final String PROCEDURE_FILE_EXTENSION = JSON_FILE_EXTENSION;
     public static final String SCHEDULES_FOLDER = ".schedules";
     public static final String SCHEDULE_FILE_EXTENSION = JSON_FILE_EXTENSION;
+    public static final String COLLECTION_NAMES_LOCK = ".collection-names";
+    public static final String DATABASE_NAMES_LOCK = ".database-names";
     public static final String TRIGGERS_FILE_NAME = "triggers";
     public static final String TRIGGERS_FILE_EXTENSION = JSON_FILE_EXTENSION;
     public static final String RW_PERMISSIONS = "rw";
@@ -29,8 +34,9 @@ public final class Globals {
     public static final char COLL_IDENTIFIER_SEPARATOR = '|';
     public static final String COLL_IDENTIFIER_SEPARATOR_REGEX = "\\|";
     public static final char INDEX_FILE_NAME_SEPARATOR = '-';
-    public static final String INDEX_ENTRY_SEPARATOR = "|";
     public static final String TOMBSTONE_FILE_NAME = "tombstones";
+    public static final String QUARANTINE_INFIX = ".quarantined-";
+    public static final String PK_INDEX_FILE_NAME = "pk";
     public static final String ID_SEPARATOR = "";
     public static final String STRING_LITERAL_PREFIX = "-";
     public static final String FILE_CONFIG_NAME = "lwnrdb.cfg";
@@ -44,11 +50,13 @@ public final class Globals {
     public static final String ADMIN_COLLECTION_USAGE_NAME = "collection_usage";
     public static final String ADMIN_TRANSACTIONS_COLLECTION_NAME = "transactions";
     public static final String ADMIN_TRIGGER_RUNS_COLLECTION_NAME = "trigger_runs";
+    public static final List<String> ADMIN_COLLECTION_NAMES = List.of(ADMIN_DATABASES_COLLECTION_NAME,
+            ADMIN_COLLECTIONS_COLLECTION_NAME, ADMIN_USERS_COLLECTION_NAME, ADMIN_COLLECTION_USAGE_NAME,
+            ADMIN_TRANSACTIONS_COLLECTION_NAME, ADMIN_TRIGGER_RUNS_COLLECTION_NAME);
     public static final String SCRIPT_RUNS_COLLECTION_NAME = "script_runs";
     public static final long CACHE_DISABLED = -1L;
     public static final long CACHE_UNLIMITED = 0L;
     public static final int PASSWORD_MIN_LENGTH = 8;
-    public static final String DEFAULT_ADMIN_PASSWORD = "administrator";
     public static final String LOG_FILE_EXTENSION = ".log";
     public static final String FILE_SEPARATOR = FileSystems.getDefault().getSeparator();
     public static final String FILE_PAGE_SEPARATOR = "-";
@@ -58,6 +66,7 @@ public final class Globals {
     public static final double EARTH_RADIUS_METERS = 6371000.0;
     public static final int GEO_HASH_MAX_PRECISION = 9;
     public static final int GEO_HASH_MAX_COVERING_CELLS = 32;
+    public static final int MAX_REQUEST_NESTING_DEPTH = 128;
     public static final String TLS_KEY_ALIAS = "lwnrdb";
     public static final String TLS_KEY_ALGORITHM = "RSA";
     public static final int TLS_KEY_SIZE = 2048;
@@ -69,7 +78,7 @@ public final class Globals {
     public static final String STANDALONE_NODE_ID = "local";
     public static final String CLUSTER_FOLDER = "cluster";
     public static final String CLUSTER_NODE_ID_FILE = "node.id";
-    public static final String CLUSTER_ADMIN_EPOCH_FILE = "admin.epoch";
+    public static final String CLUSTER_ADMIN_TOMBSTONES_FILE = "admin-tombstones.idx";
     public static final String CLUSTER_SEED_SEPARATOR = ",";
     public static final String CLUSTER_ADDRESS_SEPARATOR = ":";
     public static final String CLUSTER_ADMIN_COORDINATOR_KEY = "__admin_coordinator__";

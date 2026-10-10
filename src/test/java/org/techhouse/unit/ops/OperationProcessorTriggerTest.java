@@ -96,13 +96,25 @@ public class OperationProcessorTriggerTest {
     }
 
     @Test
-    public void test_save_submits_an_updated_event() {
+    public void test_save_with_an_explicit_id_submits_a_created_event() {
         save("s1", 1);
         final var events = settle();
         assertEquals(1, events.size());
-        assertEquals(EventType.UPDATED, events.getFirst().getType());
+        assertEquals(EventType.CREATED, events.getFirst().getType());
         assertEquals("s1", events.getFirst().getEntries().getFirst().get_id());
         assertEquals("audit", events.getFirst().getTriggerName());
+    }
+
+    @Test
+    public void test_saving_over_an_existing_document_submits_an_updated_event() {
+        save("s2", 1);
+        settle();
+        captured.clear();
+        save("s2", 2);
+        final var events = settle();
+        assertEquals(1, events.size());
+        assertEquals(EventType.UPDATED, events.getFirst().getType());
+        assertEquals("s2", events.getFirst().getEntries().getFirst().get_id());
     }
 
     @Test

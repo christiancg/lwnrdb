@@ -6,11 +6,15 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
@@ -31,10 +35,9 @@ public class MembershipServiceTest {
         return new NodeInfo("b", "127.0.0.1", 9990, NodeState.ALIVE, 1L, heartbeat, scriptLoad);
     }
 
-    private static NodeInfo node(long heartbeat, boolean adminSyncing, long adminEpoch) {
+    private static NodeInfo node(long heartbeat, boolean adminSyncing) {
         final var node = node(heartbeat, 0);
         node.setAdminSyncing(adminSyncing);
-        node.setAdminEpoch(adminEpoch);
         return node;
     }
 
@@ -142,36 +145,26 @@ public class MembershipServiceTest {
     }
 
     @Test
-    public void test_gossip_carries_the_admin_catch_up_state() throws Exception {
-        final var adminEpoch = IocContainer.get(AdminEpoch.class);
-        final var original = adminEpoch.current();
+    public void test_gossip_carries_the_admin_catch_up_state() {
         final var service = new MembershipService();
         service.bootstrap(node("self", 1L, 0L));
-        try {
-            org.techhouse.test.TestUtils.setPrivateField(adminEpoch, "epoch", 11L);
-            service.setAdminSyncing(true);
-            service.gossipTick();
-            assertTrue(service.getSelf().isAdminSyncing());
-            assertEquals(11L, service.getSelf().getAdminEpoch());
+        service.setAdminSyncing(true);
+        service.gossipTick();
+        assertTrue(service.getSelf().isAdminSyncing());
 
-            service.setAdminSyncing(false);
-            service.gossipTick();
-            assertFalse(service.getSelf().isAdminSyncing());
-        } finally {
-            org.techhouse.test.TestUtils.setPrivateField(adminEpoch, "epoch", original);
-        }
+        service.setAdminSyncing(false);
+        service.gossipTick();
+        assertFalse(service.getSelf().isAdminSyncing());
     }
 
     @Test
     public void test_merge_adopts_a_fresher_peers_admin_state() {
         final var service = new MembershipService();
         service.bootstrap(node("self", 1L, 0L));
-        service.handleGossip(gossip(node(1L, true, 4L), null));
+        service.handleGossip(gossip(node(1L, true), null));
         assertTrue(Objects.requireNonNull(service.membershipView().find("b")).isAdminSyncing());
-        assertEquals(4L, Objects.requireNonNull(service.membershipView().find("b")).getAdminEpoch());
-        service.handleGossip(gossip(node(2L, false, 6L), null));
+        service.handleGossip(gossip(node(2L, false), null));
         assertFalse(Objects.requireNonNull(service.membershipView().find("b")).isAdminSyncing());
-        assertEquals(6L, Objects.requireNonNull(service.membershipView().find("b")).getAdminEpoch());
     }
 
     @Test
@@ -196,10 +189,9 @@ public class MembershipServiceTest {
         final var notifications = new java.util.concurrent.atomic.AtomicInteger();
         service.addListener(_ -> notifications.incrementAndGet());
         service.handleGossip(gossip(node(2L, 5), null));
-        service.handleGossip(gossip(node(3L, true, 8L), null));
+        service.handleGossip(gossip(node(3L, true), null));
         assertEquals(0, notifications.get());
         assertTrue(Objects.requireNonNull(service.membershipView().find("b")).isAdminSyncing());
-        assertEquals(8L, Objects.requireNonNull(service.membershipView().find("b")).getAdminEpoch());
     }
 
     @Test
@@ -210,5 +202,64 @@ public class MembershipServiceTest {
         assertEquals(NodeState.ALIVE, Objects.requireNonNull(service.membershipView().find("self")).getState());
         assertNull(service.membershipView().find("missing"));
         assertTrue(service.membershipView().aliveNodeIds().contains("self"));
+    }
+    @Test
+    public void test_a_join_during_a_slow_notification_is_delivered_last() throws Exception {
+        final var service = new MembershipService();
+        service.bootstrap(node("self", 1L, 0L));
+        final var views = Collections.synchronizedList(new ArrayList<MembershipView>());
+        final var firstCall = new AtomicBoolean(true);
+        final var inFirstCall = new CountDownLatch(1);
+        final var releaseFirstCall = new CountDownLatch(1);
+        service.addListener(view -> {
+            if (firstCall.getAndSet(false)) {
+                inFirstCall.countDown();
+                awaitQuietly(releaseFirstCall);
+            }
+            views.add(view);
+        });
+
+        final var slow = Thread.ofPlatform().start(() -> service.handleJoin(gossip(node("b", 1L, 0L), null)));
+        assertTrue(inFirstCall.await(5, TimeUnit.SECONDS));
+        final var fast = Thread.ofPlatform().start(() -> service.handleJoin(gossip(node("c", 1L, 0L), null)));
+        awaitParkedOrDone(fast);
+        releaseFirstCall.countDown();
+        slow.join(5000);
+        fast.join(5000);
+
+        final var last = views.getLast();
+        assertNotNull(last.find("b"));
+        assertNotNull(last.find("c"), "the last view a listener applies must include every merged member");
+    }
+
+    @Test
+    public void test_a_join_notifies_a_view_that_contains_the_joiner() {
+        final var service = new MembershipService();
+        service.bootstrap(node("self", 1L, 0L));
+        final var captured = new AtomicReference<MembershipView>();
+        service.addListener(captured::set);
+
+        service.handleJoin(gossip(node("b", 1L, 0L), null));
+
+        assertNotNull(captured.get().find("b"));
+    }
+
+    private static void awaitQuietly(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(5, TimeUnit.SECONDS));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    private static void awaitParkedOrDone(Thread thread) throws InterruptedException {
+        final var deadline = System.currentTimeMillis() + 5000;
+        while (System.currentTimeMillis() < deadline) {
+            final var state = thread.getState();
+            if (state == Thread.State.WAITING || state == Thread.State.TERMINATED) {
+                return;
+            }
+            thread.join(5);
+        }
     }
 }

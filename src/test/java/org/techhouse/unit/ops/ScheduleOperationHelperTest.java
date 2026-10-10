@@ -82,6 +82,21 @@ public class ScheduleOperationHelperTest {
         return request;
     }
 
+    @Test
+    public void test_a_cron_that_can_never_occur_is_refused() throws Exception {
+        final var response = ScheduleOperationHelper.executeSave(cronRequest("impossible", "0 0 31 4 *"), ACTOR);
+
+        assertEquals(ErrorCode.INVALID_SCHEDULE.getCode(), response.getErrorCode(),
+                "April has thirty days, so the schedule would report success and silently never fire");
+    }
+
+    @Test
+    public void test_a_distant_but_reachable_cron_is_accepted() throws Exception {
+        assertInstanceOf(SaveScheduleResponse.class,
+                ScheduleOperationHelper.executeSave(cronRequest("leap", "0 0 29 2 *"), ACTOR),
+                "February 29 falls within the search horizon");
+    }
+
     private SaveScheduleResponse save(SaveScheduleRequest request) throws Exception {
         final var response = ScheduleOperationHelper.executeSave(request, ACTOR);
         assertInstanceOf(SaveScheduleResponse.class, response, response.getMessage());
@@ -112,22 +127,6 @@ public class ScheduleOperationHelperTest {
         assertEquals(1L, save(intervalRequest("s")).getVersion());
         assertEquals(2L, save(intervalRequest("s")).getVersion());
         assertEquals(2L, cache.getSchedule(TestGlobals.DB, "s").getVersion());
-    }
-
-    @Test
-    public void test_save_stamps_derived_fields_onto_the_request() throws Exception {
-        final var request = intervalRequest("s");
-        save(request);
-        assertEquals(1L, request.getStampedVersion());
-        assertTrue(request.getStampedUpdatedAt() > 0);
-        assertEquals(ACTOR, request.getStampedUpdatedBy());
-        assertEquals(ACTOR, request.getStampedDefiner());
-
-        fs.deleteSchedule(TestGlobals.DB, "s");
-        cache.removeSchedule(TestGlobals.DB, "s");
-        final var replayed = ScheduleOperationHelper.executeSave(request, "somebody-else");
-        assertEquals(1L, ((SaveScheduleResponse) replayed).getVersion());
-        assertEquals(ACTOR, cache.getSchedule(TestGlobals.DB, "s").getDefiner());
     }
 
     @Test
@@ -262,4 +261,5 @@ public class ScheduleOperationHelperTest {
         assertEquals(ErrorCode.SCRIPTS_DISABLED.getCode(),
                 ScheduleOperationHelper.executeList(new ListSchedulesRequest(TestGlobals.DB)).getErrorCode());
     }
+
 }

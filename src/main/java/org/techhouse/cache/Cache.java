@@ -1,6 +1,7 @@
 package org.techhouse.cache;
 
 import java.io.IOException;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -21,11 +22,16 @@ import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.operators.FieldOperator;
 
 public class Cache implements UserCacheDelegate, AdminCacheDelegate {
+    private static final Comparator<DbEntry> BY_ID = Comparator.comparing(DbEntry::get_id);
+    private static final Comparator<DbEntry> BY_PAGE_THEN_ID = Comparator.comparingLong(DbEntry::getPage)
+            .thenComparing(DbEntry::get_id);
     private final Configuration configuration = Configuration.getInstance();
     private final FileSystem fs = IocContainer.get(FileSystem.class);
     private final AdminCache adminCache = IocContainer.get(AdminCache.class);
     private final UserCache userCache = IocContainer.get(UserCache.class);
     private final MemoryManagement memoryManagement = IocContainer.get(MemoryManagement.class);
+    private final org.techhouse.concurrency.ResourceLocking locks = IocContainer
+            .get(org.techhouse.concurrency.ResourceLocking.class);
     @Override
     public UserCache userCache() {
         return userCache;
@@ -49,13 +55,17 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + typeLabel;
     }
 
+    public static String getHashIndexIdentifier(String fieldName, String typeLabel) {
+        return fieldName + Globals.COLL_IDENTIFIER_SEPARATOR + Globals.HASH_INDEX_KEY_PREFIX + typeLabel;
+    }
+
     public void shiftPkPositionsAfterCompaction(PkCompaction compaction) {
         if (compaction == null) {
             return;
         }
         if (Globals.ADMIN_DB_NAME.equals(compaction.dbName())
                 || Globals.ADMIN_PAGES_DB_NAME.equals(compaction.dbName())) {
-            adminCache.shiftPkPositionsAfterCompaction(compaction.collName(), compaction.page(),
+            adminCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),
                     compaction.removedPosition(), compaction.removedLength());
         } else {
             userCache.shiftPkPositionsAfterCompaction(compaction.dbName(), compaction.collName(), compaction.page(),
@@ -71,6 +81,16 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     public List<FieldIndexEntry<String>> getHashIndexAndLoadIfNecessary(String dbName, String collName,
             String fieldName, IndexKind kind) throws IOException {
         return userCache.getHashIndexAndLoadIfNecessary(dbName, collName, fieldName, kind);
+    }
+
+    public <T> List<FieldIndexEntry<T>> getFieldIndexForMaintenance(String dbName, String collName, String fieldName,
+            Class<T> indexType) throws IOException {
+        return userCache.getFieldIndexForMaintenance(dbName, collName, fieldName, indexType);
+    }
+
+    public List<FieldIndexEntry<String>> getHashIndexForMaintenance(String dbName, String collName, String fieldName,
+            IndexKind kind) throws IOException {
+        return userCache.getHashIndexForMaintenance(dbName, collName, fieldName, kind);
     }
 
     public <T> Set<String> getIdsFromIndex(String dbName, String collName, String fieldName, FieldOperator operator,
@@ -110,13 +130,15 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         // Gate completeness on the synchronous PK index size, never on the admin page entry counts:
         // those lag behind committed writes and would accept an incomplete cached map.
         if (wholeCollection != null && !wholeCollection.isEmpty()
-                && wholeCollection.size() >= pkIndexSize(dbName, collName)) {
+                && wholeCollection.size() == pkIndexSize(dbName, collName)) {
             recordScanned(wholeCollection.size());
             return wholeCollection;
         }
         try {
             final var loaded = readWholeCollection(dbName, collName);
-            final var admitted = userCache.admitWholeCollection(dbName, collName, loaded);
+            final var admitted = locks.holdsCollectionLock(dbName, collName)
+                    ? userCache.admitWholeCollection(dbName, collName, loaded)
+                    : loaded;
             recordScanned(admitted.size());
             return admitted;
         } catch (IOException e) {
@@ -124,7 +146,7 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
         }
     }
 
-    private int pkIndexSize(String dbName, String collName) {
+    public int pkIndexSize(String dbName, String collName) {
         try {
             return userCache.getPkIndexAndLoadIfNecessary(dbName, collName).size();
         } catch (IOException e) {
@@ -135,11 +157,21 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     public Stream<DbEntry> streamCollection(String dbName, String collName) throws IOException {
         if (!userCache.isCachingDisabled(dbName)) {
             final var cached = userCache.getCachedCollection(dbName, collName);
-            if (cached != null && !cached.isEmpty() && cached.size() >= pkIndexSize(dbName, collName)) {
+            if (cached != null && !cached.isEmpty() && cached.size() == pkIndexSize(dbName, collName)) {
                 return decorateScan(cached.values().stream());
             }
         }
         return decorateScan(streamCollectionFromDisk(dbName, collName));
+    }
+
+    public Stream<DbEntry> streamCollectionInScanOrder(String dbName, String collName) throws IOException {
+        if (!userCache.isCachingDisabled(dbName)) {
+            final var cached = userCache.getCachedCollection(dbName, collName);
+            if (cached != null && !cached.isEmpty() && cached.size() == pkIndexSize(dbName, collName)) {
+                return decorateScan(cached.values().stream().sorted(BY_PAGE_THEN_ID));
+            }
+        }
+        return decorateScan(streamCollectionFromDisk(dbName, collName, true));
     }
 
     private Stream<DbEntry> decorateScan(Stream<DbEntry> stream) {
@@ -151,9 +183,16 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     }
 
     private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName) throws IOException {
+        return streamCollectionFromDisk(dbName, collName, false);
+    }
+
+    private Stream<DbEntry> streamCollectionFromDisk(String dbName, String collName, boolean inScanOrder)
+            throws IOException {
         final var collPages = adminCache.getAdminPageEntries(dbName, collName);
-        if (collPages == null || collPages.isEmpty()) {
-            return fs.streamEntries(dbName, collName);
+        if (collPages == null || collPages.isEmpty() || collPages.size() < fs.pageFileCount(dbName, collName)) {
+            return inScanOrder
+                    ? fs.streamPages(dbName, collName).flatMap(page -> orderedPage(page.values(), true))
+                    : fs.streamEntries(dbName, collName);
         }
         final var maxPageBytes = configuration.getMaxPageSize();
         final var sortedPages = collPages.stream().sorted(Comparator.comparingLong(AdminPageEntry::getPage)).toList();
@@ -162,11 +201,16 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
             final var estimate = pageEntry.getPageSize() > 0 ? pageEntry.getPageSize() : maxPageBytes;
             memoryManagement.ensureHeadroomForBytes(estimate);
             try {
-                return fs.readWholeCollectionPage(dbName, collName, pageEntry.getPage()).values().stream();
+                return orderedPage(fs.readWholeCollectionPage(dbName, collName, pageEntry.getPage()).values(),
+                        inScanOrder);
             } catch (IOException e) {
                 throw new RuntimeException(e);
             }
         });
+    }
+
+    private static Stream<DbEntry> orderedPage(Collection<DbEntry> pageDocuments, boolean inScanOrder) {
+        return inScanOrder ? pageDocuments.stream().sorted(BY_ID) : pageDocuments.stream();
     }
 
     public Stream<JsonObject> initializeStreamIfNecessary(Stream<JsonObject> resultStream, String dbName,
@@ -191,7 +235,8 @@ public class Cache implements UserCacheDelegate, AdminCacheDelegate {
     }
 
     public boolean hasNoIndex(String dbName, String collName, String fieldName) {
-        return !adminCache.hasIndex(dbName, collName, fieldName);
+        return !adminCache.hasIndex(dbName, collName, fieldName)
+                || fs.indexBuildMarkers().isMarked(dbName, collName, fieldName);
     }
 
 }

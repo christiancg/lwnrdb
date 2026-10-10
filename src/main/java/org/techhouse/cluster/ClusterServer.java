@@ -18,6 +18,7 @@ public class ClusterServer {
     private final ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
     private volatile ServerSocket serverSocket;
     private volatile boolean running;
+    private volatile boolean refusingWrites;
 
     public ClusterServer(int port, String bindAddress, SSLServerSocketFactory sslServerSocketFactory) {
         this.port = port;
@@ -39,7 +40,7 @@ public class ClusterServer {
         while (running && !Thread.currentThread().isInterrupted()) {
             try {
                 final var socket = serverSocket.accept();
-                pool.execute(new ClusterConnectionHandler(socket));
+                pool.execute(new ClusterConnectionHandler(socket, this::isRefusingWrites));
             } catch (IOException e) {
                 if (running) {
                     logger.warning("Cluster server accept failed: " + e.getMessage());
@@ -58,6 +59,14 @@ public class ClusterServer {
             logger.warning("Error closing cluster server: " + e.getMessage());
         }
         pool.shutdownNow();
+    }
+
+    public void refuseWrites() {
+        refusingWrites = true;
+    }
+
+    public boolean isRefusingWrites() {
+        return refusingWrites;
     }
 
     public int getPort() {

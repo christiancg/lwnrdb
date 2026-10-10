@@ -23,9 +23,11 @@ import org.techhouse.data.admin.AdminPageEntry;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ex.MetadataReadException;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.admin.AdminStamp;
 
 public class AdminCache {
     private static final Logger logger = Logger.logFor(AdminCache.class);
@@ -52,6 +54,7 @@ public class AdminCache {
     private final BoundedLruCache<ProcedureDefinition> procedures = new BoundedLruCache<>(Integer.MAX_VALUE,
             configuration.getMetadataCacheMaxBytes() / 3,
             definition -> (long) definition.getSource().length() * 2L + 512L);
+    private final GenerationGuard triggerGeneration = new GenerationGuard();
     private final BoundedLruCache<List<TriggerDefinition>> triggers = new BoundedLruCache<>(
             configuration.getMetadataCacheMaxEntries(), 0L, definitions -> definitions.size() * 512L + 128L);
     private final BoundedLruCache<ScheduleDefinition> schedules = new BoundedLruCache<>(Integer.MAX_VALUE,
@@ -67,9 +70,7 @@ public class AdminCache {
             () -> metadataMisses, SCHEDULE_MISS_PREFIX, this::loadScheduleUncached);
 
     public void loadAdminData() throws IOException {
-        for (var collName : List.of(Globals.ADMIN_DATABASES_COLLECTION_NAME, Globals.ADMIN_COLLECTIONS_COLLECTION_NAME,
-                Globals.ADMIN_USERS_COLLECTION_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
-                Globals.ADMIN_TRANSACTIONS_COLLECTION_NAME, Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME)) {
+        for (var collName : Globals.ADMIN_COLLECTION_NAMES) {
             pageCache.loadAdminPagesForCollection(Globals.ADMIN_DB_NAME, collName);
         }
         loadPkIndexInto(Globals.ADMIN_COLLECTION_USAGE_NAME, collectionUsagePkIndex);
@@ -144,12 +145,28 @@ public class AdminCache {
         pageCache.updatePageSizeInMemory(dbName, collName, page, bytesDelta);
     }
 
+    public void updatePageSizeForUpdateInMemory(String dbName, String collName, long page, long bytesDelta) {
+        pageCache.updatePageSizeForUpdateInMemory(dbName, collName, page, bytesDelta);
+    }
+
     public List<PkIndexEntry> getAdminPagePkIndexes(String dbName, String collName) {
         return pageCache.getAdminPagePkIndexes(dbName, collName);
     }
 
-    public void shiftPkPositionsAfterCompaction(String collName, long page, long removedPosition, long removedLength) {
-        final Collection<PkIndexEntry> entries = switch (collName) {
+    public void shiftPkPositionsAfterCompaction(String dbName, String collName, long page, long removedPosition,
+            long removedLength) {
+        final Collection<PkIndexEntry> entries = Globals.ADMIN_DB_NAME.equals(dbName)
+                ? adminCollectionPkIndex(collName)
+                : pageCache.pkIndexesForPagesCollection(collName);
+        for (final var entry : entries) {
+            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
+                entry.setPosition(entry.getPosition() - removedLength);
+            }
+        }
+    }
+
+    private Collection<PkIndexEntry> adminCollectionPkIndex(String collName) {
+        return switch (collName) {
             case Globals.ADMIN_DATABASES_COLLECTION_NAME -> databasesPkIndex.values();
             case Globals.ADMIN_COLLECTIONS_COLLECTION_NAME -> collectionsPkIndex.values();
             case Globals.ADMIN_USERS_COLLECTION_NAME -> usersPkIndex.values();
@@ -158,11 +175,6 @@ public class AdminCache {
             case Globals.ADMIN_TRIGGER_RUNS_COLLECTION_NAME -> triggerRunsPkIndex.values();
             case null, default -> pageCache.pkIndexesForPagesCollection(collName);
         };
-        for (final var entry : entries) {
-            if (entry.getPage() == page && entry.getPosition() > removedPosition) {
-                entry.setPosition(entry.getPosition() - removedLength);
-            }
-        }
     }
 
     public void removeAdminPageEntries(String dbName, String collName) {
@@ -261,11 +273,12 @@ public class AdminCache {
             if (raw == null || raw.isBlank()) {
                 return null;
             }
-            return eJson.fromJson(raw, JsonObject.class);
+            return AdminStamp.unwrappedSchema(eJson.fromJson(raw, JsonObject.class));
         } catch (Exception e) {
             logger.warning("Failed to load schema for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
                     + e.getMessage());
-            return null;
+            throw new MetadataReadException(
+                    "Failed to read the schema for " + Cache.getCollectionIdentifier(dbName, collName), e);
         }
     }
 
@@ -295,7 +308,8 @@ public class AdminCache {
         } catch (Exception e) {
             logger.warning(
                     "Failed to load procedure " + Cache.getCollectionIdentifier(dbName, name) + ": " + e.getMessage());
-            return null;
+            throw new MetadataReadException(
+                    "Failed to read the procedure " + Cache.getCollectionIdentifier(dbName, name), e);
         }
     }
 
@@ -325,7 +339,8 @@ public class AdminCache {
         } catch (Exception e) {
             logger.warning(
                     "Failed to load schedule " + Cache.getCollectionIdentifier(dbName, name) + ": " + e.getMessage());
-            return null;
+            throw new MetadataReadException(
+                    "Failed to read the schedule " + Cache.getCollectionIdentifier(dbName, name), e);
         }
     }
 
@@ -351,8 +366,10 @@ public class AdminCache {
         final var id = Cache.getCollectionIdentifier(dbName, collName);
         var cached = triggers.get(id);
         if (cached == null) {
+            final var generationAtLoad = triggerGeneration.current();
             cached = loadTriggersUncached(dbName, collName);
-            triggers.put(id, cached);
+            final var loaded = cached;
+            triggerGeneration.publishIfCurrent(generationAtLoad, () -> triggers.put(id, loaded));
         }
         return cached;
     }
@@ -367,27 +384,29 @@ public class AdminCache {
         } catch (Exception e) {
             logger.warning("Failed to load triggers for " + Cache.getCollectionIdentifier(dbName, collName) + ": "
                     + e.getMessage());
-            return List.of();
+            throw new MetadataReadException(
+                    "Failed to read the triggers for " + Cache.getCollectionIdentifier(dbName, collName), e);
         }
     }
 
     public void putTriggers(String dbName, String collName, List<TriggerDefinition> definitions) {
-        triggers.put(Cache.getCollectionIdentifier(dbName, collName), List.copyOf(definitions));
+        triggerGeneration.invalidate(
+                () -> triggers.put(Cache.getCollectionIdentifier(dbName, collName), List.copyOf(definitions)));
     }
 
     public void removeTriggers(String dbName, String collName) {
-        triggers.remove(Cache.getCollectionIdentifier(dbName, collName));
+        triggerGeneration.invalidate(() -> triggers.remove(Cache.getCollectionIdentifier(dbName, collName)));
     }
 
     public void removeTriggersForDatabase(String dbName) {
         final var prefix = dbName + Globals.COLL_IDENTIFIER_SEPARATOR;
-        triggers.removeIf(id -> id.startsWith(prefix));
+        triggerGeneration.invalidate(() -> triggers.removeIf(id -> id.startsWith(prefix)));
     }
 
     // Must leave no entry behind: a cached empty list would make an already-queued trigger silently
     // not fire when TriggerDispatcher looks the list up again.
     public void removeTriggersMatching(Predicate<String> keyMatches) {
-        triggers.removeIf(keyMatches);
+        triggerGeneration.invalidate(() -> triggers.removeIf(keyMatches));
     }
 
     public MetadataCacheStats metadataCacheStats() {

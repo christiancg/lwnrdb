@@ -9,12 +9,15 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Executors;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.BooleanSupplier;
 import javax.net.ssl.SSLException;
+import org.techhouse.cluster.admin.AdminRecordMerge;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
 import org.techhouse.conn.ClientTracker;
+import org.techhouse.conn.InFlightRequests;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
@@ -22,9 +25,11 @@ import org.techhouse.log.Logger;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ReplicatedApplyHelper;
-import org.techhouse.ops.ReplicatedUserApplyHelper;
+import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.ScriptRunRegistry;
 import org.techhouse.ops.TriggerRunResolution;
+import org.techhouse.ops.index.IndexOperationHelper;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.resp.OperationResponse;
 
@@ -35,16 +40,18 @@ public class ClusterConnectionHandler implements Runnable {
     private final OperationProcessor operationProcessor = IocContainer.get(OperationProcessor.class);
     private final AntiEntropyService antiEntropyService = IocContainer.get(AntiEntropyService.class);
     private final AdminAntiEntropyService adminAntiEntropyService = IocContainer.get(AdminAntiEntropyService.class);
-    private final AdminEpoch adminEpoch = IocContainer.get(AdminEpoch.class);
     private final ScriptRunDirectory scriptRunDirectory = IocContainer.get(ScriptRunDirectory.class);
     private final TriggerRunDirectory triggerRunDirectory = IocContainer.get(TriggerRunDirectory.class);
     private final ScriptRunRegistry scriptRunRegistry = IocContainer.get(ScriptRunRegistry.class);
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
+    private final InFlightRequests inFlightRequests = IocContainer.get(InFlightRequests.class);
     private final Logger logger = Logger.logFor(ClusterConnectionHandler.class);
     private final Socket socket;
+    private final BooleanSupplier refusingWrites;
 
-    public ClusterConnectionHandler(Socket socket) {
+    public ClusterConnectionHandler(Socket socket, BooleanSupplier refusingWrites) {
         this.socket = socket;
+        this.refusingWrites = refusingWrites;
     }
 
     @Override
@@ -83,10 +90,11 @@ public class ClusterConnectionHandler implements Runnable {
         }
     }
 
-    // Everything else must keep the order the peer sent it in: ReplicatedApplyHelper does not compare
-    // versions before applying, so this connection is the only thing sequencing a coordinator's writes.
     private static boolean mayOvertake(ClusterMessageType type) {
-        return type == ClusterMessageType.GOSSIP || type == ClusterMessageType.FORWARD_REQUEST;
+        return switch (type) {
+            case GOSSIP, FORWARD_REQUEST, DIGEST, PULL, TX_STATUS, LIST_TX -> true;
+            default -> false;
+        };
     }
 
     private void respond(BufferedWriter writer, ReentrantLock writerLock, ClusterMessage request) throws IOException {
@@ -117,12 +125,24 @@ public class ClusterConnectionHandler implements Runnable {
             error.setErrorMessage("Invalid cluster secret");
             return error;
         }
+        if (!PeerShutdownGate.carriesWrite(request)) {
+            return dispatch(request);
+        }
+        inFlightRequests.enter();
+        try {
+            return refusingWrites.getAsBoolean() ? PeerShutdownGate.refusal(request) : dispatch(request);
+        } finally {
+            inFlightRequests.exit();
+        }
+    }
+
+    private ClusterMessage dispatch(ClusterMessage request) {
         return switch (request.getType()) {
             case JOIN_REQUEST -> membershipService.handleJoin(request);
             case GOSSIP -> membershipService.handleGossip(request);
             case REPLICATE -> handleReplicate(request);
             case REPLICATE_ADMIN -> handleReplicateAdmin(request);
-            case REPLICATE_USER -> handleReplicateUser(request);
+            case REINDEX_BROADCAST -> handleReindexBroadcast(request);
             case REPLICATE_TX -> ClusterTxMessageHandler.handleReplicateTx(request);
             case FORWARD_REQUEST -> handleForward(request);
             case FORWARD_TX_REQUEST -> ClusterTxMessageHandler.handleForwardTx(request);
@@ -193,14 +213,26 @@ public class ClusterConnectionHandler implements Runnable {
     }
 
     private ClusterMessage handleReplicateAdmin(ClusterMessage request) {
-        return ClusterMessages.reply(ClusterMessageType.REPLICATE_ADMIN_ACK, "Failed to apply replicated admin op",
+        return ClusterMessages.reply(ClusterMessageType.REPLICATE_ADMIN_ACK, "Failed to apply the admin records",
                 response -> {
-                    final var result = executeForwarded(request);
-                    if (result.getStatus() == OperationStatus.OK) {
-                        adminEpoch.adopt(request.getAdminEpoch());
-                    } else {
+                    if (!AdminRecordMerge.apply(request.getAdminSnapshot().getRecords(), true).complete()) {
+                        adminAntiEntropyService.reconcileSoon();
                         response.setType(ClusterMessageType.ERROR);
-                        response.setErrorMessage("Replicated admin op failed: " + result.getMessage());
+                        response.setErrorMessage("Could not apply every replicated admin record; an admin"
+                                + " anti-entropy round retries the rest");
+                    }
+                });
+    }
+
+    private ClusterMessage handleReindexBroadcast(ClusterMessage request) {
+        return ClusterMessages.reply(ClusterMessageType.REINDEX_BROADCAST_ACK, "Failed to rebuild the indexes",
+                response -> {
+                    final var reindex = (ReindexRequest) RequestParser
+                            .parseRequest(ForwardBody.decode(request.getForwardBody()));
+                    final var result = IndexOperationHelper.processReindex(reindex, true);
+                    if (result.getStatus() != OperationStatus.OK) {
+                        response.setType(ClusterMessageType.ERROR);
+                        response.setErrorMessage("Rebuilding the indexes failed: " + result.getMessage());
                     }
                 });
     }
@@ -212,6 +244,10 @@ public class ClusterConnectionHandler implements Runnable {
         final var clientId = actingUser != null ? clientTracker.registerForwardedClient(actingUser) : null;
         try {
             final var parsed = RequestParser.parseRequest(ForwardBody.decode(request.getForwardBody()));
+            final var schemaError = SchemaValidationHelper.check(parsed);
+            if (schemaError != null) {
+                return schemaError;
+            }
             return operationProcessor.processMessage(parsed, clientId);
         } finally {
             if (clientId != null) {
@@ -220,21 +256,9 @@ public class ClusterConnectionHandler implements Runnable {
         }
     }
 
-    private ClusterMessage handleReplicateUser(ClusterMessage request) {
-        final var response = new ClusterMessage();
-        if (ReplicatedUserApplyHelper.apply(request.getReplication())) {
-            adminEpoch.adopt(request.getAdminEpoch());
-            response.setType(ClusterMessageType.REPLICATE_USER_ACK);
-        } else {
-            response.setType(ClusterMessageType.ERROR);
-            response.setErrorMessage("Failed to apply replicated user mutation");
-        }
-        return response;
-    }
-
     private ClusterMessage handleReplicate(ClusterMessage request) {
         final var response = new ClusterMessage();
-        if (ReplicatedApplyHelper.apply(request.getReplication())) {
+        if (ReplicatedApplyHelper.apply(request.getReplication(), clusterConfig.replicationAckTimeoutMs())) {
             response.setType(ClusterMessageType.REPLICATE_ACK);
         } else {
             response.setType(ClusterMessageType.ERROR);
@@ -243,19 +267,33 @@ public class ClusterConnectionHandler implements Runnable {
         return response;
     }
 
+    private ClusterMessage notAdminSyncedYet() {
+        final var response = new ClusterMessage();
+        response.setType(ClusterMessageType.ERROR);
+        response.setErrorMessage("This node has not completed its first admin reconciliation, so its documents"
+                + " cannot be described yet");
+        return response;
+    }
+
     private ClusterMessage handleDigest(ClusterMessage request) {
+        if (adminAntiEntropyService.hasNotSyncedSinceStart()) {
+            return notAdminSyncedYet();
+        }
         return ClusterMessages.reply(ClusterMessageType.DIGEST_ACK, "Failed to build digest", response -> {
             final var query = request.getAntiEntropy();
-            response.setAntiEntropy(
-                    antiEntropyService.buildDigest(query.getDbName(), query.getCollName(), query.getSummary()));
+            response.setAntiEntropy(antiEntropyService.buildDigest(query.getDbName(), query.getCollName(),
+                    query.getSummary(), query.incarnationValue()));
         });
     }
 
     private ClusterMessage handlePull(ClusterMessage request) {
+        if (adminAntiEntropyService.hasNotSyncedSinceStart()) {
+            return notAdminSyncedYet();
+        }
         return ClusterMessages.reply(ClusterMessageType.PULL_ACK, "Failed to build pull response", response -> {
             final var query = request.getAntiEntropy();
-            response.setAntiEntropy(
-                    antiEntropyService.buildPull(query.getDbName(), query.getCollName(), query.getIds()));
+            response.setAntiEntropy(antiEntropyService.buildPull(query.getDbName(), query.getCollName(), query.getIds(),
+                    query.incarnationValue()));
         });
     }
 }

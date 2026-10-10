@@ -18,9 +18,54 @@ There is **no single master**. Every collection is consistent-hashed to an **own
 and ownership is spread across all nodes — one owner per collection. The owner is both the
 collection's **cache home** (reads route there) and its **write coordinator** (writes route
 there, are serialized by the existing per-collection lock, then replicated). A client may
-connect to **any** node, which transparently routes to the owner. Because each collection
-has exactly one serializing owner at a time, concurrent writes to the same document never
-conflict, preserving the engine's linearizable-per-collection guarantees.
+connect to **any** node, which transparently routes to the owner.
+
+### What the cluster actually guarantees
+
+The delivered model is **eventual consistency with per-document last-write-wins**, not
+linearizability. Ownership is derived from each node's own gossip view, and nothing agrees on a
+total order of views, so two nodes can briefly disagree about who owns a collection.
+
+Three mechanisms bound the damage rather than eliminate the disagreement:
+
+- **A hybrid logical clock** (`cluster/HybridClock`) supplies every write version: 48 bits of
+  physical milliseconds and 16 bits of logical counter packed into one `long`, seeded at startup
+  from the highest version on disk and advanced by every version received from a peer. This is
+  what makes "newer" well-defined across nodes and across restarts.
+- **An ownership re-check under the lock.** `guardWrite` runs before the collection lock is taken,
+  so ownership can move while a write waits for it. The write handlers therefore re-check
+  `isOwner` *after* acquiring the lock and refuse with `421-1` if it moved, and a write that
+  commits locally but can no longer be replicated answers `421-1` rather than `OK` — that
+  silent success was the defect this closes. A `DELETE` is checked once more when it reserves its
+  tombstone, after its before-hook ran: if ownership moved by then it answers `421-1` without
+  deleting, because a local delete with no tombstone would be undone by anti-entropy while its
+  `DELETED` trigger still fired.
+- **Version-checked applies**: a replica refuses any upsert or delete older than what it stores,
+  which makes an out-of-order arrival and a stale anti-entropy decision harmless.
+
+**The transaction commit path deliberately keeps that silent success, and this is not an oversight.**
+A commit whose ownership moved between the pre-commit check and `replicateTransaction` ships nothing
+and still answers OK, where the equivalent `SAVE`/`DELETE` answers `421-1`. Reporting it was tried
+and reverted: `entries.isEmpty()` conflates three cases, and only one is a defect — an edge
+coordinator whose slice was forwarded legitimately owns nothing locally, and a forwarded 2PC
+participant legitimately touches collections it does not own, so both would have been reported as
+failures. Telling them apart needs ownership context from *before* the commit point, which
+`replicateTransaction` does not have. The write itself is not lost: it carries the highest version,
+so anti-entropy propagates it. Only the acknowledgement is stronger than what happened.
+
+The residual is two nodes holding genuinely concurrent, incomparable views. The re-check narrows
+the window — an owner notices the loss before it writes — but cannot close it, because nothing
+orders the two views against each other. Resolving that needs consensus, which this design does not
+introduce; a write accepted under such a split is reconciled by last-write-wins rather than
+rejected.
+
+A ring-generation fencing token was tried and removed: a generation is a *per-node* counter, so a
+replica comparing a coordinator's value against its own is comparing unrelated numbers, and in
+testing it refused legitimate replication outright. A correct fence would have to compare something
+both ends can evaluate — ownership by node id — and has not been designed.
+
+A cluster must also run a single build throughout: there is no mixed-version negotiation, and data
+written by an older build is not carried forward.
 
 ## Membership and discovery
 
@@ -34,11 +79,22 @@ conflict, preserving the engine's linearizable-per-collection guarantees.
   `suspectTimeoutMs` is `SUSPECT`, and within `deadTimeoutMs` is `DEAD`. A node whose
   heartbeat advances again is restored to `ALIVE`. Merging prefers the higher
   `incarnation`, then the higher heartbeat, so state converges regardless of gossip order.
+- **Probing**: a `SUSPECT` or `DEAD` peer is not skipped. Every `deadProbeIntervalMs` it is sent an
+  ordinary gossip message, off the round's critical path so an unreachable peer never lengthens a
+  tick. Without this, two nodes that each marked the other `DEAD` during a partition would never
+  contact each other again: neither would send, and a heartbeat only travels in gossip. Whichever
+  probe arrives first carries a fresher heartbeat, so the receiver restores the sender and its reply
+  restores the receiver.
 
 Gossip also carries per-node telemetry — script load, script capacity, and two admin
 catch-up signals — used for script placement. Adopting a peer's new telemetry deliberately
 does **not** count as a membership change: firing the membership listeners every round
 would rebuild the ownership ring and re-run anti-entropy for nothing.
+
+Membership listeners are notified from the gossip tick and from the handlers answering a peer's
+`GOSSIP`/`JOIN_REQUEST`, one notification at a time: the change flag, the view snapshot and every
+listener run under one lock, so the last view a listener applies always includes every member merged
+before it.
 
 ## Ownership and the hash ring
 
@@ -90,6 +146,14 @@ that collection resident, so total cache capacity is the sum of the nodes' budge
 owner is unreachable and `readFallbackToLocal=true`, the edge serves the read from its own
 complete on-disk replica instead of failing; a write to an unreachable owner returns
 `503-4 OWNER_UNREACHABLE`.
+
+A forwarded write can also arrive at the owner **before the collection does**: admin replication
+only waits for a quorum, and the collection's owner need not be in that quorum, so a client that
+creates a collection and immediately writes to it can beat the `CREATE_COLLECTION` to the owner.
+That write is refused with a retryable `503-10 COLLECTION_NOT_READY` rather than being attempted
+and failing on the missing page folder. A clustered node deliberately never answers `404-11
+COLLECTION_NOT_FOUND` for this, because it cannot tell a collection that was never created from
+one whose metadata has not reached it yet — only a node with clustering off can make that call.
 
 Forwarded bodies are Base64-wrapped (`cluster/msg/ForwardBody`) because EJson does not
 escape string values, so raw JSON cannot be embedded directly in the outer message.
@@ -154,16 +218,15 @@ because as the owner's load ratio climbs past `weight / 100` the score inverts. 
 node places using its own view, this key is a **local** decision and need not be uniform
 across the cluster.
 
-**Eligibility** requires all three: `ALIVE` in the local view, not still catching up on
-admin metadata (`adminSyncing`), and an `adminEpoch` at least as high as this node's. The
-last two matter because admin/DDL and user ops are replicated to a *majority* and the rest
-converge through anti-entropy — without them a script could land on a node that has not
-applied the `CREATE_DATABASE`/`SAVE_PROCEDURE` the caller depends on and fail with a
-transient `404-4`/`404-8` a local run would never have hit. Two consequences: for up to one
-`gossipIntervalMs` after a DDL every peer looks behind, so scripts run locally until the
-epoch propagates; and an older node reporting no epoch reads as `0` and is never chosen
-once this node's epoch is non-zero — the safe direction, and a reason to roll the whole
-cluster promptly. This node itself is always a candidate.
+**Eligibility** requires both: `ALIVE` in the local view, and not still catching up on admin
+metadata (`adminSyncing`, gossiped until the node's first admin anti-entropy round completes).
+The second matters because a node that has just started may not hold the
+`CREATE_DATABASE`/`SAVE_PROCEDURE` the caller depends on, and a script placed there would fail
+with a transient `404-4`/`404-8` a local run would never have hit. Admin records are shipped to
+every peer, but the coordinator waits only for a majority, so a peer that missed one (a dropped
+connection, a lock that stayed held) can still answer that way until its next admin
+anti-entropy round; that window is the residual cost of placing scripts at all. This node itself
+is always a candidate.
 
 **A script runs at most once.** Only one failure falls back to running here: the target
 could not be *connected to*, which proves the request never went on the wire. Every other
@@ -217,17 +280,15 @@ the same registry, so they cannot disagree.
 
 Procedure and trigger DDL (`SAVE_PROCEDURE`, `DELETE_PROCEDURE`, `SAVE_TRIGGER`,
 `DELETE_TRIGGER`) is admin DDL: serialized by the admin coordinator, quorum-guarded,
-replicated by **re-execution**, ordered by the admin epoch, and carried on the admin
-snapshot so a node that was down for the op catches up on rejoin.
+replicated by **shipping the definition file** the coordinator wrote, versioned by its
+`writeVersion`, and carried on the admin snapshot so a node that was down for the op catches up
+on rejoin (see *Admin and DDL replication*).
 
-Re-execution is only safe because the coordinator **stamps the derived fields onto the
-request** during its own local execution — `version`, `updatedAt`, `updatedBy` and, for a
-trigger or schedule, `definer`. Otherwise each peer would compute its own
-`System.currentTimeMillis()` and the files would diverge, which admin anti-entropy would
-then flip-flop on. The `definer` in particular must be stamped rather than re-derived: a
-peer re-executing has no acting user of its own, and two nodes disagreeing about a
-trigger's definer would mean the same write runs under different authority depending on
-which node owns the collection.
+Shipping the file rather than re-executing the op is what keeps the derived fields identical
+everywhere — `version`, `updatedAt`, `updatedBy` and, for a trigger or schedule, `definer`. A
+peer never computes them, so it can neither disagree about a trigger's definer (which would run
+the same write under different authority depending on which node owns the collection) nor be
+told one by a client: a client request is always stamped from the acting user and local state.
 
 `CALL_PROCEDURE` is placed exactly like `RUN_SCRIPT` (see *Scripts*).
 
@@ -251,14 +312,26 @@ automatically on a membership change, exactly as a collection's ownership does. 
 clustering off there is no ring, so the scheduler runs everything locally.
 
 `SAVE_SCHEDULE`/`DELETE_SCHEDULE` are admin DDL on the same terms as trigger DDL above,
-and the admin snapshot's conform step also reloads that database's registry so the
+and installing or removing a schedule record also reloads that database's registry so the
 scheduler picks a change up without waiting for `scheduleRefreshMs`.
+
+**Firing is gated on quorum as well as ownership.** `OwnershipManager.ring` is rebuilt from
+`view.aliveNodeIds()`, so a partitioned minority node's ring contains only itself and it owns
+*every* schedule in every database. `ScheduleExecutor.isOwner` therefore checks
+`hasQuorum()` before `isOwner(...)`, in the same order as `ClusterCoordinator.guardWrite`.
+Script database writes were already contained — they go through `processMessage` and are
+refused `503-2` — but `fetch` is not, so without the quorum gate an external HTTP call ran on
+both sides of a partition.
 
 **Handoff skips a tick rather than duplicating one.** A new owner computes the next
 *future* occurrence, so an instant the previous owner may already have run is never
-replayed. That is the whole at-most-once guarantee, and it is why `nextRunAt` lives only in
-memory: persisting a `lastRunAt` would mean an admin write per run and would churn the
-admin epoch for no benefit. The cost is the other side of the same coin — a membership
+replayed. That, plus the quorum gate above, is the whole guarantee, and it is why `nextRunAt`
+lives only in memory: persisting a `lastRunAt` would mean an admin write per run and would
+churn the schedule's admin record for no benefit. **It is not at-most-once in general.** During gossip
+convergence after any join or leave, two nodes hold different `aliveNodeIds()` and can each
+believe they own the same ring key while both hold quorum, so the same occurrence can fire
+twice. Closing that needs a durable claim, which the memory-only `nextRunAt` deliberately
+rules out; a job that must not run twice has to be idempotent. The cost is the other side of the same coin — a membership
 change during a tick can drop that tick, and **missed runs while a node was down are
 skipped, not caught up**.
 
@@ -273,11 +346,10 @@ every node has, so handoff costs the new owner one lazy re-read and nothing is l
 Entries are **dropped, never blanked**: the dispatcher looks the list up again when it runs
 a queued event, and a cached empty list would make an in-flight trigger silently not fire.
 
-For the same reason `AdminAntiEntropyService` does not read through the cache: building a
-snapshot and comparing during a conform load procedures, triggers, schemas and schedules
-straight from disk, and a conform write *invalidates* the cache rather than populating it —
-otherwise every sweep would pull every procedure source on the node into memory regardless
-of what anyone had called.
+For the same reason admin anti-entropy does not read through the cache: building a snapshot
+and comparing records load procedures, triggers, schemas and schedules straight from disk, and
+installing a record *invalidates* the cache rather than populating it — otherwise every sweep
+would pull every procedure source on the node into memory regardless of what anyone had called.
 
 ## Pending trigger runs are node-local
 
@@ -290,6 +362,11 @@ network round trip on the write path — and is deliberately not implemented. Be
 replication is not an acceptable substitute: a lost completion notification would resurrect
 a consumed run and double-apply it, which is the failure the design exists to prevent.
 
+Because the record is local, the op that consumes it is always buffered in the firing node's own
+slice, and that slice is always part of the commit: a trigger whose body writes only to collections
+other nodes own commits through 2PC with the firing node as a participant, so the run's effects and
+the deletion of its record still land together.
+
 ## Admin and DDL replication
 
 Admin and DDL operations mutate cluster-wide metadata rather than one collection's
@@ -298,25 +375,70 @@ owner of a reserved ring key, chosen and handed off by the same consistent-hash 
 membership machinery — serializes them:
 
 1. A non-coordinator node **forwards** the op to the coordinator, carrying the
-   authenticated acting username.
-2. The coordinator **executes it locally**, then re-executes it on a **majority** of peers
-   via `REPLICATE_ADMIN`. DDL replicates by **re-execution**, not by shipping rows, because
-   the effect is a filesystem/metadata change (create a folder, rebuild an index from the
-   node's own documents) that each node must perform locally and deterministically.
+   authenticated acting username, which the coordinator applies through a short-lived
+   synthetic client so `CREATE_DATABASE` records the creator as owner.
+2. The coordinator **executes it locally**, then ships the **admin records** the op touched
+   (`AdminRecordKeys.touchedBy`) to every peer in one `REPLICATE_ADMIN` and waits for a
+   majority of acknowledgements. `REINDEX` is the one exception: it touches no record, so the
+   coordinator broadcasts the request itself (`REINDEX_BROADCAST`) and every peer rebuilds its
+   own indexes from its own documents.
 3. A node without a write quorum rejects an admin op up front (`503-2`) — the same
    split-brain protection document writes get.
+4. A node that is not the coordinator refuses a coordinated admin op with `421-1` **before**
+   running it. The router forwards from the view it holds, so a peer whose view is stale can
+   forward to a node that no longer coordinates. The coordinator check runs ahead of the quorum
+   check, so a minority node that does not coordinate still says "retry elsewhere" rather than
+   `503-2`. If the role moves while the op runs, the op has already committed here, so the
+   client gets the outcome-unknown `503-3`, never a `421-1` that would claim it was not applied.
+5. A coordinator that has not completed an admin anti-entropy round since it started answers
+   `503-5`: it may not hold every record the cluster has, and a create it committed could
+   collide with one it has not seen yet.
 
-The acting username travels edge → coordinator → peers and is applied on each node through
-a short-lived synthetic client, so `CREATE_DATABASE` records the creator as owner
-identically everywhere rather than losing that identity when executed away from the
-originating connection.
+**Admin records.** Every piece of admin state is a record with a key `kind|db|name` and an HLC
+version minted from the write clock (`HybridClock`), the same clock document writes use:
 
-**User and permission ops** (`CREATE_USER`, `DELETE_USER`, `SET_PASSWORD`,
-`CHANGE_PERMISSIONS`) are coordinated the same way but replicated by **record-shipping**:
-the coordinator ships the committed `admin/users` record and each peer upserts or deletes
-it. Re-executing `CREATE_USER`/`SET_PASSWORD` would re-hash the password with a fresh
-random salt on each node, diverging the stored hashes; shipping the already-hashed record
-keeps every node byte-identical.
+| Kind | Key | Version stored in |
+|---|---|---|
+| database (owners) | `database\|db\|db` | the `admin/databases` row's `pk.idx` version column |
+| collection (index set, incarnation) | `collection\|db\|coll` | the `admin/collections` row |
+| user (hash, grants) | `user\|\|name` | the `admin/users` row |
+| schema | `schema\|db\|coll` | `writeVersion` in `{coll}-schema.json`, which wraps the schema as `{"writeVersion", "schema"}` |
+| triggers | `triggers\|db\|coll` | `writeVersion` in `{coll}-triggers.json` |
+| procedure, schedule | `procedure\|db\|name`, `schedule\|db\|name` | `writeVersion` in the definition file |
+
+A write stamps the record above the version it replaces (`AdminStamp.over`). A delete leaves a
+**permanent tombstone** in `cluster/admin-tombstones.idx`, minted from the clock; admin
+tombstones are never collected, because there are few of them and a collected one is exactly
+what would let a stale node resurrect a dropped database. The bootstrap admin is written at
+version `1`, so any real change outranks it. A standalone node writes no admin tombstones.
+
+**Applying a record** (`AdminRecordMerge`) is the same on a live `REPLICATE_ADMIN` and on an
+anti-entropy round, and it is decided per record:
+
+- **The higher version wins; at an equal version a tombstone beats a live record.** A record
+  that does not outrank the local one is skipped, which is what makes a re-sent or reordered
+  `REPLICATE_ADMIN` harmless: there is no lane and no ordering requirement on the wire.
+- **Every received version is observed by the clock** before it is applied, and the clock is
+  seeded at startup from every admin record and tombstone on disk, so a later local write or
+  delete is always stamped above anything this node holds.
+- **Parents first.** Records apply in kind order (databases, collections, users, then
+  definitions). A child whose parent is tombstoned at or above the child's version is dropped
+  as settled; a child whose parent this node does not hold yet leaves the round incomplete, and
+  the next round retries it.
+- **Case-folded names.** A record whose name collides with a registered sibling after ASCII case
+  folding (`Foo` against `foo`) is resolved by version: the newer one is installed and the other
+  gets a tombstone at the winner's version, on every node, so they converge on the same name.
+- **Local side effects run per changed record.** Installing a collection observes its
+  incarnation, quarantines a stale incarnation's folder, and builds or drops the indexes that
+  differ from the record's index set — each under its `.building` marker. Removing a user prunes
+  its database ownerships; removing a database or collection prunes the grants that named it.
+- **A removal on a live `REPLICATE_ADMIN` runs the drop handler; a removal found by anti-entropy
+  quarantines instead** (renames the folder aside, logging `Quarantined collection`/`Quarantined
+  database`), because a stale node finding out late must never delete data it cannot prove was
+  dropped on purpose.
+
+A peer acknowledges `REPLICATE_ADMIN` only when every record applied; anything else answers an
+error (counted as a missing ack) and schedules an admin anti-entropy round, which retries it.
 
 ## Transactions
 
@@ -327,6 +449,15 @@ a `FORWARD_TX_REQUEST` (carrying a stable `txSessionId` and the distributed-tran
 not-yet-written collection run locally; a read of a written collection is forwarded to its
 participant for read-your-writes.
 
+Read-your-writes is decided over **every** collection a read touches — an `AGGREGATE`'s primary
+collection and each `JOIN` target — because a JOIN merges only the overlay held on the node that runs
+it. The edge records which node holds each written collection's buffered writes: when none of the
+touched collections was written the read routes as above, when one node holds them all the read runs
+there (reading the unwritten ones from its replica, as in [Joins across
+collections](#joins-across-collections)), and when the writes sit on two nodes the read answers
+`421-3 TRANSACTION_READ_SPANS_NODES` rather than join a partial view. The refusal leaves the
+transaction usable; commit or roll back as usual.
+
 Each participant runs its forwarded session on its **own single-thread executor** under a
 persistent synthetic client. This matters: the transaction holds the collection write lock
 from its first write until commit, and a `ReentrantReadWriteLock` write lock is
@@ -335,27 +466,106 @@ same thread and makes two concurrent sessions genuinely mutually exclusive rathe
 falsely sharing a reentrant lock. Because the lock lives on the owner, a concurrent
 non-transactional write routed there is properly serialized against the transaction.
 
+A session serves **one transaction at a time**, the one its messages name. The `txSessionId` is the
+edge connection's id, so it outlives a transaction, and the edge discards a transaction even when its
+ROLLBACK or `ABORT_TX` never reached the participant (an unreachable owner, a lost abort). A forwarded
+op naming another `txId` therefore first rolls back the transaction left on the session, since the
+edge only moves to a new id after it has discarded the old one, or answers
+`409-12 TRANSACTION_PREVIOUS_UNRESOLVED` while that one is fenced for recovery (prepared or
+half-applied). `PREPARE_TX` for another id votes no, and `COMMIT_TX`/`ABORT_TX` for another id
+resolve that id from its durable markers without touching the live session.
+
+A participant can also lose a slice outright: it reaps the session of an edge it saw as departed,
+or it restarts. The edge never learns of either, so it marks every forward to a participant it has
+already forwarded to in this transaction as a **continuation** (`txContinuation`). A participant
+that receives a continuation with no active transaction answers
+`409-13 TRANSACTION_SLICE_LOST` without starting one, rather than opening a fresh slice under the
+same id that would let COMMIT report the surviving half as the whole transaction. `PREPARE_TX` then
+finds no session and votes no; the client can only roll back. A peer that omits the field is read
+as a first forward.
+
 **Single-owner fast path.** When only one owner is involved, commit skips 2PC: the sole
 owner replays its buffered ops, checks quorum (else `503-2`), and replicates them to a
 majority as **one atomic batch** (`REPLICATE_TX`, applied inside one multi-collection lock
 window so no other writer interleaves). A replication timeout returns `503-3` but the local
-commit stands.
+commit stands. A `500-33` (half applied) or `409-10` (outcome unknown) from the owner leaves the
+transaction open on the edge, so re-sending COMMIT finishes the slice the owner is still holding; a ROLLBACK in
+that state is forwarded to the owner too and answers `500-33` rather than claiming a rollback. A script's
+`db.transaction` follows the same rule: when its commit or rollback comes back from the owner with one of those
+answers, the script seam keeps the edge transaction and its participant, rather than wiping them. A script running
+on a client connection therefore leaves that connection holding the transaction, and its next COMMIT reaches the
+owner. A re-sent COMMIT of a decided slice always finishes it, even when quorum or ownership was lost since the
+first attempt: the decision is binding, the apply is version-checked (see *Durable recovery log*), and only the
+replication waits, answering `503-3` until the replicas can be reached.
+A `409-10` can also mean the owner simply stopped waiting: the owner gives a forwarded op `replicationAckTimeoutMs`,
+and a commit that also waits that long for replica acks outlives it, finishing on the session's own thread
+afterwards. The edge's own wait also starts first, so it can give up on an answer the owner did send in time, and an
+answer can be lost in transit. The owner therefore records how each forwarded commit or rollback finished in a
+durable `{txId}|outcome` record, kept for `tombstoneRetentionMs` and surviving a restart, so a re-sent COMMIT answers
+the real outcome (`OK`, or `503-3` when replication timed out but the local commit stands) instead of `409-13`, and a
+ROLLBACK of a commit that landed answers `409-14 TRANSACTION_ALREADY_COMMITTED` rather than claiming a rollback. A
+re-send after that window answers `409-13`.
+
+**The participant's state.** Every message a participant receives for a transaction is decided from one state, read
+from its durable markers in a fixed order: `{txId}|outcome` is COMMITTED or ABORTED, `{txId}|localcommit` is
+COMMITTING (the commit is decided and being applied), `{txId}|part` is PREPARED, a live transaction with that id is
+ACTIVE, and nothing at all is NONE. One table (`ops/tx/SliceStateMachine`) maps state and message to an action:
+
+| State | first op | continued op | COMMIT | ROLLBACK | PREPARE_TX | COMMIT_TX | ABORT_TX |
+|---|---|---|---|---|---|---|---|
+| NONE | start and run | `409-13` | `409-13` | `409-13` | vote no | ack | ack |
+| ACTIVE | run | run | commit | roll back | prepare | `ERROR` | abort |
+| PREPARED | `500-33` | `500-33` | `500-33` | `500-33` | vote yes | finish | abort |
+| COMMITTING | `500-33` | `500-33` | finish | `500-33` | vote yes | finish | `ERROR` |
+| COMMITTED | `409-13` | `409-13` | recorded reply | `409-14` | vote yes | ack | `ERROR` |
+| ABORTED | `409-13` | `409-13` | `409-13` | recorded reply | vote no | `ERROR` | ack |
+
+Every commit path — the local commit, the single-owner fast path, a 2PC participant on `COMMIT_TX`, the
+coordinator's own slice, a startup or recovery replay — runs the same procedure (`ops/tx/SliceCommit`): write
+`|localcommit` (deleting `|part`), apply the ops, stage the triggers, record the outcome where a peer may ask for it,
+clear `|localcommit`, discard the ops, replicate. A failed apply leaves the slice COMMITTING with its locks held.
 
 **Cross-owner two-phase commit.** When a transaction spans multiple owners the edge runs
-2PC: `PREPARE_TX` to every participant (each votes yes only after durably recording a
-PREPARED marker and confirming quorum), then — on a unanimous yes — the coordinator
+2PC: `PREPARE_TX` to every participant (each votes yes only after confirming quorum, confirming
+it still owns every collection it buffered, and durably recording a PREPARED marker), then — on a unanimous yes — the coordinator
 **durably records the commit decision** and drives `COMMIT_TX` to all. Any no vote or
 unreachable participant drives `ABORT_TX` to all and returns `409-7 TRANSACTION_ABORTED`.
 Each participant's commit reuses the same atomic `REPLICATE_TX` batch to its own replicas.
+If the coordinator's own slice fails to apply, the edge keeps the transaction open and answers `409-10`. The slice is
+already COMMITTING, so a re-sent COMMIT finishes it without re-checking quorum or ownership, because the decision was
+already made.
 
 **Durable recovery log.** The PREPARED markers and the coordinator's commit decision are
 records in `admin/transactions` (keyed `{dtxId}|part` / `{dtxId}|coord`, alongside the
 transaction's buffered slice). Presence of the coordinator marker is the commit point:
-present ⇒ commit, absent ⇒ **presumed abort**. On restart a prepared participant
-re-acquires its write locks and asks the coordinator via `TX_STATUS` what to do, and a
-coordinator that recorded a commit re-drives `COMMIT_TX`. Recovery re-runs on every
+present ⇒ commit, absent ⇒ **presumed abort**, and a coordinator that is reachable but has not
+decided yet leaves the slice in doubt rather than being read as an abort. "Not decided yet" means
+the transaction is still live on the coordinator: a coordinator prepares its own slice before any
+other, so after a restart it can hold a participant marker naming itself with no coordinator marker
+and no live transaction, and that state answers `NO_RECORD` to its own recovery and to every
+participant's `TX_STATUS`, so all of them abort. On restart a prepared
+participant asks the coordinator via `TX_STATUS` what to do, and a coordinator that recorded a
+commit re-drives `COMMIT_TX`. A participant that received `COMMIT_TX` writes `|localcommit` before applying, so a
+crash mid-apply is finished from that marker at startup, or by the recovery sweep, without asking anyone; `TX_STATUS`
+reports COMMITTING as committed.
+
+The participant does **not** hold its write locks while in doubt — clients may write those collections meanwhile —
+so every apply is version-checked. Each buffered op is given its write version when it is buffered, after its
+before-hooks, and the version is stored with the op. Applying an op compares it with what is stored: an equal
+version is the slice's own write landing again and is skipped, a higher stored version or a tombstone at or above
+the op is a later write and wins, and anything else applies. The same rule finishes an interrupted local commit, a
+2PC participant's replay and a re-sent commit, standalone or clustered, and it needs no knowledge of what applied
+before the crash: two ops on one id simply leave the later one standing. A delete's tombstone is reserved at the
+delete op's own version, and a delete that a later write superseded reserves none. A participant whose replay
+cannot finish applying its slice answers `ERROR` to `COMMIT_TX` rather than the ack, keeping its
+marker and locks, so the coordinator keeps its own marker and re-drives the commit until the slice
+lands — an acknowledged replay that had not finished let the coordinator forget the commit and the
+participant later abort a half-applied slice. Recovery re-runs on every
 membership change and on a periodic sweep, which also GCs old outcome markers and logs
-long in-doubt transactions.
+long in-doubt transactions. Every durable replay — startup, membership-triggered, the sweep, a peer's
+`COMMIT_TX`/`ABORT_TX` with no live session, `RESOLVE_TRANSACTION` — runs on one recovery thread,
+because a replay that cannot finish keeps its collection write locks and only the thread that holds
+them can retry.
 
 **Coordinator-loss mitigation.** A prepared participant that cannot reach its coordinator
 falls back to **cooperative termination**: it polls the *other* participants (whose
@@ -374,6 +584,14 @@ correct outcome can be decided before forcing it with `RESOLVE_TRANSACTION` (for
 or force-abort, broadcast to all members). In-doubt transactions also surface per node in
 `GET_DATABASE_STATS` and in periodic warning logs.
 
+`RESOLVE_TRANSACTION` records the decision against the **live peer set**, and keeps the coordinator
+marker when any participant does not acknowledge it. Recording it with an empty participant list
+made the next recovery sweep treat the transaction as fully resolved and delete the marker, after
+which a participant that missed the forced COMMIT asked the coordinator, read `NO_RECORD`, and
+aborted a transaction the others had already committed — one distributed transaction resolved two
+ways, permanently and invisibly. This mirrors what the ordinary commit path already does: the
+marker is retained unless every listed participant acked.
+
 **Liveness before prepare.** If the edge connection closes or the edge node crashes before
 commit, the not-yet-prepared session is rolled back — the edge aborts its participants, and
 a membership listener reaps sessions of a departed edge node. A session that has already
@@ -391,7 +609,12 @@ membership — and anti-entropy makes both the handoff and the rejoining of a pr
 node data-safe.
 
 **Shutdown and departure.** `ShutdownCoordinator` leaves the cluster last, after the queues
-have drained, so peers keep routing here only while this node can still answer. There is,
+have drained, so peers keep routing here only while this node can still answer. From its first step,
+though, it refuses every write a peer sends — a forwarded request answers `503-13`, which the edge
+relays to its client, and a `REPLICATE`, `REPLICATE_TX`, `PREPARE_TX` or `COMMIT_TX` answers an
+`ERROR` the sender treats like a peer that has already left — because the background queue is about
+to stop accepting index events. Gossip, `DIGEST`, `PULL`, `TX_STATUS`, `ABORT_TX` and a forwarded
+rollback are still answered. There is,
 however, **no graceful LEAVE message**: a departing node is detected the same way a crashed
 one is, by missed heartbeats, so peers wait out `deadTimeoutMs` (15s by default) before
 reassigning its collections. During that window writes to those collections fail with
@@ -403,9 +626,50 @@ then, drain the node's traffic at the load balancer first if that window matters
 
 Every document write is stamped with a **version** — a node-global monotonic epoch-millis
 value assigned by the coordinating owner and persisted as an extra trailing column of the
-PK index (`id|position|length|page|version`). It ships in the `REPLICATE` payload so
+PK index (`id<US>position<US>length<US>page<US>version`, where `<US>` is U+001F, the delimiter every
+`.idx` file uses). It ships in the `REPLICATE` payload so
 replicas store the *owner's* version rather than assigning their own, and a node advances
-its clock past any version it receives so it never later assigns a lower one. A **delete**
+its clock past any version it receives so it never later assigns a lower one.
+
+**Versions travel as text, never as JSON numbers.** A packed version is around 2^57, well past
+the 2^53 a double represents exactly, so a numeric field lost the low bits of the logical counter
+on every hop: distinct writes arrived as equal versions (which last-write-wins cannot repair), a
+replica's stored version never matched the owner's so the digest-summary fast path could never
+hit, and a rounded-up version could outrank a newer write. The `version` field of `DigestEntry`
+and the `versions` lists of `ReplicationPayload` and `AntiEntropyPayload` are therefore strings
+on the wire. This is a cluster protocol change: nodes on either side of it do not interoperate,
+which the single-build rule above already requires. Document numbers are untouched — they are
+still stored and treated as `double`.
+
+**A collection's incarnation travels the same way.** The incarnation minted at `CREATE_COLLECTION`
+comes from the same clock and is the same 2^57 magnitude, so it rides inside the collection's admin
+record as text; as a JSON number its 16-bit logical counter was quantised away, every peer held a
+neighbouring value, and the healthy collection was quarantined as a stale incarnation. Only the
+coordinator mints one: a client cannot supply it, a duplicate create keeps the existing one, and a
+peer installs the value the record carries. Every incarnation a node accepts — an installed
+collection record, the registered entries at startup — is `observe`d by the write clock, so a
+coordinator that takes over later mints above it even if its wall clock lags the node that minted
+the original.
+
+Tombstones are only garbage-collected on a round in which **every** currently known peer answered
+the digest request. A node that is partitioned — or alone — keeps them: collecting a tombstone
+while a peer still holds the document live is what lets the next rejoin resurrect a committed
+delete.
+
+A reachable, correctly-answering node can reach the same state without any partition. `reserveDelete`
+appends the tombstone **before** the document is removed — deliberately, so a crash between the two
+leaves the delete recorded rather than lost — and nothing removes it if `executeDelete` then throws.
+The node is left holding a live document and a newer tombstone for the same id. That self-heals on the
+next sweep, because `reconcile` folds this node's own tombstones into its winner map before contacting
+any peer and its delete branch fires on `localLive.containsKey(id)` regardless of where the winner came
+from: the node applies its own orphaned tombstone. Until that sweep runs the node still serves a
+document its peers have already dropped, the client was told the delete failed, and the eventual delete
+goes through the replicated-apply path so the `DELETED` trigger never fires. If the local delete fails
+*persistently* — a damaged page file, say — the self-heal fails every round too, and once the tombstone
+ages past `tombstoneRetentionMs` it is collected while the document is still on disk, which is the
+resurrection case above reached without a partition.
+
+A **delete**
 records a versioned **tombstone** (`{coll}-tombstones.idx`), needed because a plain delete
 cannot converge — a lagging replica still holding the document would resurrect it.
 
@@ -413,12 +677,60 @@ On any membership change, `cluster/AntiEntropyService` reconciles each of this n
 collections against the live members:
 
 1. It builds a local **digest** (`id → version` for live documents, plus tombstones) and
-   requests each peer's digest.
+   requests each peer's digest. The request carries a **summary** of that digest — the entry
+   count plus a hash over every `id|version|deleted|length` line — and a peer whose own summary
+   matches answers `summaryMatch` and omits the digest entirely, which is what keeps a converged
+   cluster's sweeps cheap. Both sides must build their entries identically, byte length included,
+   or the two summaries never agree and every sweep ships a full digest instead.
 2. It computes, per id, the **highest version seen anywhere** — a tombstone wins a tie with
-   a live document, so a delete beats a concurrent write at the same version.
+   a live document, so a delete beats a concurrent write at the same version. Two live copies at
+   exactly equal versions are ordered by node id, and the pull gate and the replicated-apply check
+   use that same total order so the two paths cannot disagree. One caveat: the id compared is the
+   one stamped by the node **answering** the digest, not the node that wrote the version, so the
+   tie-break is not yet a stable property of the write. Persisting the writer's id beside the
+   version would make it one, and is a disk-format change that has not been made.
 3. Where a peer holds the winning live version it pulls that document and applies it as a
    versioned upsert; where a tombstone wins it deletes locally and records the tombstone. It
-   never overwrites an id it already holds at the winning version.
+   never overwrites an id it already holds at the winning version: a copy that wins only on the
+   node-id tie-break is pulled only when its byte length differs from the local one (or the peer
+   sent no length), since two copies at one version and one length already produce the same
+   summary. Pulls go out in batches of 500 ids, each applied as it returns, so one large repair
+   cannot outlast `replicationAckTimeoutMs` and a failed batch skips only itself.
+
+**Every digest and pull carries the collection's incarnation, and a mismatch stops the exchange.**
+Without it the whole mechanism above runs happily over documents belonging to a *dropped* creation
+of the collection name. A node that missed a `DROP_COLLECTION` or `DROP_DATABASE` keeps its admin
+entry and its documents; a peer asks it for a digest, sees ids the live incarnation has never held,
+and pulls them in. The version check cannot catch this — it compares versions *per id*, and these
+are ids nothing on the live side can be compared against. The owner then holds them, replicates
+them everywhere and serves them to clients, permanently.
+
+Admin anti-entropy's quarantine does not prevent it: that is what the stale node does to its own
+copy, and it runs after the node has already answered. `AntiEntropyPayload` therefore carries
+the requester's incarnation on both `DIGEST` and `PULL`; a node whose own incarnation for that name
+differs answers `staleIncarnation` with no digest and no documents, and `reconcile` skips any peer
+that reports `staleIncarnation` or whose answer carries a different incarnation — leaving
+`everyPeerAnswered` false, so tombstone collection still waits. Like the versions above, the
+incarnation travels as **text**; `0` on either side means "unknown" and the exchange proceeds as
+before, so a collection created before the field existed is never affected.
+
+**The apply checks it again, because the exchange is not atomic.** A gate on the request and the
+answer alone still let a pull answered by a peer that had not yet processed a drop land after this
+node finished `DROP_COLLECTION` and `CREATE_COLLECTION` during the round trip — the fresh collection
+holds no version and no tombstone to compare against, so every dead document was accepted. An
+owner's `REPLICATE` held on a replica's ordered peer lane across the replica's own drop and create
+had the same effect. Every replicated document payload — owner push, transaction batch, and the
+deletes and pulls anti-entropy applies — therefore carries the collection incarnation as text, and
+`ReplicatedApplyHelper` refuses it under the collection write lock when it names another incarnation
+or a collection that is not registered. A refused `REPLICATE` answers `ERROR`, so the owner counts no
+ack; a refused transaction batch applies none of its entries. `0` still means unknown and applies.
+
+A node also refuses `DIGEST` and `PULL` with an `ERROR` until its first admin reconciliation has
+completed, because `Main` starts the cluster server and joins the membership before admin
+anti-entropy runs, and a peer sweeps the moment the node appears. `ADMIN_SNAPSHOT` is deliberately
+not gated — it is what lets the node merge its peers' admin records and so open the gate. This narrows the window rather
+than closing it: `adminSyncCompleted` is cleared only on `stop()`, so a node that stayed up through
+a partition reports itself synced the whole time. The incarnation check is what covers that case.
 
 Because every node runs the same pull-newest reconciliation and the version totally orders
 writes per id, the cluster converges to the latest write regardless of which node became a
@@ -437,28 +749,67 @@ would be resurrected on rejoin. Owner cache warm-up on handoff is deliberately l
 ### Admin and DDL anti-entropy
 
 Document anti-entropy converges the *contents* of collections but not their *structure*: a
-node that was down during a `CREATE`/`DROP DATABASE`/`COLLECTION`/`INDEX`, `REINDEX`,
-`SET_DATABASE_OWNERS` or a user op would otherwise never learn of it. Admin records are not
-version-stamped, so per-record LWW does not apply. Instead a single cluster-wide **admin
-epoch** (`cluster/AdminEpoch`, persisted to `cluster/admin.epoch`) orders the whole admin
-state: the coordinator bumps it on each committed admin op and ships it on
-`REPLICATE_ADMIN`/`REPLICATE_USER` so live replicas advance, while an absent node falls
-behind.
+node that was down during a `CREATE`/`DROP DATABASE`/`COLLECTION`/`INDEX`, `SET_DATABASE_OWNERS`,
+a definition change or a user op would otherwise never learn of it. Because every admin record
+carries its own version (see *Admin and DDL replication*), admin anti-entropy is the same
+per-record merge the live path runs, applied to everything a peer holds.
 
-On a membership change and on the same periodic sweep, `cluster/AdminAntiEntropyService`
-pulls each live peer's `ADMIN_SNAPSHOT` (`{epoch, databases, collections, users, schemas,
-procedures, triggers, schedules}`, built from disk), keeps the **highest-epoch** one, and —
-only when it exceeds this node's own epoch — **conforms** local state to it: upsert
-snapshot users then delete absent ones; create missing databases and reconcile owners;
-create missing collections and reconcile their indexes; then drop collections and databases
-absent from the snapshot. Each create/drop takes the target collection's write lock,
-mirroring the DDL handlers. A document reconciliation pass follows, so freshly materialized
-collections repopulate. Because authority is the highest epoch, a stale rejoining node
-never overwrites live state — it catches up instead.
+On a membership change and on the same periodic sweep, `cluster/AdminAntiEntropyService` asks
+each live peer for its `ADMIN_SNAPSHOT` — every live admin record and every admin tombstone it
+holds — and merges it with `live=false`. A record that outranks the local one is installed, a
+tombstone that outranks it removes the local record by **quarantine** (the folder is renamed
+aside as `<coll>.quarantined-<incarnation>-<ts>` or `<db>.quarantined-<ts>`, never deleted), and
+everything else is left alone. Merging is idempotent and order-free, so two nodes holding
+different halves of the history each take the other's newer records and converge, and nothing a
+node acknowledged can be erased by a peer that lacks it: an absent record is not a deletion, only
+a tombstone is. A create never adopts an unregistered folder that still holds data — it moves
+that aside first, so a re-created name always starts empty. When the merge changed anything, a
+document reconciliation pass follows so freshly installed collections repopulate.
 
-To close the window where a stale node becomes the admin coordinator before it has caught
-up, a coordinator rejects coordinated admin ops with a retryable `503-5 ADMIN_SYNCING`
-until it has completed one admin reconciliation since starting.
+A definition a node could not read (a torn schema, triggers file, procedure or schedule) is left
+out of its snapshot. That is safe now that only a tombstone deletes: its peers keep their valid
+copies, and the node itself treats the torn file as absent, so the first peer copy it merges
+replaces it. A record the merge could not apply this round — a parent this node does not hold yet, a
+lock or barrier that stayed held for `replicationAckTimeoutMs` — leaves the round incomplete and
+is retried by the next one.
+
+A coordinator answers `503-5 ADMIN_SYNCING` until one admin anti-entropy round with a peer has
+completed **in full** since it started (a lone node counts as synced), and gossips `adminSyncing`
+meanwhile. That closes the window where a restarted node becomes coordinator before it has seen
+what changed while it was down: a create it committed then would collide with a record it has not
+merged yet. A node that stayed up through a partition does not need the gate, because whatever it
+missed carries a lower version than nothing it holds — the next merge simply installs it.
+
+A populated node switched from standalone to clustered needs no special case either. Its records
+already carry versions above the bootstrap admin's `1` and above zero, and a fresh peer's merge
+installs them, so whichever of the two coordinates, the populated node's databases and users
+survive. Admin records written by a build from before versioning carry no version, so the first
+start of a newer build stamps each of them once (`UnversionedRecords`) before writing anything
+else; without that, a fresh peer's bootstrap admin at `1` would outrank the upgraded node's own
+admin and reset its password. Two populated standalone nodes merged into one cluster keep the newer of each colliding
+record — merging two populated nodes is still not a supported migration.
+
+## Listenable queries in a cluster
+
+`LISTEN` and `STOP_LISTEN` are **not** owner-routed: they are served by whichever node the client is
+connected to, and the registration lives on that node. Replication is full rather than partial, so
+notifications are delivered everywhere — what is weaker is their *consistency*. An `AGGREGATE` is
+forwarded to the collection's owner and sees authoritative state, while a `LISTEN` on the same
+connection reads this node's replica, and a commit the owner acknowledged is only quorum-replicated.
+A client that runs `AGGREGATE` and then `LISTEN` can therefore watch the result set go **backwards**.
+
+Re-runs are deliberately dirty reads (timeliness over strict consistency), but a transactional commit
+defers its notifications until every buffered op has applied, and a re-run that overlaps a commit's
+apply (one queued before the commit started) is held back and re-queued by the commit's flush, so a
+listener never sees a frame holding half a transaction.
+
+Dirty does not mean unsynchronised. A writer reshapes the cached PK index in place — a bulk save
+removes, appends twice, and only re-sorts in a `finally` — so a reader binary-searching that list
+without the collection lock could miss rows, throw, or report a phantom torn index. A caller holding
+no collection lock is therefore handed its own snapshot of the list rather than the shared instance,
+taken under a non-blocking `tryLock`; when a writer holds the lock the reader falls back to reading
+the PK index from disk, which the per-file locks already make safe for a dirty read. The re-run
+itself still takes no collection lock and never makes a writer wait.
 
 ## Wire protocol
 
@@ -468,16 +819,26 @@ The node-to-node channel reuses the client transport: line-delimited EJson over 
 whose `correlationId` lets one pooled connection multiplex many in-flight requests, and
 inbound messages whose `secret` does not match `clusterSecret` are rejected.
 
+Every peer shares **one** connection, so what a node does with an inbound frame decides what the
+rest of that peer's traffic waits for. `ClusterConnectionHandler` answers replication, admin and 2PC
+messages on a single ordered executor and answers `GOSSIP`, `FORWARD_REQUEST`, `DIGEST` and `PULL` concurrently beside it.
+The last two are there because they wait out a whole `replicationAckTimeoutMs` on a busy collection
+lock: on the ordered lane that wait was the peer's entire inbound channel, so an ordinary long write
+holding a collection lock made the *requester's* next forwarded transaction op time out and the
+client's write be refused. They mutate nothing, and anti-entropy's two sides already snapshot at
+different instants, so nothing depends on where they sit in the stream. Replies may come back out of
+order; the peer dispatches them on `correlationId`.
+
 | Message (+ ack) | Carries | Purpose |
 |---|---|---|
 | `JOIN_REQUEST` / `JOIN_RESPONSE` | `sender`, `members` | discovery |
 | `GOSSIP` / `GOSSIP_ACK` | `sender`, `members` (+ heartbeat and telemetry) | membership, failure detection, script load |
 | `REPLICATE` | `replication`: `{dbName, collName, op: UPSERT\|DELETE, documents, ids, versions}` | document write replication |
 | `FORWARD_REQUEST` / `FORWARD_RESPONSE` | `forwardBody` (Base64 JSON), `actingUser` | request routing and script placement |
-| `REPLICATE_ADMIN` | `forwardBody`, `actingUser`, `adminEpoch` | admin/DDL replication by re-execution |
-| `REPLICATE_USER` | `replication` (the committed `admin/users` record), `adminEpoch` | user/permission replication by record-shipping |
-| `DIGEST` / `PULL` | `antiEntropy`: a collection's `{id, version, deleted}` digest, or pulled documents | document anti-entropy |
-| `ADMIN_SNAPSHOT` | `adminSnapshot`: `{epoch, databases, collections, users, schemas, procedures, triggers, schedules}` | admin/DDL anti-entropy |
+| `REPLICATE_ADMIN` | `adminSnapshot`: the `{key, version, body}` admin records an op touched (`body` absent for a tombstone) | admin/DDL replication by record-shipping |
+| `REINDEX_BROADCAST` | `forwardBody` (the `REINDEX` request) | a cluster-wide index rebuild |
+| `DIGEST` / `PULL` | `antiEntropy`: a collection's `{id, version, deleted, length}` digest and its summary, or pulled documents | document anti-entropy |
+| `ADMIN_SNAPSHOT` | `adminSnapshot`: every admin record and admin tombstone the node holds | admin/DDL anti-entropy |
 | `FORWARD_TX_REQUEST` | `forwardBody`, `txSessionId`, `txId` (reply reuses `FORWARD_RESPONSE`) | a forwarded transaction operation |
 | `REPLICATE_TX` | `txReplication`: per-collection entries | a committed transaction's atomic batch |
 | `PREPARE_TX` / `COMMIT_TX` / `ABORT_TX` | `txId`, `txParticipants` | 2PC control |
@@ -490,15 +851,17 @@ See the *Clustering* row of the configuration table in the main
 [README](../README.md#configuration). Key settings: `clusterEnabled`, `clusterPort`,
 `clusterBindAddress`, `clusterAdvertisedAddress`, `clusterSeeds`, `nodeId`,
 `clusterExpectedSize`, `gossipIntervalMs`, `suspectTimeoutMs`, `deadTimeoutMs`,
-`replicationAckTimeoutMs`, `virtualNodesPerNode`, `readFallbackToLocal`,
+`deadProbeIntervalMs`, `replicationAckTimeoutMs`, `virtualNodesPerNode`, `readFallbackToLocal`,
 `scriptRoutingEnabled`, `scriptLocalityWeight`, `clusterTlsEnabled`, `clusterSecret`,
 `antiEntropyIntervalMs`, `tombstoneRetentionMs`.
 
 Two classes of key have cluster-wide constraints: `scriptsEnabled` and the `script*`
 sandbox keys must be **uniform**, because the sandbox comes from the executing node; and
 `clusterExpectedSize` should match the steady-state node count so the write-quorum majority
-is computed correctly before membership stabilizes. `scriptLocalityWeight` is explicitly
-per-node.
+is computed correctly before membership stabilizes; it must be **at least 2** whenever
+`clusterEnabled=true`, because a lone node evicts its peers after `deadEvictionMs` and then
+satisfies its own quorum, letting both sides of a partition accept divergent writes.
+`scriptLocalityWeight` is explicitly per-node.
 
 ## Operations runbook
 
@@ -509,9 +872,9 @@ per-node.
 - **Sizing:** set `clusterExpectedSize` to the steady-state node count.
 - **Security:** use a strong shared `clusterSecret`; enable `clusterTlsEnabled` with a
   shared CA-issued keystore for encrypted inter-node traffic.
-- **Rolling upgrades:** roll every node before enabling a feature that depends on a new
-  gossip field or a new stored field — an older node reports `0` script load and no admin
-  epoch (so it attracts placement it should not), and drops unknown fields it re-executes,
-  such as a trigger's `timing`.
+- **Rolling upgrades:** every node must run the same build. Admin replication ships versioned
+  records (`REPLICATE_ADMIN` and `ADMIN_SNAPSHOT` changed shape, and `REPLICATE_USER` is gone), so
+  a node on an older build neither applies nor answers them; an older node also reports `0`
+  script load, which attracts placement it should not.
 - **Removing a node:** drain its traffic at the load balancer first — there is no LEAVE
   message, so peers wait out `deadTimeoutMs` before reassigning its collections.

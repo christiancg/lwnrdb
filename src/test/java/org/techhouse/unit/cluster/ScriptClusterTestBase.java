@@ -7,7 +7,6 @@ import java.util.HashSet;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.techhouse.cache.Cache;
-import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
@@ -51,16 +50,12 @@ abstract class ScriptClusterTestBase {
     }
 
     static NodeInfo node(String id, int port, int scriptLoad) {
-        final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad);
-        node.setAdminEpoch(IocContainer.get(AdminEpoch.class).current());
-        return node;
+        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad);
     }
 
     // The cap is arbitrary and shared by both sides of the pair; only the ratio between them decides.
     static NodeInfo cappedNode(String id, int port, int scriptLoad) {
-        final var node = new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, SCRIPT_CAPACITY);
-        node.setAdminEpoch(IocContainer.get(AdminEpoch.class).current());
-        return node;
+        return new NodeInfo(id, "127.0.0.1", port, NodeState.ALIVE, 1L, 1L, scriptLoad, SCRIPT_CAPACITY);
     }
 
     @BeforeEach

@@ -2,7 +2,9 @@ package org.techhouse.fs;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -21,20 +23,33 @@ final class MetadataFileStore {
     }
 
     static String read(File file) throws IOException {
-        if (!file.exists()) {
-            return null;
-        }
-        return String.join("", FileLocks.readAllLinesLocked(file));
+        final var lines = FileLocks.readAllLinesIfExists(file);
+        return lines == null ? null : String.join("", lines);
     }
 
-    static boolean delete(File file) {
+    static boolean delete(File file) throws IOException {
         final var lock = FileLocks.lockFor(file).writeLock();
         lock.lock();
         try {
-            return file.exists() && file.delete();
+            return Files.deleteIfExists(file.toPath());
         } finally {
             lock.unlock();
         }
+    }
+
+    static boolean isListedExactly(File file) throws IOException {
+        final var folder = file.getParentFile();
+        if (folder == null) {
+            return false;
+        }
+        final var names = folder.list();
+        if (names != null) {
+            return Arrays.asList(names).contains(file.getName());
+        }
+        if (folder.exists()) {
+            throw new IOException("Could not list the folder " + folder);
+        }
+        return false;
     }
 
     static void ensureFolder(File folder, String label, String dbName) throws IOException {
@@ -43,10 +58,13 @@ final class MetadataFileStore {
         }
     }
 
-    static List<String> listNames(File folder, String extension) {
+    static List<String> listNames(File folder, String extension) throws IOException {
+        if (!folder.exists()) {
+            return List.of();
+        }
         final var files = folder.listFiles();
         if (files == null) {
-            return List.of();
+            throw new IOException("Could not list the folder " + folder);
         }
         final var names = new ArrayList<String>();
         for (final var file : files) {

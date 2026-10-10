@@ -64,4 +64,26 @@ public class ReplicationPayloadTest {
         assertEquals(1, payload.getDocuments().size());
         assertEquals(List.of("1"), payload.getIds());
     }
+
+    @Test
+    public void test_the_incarnation_round_trips_exactly_as_text() {
+        final var incarnation = (1L << 57) + 3L;
+        final var payload = new ReplicationPayload("db", "coll", ReplicationOp.DELETE, null, List.of("x"));
+        payload.setIncarnationValue(incarnation);
+
+        final var parsed = eJson.fromJson(eJson.toJson(payload), ReplicationPayload.class);
+
+        assertEquals(incarnation, parsed.incarnationValue());
+        assertEquals(Long.toString(incarnation), parsed.getIncarnation());
+    }
+
+    @Test
+    public void test_a_payload_without_an_incarnation_reads_as_unknown() {
+        final var parsed = eJson.fromJson("{\"dbName\":\"db\",\"collName\":\"coll\",\"op\":\"DELETE\"}",
+                ReplicationPayload.class);
+
+        assertEquals(0L, parsed.incarnationValue());
+        parsed.setIncarnation(" ");
+        assertEquals(0L, parsed.incarnationValue());
+    }
 }

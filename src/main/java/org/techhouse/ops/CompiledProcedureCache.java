@@ -9,6 +9,7 @@ import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.simplejs.CompiledScript;
 import org.techhouse.simplejs.SimpleJs;
+import org.techhouse.utils.JsonUtils;
 
 public class CompiledProcedureCache {
     private final SimpleJs simpleJs = IocContainer.get(SimpleJs.class);
@@ -22,10 +23,11 @@ public class CompiledProcedureCache {
             return simpleJs.compile(source, false);
         }
         final var key = keyOf(dbName, name, version);
+        final var sourceHash = JsonUtils.sha256(source);
         lock.lock();
         try {
             var compiled = cache.get(key);
-            if (compiled == null) {
+            if (compiled == null || !sourceHash.equals(compiled.sourceHash())) {
                 compiled = simpleJs.compile(source, false);
                 cache.put(key, compiled);
                 evictDownTo(maxSize);

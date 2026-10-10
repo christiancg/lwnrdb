@@ -15,11 +15,12 @@ import java.util.Spliterators;
 import java.util.stream.Stream;
 import java.util.stream.StreamSupport;
 import org.techhouse.cache.Cache;
+import org.techhouse.config.Globals;
 import org.techhouse.data.FieldIndexEntry;
 import org.techhouse.ejson.elements.JsonBaseElement;
-import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonObject;
+import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.req.agg.step.SortAggregationStep;
 import org.techhouse.utils.JsonUtils;
@@ -41,8 +42,7 @@ public final class SortOperatorHelper {
         final var fieldName = sortStep.getFieldName();
         final var ascending = sortStep.getAscending();
         if (resultStream == null) {
-            final var orderedIds = IndexHelper.getSortedIdsForField(dbName, collName, fieldName,
-                    (a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending),
+            final var orderedIds = IndexHelper.getSortedIdsForField(dbName, collName, fieldName, entryOrder(ascending),
                     bound > 0 ? bound : Long.MAX_VALUE);
             if (orderedIds != null) {
                 return fetchInOrder(orderedIds, dbName, collName, bound);
@@ -64,7 +64,12 @@ public final class SortOperatorHelper {
         final Comparator<Keyed> byKey = ascending
                 ? (a, b) -> JsonUtils.compareSortKeysAscending(a.key(), b.key())
                 : (a, b) -> JsonUtils.compareSortKeysDescending(a.key(), b.key());
-        return byKey.thenComparingInt(Keyed::seq);
+        return byKey.thenComparing(SortOperatorHelper::idOf).thenComparingInt(Keyed::seq);
+    }
+
+    private static String idOf(Keyed keyed) {
+        final var id = keyed.document().get(Globals.PK_FIELD);
+        return id instanceof JsonString jsonString ? jsonString.getValue() : "";
     }
 
     private static Stream<JsonObject> fullSort(Stream<JsonObject> source, String fieldName,
@@ -78,15 +83,17 @@ public final class SortOperatorHelper {
             Comparator<Keyed> comparator, int bound) {
         final var heap = new PriorityQueue<>(comparator.reversed());
         final var seq = new int[]{0};
-        source.forEach(document -> {
-            final var keyed = new Keyed(document, JsonUtils.getFromPath(document, fieldName), seq[0]++);
-            if (heap.size() < bound) {
-                heap.offer(keyed);
-            } else if (comparator.compare(heap.peek(), keyed) > 0) {
-                heap.poll();
-                heap.offer(keyed);
-            }
-        });
+        try (var documents = source) {
+            documents.forEach(document -> {
+                final var keyed = new Keyed(document, JsonUtils.getFromPath(document, fieldName), seq[0]++);
+                if (heap.size() < bound) {
+                    heap.offer(keyed);
+                } else if (comparator.compare(heap.peek(), keyed) > 0) {
+                    heap.poll();
+                    heap.offer(keyed);
+                }
+            });
+        }
         final var retained = heap.toArray(Keyed[]::new);
         Arrays.sort(retained, comparator);
         return Arrays.stream(retained).map(Keyed::document);
@@ -94,8 +101,10 @@ public final class SortOperatorHelper {
 
     private static Keyed[] decorate(Stream<JsonObject> source, String fieldName) {
         final var decorated = new ArrayList<Keyed>();
-        source.forEach(document -> decorated
-                .add(new Keyed(document, JsonUtils.getFromPath(document, fieldName), decorated.size())));
+        try (var documents = source) {
+            documents.forEach(document -> decorated
+                    .add(new Keyed(document, JsonUtils.getFromPath(document, fieldName), decorated.size())));
+        }
         return decorated.toArray(Keyed[]::new);
     }
 
@@ -108,12 +117,15 @@ public final class SortOperatorHelper {
 
     private static Stream<JsonObject> sortViaIndex(List<FieldIndexEntry<?>> indexEntries, String dbName,
             String collName, boolean ascending, long bound) {
+        final var order = entryOrder(ascending);
         final var sortedEntries = new ArrayList<>(indexEntries);
-        sortedEntries.sort((a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending));
-        final var ids = sortedEntries.stream().flatMap(entry -> entry.getIds().stream()).iterator();
-        final var chunks = Spliterators.spliteratorUnknownSize(chunkIterator(ids, firstChunkSize(bound)),
-                Spliterator.ORDERED);
-        return StreamSupport.stream(chunks, false).flatMap(chunk -> fetchChunk(chunk, dbName, collName));
+        sortedEntries.sort(order);
+        return fetchInOrder(IndexHelper.idsInOrder(sortedEntries, order, bound > 0 ? bound : Long.MAX_VALUE), dbName,
+                collName, bound);
+    }
+
+    private static Comparator<FieldIndexEntry<?>> entryOrder(boolean ascending) {
+        return (a, b) -> compareIndexValues(a.getValue(), b.getValue(), ascending);
     }
 
     private static int firstChunkSize(long bound) {
@@ -171,42 +183,14 @@ public final class SortOperatorHelper {
     }
 
     private static int compareIndexValues(Object a, Object b, boolean ascending) {
-        if (!ascending) {
-            return compareIndexValues(b, a, true);
-        }
-        final var aIsNull = (a == null || a instanceof JsonNull);
-        final var bIsNull = (b == null || b instanceof JsonNull);
-        if (aIsNull && bIsNull) {
-            return 0;
-        }
-        if (aIsNull) {
-            return 1;
-        }
-        if (bIsNull) {
-            return -1;
-        }
-        switch (a) {
-            case Number na when b instanceof Number nb -> {
-                return Double.compare(na.doubleValue(), nb.doubleValue());
-            }
-            case String sa when b instanceof String sb -> {
-                return sa.compareTo(sb);
-            }
-            case Boolean ba -> {
-                return ba ? -1 : 1;
-            }
-            case JsonCustom<?> ca when b instanceof JsonCustom<?> cb
-                    && ca.getClass().isAssignableFrom(cb.getClass()) -> {
-                return ca.getValue().compareTo(cb.getValue());
-            }
-            default -> {
-            }
-        }
-        final var elemA = IndexHelper.indexValueToElement(a);
-        final var elemB = IndexHelper.indexValueToElement(b);
-        if (elemA.isJsonPrimitive() && !elemB.isJsonPrimitive()) {
-            return 1;
-        }
-        return -1;
+        final var elemA = toSortKey(a);
+        final var elemB = toSortKey(b);
+        return ascending
+                ? JsonUtils.compareSortKeysAscending(elemA, elemB)
+                : JsonUtils.compareSortKeysDescending(elemA, elemB);
+    }
+
+    private static JsonBaseElement toSortKey(Object value) {
+        return value == null || value instanceof JsonNull ? JsonNull.INSTANCE : IndexHelper.indexValueToElement(value);
     }
 }

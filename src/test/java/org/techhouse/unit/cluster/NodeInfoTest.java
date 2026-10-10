@@ -57,14 +57,11 @@ public class NodeInfoTest {
     public void test_telemetry_is_copied_from_a_peer_report() {
         final var incoming = new NodeInfo("node-1", "127.0.0.1", 9990, NodeState.ALIVE, 100L, 5L, 4);
         incoming.setAdminSyncing(true);
-        incoming.setAdminEpoch(9L);
         final var local = sample();
         local.copyTelemetryFrom(incoming);
         assertEquals(4, local.getScriptLoad());
         assertTrue(local.isAdminSyncing());
-        assertEquals(9L, local.getAdminEpoch());
         assertTrue(local.toString().contains("adminSyncing=true"));
-        assertTrue(local.toString().contains("adminEpoch=9"));
     }
 
     @Test
@@ -83,15 +80,13 @@ public class NodeInfoTest {
         assertEquals(a, b);
         b.setAdminSyncing(true);
         assertNotEquals(a, b);
-        b.setAdminSyncing(false);
-        b.setAdminEpoch(3L);
-        assertNotEquals(a, b);
         assertNotEquals(a.hashCode(), b.hashCode());
-        b.setAdminEpoch(0L);
+        b.setAdminSyncing(false);
         assertEquals(a, b);
         b.setHeartbeat(6L);
         assertNotEquals(null, a);
         assertNotEquals("node-1", a);
         assertTrue(a.toString().contains("node-1"));
     }
+
 }

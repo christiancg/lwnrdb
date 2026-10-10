@@ -1,6 +1,9 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.Mockito.atLeastOnce;
@@ -13,6 +16,8 @@ import java.net.Socket;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,17 +30,24 @@ import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.ownership.OwnershipManager;
+import org.techhouse.concurrency.ResourceLocking;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
+import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
+import org.techhouse.ops.TwoPhaseParticipant;
+import org.techhouse.ops.Tx2pcLog;
+import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
+import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -47,8 +59,10 @@ public class Tx2pcCoordinatorTest {
     private final MembershipService membershipService = IocContainer.get(MembershipService.class);
     private final OwnershipManager ownership = IocContainer.get(OwnershipManager.class);
     private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
-    private boolean origEnabled;
-    private int origExpected;
+    private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
+    private volatile boolean origEnabled;
+    private volatile int origExpected;
+    private volatile long origAckTimeoutMs;
     private PeerConnectionPool origPool;
 
     private static NodeInfo node() {
@@ -62,6 +76,7 @@ public class Tx2pcCoordinatorTest {
         TestUtils.resetClients();
         origEnabled = config.isClusterEnabled();
         origExpected = config.getClusterExpectedSize();
+        origAckTimeoutMs = config.getReplicationAckTimeoutMs();
         origPool = TestUtils.getPrivateField(coordinator, "pool", PeerConnectionPool.class);
         TestUtils.setPrivateField(config, "clusterEnabled", true);
         TestUtils.setPrivateField(config, "clusterExpectedSize", 1);
@@ -78,6 +93,7 @@ public class Tx2pcCoordinatorTest {
         TestUtils.setPrivateField(coordinator, "pool", origPool);
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "clusterExpectedSize", origExpected);
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", origAckTimeoutMs);
         ownership.setSelfNodeId(null);
         ownership.onMembershipChanged(new MembershipView(List.of()));
         TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
@@ -127,6 +143,119 @@ public class Tx2pcCoordinatorTest {
         final var request = new FindByIdRequest(TestGlobals.DB, TestGlobals.COLL);
         request.set_id(id);
         return processor.processMessage(request).getStatus();
+    }
+
+    private String breakLocalSlice(UUID clientId) throws Exception {
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var txId = transaction.getTransactionId().toString();
+        final var corrupt = new org.techhouse.data.admin.AdminTransactionEntry(txId, "client", 99,
+                org.techhouse.data.admin.AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB, TestGlobals.COLL,
+                new JsonObject());
+        org.techhouse.ops.AdminOperationHelper.saveTransactionOp(corrupt);
+        transaction.getBufferedOpIds().add(corrupt.get_id());
+        return txId;
+    }
+
+    @Test
+    public void test_a_failed_local_commit_does_not_report_success() throws Exception {
+        poolReplies(ClusterMessageType.PREPARE_TX_ACK);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-localfail");
+        breakLocalSlice(clientId);
+
+        final var response = coordinator.commit(clientId);
+
+        assertEquals("409-10", response.getErrorCode(),
+                "a coordinator whose own slice did not apply must not answer OK");
+    }
+
+    @Test
+    public void test_a_failed_local_commit_keeps_the_coordinator_marker() throws Exception {
+        poolReplies(ClusterMessageType.PREPARE_TX_ACK);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-localfail2");
+        final var txId = breakLocalSlice(clientId);
+
+        coordinator.commit(clientId);
+
+        assertTrue(org.techhouse.ops.Tx2pcLog.isCommitted(txId),
+                "the commit decision must survive so recovery can re-drive the failed slice");
+    }
+
+    private OperationResponse resendCommitWithoutQuorum(UUID clientId) throws Exception {
+        TestUtils.setPrivateField(config, "clusterExpectedSize", 3);
+        return processor.processMessage(new CommitTransactionRequest(), clientId);
+    }
+
+    @Test
+    public void test_a_resent_commit_without_quorum_keeps_a_decided_slice() throws Exception {
+        poolReplies(ClusterMessageType.PREPARE_TX_ACK);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-resent-noquorum");
+        final var txId = breakLocalSlice(clientId);
+        assertEquals("409-10", coordinator.commit(clientId).getErrorCode());
+        final var transaction = clientTracker.getActiveTransaction(clientId);
+        final var opIds = List.copyOf(transaction.getBufferedOpIds());
+
+        final var response = resendCommitWithoutQuorum(clientId);
+
+        assertEquals("500-33", response.getErrorCode(),
+                "a decided slice is not refused for quorum: the decision is already binding");
+        assertTrue(Tx2pcLog.sliceOpIds(txId).containsAll(opIds),
+                "deleting the slice leaves recovery an empty replay it records as committed");
+        assertTrue(org.techhouse.ops.TxCommitLog.isLocallyCommitted(txId),
+                "the decided marker must survive the re-sent commit");
+        assertFalse(transaction.getHeldLocks().isEmpty(), "the half-applied slice stays fenced");
+        assertEquals(transaction, clientTracker.getActiveTransaction(clientId));
+    }
+
+    @Test
+    public void test_a_resent_commit_finishes_a_decided_slice_without_quorum() throws Exception {
+        poolReplies(ClusterMessageType.PREPARE_TX_ACK);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-resent-finish");
+        final var txId = breakLocalSlice(clientId);
+        assertEquals("409-10", coordinator.commit(clientId).getErrorCode());
+        final var opIds = clientTracker.getActiveTransaction(clientId).getBufferedOpIds();
+        final var corruptOpId = opIds.getLast();
+        opIds.remove(corruptOpId);
+        AdminOperationHelper.deleteTransactionOps(List.of(corruptOpId));
+
+        final var response = resendCommitWithoutQuorum(clientId);
+
+        assertEquals(ErrorCode.REPLICATION_TIMEOUT.getCode(), response.getErrorCode(),
+                "the re-sent commit finishes the decided slice; only its replication waits for the quorum");
+        assertEquals(OperationStatus.OK, findStatus("tpc-resent-finish"));
+        assertFalse(Tx2pcLog.isPrepared(txId), "finishing the slice resolves its prepared marker");
+        assertNull(clientTracker.getActiveTransaction(clientId));
+    }
+
+    @Test
+    public void test_a_prepared_but_undecided_slice_keeps_the_quorum_refusal() throws Exception {
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-undecided");
+        final var txId = clientTracker.getActiveTransaction(clientId).getTransactionId().toString();
+        assertTrue(TwoPhaseParticipant.prepare(clientId, REMOTE, List.of(REMOTE)));
+
+        final var response = resendCommitWithoutQuorum(clientId);
+
+        assertEquals(ErrorCode.NO_QUORUM.getCode(), response.getErrorCode(),
+                "without a commit decision the single-node refusals still apply");
+        Tx2pcLog.deleteParticipantMarker(txId);
+    }
+
+    @Test
+    public void test_rollback_after_an_indeterminate_commit_keeps_the_slice() throws Exception {
+        poolReplies(ClusterMessageType.PREPARE_TX_ACK);
+        final var clientId = clientWithLocalAndRemoteSlice("tpc-indeterminate");
+        final var txId = breakLocalSlice(clientId);
+        assertEquals("409-10", coordinator.commit(clientId).getErrorCode());
+        final var opIds = List.copyOf(clientTracker.getActiveTransaction(clientId).getBufferedOpIds());
+
+        final var response = processor.processMessage(new org.techhouse.ops.req.RollbackTransactionRequest(), clientId);
+
+        assertEquals("500-33", response.getErrorCode(),
+                "a rollback after the commit decision must not report a clean rollback");
+        assertTrue(org.techhouse.ops.TxCommitLog.isLocallyCommitted(txId),
+                "the decided marker must survive the rollback");
+        assertTrue(org.techhouse.ops.Tx2pcLog.isCommitted(txId), "the commit decision must survive the rollback");
+        assertTrue(org.techhouse.ops.Tx2pcLog.sliceOpIds(txId).containsAll(opIds),
+                "the slice recovery re-drives must survive the rollback");
     }
 
     @Test
@@ -189,10 +318,61 @@ public class Tx2pcCoordinatorTest {
     }
 
     @Test
+    public void test_force_resolve_reports_an_error_when_the_local_replay_is_incomplete() throws Exception {
+        final var dtxId = UUID.randomUUID().toString();
+        final var obj = new JsonObject();
+        obj.add("_id", new JsonString("force-missing"));
+        org.techhouse.ops.AdminOperationHelper.saveTransactionOp(new org.techhouse.data.admin.AdminTransactionEntry(
+                dtxId, "client", 0, org.techhouse.data.admin.AdminTransactionEntry.OP_TYPE_SAVE, TestGlobals.DB,
+                "missing-coll", obj));
+        org.techhouse.ops.Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:5000", List.of("127.0.0.1:5000"),
+                List.of(org.techhouse.cache.Cache.getCollectionIdentifier(TestGlobals.DB, "missing-coll")));
+
+        final var response = coordinator.forceResolve(dtxId, true);
+
+        assertEquals("500-24", response.getErrorCode(), "an incomplete local replay is not a resolved transaction");
+        assertTrue(org.techhouse.ops.TxCommitLog.isLocallyCommitted(dtxId));
+    }
+
+    @Test
     public void test_force_resolve_abort_discards() throws Exception {
         final var dtxId = seedDurablePrepared("force-abort");
         assertEquals(OperationStatus.OK, coordinator.forceResolve(dtxId, false).getStatus());
         assertEquals(OperationStatus.NOT_FOUND, findStatus("force-abort"));
+    }
+
+    @Test
+    public void test_force_resolve_gives_up_on_a_busy_collection_lock_instead_of_blocking() throws Exception {
+        final var dtxId = seedDurablePrepared("force-busy");
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 500L);
+        final var holding = new CountDownLatch(1);
+        final var release = new CountDownLatch(1);
+        final var releasedOnSignal = new java.util.concurrent.atomic.AtomicBoolean();
+        final var holder = new Thread(() -> {
+            try {
+                locks.lock(TestGlobals.DB, TestGlobals.COLL);
+                holding.countDown();
+                releasedOnSignal.set(release.await(5, TimeUnit.SECONDS));
+                locks.release(TestGlobals.DB, TestGlobals.COLL);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        holder.start();
+        assertTrue(holding.await(5, TimeUnit.SECONDS));
+
+        final var started = System.currentTimeMillis();
+        final var response = coordinator.forceResolve(dtxId, true);
+        final var elapsed = System.currentTimeMillis() - started;
+
+        release.countDown();
+        holder.join(5000);
+
+        assertTrue(releasedOnSignal.get(), "the lock holder released on the signal, not on its own timeout");
+        assertTrue(elapsed < 5000, "the coordinator must give up on its own budget instead of parking on the lock");
+        assertEquals(OperationType.RESOLVE_TRANSACTION, response.getType());
+        assertEquals("500-24", response.getErrorCode(),
+                "a busy collection lock must be reported as a failure, not resolved by an eventual retry");
     }
 
     @Test
@@ -214,6 +394,30 @@ public class Tx2pcCoordinatorTest {
         assertEquals(OperationStatus.OK, coordinator.forceResolve(dtxId, true).getStatus());
         verify(pool, atLeastOnce()).request(any(), any(), anyLong());
         assertEquals(OperationStatus.OK, findStatus("force-broadcast"));
+    }
+
+    @Test
+    public void test_force_resolve_records_the_real_participants() throws Exception {
+        final var self = node();
+        final var other = new NodeInfo("other", "127.0.0.1", 59998, NodeState.ALIVE, 1L, 1L);
+        TestUtils.setPrivateField(membershipService, "members",
+                new ConcurrentHashMap<>(java.util.Map.of("self", self, "other", other)));
+        TestUtils.setPrivateField(membershipService, "self", self);
+        ownership.onMembershipChanged(membershipService.membershipView());
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenAnswer(_ -> {
+            final var reply = new ClusterMessage();
+            reply.setType(ClusterMessageType.COMMIT_TX_ACK);
+            return reply;
+        });
+        TestUtils.setPrivateField(coordinator, "pool", pool);
+        final var dtxId = seedDurablePrepared("force-participants");
+
+        assertEquals(OperationStatus.OK, coordinator.forceResolve(dtxId, true).getStatus());
+
+        assertFalse(org.techhouse.ops.Tx2pcLog.readCoordinatorParticipants(dtxId).isEmpty(),
+                "an empty participant list makes the next recovery sweep delete the coordinator marker, after"
+                        + " which a straggler participant reads NO_RECORD and aborts what the others committed");
     }
 
     @Test

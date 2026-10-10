@@ -3,6 +3,7 @@ package org.techhouse.ops;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.concurrent.locks.ReentrantLock;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.cluster.msg.TriggerRunRow;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
@@ -14,6 +15,7 @@ import org.techhouse.ops.req.ResolveTriggerRunRequest;
 public final class TriggerRunResolution {
     private static final Logger logger = Logger.logFor(TriggerRunResolution.class);
     private static final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
+    private static final ReentrantLock RESOLUTION_LOCK = new ReentrantLock();
 
     private TriggerRunResolution() {
     }
@@ -26,10 +28,10 @@ public final class TriggerRunResolution {
         try {
             for (final var chunks : byRun().values()) {
                 final var first = chunks.getFirst();
-                if (filter != null && first.getStatus() != filter) {
+                if (filter != null && first.getStatus().reported() != filter) {
                     continue;
                 }
-                rows.add(new TriggerRunRow(first.getRunId(), first.getStatus().name(), first.getDbName(),
+                rows.add(new TriggerRunRow(first.getRunId(), first.getStatus().reported().name(), first.getDbName(),
                         first.getCollName(), first.getTriggerName(), first.getProcedureName(),
                         first.getEventType().name(), first.getAttempts(), first.getLastError(), first.getFiredAt(),
                         first.getNextAttemptAt()));
@@ -44,6 +46,15 @@ public final class TriggerRunResolution {
         if (runId == null || !TriggerRunLog.isEnabled()) {
             return false;
         }
+        RESOLUTION_LOCK.lock();
+        try {
+            return resolveRun(runId, decision);
+        } finally {
+            RESOLUTION_LOCK.unlock();
+        }
+    }
+
+    private static boolean resolveRun(String runId, String decision) {
         try {
             final var chunks = byRun().get(runId);
             if (chunks == null) {
@@ -58,7 +69,12 @@ public final class TriggerRunResolution {
                 logger.warning("Ignoring trigger run '" + runId + "': unknown decision '" + decision + "'");
                 return false;
             }
-            final var event = TriggerRunRecovery.toEvent(chunks);
+            if (chunks.getFirst().getStatus() != TriggerRunStatus.DEAD) {
+                logger.warning("Refusing to replay trigger run '" + runId + "': it is " + chunks.getFirst().getStatus()
+                        + ", not dead-lettered");
+                return false;
+            }
+            final var event = TriggerRunRecovery.toEvent(chunks, 1);
             if (event == null) {
                 TriggerDispatcher.consumeQuietly(runId, chunks.getFirst().getTriggerName());
                 logger.info("Discarded trigger run '" + runId + "': the documents it applied to are gone");

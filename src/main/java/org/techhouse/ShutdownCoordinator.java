@@ -11,6 +11,7 @@ import org.techhouse.cluster.ClusterServer;
 import org.techhouse.cluster.Tx2pcRecovery;
 import org.techhouse.cluster.membership.MembershipService;
 import org.techhouse.config.Configuration;
+import org.techhouse.conn.InFlightRequests;
 import org.techhouse.conn.SocketServer;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.listen.ListenManager;
@@ -27,6 +28,7 @@ public class ShutdownCoordinator {
     private final Logger logger = Logger.logFor(ShutdownCoordinator.class);
     private final Configuration configuration = Configuration.getInstance();
     private final ClusterConfig clusterConfig = IocContainer.get(ClusterConfig.class);
+    private final InFlightRequests inFlightRequests = IocContainer.get(InFlightRequests.class);
     private final TriggerExecutor triggerExecutor = IocContainer.get(TriggerExecutor.class);
     private final ScheduleExecutor scheduleExecutor = IocContainer.get(ScheduleExecutor.class);
     private final BackgroundTaskManager backgroundTaskManager = IocContainer.get(BackgroundTaskManager.class);
@@ -53,17 +55,22 @@ public class ShutdownCoordinator {
             if (socketServer != null) {
                 socketServer.stopAccepting();
             }
+            if (clusterServer != null) {
+                clusterServer.refuseWrites();
+            }
         });
         step("stop background sweeps", () -> {
             memoryManagement.stopSweepThread();
             scriptRunHistory.stopSweep();
+            scheduleExecutor.stopTicking();
             if (clusterConfig.isEnabled()) {
-                antiEntropyService.stop();
-                adminAntiEntropyService.stop();
+                antiEntropyService.stop(remaining(deadline));
+                adminAntiEntropyService.stop(remaining(deadline));
                 tx2pcRecovery.stop();
             }
         });
         step("roll back open transactions", TransactionOperationHelper::rollbackOpenTransactionsAtShutdown);
+        step("wait for in-flight requests", () -> awaitInFlightRequests(deadline));
         step("drain triggers", () -> triggerExecutor.drain(remaining(deadline)));
         // After the triggers and before the background queue: a scheduled run enqueues into both.
         step("drain schedules", () -> scheduleExecutor.drain(remaining(deadline)));
@@ -79,6 +86,17 @@ public class ShutdownCoordinator {
         });
         logger.info("Shutdown complete");
         LogWriter.flushAndClose();
+    }
+
+    private void awaitInFlightRequests(long deadline) {
+        try {
+            if (!inFlightRequests.awaitIdle(remaining(deadline))) {
+                logger.warning(inFlightRequests.current() + " request(s) still running at the end of the shutdown "
+                        + "budget; their background work may be dropped");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private void step(String description, Runnable action) {

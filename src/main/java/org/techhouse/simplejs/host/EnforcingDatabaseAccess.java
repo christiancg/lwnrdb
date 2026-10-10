@@ -12,13 +12,16 @@ import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonArray;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ex.InvalidCommandException;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.listen.ResultHasher;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.SchemaValidationHelper;
 import org.techhouse.ops.TransactionOperationHelper;
 import org.techhouse.ops.auth.AuthorizationChecker;
+import org.techhouse.ops.req.AggregateRequest;
 import org.techhouse.ops.req.BulkSaveRequest;
 import org.techhouse.ops.req.CommitTransactionRequest;
 import org.techhouse.ops.req.DeleteRequest;
@@ -30,6 +33,7 @@ import org.techhouse.ops.req.RequestParser;
 import org.techhouse.ops.req.RollbackTransactionRequest;
 import org.techhouse.ops.req.SaveRequest;
 import org.techhouse.ops.req.StartTransactionRequest;
+import org.techhouse.ops.req.validations.RequestValidator;
 import org.techhouse.ops.resp.AggregateResponse;
 import org.techhouse.ops.resp.BulkSaveResponse;
 import org.techhouse.ops.resp.FindByIdResponse;
@@ -38,6 +42,7 @@ import org.techhouse.ops.resp.ListDatabasesResponse;
 import org.techhouse.ops.resp.OperationResponse;
 import org.techhouse.ops.resp.ResponseParser;
 import org.techhouse.ops.resp.SaveResponse;
+import org.techhouse.ops.tx.SliceStates;
 import org.techhouse.simplejs.builtins.ErrorBuiltins;
 import org.techhouse.simplejs.exceptions.JsThrowException;
 import org.techhouse.simplejs.values.JsObject;
@@ -59,6 +64,8 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
     private JsObject errorPrototype;
     private UUID sessionClientId;
     private Thread sessionThread;
+    private volatile boolean lastCommitFenced;
+    private volatile boolean clusterUnavailable;
 
     public EnforcingDatabaseAccess(String username, UUID clientId) {
         this(username, clientId, null);
@@ -104,14 +111,8 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
 
     @Override
     public List<JsonObject> aggregate(String db, String coll, JsonArray pipeline) {
-        final var message = new JsonObject();
-        message.add("type", new JsonString("AGGREGATE"));
-        message.add("databaseName", new JsonString(db));
-        message.add("collectionName", new JsonString(coll));
-        message.add("aggregationSteps", pipeline);
-        final var rawJson = eJson.toJson(message);
-        final OperationRequest request = RequestParser.parseRequest(rawJson);
-        final var response = dispatch(request, rawJson);
+        final var rawJson = aggregateMessage(db, coll, pipeline);
+        final var response = dispatch(parsedAggregate(rawJson), rawJson);
         if (response instanceof AggregateResponse aggregateResponse) {
             return aggregateResponse.getResults();
         }
@@ -121,12 +122,51 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         throw jsError(response.getMessage());
     }
 
+    private OperationRequest parsedAggregate(String rawJson) {
+        try {
+            return RequestParser.parseRequest(rawJson);
+        } catch (InvalidCommandException unparseable) {
+            throw jsError(unparseable.getMessage());
+        }
+    }
+
+    @Override
+    public boolean ordersResults(String db, String coll, JsonArray pipeline) {
+        try {
+            return !(RequestParser
+                    .parseRequest(aggregateMessage(db, coll, pipeline)) instanceof AggregateRequest parsed)
+                    || ResultHasher.ordersResults(parsed.getAggregationSteps());
+        } catch (RuntimeException unparseable) {
+            return true;
+        }
+    }
+
+    @Override
+    public int firstUnorderedCut(String db, String coll, JsonArray pipeline) {
+        try {
+            return RequestParser.parseRequest(aggregateMessage(db, coll, pipeline)) instanceof AggregateRequest parsed
+                    ? ResultHasher.firstUnorderedCut(parsed.getAggregationSteps())
+                    : -1;
+        } catch (RuntimeException unparseable) {
+            return -1;
+        }
+    }
+
+    private String aggregateMessage(String db, String coll, JsonArray pipeline) {
+        final var message = new JsonObject();
+        message.add("type", new JsonString("AGGREGATE"));
+        message.add("databaseName", new JsonString(db));
+        message.add("collectionName", new JsonString(coll));
+        message.add("aggregationSteps", pipeline);
+        return eJson.toJson(message);
+    }
+
     @Override
     public JsonObject save(String db, String coll, JsonObject document) {
         final var request = new SaveRequest(db, coll);
         request.setObject(document);
-        if (document.has(Globals.PK_FIELD)) {
-            request.set_id(document.get(Globals.PK_FIELD).asJsonString().getValue());
+        if (document.get(Globals.PK_FIELD) instanceof JsonString objectId) {
+            request.set_id(objectId.getValue());
         }
         final var response = dispatch(request);
         if (response instanceof SaveResponse saveResponse) {
@@ -207,11 +247,27 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         if (sessionClientId == null) {
             throw jsError("No transaction is active on this script");
         }
+        final var transaction = clientTracker.getActiveTransaction(sessionClientId);
+        final var txId = transaction != null ? transaction.getTransactionId().toString() : null;
+        OperationResponse response = null;
         try {
-            requireOk(dispatch(request));
+            response = dispatch(request);
         } finally {
-            clearSession();
+            final var fenced = txId != null && (SliceStates.isFenced(txId) || keptAfterFinishing(response));
+            lastCommitFenced = fenced;
+            if (response == null && !fenced) {
+                TransactionOperationHelper.rollback(sessionClientId);
+            }
+            clearSession(fenced);
         }
+        if (response.getStatus() != OperationStatus.OK
+                && !ErrorCode.REPLICATION_TIMEOUT.getCode().equals(response.getErrorCode())) {
+            throw jsError(response.getMessage());
+        }
+    }
+
+    private boolean keptAfterFinishing(OperationResponse response) {
+        return response != null && clientTracker.getActiveTransaction(sessionClientId) != null;
     }
 
     public void bufferTriggerRunConsume(String runId) {
@@ -222,6 +278,7 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         }
         try {
             TransactionOperationHelper.bufferTriggerRunConsume(transaction, runId);
+            clientTracker.markLocalSlice(sessionClientId);
         } catch (Exception e) {
             throw jsError("Could not consume the pending trigger run: " + e.getMessage());
         }
@@ -231,12 +288,24 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
         return sessionClientId != null;
     }
 
+    public boolean lastCommitWasFenced() {
+        return lastCommitFenced;
+    }
+
+    public boolean sawClusterUnavailable() {
+        return clusterUnavailable;
+    }
+
     private void clearSession() {
-        if (sessionClientId != null) {
+        clearSession(false);
+    }
+
+    private void clearSession(boolean fenced) {
+        if (sessionClientId != null && !fenced) {
             clientTracker.clearTransactionState(sessionClientId);
-        }
-        if (sessionClientId != null && !sessionClientId.equals(clientId)) {
-            clientTracker.removeById(sessionClientId);
+            if (!sessionClientId.equals(clientId)) {
+                clientTracker.removeById(sessionClientId);
+            }
         }
         sessionClientId = null;
         sessionThread = null;
@@ -268,11 +337,15 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
                 throw jsError("This script may only access database '" + scopedDatabase + "'");
             }
         }
-        final var user = cache.getAdminUserEntry(username);
-        if (user == null) {
-            throw jsError("User '" + username + "' not found");
+        final var validation = RequestValidator.validate(request);
+        if (!validation.isValid()) {
+            throw jsError(validation.getErrorMessage());
         }
         if (!isTransactionControl(request)) {
+            final var user = cache.getAdminUserEntry(username);
+            if (user == null) {
+                throw jsError("User '" + username + "' not found");
+            }
             final var authorization = AuthorizationChecker.check(request, user);
             if (!authorization.isAllowed()) {
                 throw jsError(authorization.getReason());
@@ -283,17 +356,25 @@ public final class EnforcingDatabaseAccess implements DatabaseAccess {
             throw jsError(schemaError.getMessage());
         }
         if (sessionClientId != null) {
-            return routeOrProcess(request, rawJson, sessionClientId);
+            return recordClusterAvailability(routeOrProcess(request, rawJson, sessionClientId));
         }
         if (clientId != null) {
-            return routeOrProcess(request, rawJson, clientId);
+            return recordClusterAvailability(routeOrProcess(request, rawJson, clientId));
         }
         final var forwardedClientId = clientTracker.registerForwardedClient(username);
         try {
-            return routeOrProcess(request, rawJson, forwardedClientId);
+            return recordClusterAvailability(routeOrProcess(request, rawJson, forwardedClientId));
         } finally {
             clientTracker.removeById(forwardedClientId);
         }
+    }
+
+    private OperationResponse recordClusterAvailability(OperationResponse response) {
+        if (ErrorCode.NO_QUORUM.getCode().equals(response.getErrorCode())
+                || ErrorCode.NOT_COLLECTION_OWNER.getCode().equals(response.getErrorCode())) {
+            clusterUnavailable = true;
+        }
+        return response;
     }
 
     private OperationResponse routeOrProcess(OperationRequest request, String rawJson, UUID effectiveClientId) {

@@ -11,58 +11,21 @@ import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.BeforeEach;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cluster.NodeInfo;
-import org.techhouse.cluster.NodeState;
-import org.techhouse.cluster.PeerConnectionPool;
+import org.techhouse.cache.Cache;
+import org.techhouse.cluster.AdminAntiEntropyService;
+import org.techhouse.cluster.msg.AntiEntropyPayload;
 import org.techhouse.cluster.msg.ClusterMessage;
 import org.techhouse.cluster.msg.ClusterMessageType;
 import org.techhouse.cluster.msg.ForwardBody;
-import org.techhouse.concurrency.ResourceLocking;
-import org.techhouse.ejson.EJson;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
-import org.techhouse.ops.req.RequestParser;
-import org.techhouse.ops.resp.OperationResponse;
-import org.techhouse.test.ClusterTestHarness;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
-public class ClusterConnectionHandlerTest {
-    private static final long ACK_TIMEOUT_MS = 30000L;
+public class ClusterConnectionHandlerTest extends ClusterConnectionHandlerTestBase {
     private static final List<String> QUEUED_IDS = List.of("drain1", "drain2");
-    private final ClusterTestHarness cluster = new ClusterTestHarness();
-    private final ResourceLocking locks = IocContainer.get(ResourceLocking.class);
-    private final PeerConnectionPool pool = new PeerConnectionPool();
-    private final OperationProcessor processor = IocContainer.get(OperationProcessor.class);
-    private final EJson eJson = IocContainer.get(EJson.class);
-
-    @BeforeEach
-    public void setUp() throws Exception {
-        TestUtils.standardInitialSetup();
-        TestUtils.createTestDatabaseAndCollection();
-        cluster.start(true, ACK_TIMEOUT_MS);
-        cluster.configureMembership(1,
-                new NodeInfo("self", "127.0.0.1", cluster.serverPort(), NodeState.ALIVE, 1L, 1L));
-    }
-
-    @AfterEach
-    public void tearDown() throws Exception {
-        pool.closeAll();
-        cluster.stop();
-        TestUtils.releaseAllLocks();
-        TestUtils.standardTearDown();
-    }
-
-    private ClusterMessage envelope(ClusterMessageType type) {
-        final var message = new ClusterMessage();
-        message.setType(type);
-        message.setSecret(ClusterTestHarness.SECRET);
-        return message;
-    }
 
     // A SAVE into a collection whose write lock the test holds: it reaches the handler and then blocks,
     // which is the shape of the slow request that used to hold up everything queued behind it.
@@ -146,12 +109,6 @@ public class ClusterConnectionHandlerTest {
         }
     }
 
-    private OperationResponse findById(String id) {
-        final var json = "{\"type\":\"FIND_BY_ID\",\"databaseName\":\"" + TestGlobals.DB + "\",\"collectionName\":\""
-                + TestGlobals.COLL + "\",\"_id\":\"" + id + "\"}";
-        return processor.processMessage(RequestParser.parseRequest(json));
-    }
-
     // Only gossip left the serial path: a peer's writes must still apply in the order it sent them.
     @Test
     public void test_requests_other_than_gossip_are_still_answered_in_order() throws Exception {
@@ -162,5 +119,92 @@ public class ClusterConnectionHandlerTest {
 
         assertEquals(ClusterMessageType.FORWARD_RESPONSE, save.getType());
         assertEquals(ClusterMessageType.ADMIN_SNAPSHOT_ACK, snapshot.getType());
+    }
+
+    @Test
+    public void test_a_digest_blocked_on_a_collection_lock_does_not_hold_up_the_connection() throws Exception {
+        markAdminSyncCompleted(true);
+        final var address = cluster.serverAddress();
+        final var digestDone = new CountDownLatch(1);
+        final Thread digest;
+
+        locks.lock(TestGlobals.DB, TestGlobals.COLL);
+        try {
+            digest = Thread.ofVirtual().start(() -> {
+                try {
+                    pool.request(address, antiEntropyRequest(ClusterMessageType.DIGEST, 0L), ACK_TIMEOUT_MS);
+                } catch (Exception e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    digestDone.countDown();
+                }
+            });
+            assertFalse(digestDone.await(1, TimeUnit.SECONDS), "the digest should still be waiting on the lock");
+
+            final var ack = pool.request(address, envelope(ClusterMessageType.ADMIN_SNAPSHOT), 5000L);
+
+            assertNotNull(ack);
+            assertEquals(ClusterMessageType.ADMIN_SNAPSHOT_ACK, ack.getType());
+            assertEquals(1L, digestDone.getCount(), "the digest must still be blocked, or this proved nothing");
+        } finally {
+            locks.release(TestGlobals.DB, TestGlobals.COLL);
+            markAdminSyncCompleted(false);
+        }
+
+        assertTrue(digestDone.await(30, TimeUnit.SECONDS), "the digest must finish once the lock is released");
+        digest.join();
+    }
+
+    private void markAdminSyncCompleted(boolean completed) throws Exception {
+        TestUtils.getPrivateField(IocContainer.get(AdminAntiEntropyService.class), "adminSyncCompleted",
+                AtomicBoolean.class).set(completed);
+    }
+
+    private ClusterMessage antiEntropyRequest(ClusterMessageType type, long incarnation) {
+        final var message = envelope(type);
+        final var payload = new AntiEntropyPayload(TestGlobals.DB, TestGlobals.COLL);
+        payload.setIds(List.of("a"));
+        payload.setIncarnationValue(incarnation);
+        message.setAntiEntropy(payload);
+        return message;
+    }
+
+    @Test
+    public void test_digest_is_refused_before_the_first_admin_sync() throws Exception {
+        markAdminSyncCompleted(false);
+
+        final var response = pool.request(cluster.serverAddress(), antiEntropyRequest(ClusterMessageType.DIGEST, 0L),
+                ACK_TIMEOUT_MS);
+
+        assertEquals(ClusterMessageType.ERROR, response.getType(), "a node that has not conformed to the admin"
+                + " snapshot yet must not describe its documents, or a peer pulls a dropped incarnation back");
+    }
+
+    @Test
+    public void test_pull_is_refused_before_the_first_admin_sync() throws Exception {
+        markAdminSyncCompleted(false);
+
+        final var response = pool.request(cluster.serverAddress(), antiEntropyRequest(ClusterMessageType.PULL, 0L),
+                ACK_TIMEOUT_MS);
+
+        assertEquals(ClusterMessageType.ERROR, response.getType());
+    }
+
+    @Test
+    public void test_digest_carries_the_queried_incarnation_into_the_service() throws Exception {
+        markAdminSyncCompleted(true);
+        try {
+            IocContainer.get(Cache.class).getAdminCollectionEntry(TestGlobals.DB, TestGlobals.COLL)
+                    .setIncarnation(100L);
+
+            final var response = pool.request(cluster.serverAddress(),
+                    antiEntropyRequest(ClusterMessageType.DIGEST, 200L), ACK_TIMEOUT_MS);
+
+            assertEquals(ClusterMessageType.DIGEST_ACK, response.getType());
+            assertTrue(response.getAntiEntropy().isStaleIncarnation(),
+                    "the incarnation on the query must reach the service, or the mismatch goes undetected");
+        } finally {
+            markAdminSyncCompleted(false);
+        }
     }
 }

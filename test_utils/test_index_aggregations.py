@@ -4,7 +4,7 @@ import threading
 import time
 
 import base_utils as bu
-from base_utils import Conn, check, check_status, section
+from base_utils import Conn, check, check_code, check_status, section
 
 HOST = os.environ.get("INDEX_TEST_HOST", "127.0.0.1")
 # Overridable so CI can point this suite at a dedicated caching-disabled server
@@ -332,6 +332,26 @@ def probe_count_with_filter(c):
                detail=f"{bad}/{CONS_REPEATS} counts were stale")
 
 
+THROWING_MAP = {"type": "MAP", "operators": [{"fieldName": "x", "operator": {
+    "type": "SCRIPT", "script": "export default () => { throw new Error('boom'); }"}}]}
+
+
+def probe_count_after_a_failing_map_script(c):
+    countme = {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": "countme"}}
+    indexed = agg(c, CONS, [countme, THROWING_MAP, {"type": "COUNT"}])
+    scanned = agg(c, CONS, [{"type": "SKIP", "skip": 0}, countme, THROWING_MAP, {"type": "COUNT"}])
+    check_code("a COUNT whose MAP script throws fails even when an index could count", indexed, "ERROR", "400-9")
+    check_code("exactly as it fails when the filter is answered by a scan", scanned, "ERROR", "400-9")
+    by_unindexed = agg(c, CONS, [{"type": "SORT", "fieldName": "unindexed", "ascending": True}, THROWING_MAP,
+                                 {"type": "COUNT"}])
+    by_indexed = agg(c, CONS, [{"type": "SORT", "fieldName": "status", "ascending": True}, THROWING_MAP,
+                               {"type": "COUNT"}])
+    grouped = agg(c, CONS, [{"type": "GROUP_BY", "fieldName": "status"}, THROWING_MAP, {"type": "COUNT"}])
+    check_code("a COUNT after a scan SORT still runs the MAP script before it", by_unindexed, "ERROR", "400-9")
+    check_code("as it does after an index-backed SORT", by_indexed, "ERROR", "400-9")
+    check_code("and after a GROUP_BY, whose output size is known up front", grouped, "ERROR", "400-9")
+
+
 def probe_whole_collection_count(c):
     # The no-filter COUNT comes from the synchronously-maintained PK index, so it is exact at once.
     bad = 0
@@ -585,6 +605,7 @@ def consistency_suite(c):
     probe_filter_no_false_negative(c)
     probe_filter_no_false_positive_on_update(c)
     probe_count_with_filter(c)
+    probe_count_after_a_failing_map_script(c)
     probe_whole_collection_count(c)
     probe_distinct_new_value(c)
     probe_group_by(c)
@@ -732,14 +753,572 @@ def geo_suite(c):
     probe_geo_pending_write(c)
 
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# Index / scan agreement
+#
+# An index-backed answer must equal the answer the same query gives against a full scan. Each case
+# runs the query with no index, builds the index, and runs it again: the two answers must match.
+# These are the shapes where an index used to answer differently — a scalar index answering a
+# type-agnostic operator, a complement taken from one index of a mixed-type field, a join key the
+# index cannot look up, and an ordering the index computed with its own comparator.
+# ══════════════════════════════════════════════════════════════════════════
+
+AGREE_CONTAINS_NUM = "idxagg_agree_contains_num"
+AGREE_CONTAINS_BOOL = "idxagg_agree_contains_bool"
+AGREE_NOT_IN_OBJ = "idxagg_agree_notin_obj"
+AGREE_NOT_IN_ARR = "idxagg_agree_notin_arr"
+AGREE_JOIN_REMOTE = "idxagg_agree_join_remote"
+AGREE_JOIN_LEFT = "idxagg_agree_join_left"
+AGREE_JOIN_NULL_REMOTE = "idxagg_agree_join_null_remote"
+AGREE_JOIN_NULL_LEFT = "idxagg_agree_join_null_left"
+AGREE_SORT_BOOL = "idxagg_agree_sort_bool"
+AGREE_SORT_BOOL_DESC = "idxagg_agree_sort_bool_desc"
+AGREE_SORT_MIXED = "idxagg_agree_sort_mixed"
+AGREE_SORT_TIES = "idxagg_agree_sort_ties"
+AGREE_SIBLING = "idxagg_agree_sibling"
+AGREE_OBJ_SORT = "idxagg_agree_obj_sort"
+AGREE_CUSTOM = "idxagg_agree_custom"
+AGREE_MIXED_BOX = "idxagg_agree_mixed_box"
+AGREE_GEO = "idxagg_agree_geo"
+AGREE_GEO_TARGET = "#geo(0.000000,0.000000)"
+AGREE_IN_CASE = "idxagg_agree_in_case"
+AGREE_NOT_IN_CASE = "idxagg_agree_notin_case"
+AGREE_IN_CUSTOM = "idxagg_agree_in_custom"
+AGREE_NOT_IN_CUSTOM = "idxagg_agree_notin_custom"
+AGREE_CUSTOM_SORT = "idxagg_agree_custom_sort"
+AGREE_CUSTOM_TIES = "idxagg_agree_custom_ties"
+AGREE_SURROGATE = "idxagg_agree_surrogate"
+AGREE_SURROGATE_CONTAINER = "idxagg_agree_surrogate_container"
+AGREE_SURROGATE_FOLD = "idxagg_agree_surrogate_fold"
+AGREE_ARRAY_CUSTOM = "idxagg_agree_array_custom"
+AGREE_OBJECT_CUSTOM = "idxagg_agree_object_custom"
+AGREE_CONTAINS_CUSTOM = "idxagg_agree_contains_custom"
+AGREE_NOT_EQUALS_MIXED = "idxagg_agree_ne_mixed"
+AGREE_NOT_EQUALS_HOMOGENEOUS = "idxagg_agree_ne_homogeneous"
+AGREE_DOTTED_GROUP = "idxagg_agree_dotted_group"
+AGREE_DOTTED_DISTINCT = "idxagg_agree_dotted_distinct"
+
+AGREE_COLLECTIONS = (AGREE_CONTAINS_NUM, AGREE_CONTAINS_BOOL, AGREE_NOT_IN_OBJ, AGREE_NOT_IN_ARR,
+                     AGREE_JOIN_REMOTE, AGREE_JOIN_LEFT, AGREE_JOIN_NULL_REMOTE, AGREE_JOIN_NULL_LEFT,
+                     AGREE_SORT_BOOL, AGREE_SORT_BOOL_DESC, AGREE_SORT_MIXED, AGREE_SORT_TIES,
+                     AGREE_SIBLING, AGREE_OBJ_SORT, AGREE_CUSTOM, AGREE_MIXED_BOX, AGREE_GEO,
+                     AGREE_IN_CASE, AGREE_NOT_IN_CASE, AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM,
+                     AGREE_CUSTOM_SORT, AGREE_CUSTOM_TIES, AGREE_SURROGATE, AGREE_SURROGATE_CONTAINER, AGREE_SURROGATE_FOLD,
+                     AGREE_ARRAY_CUSTOM,
+                     AGREE_OBJECT_CUSTOM, AGREE_CONTAINS_CUSTOM, AGREE_NOT_EQUALS_MIXED,
+                     AGREE_NOT_EQUALS_HOMOGENEOUS, AGREE_DOTTED_GROUP, AGREE_DOTTED_DISTINCT)
+
+
+def agree_ids(r):
+    """Sorted ids, or a marker for a real error so it can never look like an empty answer."""
+    status = r.get("status")
+    if status not in ("OK", "NOT_FOUND"):
+        return f"<{status}/{r.get('errorCode')}>"
+    return sorted(d.get("_id") for d in (r.get("results") or []))
+
+
+def agree_ordered_ids(r):
+    status = r.get("status")
+    if status not in ("OK", "NOT_FOUND"):
+        return f"<{status}/{r.get('errorCode')}>"
+    return [d.get("_id") for d in (r.get("results") or [])]
+
+
+def agree_joined(r):
+    """Each row as (id, how many documents were attached) — a dropped join shows up as 0."""
+    status = r.get("status")
+    if status not in ("OK", "NOT_FOUND"):
+        return f"<{status}/{r.get('errorCode')}>"
+    rows = []
+    for d in (r.get("results") or []):
+        attached = d.get("cfg")
+        rows.append((d.get("_id"), len(attached) if isinstance(attached, list) else 0))
+    return sorted(rows)
+
+
+def agree_nested_keys(field_path):
+    def extract(r):
+        status = r.get("status")
+        if status not in ("OK", "NOT_FOUND"):
+            return f"<{status}/{r.get('errorCode')}>"
+        rows = []
+        for d in (r.get("results") or []):
+            node = d
+            for segment in field_path.split("."):
+                node = node.get(segment) if isinstance(node, dict) else None
+            members = sorted(m.get("_id") for m in (d.get("group") or []))
+            rows.append((node, members, field_path in d))
+        return sorted(rows)
+    return extract
+
+
+def agree(c, label, query_coll, steps, index_coll, index_field, extract=agree_ids, expected=None):
+    scanned = extract(agg(c, query_coll, steps))
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": index_coll,
+            "fieldName": index_field})
+    wait_for_indexes(c, [(index_coll, index_field)])
+    indexed = extract(agg(c, query_coll, steps))
+    check(f"{label}: index agrees with scan", scanned == indexed,
+          f"scan={scanned!r}  indexed={indexed!r}")
+    if expected is not None:
+        check(f"{label}: answer is correct", scanned == expected,
+              f"expected={expected!r}  got={scanned!r}")
+
+
+def setup_agreement(c):
+    for coll in AGREE_COLLECTIONS:
+        c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": coll})
+    # CONTAINS is type-agnostic on the scan side: it matches an array-valued document holding the
+    # operand, which a scalar index of that field cannot see.
+    save_doc(c, AGREE_CONTAINS_NUM, {"_id": "scalar", "tags": 5})
+    save_doc(c, AGREE_CONTAINS_NUM, {"_id": "inArray", "tags": [5, 7]})
+    save_doc(c, AGREE_CONTAINS_BOOL, {"_id": "scalar", "flags": True})
+    save_doc(c, AGREE_CONTAINS_BOOL, {"_id": "inArray", "flags": [True]})
+    # NOT_IN is a complement: taken from one index of a mixed-type field it silently omits every
+    # document held only by another index of the same field.
+    save_doc(c, AGREE_NOT_IN_OBJ, {"_id": "obj1", "tag": {"a": 1}})
+    save_doc(c, AGREE_NOT_IN_OBJ, {"_id": "str1", "tag": "x"})
+    save_doc(c, AGREE_NOT_IN_OBJ, {"_id": "obj2", "tag": {"b": 2}})
+    save_doc(c, AGREE_NOT_IN_ARR, {"_id": "arr1", "tag": [1]})
+    save_doc(c, AGREE_NOT_IN_ARR, {"_id": "str1", "tag": "x"})
+    save_doc(c, AGREE_NOT_IN_ARR, {"_id": "arr2", "tag": [2]})
+    # A join key the index cannot be looked up by: an object, and an explicit JSON null.
+    save_doc(c, AGREE_JOIN_REMOTE, {"_id": "cfg1", "key": {"region": "eu"}})
+    save_doc(c, AGREE_JOIN_LEFT, {"_id": "row1", "key": {"region": "eu"}})
+    save_doc(c, AGREE_JOIN_NULL_REMOTE, {"_id": "cfg1", "key": None})
+    save_doc(c, AGREE_JOIN_NULL_LEFT, {"_id": "row1", "key": None})
+    # Ordering: booleans, and values of different types that must rank the same way either path.
+    save_doc(c, AGREE_SORT_BOOL, {"_id": "isFalse", "active": False})
+    save_doc(c, AGREE_SORT_BOOL, {"_id": "isTrue", "active": True})
+    save_doc(c, AGREE_SORT_BOOL_DESC, {"_id": "isFalse", "active": False})
+    save_doc(c, AGREE_SORT_BOOL_DESC, {"_id": "isTrue", "active": True})
+    save_doc(c, AGREE_SORT_MIXED, {"_id": "bool1", "x": True})
+    save_doc(c, AGREE_SORT_MIXED, {"_id": "num1", "x": 5})
+    save_doc(c, AGREE_SORT_MIXED, {"_id": "num2", "x": 7})
+    save_doc(c, AGREE_SORT_MIXED, {"_id": "str1", "x": "abc"})
+    save_doc(c, AGREE_SORT_TIES, {"_id": "tieA", "score": 5})
+    save_doc(c, AGREE_SORT_TIES, {"_id": "tieB", "score": 5})
+    save_doc(c, AGREE_SORT_TIES, {"_id": "high", "score": 9})
+    # A point 99.96 km from the target: inside a 100 km radius, but outside a candidate box sized
+    # with a rounded metres-per-degree constant rather than the sphere the distance itself uses.
+    save_doc(c, AGREE_GEO, {"_id": "onTheRim", "location": "#geo(0.899000,0.000000)"})
+    save_doc(c, AGREE_GEO, {"_id": "farAway", "location": "#geo(-40.000000,100.000000)"})
+    # Membership must use the equality EQUALS uses: case-insensitive for strings, semantic for
+    # custom types. Index and scan agreed with each other before, and disagreed with EQUALS.
+    for coll in (AGREE_IN_CASE, AGREE_NOT_IN_CASE):
+        save_doc(c, coll, {"_id": "upper", "tag": "Alpha"})
+        save_doc(c, coll, {"_id": "lower", "tag": "alpha"})
+        save_doc(c, coll, {"_id": "other", "tag": "beta"})
+    for coll in (AGREE_IN_CUSTOM, AGREE_NOT_IN_CUSTOM):
+        save_doc(c, coll, {"_id": "d1", "when": "#datetime(2024-01-01T10:00)"})
+        save_doc(c, coll, {"_id": "d2", "when": "#datetime(2024-02-02T11:00:00)"})
+
+
+def probe_contains_agrees_with_scan_per_type(c):
+    agree(c, "CONTAINS over a number-indexed field", AGREE_CONTAINS_NUM,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "CONTAINS", "field": "tags", "value": 5}}],
+          AGREE_CONTAINS_NUM, "tags", expected=["inArray"])
+    agree(c, "CONTAINS over a boolean-indexed field", AGREE_CONTAINS_BOOL,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "CONTAINS", "field": "flags", "value": True}}],
+          AGREE_CONTAINS_BOOL, "flags", expected=["inArray"])
+
+
+def probe_not_in_agrees_with_scan(c):
+    agree(c, "NOT_IN with an object operand on a mixed-type field", AGREE_NOT_IN_OBJ,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_IN", "field": "tag",
+                                           "value": [{"a": 1}]}}],
+          AGREE_NOT_IN_OBJ, "tag", expected=["obj2", "str1"])
+    agree(c, "NOT_IN with an array operand on a mixed-type field", AGREE_NOT_IN_ARR,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_IN", "field": "tag",
+                                           "value": [[1]]}}],
+          AGREE_NOT_IN_ARR, "tag", expected=["arr2", "str1"])
+
+
+def probe_join_agrees_with_scan_for_non_scalar_keys(c):
+    agree(c, "JOIN on an object key", AGREE_JOIN_LEFT,
+          [{"type": "JOIN", "joinCollection": AGREE_JOIN_REMOTE, "localField": "key",
+            "remoteField": "key", "asField": "cfg"}],
+          AGREE_JOIN_REMOTE, "key", extract=agree_joined, expected=[("row1", 1)])
+    agree(c, "JOIN on a null key", AGREE_JOIN_NULL_LEFT,
+          [{"type": "JOIN", "joinCollection": AGREE_JOIN_NULL_REMOTE, "localField": "key",
+            "remoteField": "key", "asField": "cfg"}],
+          AGREE_JOIN_NULL_REMOTE, "key", extract=agree_joined)
+
+
+def probe_sort_agrees_with_scan(c):
+    agree(c, "SORT ascending on a boolean field", AGREE_SORT_BOOL,
+          [{"type": "SORT", "fieldName": "active", "ascending": True}],
+          AGREE_SORT_BOOL, "active", extract=agree_ordered_ids, expected=["isFalse", "isTrue"])
+    agree(c, "SORT descending on a boolean field", AGREE_SORT_BOOL_DESC,
+          [{"type": "SORT", "fieldName": "active", "ascending": False}],
+          AGREE_SORT_BOOL_DESC, "active", extract=agree_ordered_ids, expected=["isTrue", "isFalse"])
+    agree(c, "SORT over a mixed-type field", AGREE_SORT_MIXED,
+          [{"type": "SORT", "fieldName": "x", "ascending": True}],
+          AGREE_SORT_MIXED, "x", extract=agree_ordered_ids,
+          expected=["bool1", "num1", "num2", "str1"])
+
+
+def probe_sort_limit_is_deterministic(c):
+    """Two documents tied on the sort key: SORT + LIMIT 1 must not pick a different one per run."""
+    steps = [{"type": "SORT", "fieldName": "score", "ascending": True}, {"type": "LIMIT", "limit": 1}]
+    scanned = agree_ordered_ids(agg(c, AGREE_SORT_TIES, steps))
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SORT_TIES,
+            "fieldName": "score"})
+    wait_for_indexes(c, [(AGREE_SORT_TIES, "score")])
+    picks = {tuple(agree_ordered_ids(agg(c, AGREE_SORT_TIES, steps))) for _ in range(10)}
+    check("SORT + LIMIT over tied keys picks the same document every run", len(picks) == 1,
+          f"scan={scanned!r}  indexed picks across 10 runs={sorted(picks)!r}")
+    # Perturb the tied bucket so its backing set rehashes, then delete the additions again: an
+    # order that depends on set iteration moves, a deterministic one does not.
+    for i in range(30):
+        save_doc(c, AGREE_SORT_TIES, {"_id": f"churn{i}", "score": 5})
+    for i in range(30):
+        c.send({"type": "DELETE", "databaseName": DB, "collectionName": AGREE_SORT_TIES,
+                "_id": f"churn{i}"})
+    after = {tuple(agree_ordered_ids(agg(c, AGREE_SORT_TIES, steps))) for _ in range(10)}
+    check("SORT + LIMIT over tied keys is stable across churn in the tied bucket",
+          picks == after, f"before={sorted(picks)!r}  after={sorted(after)!r}")
+
+
+def probe_geo_distance_agrees_with_scan_at_the_rim(c):
+    agree(c, "geo distance just inside the radius", AGREE_GEO,
+          geo_distance_steps("SMALLER_THAN", 100000, target=AGREE_GEO_TARGET),
+          AGREE_GEO, "location", expected=["onTheRim"])
+
+
+def probe_dropping_an_index_spares_a_sibling_field(c):
+    """CREATE_INDEX on `first` used to delete every `first-name` index file: the anchored prefix
+    still matched a longer field, and hyphens are legal in field names."""
+    save_doc(c, AGREE_SIBLING, {"_id": "s1", "first": "ada", "first-name": "ada lovelace"})
+    save_doc(c, AGREE_SIBLING, {"_id": "s2", "first": "alan", "first-name": "alan turing"})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SIBLING,
+            "fieldName": "first-name"})
+    wait_for_indexes(c, [(AGREE_SIBLING, "first-name")])
+    steps = [{"type": "FILTER",
+              "operator": {"fieldOperatorType": "EQUALS", "field": "first-name", "value": "ada lovelace"}}]
+    before = agree_ids(agg(c, AGREE_SIBLING, steps))
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SIBLING,
+            "fieldName": "first"})
+    wait_for_indexes(c, [(AGREE_SIBLING, "first")])
+    save_doc(c, AGREE_SIBLING, {"_id": "s3", "first": "grace", "first-name": "grace hopper"})
+    after = agree_ids(agg(c, AGREE_SIBLING, steps))
+    check("indexing a field never deletes a sibling whose name extends it",
+          before == ["s1"] and after == ["s1"],
+          f"before={before!r}  after indexing 'first'={after!r}")
+
+
+def probe_object_sort_keys_break_ties_on_id(c):
+    """Every object-valued sort key compares equal, so the index path must still order ties by _id
+    the way the scan does - otherwise SORT + LIMIT returns a different page."""
+    for doc_id, inner in (("z", 1), ("a", 2), ("m", 3)):
+        save_doc(c, AGREE_OBJ_SORT, {"_id": doc_id, "meta": {"x": inner}})
+    steps = [{"type": "SORT", "fieldName": "meta", "ascending": True}, {"type": "LIMIT", "limit": 2}]
+    agree(c, "SORT + LIMIT over object-valued keys", AGREE_OBJ_SORT, steps,
+          AGREE_OBJ_SORT, "meta", extract=agree_ordered_ids, expected=["a", "m"])
+
+
+def probe_custom_values_bucket_the_same_either_way(c):
+    """The build path buckets custom values by raw wire text while incremental maintenance used to
+    match them semantically, so DISTINCT disagreed with the scan and with itself."""
+    save_doc(c, AGREE_CUSTOM, {"_id": "d1", "when": "#datetime(2024-01-01T10:00)"})
+    save_doc(c, AGREE_CUSTOM, {"_id": "d2", "when": "#datetime(2024-01-01T10:00:00)"})
+    steps = [{"type": "DISTINCT", "fieldName": "when"}]
+    scanned = len(agg(c, AGREE_CUSTOM, steps).get("results") or [])
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_CUSTOM,
+            "fieldName": "when"})
+    wait_for_indexes(c, [(AGREE_CUSTOM, "when")])
+    save_doc(c, AGREE_CUSTOM, {"_id": "d3", "when": "#datetime(2024-02-02T11:00)"})
+    indexed = len(agg(c, AGREE_CUSTOM, steps).get("results") or [])
+    check("DISTINCT over a custom-typed field buckets the same with and without an index",
+          indexed == scanned + 1, f"scan over 2 docs={scanned}  indexed over 3 docs={indexed}")
+
+
+def probe_custom_sort_keys_order_by_the_type_comparator(c):
+    """SORT compared custom values by their raw wire text, so #geo(10.0,5.0) sorted before
+    #geo(9.0,5.0) - the opposite of the geohash order the range operators and the index use."""
+    for doc_id, location in (("x", "#geo(10.0,5.0)"), ("y", "#geo(9.0,5.0)"), ("z", "#geo(8.0,5.0)")):
+        save_doc(c, AGREE_CUSTOM_SORT, {"_id": doc_id, "location": location})
+    agree(c, "SORT over geo values", AGREE_CUSTOM_SORT,
+          [{"type": "SORT", "fieldName": "location", "ascending": True}],
+          AGREE_CUSTOM_SORT, "location", extract=agree_ordered_ids, expected=["z", "y", "x"])
+
+    for doc_id, when in (("b", "#datetime(2024-01-01T10:00)"), ("a", "#datetime(2024-01-01T10:00:00)"),
+                         ("c", "#datetime(2024-06-01T10:00:00)")):
+        save_doc(c, AGREE_CUSTOM_TIES, {"_id": doc_id, "when": when})
+    agree(c, "SORT + LIMIT over two spellings of one instant", AGREE_CUSTOM_TIES,
+          [{"type": "SORT", "fieldName": "when", "ascending": True}, {"type": "LIMIT", "limit": 1}],
+          AGREE_CUSTOM_TIES, "when", extract=agree_ordered_ids, expected=["a"])
+
+
+def probe_membership_uses_the_same_equality_as_equals(c):
+    agree(c, "IN with a case-mismatched string operand", AGREE_IN_CASE,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "tag",
+                                           "value": ["ALPHA"]}}],
+          AGREE_IN_CASE, "tag", expected=["lower", "upper"])
+    agree(c, "NOT_IN with a case-mismatched string operand", AGREE_NOT_IN_CASE,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_IN", "field": "tag",
+                                           "value": ["ALPHA"]}}],
+          AGREE_NOT_IN_CASE, "tag", expected=["other"])
+    agree(c, "IN with a custom operand spelled differently from the stored value", AGREE_IN_CUSTOM,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "when",
+                                           "value": ["#datetime(2024-01-01T10:00:00)"]}}],
+          AGREE_IN_CUSTOM, "when", expected=["d1"])
+    agree(c, "NOT_IN with a custom operand spelled differently from the stored value", AGREE_NOT_IN_CUSTOM,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_IN", "field": "when",
+                                           "value": ["#datetime(2024-01-01T10:00:00)"]}}],
+          AGREE_NOT_IN_CUSTOM, "when", expected=["d2"])
+
+
+def probe_array_equals_uses_the_same_equality_as_scalar_equals(c):
+    """A custom value inside an array or object used to compare by wire text on the scan and hash by
+    wire text in the index, while the same value as a scalar compared by meaning. Both sides now
+    compare by meaning, and a document saved after the index exists must join the same bucket."""
+    long_spelling = "#datetime(2024-01-01T10:00:00)"
+    short_spelling = "#datetime(2024-01-01T10:00)"
+    for coll in (AGREE_ARRAY_CUSTOM, AGREE_CONTAINS_CUSTOM):
+        save_doc(c, coll, {"_id": "d1", "times": [long_spelling]})
+        save_doc(c, coll, {"_id": "d2", "times": ["#datetime(2024-02-02T11:00)"]})
+    save_doc(c, AGREE_OBJECT_CUSTOM, {"_id": "d1", "meta": {"when": long_spelling}})
+    save_doc(c, AGREE_OBJECT_CUSTOM, {"_id": "d2", "meta": {"when": "#datetime(2024-02-02T11:00)"}})
+
+    array_steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "times",
+                                                   "value": [short_spelling]}}]
+    agree(c, "EQUALS with an array holding a custom value spelled differently", AGREE_ARRAY_CUSTOM,
+          array_steps, AGREE_ARRAY_CUSTOM, "times", expected=["d1"])
+    agree(c, "EQUALS with an object holding a custom value spelled differently", AGREE_OBJECT_CUSTOM,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "meta",
+                                           "value": {"when": short_spelling}}}],
+          AGREE_OBJECT_CUSTOM, "meta", expected=["d1"])
+    agree(c, "CONTAINS with a custom operand spelled differently from the array element",
+          AGREE_CONTAINS_CUSTOM,
+          [{"type": "FILTER", "operator": {"fieldOperatorType": "CONTAINS", "field": "times",
+                                           "value": short_spelling}}],
+          AGREE_CONTAINS_CUSTOM, "times", expected=["d1"])
+
+    save_doc(c, AGREE_ARRAY_CUSTOM, {"_id": "d3", "times": [short_spelling]})
+    wait_for_indexes(c, [(AGREE_ARRAY_CUSTOM, "times")])
+    indexed = agree_ids(agg(c, AGREE_ARRAY_CUSTOM, array_steps))
+    scanned = agree_ids(agg(c, AGREE_ARRAY_CUSTOM, [{"type": "SKIP", "skip": 0}] + array_steps))
+    check("a document saved after the index exists joins the bucket of its equal spelling",
+          indexed == scanned == ["d1", "d3"], f"index={indexed!r} scan={scanned!r}")
+
+
+def probe_a_scalar_membership_operand_is_refused(c):
+    """IN with a non-array operand reached SearchUtils and threw, so the same query answered 500
+    with an index and NO_RESULTS without one. It must now be refused before either path."""
+    steps = [{"type": "FILTER",
+              "operator": {"fieldOperatorType": "IN", "field": "score", "value": 2}}]
+    r = agg(c, AGREE_MIXED_BOX, steps)
+    check("a scalar IN operand is refused rather than answered differently per path",
+          r.get("status") == "ERROR" and str(r.get("errorCode", "")).startswith("400"),
+          f"status={r.get('status')} errorCode={r.get('errorCode')} message={r.get('message')!r}")
+
+
+def probe_mixed_number_boxes_group_the_same_either_way(c):
+    """equals compares numbers by double value while hashCode returned the boxed hash, so a
+    hash-based GROUP_BY split one logical value across two buckets on the scan path."""
+    save_doc(c, AGREE_MIXED_BOX, {"_id": "w1", "score": 2})
+    save_doc(c, AGREE_MIXED_BOX, {"_id": "w2", "score": 2.0})
+    save_doc(c, AGREE_MIXED_BOX, {"_id": "w3", "score": 3})
+    steps = [{"type": "GROUP_BY", "fieldName": "score"}]
+    agree(c, "GROUP_BY over mixed integer and fractional spellings", AGREE_MIXED_BOX, steps,
+          AGREE_MIXED_BOX, "score", extract=lambda r: len(r.get("results") or []), expected=2)
+
+
+def probe_lone_surrogate_values_index_the_same_as_they_scan(c):
+    """escapeIndexToken left an unpaired surrogate raw, so the UTF-8 writer substituted '?' and two
+    distinct values collapsed onto one file key: an index-backed EQUALS missed its own document, and
+    the next update made removeIndexLine delete an unrelated document's line."""
+    values = {"hi": "a\ud800b", "lo": "a\udc00b", "plain": "a?b", "emoji": "a\U0001f600b"}
+    for doc_id, value in values.items():
+        save_doc(c, AGREE_SURROGATE, {"_id": doc_id, "v": value})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SURROGATE, "fieldName": "v"})
+    wait_for_indexes(c, [(AGREE_SURROGATE, "v")])
+
+    for doc_id, value in values.items():
+        steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "v", "value": value}}]
+        indexed = agree_ids(agg(c, AGREE_SURROGATE, steps))
+        scanned = agree_ids(agg(c, AGREE_SURROGATE, [{"type": "SKIP", "skip": 0}] + steps))
+        counted = agg(c, AGREE_SURROGATE, steps + [{"type": "COUNT"}])
+        rows = len(indexed) if isinstance(indexed, list) else -1
+        counted_rows = ((counted.get("results") or [{}])[0]).get("count")
+        check(f"an index-backed EQUALS on the {doc_id} value equals the scan",
+              indexed == scanned == [doc_id], f"index={indexed!r} scan={scanned!r}")
+        check(f"index-only COUNT agrees with the rows for the {doc_id} value", counted_rows == rows,
+              f"count={counted_rows} rows={rows}")
+
+    distinct_indexed = sorted(d.get("v") for d in (agg(c, AGREE_SURROGATE,
+                              [{"type": "DISTINCT", "fieldName": "v"}]).get("results") or []))
+    distinct_scanned = sorted(d.get("v") for d in (agg(c, AGREE_SURROGATE,
+                              [{"type": "SKIP", "skip": 0}, {"type": "DISTINCT", "fieldName": "v"}])
+                              .get("results") or []))
+    check("DISTINCT keeps every surrogate value distinct", distinct_indexed == distinct_scanned == sorted(
+        values.values()), f"index={distinct_indexed!r} scan={distinct_scanned!r}")
+
+    save_doc(c, AGREE_SURROGATE, {"_id": "hi", "v": "zzz"})
+    wait_for_indexes(c, [(AGREE_SURROGATE, "v")])
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "v", "value": "a?b"}}]
+    after = agree_ids(agg(c, AGREE_SURROGATE, steps))
+    check("updating a surrogate-valued document leaves an unrelated document indexed",
+          after == ["plain"], f"got {after!r}")
+
+
+def probe_lone_surrogates_inside_containers_index_the_same_as_they_scan(c):
+    values = {"hi": ["\ud800"], "hi2": ["\ud801"], "plain": ["?"]}
+    for doc_id, value in values.items():
+        save_doc(c, AGREE_SURROGATE_CONTAINER, {"_id": doc_id, "x": value})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SURROGATE_CONTAINER, "fieldName": "x"})
+    wait_for_indexes(c, [(AGREE_SURROGATE_CONTAINER, "x")])
+
+    for doc_id, value in values.items():
+        for operator, operand in (("EQUALS", value), ("NOT_EQUALS", value), ("NOT_IN", [value])):
+            steps = [{"type": "FILTER", "operator": {"fieldOperatorType": operator, "field": "x", "value": operand}}]
+            indexed = agree_ids(agg(c, AGREE_SURROGATE_CONTAINER, steps))
+            scanned = agree_ids(agg(c, AGREE_SURROGATE_CONTAINER, [{"type": "SKIP", "skip": 0}] + steps))
+            check(f"an index-backed {operator} on the {doc_id} array equals the scan", indexed == scanned,
+                  f"index={indexed!r} scan={scanned!r}")
+    steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "x", "value": ["?"]}}]
+    check("NOT_EQUALS [\"?\"] keeps both lone-surrogate arrays",
+          agree_ids(agg(c, AGREE_SURROGATE_CONTAINER, steps)) == ["hi", "hi2"])
+
+
+def probe_lone_surrogate_before_a_pair_orders_the_index_consistently(c):
+    """compareToIgnoreCase merges a surrogate pair into one code point only when the chars differ, so a
+    lone high surrogate right before a pair broke transitivity: the loader sorted the String index into
+    an order binary search could not walk, and an index-backed EQUALS missed a document the scan found."""
+    values = {"emoji": "\U0001f600", "fullwidth": "\uff21", "prefixed": "aa\uff21", "lone": "\ud83d\U0001f600"}
+    for doc_id, value in values.items():
+        save_doc(c, AGREE_SURROGATE_FOLD, {"_id": doc_id, "v": value})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": AGREE_SURROGATE_FOLD, "fieldName": "v"})
+    wait_for_indexes(c, [(AGREE_SURROGATE_FOLD, "v")])
+
+    def compare_every_operator(label):
+        for doc_id, value in values.items():
+            for operator, operand in (("EQUALS", value), ("NOT_EQUALS", value), ("IN", [value])):
+                steps = [{"type": "FILTER", "operator": {"fieldOperatorType": operator, "field": "v",
+                                                         "value": operand}}]
+                indexed = agree_ids(agg(c, AGREE_SURROGATE_FOLD, steps))
+                scanned = agree_ids(agg(c, AGREE_SURROGATE_FOLD, [{"type": "SKIP", "skip": 0}] + steps))
+                check(f"{label}: an index-backed {operator} on the {doc_id} value equals the scan",
+                      indexed == scanned, f"index={indexed!r} scan={scanned!r}")
+            steps = [{"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "v", "value": value}}]
+            counted = ((agg(c, AGREE_SURROGATE_FOLD, steps + [{"type": "COUNT"}]).get("results") or [{}])[0]
+                       ).get("count")
+            scanned_count = ((agg(c, AGREE_SURROGATE_FOLD, [{"type": "SKIP", "skip": 0}] + steps
+                                  + [{"type": "COUNT"}]).get("results") or [{}])[0]).get("count")
+            check(f"{label}: index-only COUNT on the {doc_id} value equals the scan count",
+                  counted == scanned_count, f"index={counted} scan={scanned_count}")
+
+    compare_every_operator("after CREATE_INDEX")
+    save_doc(c, AGREE_SURROGATE_FOLD, {"_id": "late", "v": "b\ud83d\ud83d"})
+    wait_for_indexes(c, [(AGREE_SURROGATE_FOLD, "v")])
+    compare_every_operator("after a save rewrote the index file")
+
+
+def not_equals_filter(value):
+    return [{"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "x", "value": value}}]
+
+
+def probe_not_equals_matches_every_other_kind(c):
+    mixed = {"num": 5, "str": "a", "bool": True, "nul": None, "arr": [5], "obj": {"k": 5}}
+    for doc_id, value in mixed.items():
+        save_doc(c, AGREE_NOT_EQUALS_MIXED, {"_id": doc_id, "x": value})
+    save_doc(c, AGREE_NOT_EQUALS_MIXED, {"_id": "missing"})
+    every_holder = sorted(mixed)
+    agree(c, "NOT_EQUALS a string on a mixed-kind field", AGREE_NOT_EQUALS_MIXED, not_equals_filter("b"),
+          AGREE_NOT_EQUALS_MIXED, "x", expected=every_holder)
+
+    for operand, excluded in ((5, "num"), (True, "bool"), ("A", "str")):
+        expected = [doc_id for doc_id in every_holder if doc_id != excluded]
+        steps = not_equals_filter(operand)
+        indexed = agree_ids(agg(c, AGREE_NOT_EQUALS_MIXED, steps))
+        scanned = agree_ids(agg(c, AGREE_NOT_EQUALS_MIXED, [{"type": "SKIP", "skip": 0}] + steps))
+        not_in = agree_ids(agg(c, AGREE_NOT_EQUALS_MIXED, [{"type": "FILTER", "operator": {
+            "fieldOperatorType": "NOT_IN", "field": "x", "value": [operand]}}]))
+        counted = agg(c, AGREE_NOT_EQUALS_MIXED, steps + [{"type": "COUNT"}])
+        counted_rows = ((counted.get("results") or [{}])[0]).get("count")
+        check(f"NOT_EQUALS {operand!r} on a mixed-kind field matches every other kind",
+              indexed == scanned == expected, f"index={indexed!r} scan={scanned!r} expected={expected!r}")
+        check(f"NOT_EQUALS {operand!r} agrees with NOT_IN [{operand!r}]", indexed == not_in,
+              f"not_equals={indexed!r} not_in={not_in!r}")
+        check(f"index-only COUNT agrees with the rows for NOT_EQUALS {operand!r}",
+              counted_rows == len(expected), f"count={counted_rows} rows={len(expected)}")
+
+    for doc_id, value in (("n1", 1), ("n2", 2), ("n3", 3)):
+        save_doc(c, AGREE_NOT_EQUALS_HOMOGENEOUS, {"_id": doc_id, "x": value})
+    agree(c, "NOT_EQUALS on a homogeneous, fully covered field", AGREE_NOT_EQUALS_HOMOGENEOUS,
+          not_equals_filter(2), AGREE_NOT_EQUALS_HOMOGENEOUS, "x", expected=["n1", "n3"])
+
+
+def probe_dotted_group_by_and_distinct_agree_with_scan(c):
+    for coll in (AGREE_DOTTED_GROUP, AGREE_DOTTED_DISTINCT):
+        for doc_id, value in (("p1", "x"), ("p2", "y"), ("p3", "x")):
+            save_doc(c, coll, {"_id": doc_id, "a": {"b": value}})
+    agree(c, "GROUP_BY on a dotted field emits nested keys", AGREE_DOTTED_GROUP,
+          [{"type": "GROUP_BY", "fieldName": "a.b"}], AGREE_DOTTED_GROUP, "a.b",
+          extract=agree_nested_keys("a.b"), expected=[("x", ["p1", "p3"], False), ("y", ["p2"], False)])
+    agree(c, "DISTINCT on a dotted field emits nested keys", AGREE_DOTTED_DISTINCT,
+          [{"type": "DISTINCT", "fieldName": "a.b"}], AGREE_DOTTED_DISTINCT, "a.b",
+          extract=agree_nested_keys("a.b"), expected=[("x", [], False), ("y", [], False)])
+
+
+def agreement_suite(c):
+    section("Index / scan agreement: an index-backed answer must equal the full-scan answer")
+    setup_agreement(c)
+    probe_contains_agrees_with_scan_per_type(c)
+    probe_not_in_agrees_with_scan(c)
+    probe_join_agrees_with_scan_for_non_scalar_keys(c)
+    probe_sort_agrees_with_scan(c)
+    probe_sort_limit_is_deterministic(c)
+    probe_geo_distance_agrees_with_scan_at_the_rim(c)
+    probe_dropping_an_index_spares_a_sibling_field(c)
+    probe_object_sort_keys_break_ties_on_id(c)
+    probe_custom_values_bucket_the_same_either_way(c)
+    probe_custom_sort_keys_order_by_the_type_comparator(c)
+    probe_a_scalar_membership_operand_is_refused(c)
+    probe_membership_uses_the_same_equality_as_equals(c)
+    probe_array_equals_uses_the_same_equality_as_scalar_equals(c)
+    probe_mixed_number_boxes_group_the_same_either_way(c)
+    probe_lone_surrogate_values_index_the_same_as_they_scan(c)
+    probe_lone_surrogates_inside_containers_index_the_same_as_they_scan(c)
+    probe_lone_surrogate_before_a_pair_orders_the_index_consistently(c)
+    probe_not_equals_matches_every_other_kind(c)
+    probe_dotted_group_by_and_distinct_agree_with_scan(c)
+
+
 # ══════════════════════════════════════════════════════════════════════════
 # Correctness regressions
 # ══════════════════════════════════════════════════════════════════════════
 
 REG_UNICODE = "idxagg_reg_unicode"
+REG_DELIMITER = "idxagg_reg_delimiter"
+REG_IDEMPOTENT = "idxagg_reg_idempotent"
 REG_SINGLE = "idxagg_reg_single"
 REG_CONJ = "idxagg_reg_conj"
 REG_NUMERIC = "idxagg_reg_numeric"
+REG_BULK = "idxagg_reg_bulk"
+REG_CASE = "idxagg_reg_case"
+REG_SORT = "idxagg_reg_sort"
+REG_MIXED = "idxagg_reg_mixed"
+REG_CUSTOM = "idxagg_reg_custom"
+REG_NOID = "idxagg_reg_noid"
+REG_IN = "idxagg_reg_in"
+REG_NOTIN = "idxagg_reg_notin"
+REG_MINVALUE = "idxagg_reg_minvalue"
+REG_GEO_WRAP = "idxagg_reg_geowrap"
+REG_GEO_NAN = "idxagg_reg_geonan"
+REG_TIES = "idxagg_reg_ties"
+REG_VALUELESS = "idxagg_reg_valueless"
+REG_CAST = "idxagg_reg_cast"
+REG_NULLFOLD = "idxagg_reg_nullfold"
+REG_CUSTOM_ORDER = "idxagg_reg_customorder"
+REG_COMPLEMENT_KINDS = "idxagg_reg_complkinds"
+REG_COMPLEMENT_NULL = "idxagg_reg_complnull"
+REG_CONJ_ORDER = "idxagg_reg_conjorder"
+REG_NOID_DUP = "idxagg_reg_noiddup"
+REG_NEAREST_TIES = "idxagg_reg_nearestties"
+REG_NEAREST_SCALE = "idxagg_reg_nearestscale"
 
 
 def reg_filter(c, coll, field, value, op="EQUALS"):
@@ -764,6 +1343,74 @@ def probe_non_ascii_indexed_values(c):
               got == expected, detail=f"expected {expected}, got {got}")
     check("re-pointed document no longer answers under its old non-ASCII value",
           "u3" not in reg_filter(c, REG_UNICODE, "city", "plain"))
+
+    # A rebuild from the documents must leave multi-byte sequences and paired surrogates exactly as
+    # they were: only an *unpaired* surrogate is escaped, and escaping an emoji would churn the file.
+    check_status("REINDEX the non-ASCII collection",
+                 c.send({"type": "REINDEX", "databaseName": DB, "collectionName": REG_UNICODE}), "OK")
+    wait_for_background()
+    for city, expected in (("café", ["u1", "u5"]), ("日本語", ["u2", "u3"]), ("a😀b", ["u4"])):
+        got = reg_filter(c, REG_UNICODE, "city", city)
+        scanned = sorted(d.get("_id") for d in (agg(c, REG_UNICODE, [
+            {"type": "SKIP", "skip": 0},
+            {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "city", "value": city}},
+        ]).get("results") or []))
+        check(f"non-ASCII indexed value {city!r} survives a REINDEX and agrees with the scan",
+              got == expected and scanned == expected, detail=f"expected {expected}, index={got}, scan={scanned}")
+
+
+def probe_index_values_containing_delimiters(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_DELIMITER})
+    values = {
+        "d1": "line\nbreak",
+        "d2": "carriage\rreturn",
+        "d3": "unitseparator",
+        "d4": "back\\slash",
+        "d5": "plain",
+    }
+    for doc_id, note in values.items():
+        save_doc(c, REG_DELIMITER, {"_id": doc_id, "note": note})
+
+    for doc_id, note in values.items():
+        got = reg_filter(c, REG_DELIMITER, "note", note)
+        check(f"{doc_id}: unindexed scan finds {note!r}", got == [doc_id], detail=f"got {got}")
+
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_DELIMITER, "fieldName": "note"})
+    wait_for_indexes(c, [(REG_DELIMITER, "note")])
+    wait_for_background()
+
+    for doc_id, note in values.items():
+        got = reg_filter(c, REG_DELIMITER, "note", note)
+        check(f"{doc_id}: an index value containing a delimiter stays queryable ({note!r})",
+              got == [doc_id], detail=f"expected ['{doc_id}'], got {got}")
+
+
+def probe_repeated_create_index_is_idempotent(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_IDEMPOTENT})
+    for doc_id, status in (("i0", "active"), ("i1", "active"), ("i2", "archived")):
+        save_doc(c, REG_IDEMPOTENT, {"_id": doc_id, "status": status})
+
+    baseline_eq = reg_filter(c, REG_IDEMPOTENT, "status", "active")
+    baseline_ne = reg_filter(c, REG_IDEMPOTENT, "status", "active", op="NOT_EQUALS")
+
+    for attempt in range(3):
+        c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_IDEMPOTENT,
+                "fieldName": "status"})
+        wait_for_indexes(c, [(REG_IDEMPOTENT, "status")])
+        wait_for_background()
+        got_eq = reg_filter(c, REG_IDEMPOTENT, "status", "active")
+        got_ne = reg_filter(c, REG_IDEMPOTENT, "status", "active", op="NOT_EQUALS")
+        check(f"EQUALS is unchanged after CREATE_INDEX x{attempt + 1}", got_eq == baseline_eq,
+              detail=f"expected {baseline_eq}, got {got_eq}")
+        check(f"NOT_EQUALS is unchanged after CREATE_INDEX x{attempt + 1}", got_ne == baseline_ne,
+              detail=f"expected {baseline_ne}, got {got_ne}")
+
+    counted = agg(c, REG_IDEMPOTENT, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "status", "value": "active"}},
+        {"type": "COUNT"}])
+    got = ((counted.get("results") or [{}])[0]).get("count")
+    check("index-only COUNT is not inflated by repeated CREATE_INDEX", got == len(baseline_ne),
+          detail=f"expected {len(baseline_ne)}, got {got}")
 
 
 def probe_single_valued_index_ranges(c):
@@ -858,13 +1505,631 @@ def probe_low_cardinality_numeric_index(c):
           reg_filter(c, REG_NUMERIC, "bucket", 5) == ["n1"])
 
 
+def probe_bulk_save_indexes_every_doc_sharing_a_value(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_BULK})
+    save_doc(c, REG_BULK, {"_id": "seed", "status": "seeded"})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_BULK, "fieldName": "status"})
+    wait_for_indexes(c, [(REG_BULK, "status")])
+    wait_for_background()
+
+    documents = [{"_id": f"b{i}", "status": "active" if i % 2 == 0 else "archived"} for i in range(5)]
+    check_status("BULK_SAVE five documents over two status values",
+                 c.send({"type": "BULK_SAVE", "databaseName": DB, "collectionName": REG_BULK,
+                         "objects": documents}), "OK")
+    wait_for_background()
+
+    for status, expected in (("active", ["b0", "b2", "b4"]), ("archived", ["b1", "b3"])):
+        got = reg_filter(c, REG_BULK, "status", status)
+        check(f"every bulk-saved doc with status={status} is still indexed", got == expected,
+              detail=f"expected {expected}, got {got}")
+        counted = agg(c, REG_BULK, [
+            {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "status", "value": status}},
+            {"type": "COUNT"}])
+        got_count = ((counted.get("results") or [{}])[0]).get("count")
+        check(f"the index-only COUNT for status={status} matches", got_count == len(expected),
+              detail=f"expected {len(expected)}, got {got_count}")
+
+
+def probe_case_variants_agree_between_index_and_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CASE})
+    for doc_id, name in (("a", "Bob"), ("b", "bob"), ("c", "bob"), ("d", "carol")):
+        save_doc(c, REG_CASE, {"_id": doc_id, "name": name})
+
+    scan_equals = reg_filter(c, REG_CASE, "name", "bob")
+    scan_not_equals = reg_filter(c, REG_CASE, "name", "bob", op="NOT_EQUALS")
+    scan_count = agg(c, REG_CASE, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "name", "value": "bob"}},
+        {"type": "COUNT"}])
+    scan_count = ((scan_count.get("results") or [{}])[0]).get("count")
+
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_CASE, "fieldName": "name"})
+    wait_for_indexes(c, [(REG_CASE, "name")])
+    wait_for_background()
+
+    got_equals = reg_filter(c, REG_CASE, "name", "bob")
+    got_not_equals = reg_filter(c, REG_CASE, "name", "bob", op="NOT_EQUALS")
+    counted = agg(c, REG_CASE, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "NOT_EQUALS", "field": "name", "value": "bob"}},
+        {"type": "COUNT"}])
+    got_count = ((counted.get("results") or [{}])[0]).get("count")
+
+    check("indexed EQUALS returns every case variant", got_equals == scan_equals == ["a", "b", "c"],
+          detail=f"scan={scan_equals} indexed={got_equals}")
+    check("indexed NOT_EQUALS excludes every case variant", got_not_equals == scan_not_equals == ["d"],
+          detail=f"scan={scan_not_equals} indexed={got_not_equals}")
+    check("the index-only COUNT matches the scan for case variants", got_count == scan_count == 1,
+          detail=f"scan={scan_count} indexed={got_count}")
+
+
+def probe_sort_keeps_documents_without_the_field(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_SORT})
+    total = 20
+    for i in range(total):
+        if i % 3 == 0:
+            save_doc(c, REG_SORT, {"_id": f"s{i:03d}", "other": i})
+        else:
+            save_doc(c, REG_SORT, {"_id": f"s{i:03d}", "score": i})
+
+    scanned = agg(c, REG_SORT, [{"type": "SORT", "fieldName": "score", "ascending": True}])
+    scanned_ids = sorted(d.get("_id") for d in (scanned.get("results") or []))
+
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_SORT, "fieldName": "score"})
+    wait_for_indexes(c, [(REG_SORT, "score")])
+    wait_for_background()
+
+    indexed = agg(c, REG_SORT, [{"type": "SORT", "fieldName": "score", "ascending": True}])
+    indexed_ids = sorted(d.get("_id") for d in (indexed.get("results") or []))
+
+    check("an indexed SORT returns the whole collection, not only the documents that have the field",
+          len(indexed_ids) == total, detail=f"expected {total}, got {len(indexed_ids)}")
+    check("an indexed SORT returns exactly what the full scan returns", indexed_ids == scanned_ids,
+          detail=f"scan={len(scanned_ids)} indexed={len(indexed_ids)}")
+
+
+def probe_mixed_type_field_falls_back_to_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_MIXED})
+    save_doc(c, REG_MIXED, {"_id": "m1", "tags": "alpha"})
+    save_doc(c, REG_MIXED, {"_id": "m2", "tags": ["alpha", "beta"]})
+    save_doc(c, REG_MIXED, {"_id": "m3", "tags": "beta"})
+
+    scan_contains = reg_filter(c, REG_MIXED, "tags", "alpha", op="CONTAINS")
+
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_MIXED, "fieldName": "tags"})
+    wait_for_indexes(c, [(REG_MIXED, "tags")])
+    wait_for_background()
+
+    indexed_contains = reg_filter(c, REG_MIXED, "tags", "alpha", op="CONTAINS")
+
+    check("CONTAINS on a mixed-type field answers the same with and without the index",
+          indexed_contains == scan_contains, detail=f"scan={scan_contains} indexed={indexed_contains}")
+    check("CONTAINS still finds the array-valued document", "m2" in indexed_contains,
+          detail=f"got {indexed_contains}")
+
+
+def _ids(response) -> list:
+    return sorted(d.get("_id") for d in (response.get("results") or []))
+
+
+def _in_filter(c, coll, field, values, op="IN"):
+    return _ids(agg(c, coll, [{"type": "FILTER",
+                               "operator": {"fieldOperatorType": op, "field": field, "value": values}}]))
+
+
+def probe_numeric_in_agrees_between_index_and_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_IN})
+    for i, score in enumerate((1, 2, 3, 5, 9)):
+        save_doc(c, REG_IN, {"_id": f"n{i}", "score": score})
+
+    # The operands arrive through the real parser, which narrows an integral value inside the int
+    # range to an Integer, while a number index entry is always a Double. Boxed set membership then
+    # matched nothing and every numeric IN on an indexed field silently returned no rows.
+    scan_in = _in_filter(c, REG_IN, "score", [2, 9])
+    scan_mixed = _in_filter(c, REG_IN, "score", [5, 2.5])
+    scan_count = ((agg(c, REG_IN, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "score", "value": [2, 9]}},
+        {"type": "COUNT"}]).get("results") or [{}])[0]).get("count")
+
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_IN, "fieldName": "score"})
+    wait_for_indexes(c, [(REG_IN, "score")])
+    wait_for_background()
+
+    indexed_in = _in_filter(c, REG_IN, "score", [2, 9])
+    indexed_mixed = _in_filter(c, REG_IN, "score", [5, 2.5])
+    indexed_count = ((agg(c, REG_IN, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "IN", "field": "score", "value": [2, 9]}},
+        {"type": "COUNT"}]).get("results") or [{}])[0]).get("count")
+
+    check("an indexed numeric IN returns what the scan returns",
+          indexed_in == scan_in == ["n1", "n4"], detail=f"scan={scan_in} indexed={indexed_in}")
+    check("an IN list mixing integral and fractional operands agrees too",
+          indexed_mixed == scan_mixed, detail=f"scan={scan_mixed} indexed={indexed_mixed}")
+    check("the index-only COUNT after a numeric IN matches the scan",
+          indexed_count == scan_count == 2, detail=f"scan={scan_count} indexed={indexed_count}")
+
+
+def probe_not_in_then_equals_on_a_scalar_only_field(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NOTIN})
+    for i, score in enumerate((1, 2, 2, 7)):
+        save_doc(c, REG_NOTIN, {"_id": f"s{i}", "score": score})
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_NOTIN, "fieldName": "score"})
+    wait_for_indexes(c, [(REG_NOTIN, "score")])
+    wait_for_background()
+
+    # NOT_IN probes whether another index covers the field. Probing the scalar kinds through the hash
+    # loader parsed the same .idx file into String values and cached them under the typed key, so the
+    # next EQUALS threw a ClassCastException and the following write replaced the line instead of
+    # merging into it, permanently dropping ids.
+    not_in = _in_filter(c, REG_NOTIN, "score", [1], op="NOT_IN")
+    equals = _ids(agg(c, REG_NOTIN, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "score", "value": 2}}]))
+
+    check("NOT_IN on a scalar-only indexed field answers", not_in == ["s1", "s2", "s3"],
+          detail=f"got={not_in}")
+    check("EQUALS still works after the NOT_IN probe", equals == ["s1", "s2"], detail=f"got={equals}")
+
+    save_doc(c, REG_NOTIN, {"_id": "s4", "score": 2})
+    wait_for_background()
+    after = _ids(agg(c, REG_NOTIN, [
+        {"type": "FILTER", "operator": {"fieldOperatorType": "EQUALS", "field": "score", "value": 2}}]))
+    check("a write after the NOT_IN probe does not drop the ids already on that line",
+          after == ["s1", "s2", "s4"], detail=f"got={after}")
+
+
+def probe_group_by_integer_min_value(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_MINVALUE})
+    for i in range(3):
+        save_doc(c, REG_MINVALUE, {"_id": f"m{i}", "n": -2147483648})
+
+    scanned = agg(c, REG_MINVALUE, [{"type": "GROUP_BY", "fieldName": "n"}])
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_MINVALUE, "fieldName": "n"})
+    wait_for_indexes(c, [(REG_MINVALUE, "n")])
+    wait_for_background()
+    indexed = agg(c, REG_MINVALUE, [{"type": "GROUP_BY", "fieldName": "n"}])
+
+    # The codec admitted Integer.MIN_VALUE where the parser does not, so the same value hashed two
+    # ways and the index-backed grouping emitted two groups under one key.
+    check("an indexed GROUP_BY on Integer.MIN_VALUE emits one group, as the scan does",
+          len(indexed.get("results") or []) == len(scanned.get("results") or []) == 1,
+          detail=f"scan={scanned.get('results')} indexed={indexed.get('results')}")
+
+
+def probe_geo_distance_across_the_antimeridian(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_GEO_WRAP})
+    save_doc(c, REG_GEO_WRAP, {"_id": "east", "location": "#geo(0.000000,179.950000)"})
+    save_doc(c, REG_GEO_WRAP, {"_id": "west", "location": "#geo(0.000000,-179.950000)"})
+    save_doc(c, REG_GEO_WRAP, {"_id": "mid", "location": "#geo(0.000000,0.000000)"})
+
+    def _within():
+        return _ids(agg(c, REG_GEO_WRAP,
+                        geo_distance_steps("SMALLER_THAN", 50000, target="#geo(0.000000,179.990000)")))
+
+    scanned = _within()
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_GEO_WRAP,
+            "fieldName": "location"})
+    wait_for_indexes(c, [(REG_GEO_WRAP, "location")])
+    wait_for_background()
+    indexed = _within()
+
+    # clampLng truncates at +/-180 and contains() cannot express a wrapped interval, so the pre-filter
+    # dropped every true match on the far side - and FILTER re-tests candidates but never adds one back.
+    check("a geo radius spanning the antimeridian returns both sides", scanned == ["east", "west"],
+          detail=f"scan={scanned}")
+    check("the indexed geo radius returns what the scan returns", indexed == scanned,
+          detail=f"scan={scanned} indexed={indexed}")
+
+
+def probe_a_non_finite_geo_operand_is_refused(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_GEO_NAN})
+    save_doc(c, REG_GEO_NAN, {"_id": "inside", "location": "#geo(2.000000,5.000000)"})
+    nan_polygon = ["#geo(0,0)", "#geo(10,0)", "#geo(NaN,NaN)"]
+    nan_target = geo_distance_steps("SMALLER_THAN", 50000, target="#geo(NaN,0)")
+
+    def _probe(label):
+        check_code(f"a within polygon with a NaN vertex is refused ({label})",
+                   agg(c, REG_GEO_NAN, geo_within_steps(nan_polygon)), "ERROR", "400-1")
+        check_code(f"a distance target holding NaN is refused ({label})",
+                   agg(c, REG_GEO_NAN, nan_target), "ERROR", "400-1")
+
+    _probe("scan")
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_GEO_NAN, "fieldName": "location"})
+    wait_for_indexes(c, [(REG_GEO_NAN, "location")])
+    wait_for_background()
+    _probe("indexed")
+
+
+def probe_sort_ties_do_not_depend_on_the_index(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_TIES})
+    for i in range(10):
+        save_doc(c, REG_TIES, {"_id": f"p{i:02d}", "score": 5})
+
+    def _page():
+        return [d.get("_id") for d in (agg(c, REG_TIES, [
+            {"type": "SORT", "fieldName": "score", "ascending": True},
+            {"type": "SKIP", "skip": 3},
+            {"type": "LIMIT", "limit": 3}]).get("results") or [])]
+
+    scanned = _page()
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_TIES, "fieldName": "score"})
+    wait_for_indexes(c, [(REG_TIES, "score")])
+    wait_for_background()
+    indexed = _page()
+
+    check("a SORT + SKIP + LIMIT page does not change when the field gains an index",
+          indexed == scanned, detail=f"scan={scanned} indexed={indexed}")
+
+
+REG_CUSTOM_WHEN = "#datetime(2024-01-01T10:00:00)"
+REG_CUSTOM_WHERE = "#geo(40.0,-74.0)"
+
+
+def probe_a_custom_filter_survives_a_map_step(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CUSTOM})
+    save_doc(c, REG_CUSTOM, {"_id": "cu1", "when": REG_CUSTOM_WHEN, "where": REG_CUSTOM_WHERE, "note": "keep"})
+    save_doc(c, REG_CUSTOM, {"_id": "cu2", "when": "#datetime(2025-06-01T08:30:00)",
+                             "where": "#geo(34.05,-118.24)", "note": "keep"})
+    wait_for_background()
+
+    when_filter = {"type": "FILTER",
+                   "operator": {"fieldOperatorType": "EQUALS", "field": "when", "value": REG_CUSTOM_WHEN}}
+    geo_filter = {"type": "FILTER", "operator": {"customOperatorName": "distance", "field": "where",
+                                                 "value": REG_CUSTOM_WHERE, "comparator": "SMALLER_THAN",
+                                                 "distance": 1000}}
+    passthrough_map = {"type": "MAP", "operators": [{"fieldName": "absent"}]}
+
+    for label, step in (("datetime EQUALS", when_filter), ("geo distance", geo_filter)):
+        direct = _ids(agg(c, REG_CUSTOM, [step]))
+        after_map = _ids(agg(c, REG_CUSTOM, [passthrough_map, step]))
+        check(f"a {label} filter answers the same before and after a MAP step",
+              direct == after_map == ["cu1"], detail=f"direct={direct}, after MAP={after_map}")
+
+    distinct_all = agg(c, REG_CUSTOM, [{"type": "DISTINCT"}])
+    values = sorted(d.get("when") for d in (distinct_all.get("results") or []))
+    check("a DISTINCT step keeps custom values in their wire form",
+          values == sorted([REG_CUSTOM_WHEN, "#datetime(2025-06-01T08:30:00)"]),
+          detail=f"got {values}")
+
+
+def probe_a_conjunction_after_a_row_reshaping_step(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NOID})
+    for doc_id, category in (("n1", "books"), ("n2", "music"), ("n3", "books")):
+        save_doc(c, REG_NOID, {"_id": doc_id, "category": category})
+    wait_for_background()
+
+    def conjunction(kind):
+        return {"type": "FILTER", "operator": {"conjunctionType": kind, "operators": [
+            {"fieldOperatorType": "EQUALS", "field": "category", "value": "books"},
+            {"fieldOperatorType": "NOT_EQUALS", "field": "category", "value": "music"}]}}
+
+    for reshaper, label in (({"type": "DISTINCT", "fieldName": "category"}, "DISTINCT"),
+                            ({"type": "GROUP_BY", "fieldName": "category"}, "GROUP_BY")):
+        for kind in ("AND", "XOR", "NAND", "NOR", "OR"):
+            r = agg(c, REG_NOID, [reshaper, conjunction(kind)])
+            check(f"a {kind} conjunction after {label} answers instead of erroring",
+                  r.get("status") == "OK" or r.get("errorCode") == "404-3",
+                  detail=f"status={r.get('status')} code={r.get('errorCode')} msg={r.get('message', '')!r}")
+
+        and_rows = agg(c, REG_NOID, [reshaper, conjunction("AND")]).get("results") or []
+        check(f"a AND conjunction after {label} keeps only the matching row",
+              [row.get("category") for row in and_rows] == ["books"],
+              detail=f"got {[row.get('category') for row in and_rows]}")
+
+
+def probe_a_sorted_conjunction_keeps_its_order(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CONJ_ORDER})
+    rows = (("o1", 9, "admin", "yes"), ("o2", 3, "user", "yes"), ("o3", 7, "admin", "no"),
+            ("o4", 1, "admin", "yes"), ("o5", 5, "user", "no"), ("o6", 8, "user", "yes"))
+    for doc_id, score, role, active in rows:
+        save_doc(c, REG_CONJ_ORDER, {"_id": doc_id, "score": score, "role": role, "active": active})
+    wait_for_background()
+
+    def conjunction(conjunction_type):
+        return {"type": "FILTER", "operator": {"conjunctionType": conjunction_type, "operators": [
+            {"fieldOperatorType": "EQUALS", "field": "role", "value": "admin"},
+            {"fieldOperatorType": "EQUALS", "field": "active", "value": "yes"}]}}
+
+    sort = {"type": "SORT", "fieldName": "score", "ascending": True}
+    limit = {"type": "LIMIT", "limit": 3}
+    for indexed in (False, True):
+        if indexed:
+            for field in ("score", "role"):
+                c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_CONJ_ORDER,
+                        "fieldName": field})
+            wait_for_indexes(c, [(REG_CONJ_ORDER, "score"), (REG_CONJ_ORDER, "role")])
+        label = "indexed" if indexed else "scan"
+        for kind in ("AND", "OR", "XOR", "NOR", "NAND"):
+            sorted_first = agree_ordered_ids(agg(c, REG_CONJ_ORDER, [sort, conjunction(kind), limit]))
+            filtered_first = agree_ordered_ids(agg(c, REG_CONJ_ORDER, [conjunction(kind), sort, limit]))
+            check(f"SORT then {kind} keeps the sort order ({label})", sorted_first == filtered_first,
+                  detail=f"SORT first={sorted_first}  FILTER first={filtered_first}")
+
+
+def probe_a_conjunction_keeps_equal_rows_without_an_id(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NOID_DUP})
+    for doc_id, extra in (("d1", "a"), ("d2", "b"), ("d3", "c")):
+        save_doc(c, REG_NOID_DUP, {"_id": doc_id, "category": "books", "extra": extra})
+    wait_for_background()
+    reshape = {"type": "MAP", "operators": [{"fieldName": "_id"}, {"fieldName": "extra"}]}
+    books = {"fieldOperatorType": "EQUALS", "field": "category", "value": "books"}
+    plain = agg(c, REG_NOID_DUP, [reshape, {"type": "FILTER", "operator": books}, {"type": "COUNT"}])
+    plain_count = ((plain.get("results") or [{}])[0]).get("count")
+    for kind in ("AND", "OR"):
+        conjoined = agg(c, REG_NOID_DUP, [reshape,
+                                          {"type": "FILTER", "operator": {"conjunctionType": kind,
+                                                                          "operators": [books]}},
+                                          {"type": "COUNT"}])
+        count = ((conjoined.get("results") or [{}])[0]).get("count")
+        check(f"a single-operand {kind} counts the same equal rows a plain FILTER does",
+              count == plain_count == 3, detail=f"FILTER={plain_count}  {kind}={count}")
+
+
+def probe_nearest_ties_are_broken_on_id(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NEAREST_TIES})
+    for doc_id, vector in (("t3", "#vector(3.0,0.0)"), ("t1", "#vector(1.0,0.0)"), ("t2", "#vector(2.0,0.0)"),
+                           ("t9", "#vector(0.0,1.0)")):
+        save_doc(c, REG_NEAREST_TIES, {"_id": doc_id, "embedding": vector})
+    wait_for_background()
+
+    def nearest(k):
+        return [{"type": "FILTER", "operator": {"customOperatorName": "nearest", "field": "embedding",
+                                                "value": "#vector(1.0,0.0)", "k": k, "exact": True}}]
+
+    picks = {tuple(agree_ordered_ids(agg(c, REG_NEAREST_TIES, nearest(1)))) for _ in range(5)}
+    check("nearest k=1 over equally-scored documents picks the smallest _id", picks == {("t1",)},
+          detail=f"picks={sorted(picks)}")
+    check("nearest lists equally-scored documents in _id order",
+          agree_ordered_ids(agg(c, REG_NEAREST_TIES, nearest(3))) == ["t1", "t2", "t3"],
+          detail=f"got {agree_ordered_ids(agg(c, REG_NEAREST_TIES, nearest(3)))}")
+
+
+def probe_nearest_scores_huge_and_tiny_vectors(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NEAREST_SCALE})
+    for doc_id, vector in (("huge", "#vector(1e200,1e200)"), ("tiny", "#vector(1e-200,1e-200)"),
+                           ("axis", "#vector(1.0,0.0)")):
+        save_doc(c, REG_NEAREST_SCALE, {"_id": doc_id, "embedding": vector})
+    wait_for_background()
+
+    def nearest(exact_scan):
+        return [{"type": "FILTER", "operator": {"customOperatorName": "nearest", "field": "embedding",
+                                                "value": "#vector(1.0,1.0)", "k": 2, "exact": exact_scan}}]
+
+    exact = agree_ids(agg(c, REG_NEAREST_SCALE, nearest(True)))
+    check("exact nearest scores vectors whose squared norm overflows or underflows by their true cosine",
+          exact == ["huge", "tiny"], detail=f"got {exact}")
+    c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_NEAREST_SCALE,
+            "fieldName": "embedding"})
+    wait_for_indexes(c, [(REG_NEAREST_SCALE, "embedding")])
+    indexed = agree_ids(agg(c, REG_NEAREST_SCALE, nearest(False)))
+    check("index-backed nearest agrees with the exact scan on huge and tiny vectors",
+          indexed == exact, detail=f"exact={exact}  indexed={indexed}")
+
+
+def probe_a_field_operator_without_a_value_is_refused(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_VALUELESS})
+    save_doc(c, REG_VALUELESS, {"_id": "v1", "name": "alice"})
+    wait_for_background()
+
+    def valueless(field, operator_type):
+        return agg(c, REG_VALUELESS,
+                   [{"type": "FILTER", "operator": {"fieldOperatorType": operator_type, "field": field}}])
+
+    for indexed in (False, True):
+        if indexed:
+            c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_VALUELESS,
+                    "fieldName": "name"})
+            wait_for_background()
+        label = "indexed" if indexed else "unindexed"
+        for operator_type in ("EQUALS", "NOT_EQUALS", "CONTAINS", "GREATER_THAN", "SMALLER_THAN_EQUALS"):
+            check_code(f"[{label}] a valueless {operator_type} on an ordinary field is a validation error",
+                       valueless("name", operator_type), "ERROR", "400-1")
+            check_code(f"[{label}] a valueless {operator_type} on _id is a validation error",
+                       valueless("_id", operator_type), "ERROR", "400-1")
+
+    check_status("an explicit null operand is still accepted",
+                 agg(c, REG_VALUELESS, [{"type": "FILTER", "operator": {
+                     "fieldOperatorType": "NOT_EQUALS", "field": "name", "value": None}}]), "OK")
+
+
+def probe_a_trailing_dot_cannot_alias_the_primary_key(c):
+    save_doc(c, REG_VALUELESS, {"_id": "alias-abc", "name": "x"})
+    save_doc(c, REG_VALUELESS, {"_id": "ALIAS-ABC", "name": "y"})
+    wait_for_background()
+
+    def rows(field, operator_type="EQUALS"):
+        return agg(c, REG_VALUELESS, [{"type": "FILTER", "operator": {
+            "fieldOperatorType": operator_type, "field": field, "value": "alias-abc"}}])
+
+    exact = rows("_id")
+    check("an EQUALS on _id is case-sensitive",
+          sorted(row["_id"] for row in (exact.get("results") or [])) == ["alias-abc"])
+    for alias in ("_id.", "_id..", "name."):
+        check_code(f"a FILTER on '{alias}' is a validation error", rows(alias), "ERROR", "400-1")
+    for alias in ("_id.", "_id.."):
+        check_code(f"a CREATE_INDEX on '{alias}' is refused",
+                   c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_VALUELESS,
+                           "fieldName": alias}), "ERROR", "400-1")
+
+
+CAST_NUMBER_STEPS = [{"type": "MAP", "operators": [
+    {"fieldName": "n", "operator": {"type": "CAST", "fieldName": "raw", "toType": "NUMBER"}}]}]
+CAST_BOOLEAN_STEPS = [{"type": "MAP", "operators": [
+    {"fieldName": "b", "operator": {"type": "CAST", "fieldName": "raw", "toType": "BOOLEAN"}}]}]
+
+
+def probe_cast_keeps_the_value_boundary(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CAST})
+    numbers = {"inf": "Infinity", "nan": "NaN", "hex": "0x1p3", "exp": "1e3"}
+    for doc_id, raw in numbers.items():
+        save_doc(c, REG_CAST, {"_id": doc_id, "raw": raw})
+    wait_for_background()
+
+    rows = {row["_id"]: row.get("n") for row in (agg(c, REG_CAST, CAST_NUMBER_STEPS).get("results") or [])}
+    for doc_id, expected in (("inf", None), ("nan", None), ("hex", None), ("exp", 1000)):
+        check(f"CAST {numbers[doc_id]!r} to NUMBER answers {expected!r}", rows.get(doc_id) == expected,
+              detail=f"got {rows.get(doc_id)!r}")
+
+    selected = agg(c, REG_CAST, CAST_NUMBER_STEPS + [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "GREATER_THAN", "field": "n", "value": 100}}])
+    selected_ids = sorted(row["_id"] for row in (selected.get("results") or []))
+    check("a numeric filter after the cast selects only the row that really is a number",
+          selected_ids == ["exp"], detail=f"got {selected_ids}")
+
+
+def probe_cast_to_boolean_answers_null_for_an_unparseable_string(c):
+    booleans = {"btrue": "true", "bfalse": "FALSE", "bjunk": "banana"}
+    for doc_id, raw in booleans.items():
+        save_doc(c, REG_CAST, {"_id": doc_id, "raw": raw})
+    wait_for_background()
+
+    rows = {row["_id"]: row.get("b") for row in (agg(c, REG_CAST, CAST_BOOLEAN_STEPS).get("results") or [])}
+    for doc_id, expected in (("btrue", True), ("bfalse", False), ("bjunk", None)):
+        check(f"CAST {booleans[doc_id]!r} to BOOLEAN answers {expected!r}", rows.get(doc_id) == expected,
+              detail=f"got {rows.get(doc_id)!r}")
+
+
+AVG_FOLD_STEPS = [{"type": "MAP", "operators": [
+    {"fieldName": "derived", "operator": {"type": "AVG", "operands": ["price"]}}]}]
+
+
+def probe_a_map_null_result_is_a_real_json_null(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_NULLFOLD})
+    save_doc(c, REG_NULLFOLD, {"_id": "priced", "price": 10})
+    save_doc(c, REG_NULLFOLD, {"_id": "unpriced", "label": "no price here"})
+    wait_for_background()
+
+    rows = {row["_id"]: row for row in (agg(c, REG_NULLFOLD, AVG_FOLD_STEPS).get("results") or [])}
+    check("a fold with no valid operand answers null",
+          "derived" in rows.get("unpriced", {}) and rows.get("unpriced", {}).get("derived") is None,
+          detail=f"got {rows.get('unpriced')!r}")
+
+    ordered = agg(c, REG_NULLFOLD, AVG_FOLD_STEPS + [{"type": "SORT", "fieldName": "derived", "ascending": True}])
+    check("a SORT after that MAP is not a server error", ordered.get("status") == "OK",
+          detail=f"got {ordered.get('status')!r} {ordered.get('message')!r}")
+
+    selected = agg(c, REG_NULLFOLD, AVG_FOLD_STEPS + [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "GREATER_THAN", "field": "derived", "value": 0}}])
+    selected_ids = sorted(row["_id"] for row in (selected.get("results") or []))
+    check("a numeric filter after that MAP keeps only the row that really is a number",
+          selected_ids == ["priced"], detail=f"got {selected_ids}")
+
+    is_null = agg(c, REG_NULLFOLD, AVG_FOLD_STEPS + [{"type": "FILTER", "operator": {
+        "fieldOperatorType": "EQUALS", "field": "derived", "value": None}}])
+    null_ids = sorted(row["_id"] for row in (is_null.get("results") or []))
+    check("EQUALS null matches the row the same response showed as null",
+          null_ids == ["unpriced"], detail=f"got {null_ids}")
+
+
+def probe_indexing_a_field_written_as_null_is_consistent(c):
+    save_doc(c, REG_NULLFOLD, {"_id": "explicit", "price": None})
+    wait_for_background()
+
+    before = reg_filter(c, REG_NULLFOLD, "price", 10)
+    created = c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": REG_NULLFOLD,
+                      "fieldName": "price"})
+    check("an index builds over a collection holding a null value", created.get("status") == "OK",
+          detail=f"got {created.get('status')!r} {created.get('message')!r}")
+    wait_for_background()
+
+    check("the indexed answer agrees with the scan", reg_filter(c, REG_NULLFOLD, "price", 10) == before,
+          detail=f"scan={before} index={reg_filter(c, REG_NULLFOLD, 'price', 10)}")
+    is_null = reg_filter(c, REG_NULLFOLD, "price", None)
+    check("EQUALS null still names only the null-valued document", is_null == ["explicit"],
+          detail=f"got {is_null}")
+
+
+def probe_custom_sort_agrees_with_the_range_filter(c):
+    """SORT ordered custom values by wire text while GREATER_THAN used the type's own comparator, so
+    the two disagreed about which of two geo points comes first."""
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_CUSTOM_ORDER})
+    for doc_id, location in (("x", "#geo(10.0,5.0)"), ("y", "#geo(9.0,5.0)"), ("z", "#geo(8.0,5.0)")):
+        save_doc(c, REG_CUSTOM_ORDER, {"_id": doc_id, "location": location})
+
+    ordered = [d.get("_id") for d in (agg(c, REG_CUSTOM_ORDER, [
+        {"type": "SORT", "fieldName": "location", "ascending": True}]).get("results") or [])]
+    above = reg_filter(c, REG_CUSTOM_ORDER, "location", "#geo(9.0,5.0)", op="GREATER_THAN")
+
+    check("SORT over geo values follows the same order as GREATER_THAN",
+          ordered == ["z", "y", "x"] and above == ["x"],
+          detail=f"sorted={ordered} above the middle point={above}")
+
+
+def _complement_answers(c, coll, field, op, value):
+    rows = _in_filter(c, coll, field, value, op=op)
+    counted = agg(c, coll, [{"type": "FILTER", "operator": {"fieldOperatorType": op, "field": field, "value": value}},
+                            {"type": "COUNT"}])
+    return rows, ((counted.get("results") or [{}])[0]).get("count")
+
+
+def probe_complements_agree_between_index_and_scan(c):
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_COMPLEMENT_KINDS})
+    save_doc(c, REG_COMPLEMENT_KINDS, {"_id": "obj", "x": {"a": 1}})
+    save_doc(c, REG_COMPLEMENT_KINDS, {"_id": "arr", "x": [1, 2, 3]})
+    save_doc(c, REG_COMPLEMENT_KINDS, {"_id": "str", "x": "hello"})
+    save_doc(c, REG_COMPLEMENT_KINDS, {"_id": "nul", "x": None})
+    c.send({"type": "CREATE_COLLECTION", "databaseName": DB, "collectionName": REG_COMPLEMENT_NULL})
+    save_doc(c, REG_COMPLEMENT_NULL, {"_id": "a", "x": "a"})
+    save_doc(c, REG_COMPLEMENT_NULL, {"_id": "b", "x": "b"})
+    save_doc(c, REG_COMPLEMENT_NULL, {"_id": "n", "x": None})
+
+    queries = (
+        (REG_COMPLEMENT_KINDS, "NOT_EQUALS", {"a": 1}),
+        (REG_COMPLEMENT_KINDS, "NOT_EQUALS", [1, 2, 3]),
+        (REG_COMPLEMENT_KINDS, "NOT_IN", [{"a": 1}]),
+        (REG_COMPLEMENT_NULL, "NOT_IN", ["a"]),
+    )
+    scanned = [_complement_answers(c, coll, "x", op, value) for coll, op, value in queries]
+
+    for coll in (REG_COMPLEMENT_KINDS, REG_COMPLEMENT_NULL):
+        c.send({"type": "CREATE_INDEX", "databaseName": DB, "collectionName": coll, "fieldName": "x"})
+    wait_for_indexes(c, [(REG_COMPLEMENT_KINDS, "x"), (REG_COMPLEMENT_NULL, "x")])
+    wait_for_background()
+
+    check("NOT_EQUALS against an object matches every other kind of value, null included",
+          scanned[0][0] == ["arr", "nul", "str"], detail=f"scan={scanned[0][0]}")
+    check("NOT_IN keeps an explicit null on a single-type field", scanned[3][0] == ["b", "n"],
+          detail=f"scan={scanned[3][0]}")
+    for (coll, op, value), before in zip(queries, scanned):
+        after = _complement_answers(c, coll, "x", op, value)
+        check(f"an indexed {op} {value!r} returns what the scan returns, rows and COUNT alike", after == before,
+              detail=f"scan={before} indexed={after}")
+
+
 def regression_suite(c):
-    section("Correctness regressions: non-ASCII index values, single-valued index ranges, "
-            "low-cardinality numeric indexes, conjunctions over a filtered stream")
+    section("Correctness regressions: non-ASCII index values, index values containing the file's own "
+            "delimiters, repeated CREATE_INDEX, single-valued index ranges, low-cardinality numeric "
+            "indexes, conjunctions over a filtered stream, custom values across a MAP step, "
+            "conjunctions over rows with no _id, valueless field operands, the MAP CAST value boundary, "
+            "one spelling of JSON null across a MAP step and an index build, custom-typed SORT order, "
+            "complement operators over mixed kinds and explicit nulls")
     probe_non_ascii_indexed_values(c)
+    probe_index_values_containing_delimiters(c)
+    probe_repeated_create_index_is_idempotent(c)
     probe_single_valued_index_ranges(c)
     probe_low_cardinality_numeric_index(c)
     probe_conjunction_after_a_filter_step(c)
+    probe_bulk_save_indexes_every_doc_sharing_a_value(c)
+    probe_case_variants_agree_between_index_and_scan(c)
+    probe_sort_keeps_documents_without_the_field(c)
+    probe_mixed_type_field_falls_back_to_scan(c)
+    probe_numeric_in_agrees_between_index_and_scan(c)
+    probe_not_in_then_equals_on_a_scalar_only_field(c)
+    probe_group_by_integer_min_value(c)
+    probe_geo_distance_across_the_antimeridian(c)
+    probe_a_non_finite_geo_operand_is_refused(c)
+    probe_sort_ties_do_not_depend_on_the_index(c)
+    probe_a_custom_filter_survives_a_map_step(c)
+    probe_a_conjunction_after_a_row_reshaping_step(c)
+    probe_a_field_operator_without_a_value_is_refused(c)
+    probe_a_trailing_dot_cannot_alias_the_primary_key(c)
+    probe_cast_keeps_the_value_boundary(c)
+    probe_cast_to_boolean_answers_null_for_an_unparseable_string(c)
+    probe_a_map_null_result_is_a_real_json_null(c)
+    probe_indexing_a_field_written_as_null_is_consistent(c)
+    probe_custom_sort_agrees_with_the_range_filter(c)
+    probe_complements_agree_between_index_and_scan(c)
+    probe_a_sorted_conjunction_keeps_its_order(c)
+    probe_a_conjunction_keeps_equal_rows_without_an_id(c)
+    probe_nearest_ties_are_broken_on_id(c)
+    probe_nearest_scores_huge_and_tiny_vectors(c)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -942,6 +2207,11 @@ def main():
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
         regression_suite(c)
+
+    # Phase 6 — an index-backed answer must equal the full-scan answer.
+    with Conn() as c:
+        c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)
+        agreement_suite(c)
 
     with Conn() as c:
         c.authenticate(ADMIN_USERNAME, ADMIN_PASSWORD)

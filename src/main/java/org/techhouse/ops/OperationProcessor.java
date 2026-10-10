@@ -2,7 +2,6 @@ package org.techhouse.ops;
 
 import java.util.List;
 import java.util.UUID;
-import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Globals;
 import org.techhouse.conn.ClientTracker;
@@ -56,10 +55,8 @@ import org.techhouse.ops.req.SetPasswordRequest;
 import org.techhouse.ops.req.StopListenRequest;
 import org.techhouse.ops.req.TestTriggerRequest;
 import org.techhouse.ops.resp.CloseConnectionResponse;
-import org.techhouse.ops.resp.DeleteResponse;
 import org.techhouse.ops.resp.ListUsersResponse;
 import org.techhouse.ops.resp.OperationResponse;
-import org.techhouse.ops.resp.SaveResponse;
 
 public class OperationProcessor {
     private final Cache cache = IocContainer.get(Cache.class);
@@ -75,11 +72,20 @@ public class OperationProcessor {
                 && !TransactionOperationHelper.isAllowedDuringTransaction(operationRequest.getType())) {
             return new OperationResponse(operationRequest.getType(), ErrorCode.OPERATION_NOT_ALLOWED_IN_TRANSACTION);
         }
+        if (activeTransaction != null && activeTransaction.isAborted()
+                && !TransactionOperationHelper.isAllowedOnAbortedTransaction(operationRequest.getType())) {
+            return new OperationResponse(operationRequest.getType(), ErrorCode.TRANSACTION_NOT_USABLE);
+        }
+        final var actingUser = clientTracker.getAuthenticatedUsername(clientId);
+        return processOperation(operationRequest, clientId, activeTransaction, actingUser);
+    }
+
+    private OperationResponse processOperation(OperationRequest operationRequest, UUID clientId,
+            Transaction activeTransaction, String actingUser) {
         final var adminGuard = ClusterAdminHelper.guard(operationRequest);
         if (adminGuard != null) {
             return adminGuard;
         }
-        final var actingUser = clientTracker.getAuthenticatedUsername(clientId);
         final var response = switch (operationRequest.getType()) {
             case BULK_SAVE ->
                 processBulkSaveOperation((BulkSaveRequest) operationRequest, activeTransaction, actingUser);
@@ -111,7 +117,7 @@ public class OperationProcessor {
                 UserOperationHelper.processSetPassword((SetPasswordRequest) operationRequest, clientId);
             case GET_DATABASE_STATS -> DatabaseStatsHelper.processGetDatabaseStats();
             case LISTEN -> processListenOperation((ListenRequest) operationRequest, clientId);
-            case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest);
+            case STOP_LISTEN -> processStopListenOperation((StopListenRequest) operationRequest, clientId);
             case START_TRANSACTION ->
                 TransactionOperationHelper.start(clientId, UUID.randomUUID(), operationRequest.getTriggerDepth());
             case COMMIT_TRANSACTION -> TransactionOperationHelper.commit(clientId);
@@ -135,7 +141,7 @@ public class OperationProcessor {
             case LIST_TRIGGER_RUNS -> processListTriggerRuns((ListTriggerRunsRequest) operationRequest);
             case RESOLVE_TRIGGER_RUN -> processResolveTriggerRun((ResolveTriggerRunRequest) operationRequest);
         };
-        return ClusterAdminHelper.afterAdminOp(operationRequest, actingUser, response);
+        return ClusterAdminHelper.afterAdminOp(operationRequest, response);
     }
 
     private OperationResponse processCreateIndex(CreateIndexRequest createIndexRequest) {
@@ -216,8 +222,8 @@ public class OperationProcessor {
         return ListenOperationHelper.processListenOperation(listenRequest, clientId);
     }
 
-    private OperationResponse processStopListenOperation(StopListenRequest request) {
-        return ListenOperationHelper.processStopListenOperation(request);
+    private OperationResponse processStopListenOperation(StopListenRequest request, UUID clientId) {
+        return ListenOperationHelper.processStopListenOperation(request, clientId);
     }
 
     private OperationResponse processRunScriptOperation(RunScriptRequest request, String actingUser, UUID clientId) {
@@ -292,15 +298,26 @@ public class OperationProcessor {
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.BULK_SAVE, ErrorCode.ERROR_BULK_SAVING,
                 () -> {
+                    final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.BULK_SAVE, dbName,
+                            collName);
+                    if (ownershipError != null) {
+                        return ownershipError;
+                    }
+                    final var readinessError = CollectionReadinessGuard.check(OperationType.BULK_SAVE, dbName,
+                            collName);
+                    if (readinessError != null) {
+                        return readinessError;
+                    }
+                    final var schemaError = SchemaValidationHelper.check(bulkSaveRequest);
+                    if (schemaError != null) {
+                        return schemaError;
+                    }
                     final var hookError = BeforeHookHelper.beforeBulkSave(bulkSaveRequest, actingUser);
                     if (hookError != null) {
                         return hookError;
                     }
-                    final var response = ClusterWriteHelper.afterBulkSave(dbName, collName,
-                            SaveOperationHelper.executeBulkSave(bulkSaveRequest));
-                    TriggerHelper.afterBulkSave(dbName, collName, response, actingUser,
-                            bulkSaveRequest.getTriggerDepth());
-                    return response;
+                    return BulkSaveEffects.executeAndPublish(bulkSaveRequest, actingUser,
+                            TriggerHelper.stageBulkSave(bulkSaveRequest, actingUser));
                 });
     }
 
@@ -315,20 +332,27 @@ public class OperationProcessor {
         if (guardError != null) {
             return guardError;
         }
-        final var isInsert = saveRequest.get_id() == null || saveRequest.get_id().isBlank();
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.SAVE, ErrorCode.ERROR_SAVING, () -> {
-            final var hookError = BeforeHookHelper.beforeSave(saveRequest,
-                    isInsert ? EventType.CREATED : EventType.UPDATED, actingUser);
+            final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.SAVE, dbName, collName);
+            if (ownershipError != null) {
+                return ownershipError;
+            }
+            final var readinessError = CollectionReadinessGuard.check(OperationType.SAVE, dbName, collName);
+            if (readinessError != null) {
+                return readinessError;
+            }
+            final var schemaError = SchemaValidationHelper.check(saveRequest);
+            if (schemaError != null) {
+                return schemaError;
+            }
+            final var hookError = BeforeHookHelper.beforeSave(saveRequest, actingUser);
             if (hookError != null) {
                 return hookError;
             }
-            final var response = ClusterWriteHelper.afterSave(dbName, collName,
-                    SaveOperationHelper.executeSave(saveRequest));
-            if (response instanceof SaveResponse saveResponse) {
-                TriggerHelper.afterWriteIds(dbName, collName, isInsert ? EventType.CREATED : EventType.UPDATED,
-                        List.of(saveResponse.get_id()), actingUser, saveRequest.getTriggerDepth());
-            }
-            return response;
+            final var local = TriggerHelper.runStaged(TriggerHelper.stageSave(saveRequest, actingUser), dbName,
+                    collName, actingUser, saveRequest.getTriggerDepth(),
+                    () -> SaveOperationHelper.executeSave(saveRequest));
+            return ClusterWriteHelper.afterSave(dbName, collName, local);
         });
     }
 
@@ -345,6 +369,15 @@ public class OperationProcessor {
         }
         return OperationLocks.withCollectionLock(dbName, collName, OperationType.DELETE, ErrorCode.ERROR_DELETING,
                 () -> {
+                    final var ownershipError = ClusterWriteHelper.stillOwnsOrError(OperationType.DELETE, dbName,
+                            collName);
+                    if (ownershipError != null) {
+                        return ownershipError;
+                    }
+                    final var readinessError = CollectionReadinessGuard.check(OperationType.DELETE, dbName, collName);
+                    if (readinessError != null) {
+                        return readinessError;
+                    }
                     // Read before the delete: afterWrite needs the document that is about to disappear.
                     final var deleted = TriggerHelper.captureForDelete(dbName, collName, deleteRequest.get_id(),
                             deleteRequest.getTriggerDepth());
@@ -352,13 +385,18 @@ public class OperationProcessor {
                     if (hookError != null) {
                         return hookError;
                     }
-                    final var response = ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
-                            DeleteOperationHelper.executeDelete(deleteRequest));
-                    if (response instanceof DeleteResponse) {
-                        TriggerHelper.afterWrite(dbName, collName, EventType.DELETED, deleted, actingUser,
-                                deleteRequest.getTriggerDepth());
+                    final var staged = TriggerHelper.stageDelete(deleteRequest, deleted, actingUser);
+                    final var reservation = TriggerHelper.discardingOnFailure(staged,
+                            () -> ClusterWriteHelper.reserveDelete(dbName, collName, deleteRequest.get_id()));
+                    if (reservation.ownerLost()) {
+                        staged.discard();
+                        return new OperationResponse(OperationType.DELETE, ErrorCode.NOT_COLLECTION_OWNER);
                     }
-                    return response;
+                    final var local = TriggerHelper.runStaged(staged, dbName, collName, actingUser,
+                            deleteRequest.getTriggerDepth(),
+                            () -> ClusterWriteHelper.deleteOrRetract(deleteRequest, reservation.version()));
+                    return ClusterWriteHelper.afterDelete(dbName, collName, deleteRequest.get_id(),
+                            reservation.version(), local);
                 });
     }
 

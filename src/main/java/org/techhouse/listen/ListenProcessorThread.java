@@ -4,14 +4,17 @@ import java.io.IOException;
 import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.locks.ReentrantLock;
+import org.techhouse.cache.Cache;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.ejson.EJson;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
 import org.techhouse.ops.AggregationOperationHelper;
+import org.techhouse.ops.auth.AuthorizationChecker;
+import org.techhouse.ops.resp.ListenEndedResponse;
 import org.techhouse.ops.resp.ListenResponse;
+import org.techhouse.ops.resp.OperationResponse;
 
 public class ListenProcessorThread implements Runnable {
     private final Logger logger = Logger.logFor(ListenProcessorThread.class);
@@ -19,6 +22,7 @@ public class ListenProcessorThread implements Runnable {
     private final ListenManager manager;
     private final ClientTracker clientTracker = IocContainer.get(ClientTracker.class);
     private final EJson eJson = IocContainer.get(EJson.class);
+    private final Cache cache = IocContainer.get(Cache.class);
 
     public ListenProcessorThread(LinkedBlockingQueue<UUID> dirtyQueue, ListenManager manager) {
         this.dirtyQueue = dirtyQueue;
@@ -41,18 +45,21 @@ public class ListenProcessorThread implements Runnable {
     }
 
     private void processListen(UUID listenId) {
-        final var registration = manager.getRegistration(listenId);
-        if (registration == null) {
+        final var endedListen = manager.endedListen(listenId);
+        if (endedListen != null) {
+            pushEndedOnceDelivered(listenId, endedListen);
             return;
         }
-        final List<JsonObject> results;
-        try {
-            results = AggregationOperationHelper.processAggregation(registration.request());
-        } catch (Exception e) {
-            logger.error("Error re-running listen query for " + listenId, e);
+        final var registration = authorizedRegistration(listenId);
+        if (registration == null || !registration.delivered().get()) {
             return;
         }
-        final var newHash = ResultHasher.hash(results);
+        final var results = rerunOutsideAnyApply(listenId, registration);
+        if (results == null) {
+            return;
+        }
+        final var newHash = ResultHasher.hash(results,
+                ResultHasher.ordersResults(registration.request().getAggregationSteps()));
         final var oldHash = registration.lastHash().get();
         if (newHash.equals(oldHash)) {
             return;
@@ -60,25 +67,69 @@ public class ListenProcessorThread implements Runnable {
         if (!registration.lastHash().compareAndSet(oldHash, newHash)) {
             return;
         }
-        final var writer = clientTracker.getWriter(registration.clientId());
-        if (writer == null) {
-            manager.unregister(listenId);
-            return;
-        }
-        final var writerLock = clientTracker.getWriterLock(registration.clientId());
-        if (writerLock == null) {
-            manager.unregister(listenId);
-            return;
-        }
-        pushUpdate(listenId, results, newHash, writer, writerLock);
+        push(listenId, registration.clientId(), new ListenResponse(listenId.toString(), results, newHash, true),
+                registration);
     }
 
-    private void pushUpdate(UUID listenId, List<JsonObject> results, String newHash, java.io.BufferedWriter writer,
-            ReentrantLock writerLock) {
-        final var updateResponse = new ListenResponse(listenId.toString(), results, newHash, true);
+    private List<JsonObject> rerunOutsideAnyApply(UUID listenId, ListenRegistration registration) {
+        final var before = manager.applySnapshot(registration.collectionKeys());
+        if (before == null) {
+            manager.holdBack(listenId, registration.collectionKeys());
+            return null;
+        }
+        final List<JsonObject> results;
+        try {
+            results = AggregationOperationHelper.processAggregation(registration.request());
+        } catch (Exception e) {
+            logger.error("Error re-running listen query for " + listenId, e);
+            return null;
+        }
+        if (!manager.unchangedSince(before)) {
+            manager.holdBack(listenId, registration.collectionKeys());
+            return null;
+        }
+        return results;
+    }
+
+    private void pushEndedOnceDelivered(UUID listenId, ListenManager.EndedListen endedListen) {
+        final var registration = endedListen.registration();
+        if (registration.delivered().get() && manager.consumeEnded(listenId, endedListen)) {
+            push(listenId, registration.clientId(), new ListenEndedResponse(listenId.toString(), endedListen.reason()),
+                    null);
+        }
+    }
+
+    private ListenRegistration authorizedRegistration(UUID listenId) {
+        final var registration = manager.getRegistration(listenId);
+        if (registration == null || stillAuthorized(registration)) {
+            return registration;
+        }
+        manager.end(listenId, ListenManager.ACCESS_REVOKED);
+        return null;
+    }
+
+    private boolean stillAuthorized(ListenRegistration registration) {
+        final var username = clientTracker.getAuthenticatedUsername(registration.clientId());
+        if (username == null) {
+            return false;
+        }
+        final var user = cache.getAdminUserEntry(username);
+        return user != null && AuthorizationChecker.check(registration.request(), user).isAllowed();
+    }
+
+    private void push(UUID listenId, UUID clientId, OperationResponse frame, ListenRegistration expected) {
+        final var writer = clientTracker.getWriter(clientId);
+        final var writerLock = clientTracker.getWriterLock(clientId);
+        if (writer == null || writerLock == null) {
+            manager.unregister(listenId);
+            return;
+        }
         writerLock.lock();
         try {
-            writer.write(eJson.toJson(updateResponse));
+            if (expected != null && manager.getRegistration(listenId) != expected) {
+                return;
+            }
+            writer.write(eJson.toJson(frame));
             writer.newLine();
             writer.flush();
         } catch (IOException e) {

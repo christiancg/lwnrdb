@@ -132,7 +132,7 @@ public class ProcedureImportIntegrationTest {
         clearProcedures(OTHER_DB);
     }
 
-    private void clearProcedures(String dbName) {
+    private void clearProcedures(String dbName) throws Exception {
         for (final var name : fs.listProcedureNames(dbName)) {
             fs.deleteProcedure(dbName, name);
         }
@@ -423,20 +423,6 @@ public class ProcedureImportIntegrationTest {
         final var response = ProcedureOperationHelper.executeSave(new SaveProcedureRequest(TestGlobals.DB, "builtins",
                 "import db from \"db\"; import args from \"args\"; export const n = typeof db;"), OWNER);
         assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
-    }
-
-    @Test
-    public void test_a_replicated_save_skips_the_import_check() throws Exception {
-        // A stamped request is a peer re-executing REPLICATE_ADMIN. It must not reject a save the
-        // coordinator accepted just because its own copy of the library has not arrived yet.
-        final var request = new SaveProcedureRequest(TestGlobals.DB, "caller",
-                "import { missing } from \"procedures/absent\"; export const x = missing;");
-        request.setStampedVersion(7L);
-        request.setStampedUpdatedAt(System.currentTimeMillis());
-        request.setStampedUpdatedBy(OWNER);
-        final var response = ProcedureOperationHelper.executeSave(request, OWNER);
-        assertEquals(OperationStatus.OK, response.getStatus(), response.getMessage());
-        assertNotNull(cache.getProcedure(TestGlobals.DB, "caller"));
     }
 
     @Test

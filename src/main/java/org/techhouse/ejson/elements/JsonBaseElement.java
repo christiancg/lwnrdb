@@ -14,16 +14,12 @@ public abstract class JsonBaseElement {
             case JsonArray ignored -> JsonType.ARRAY;
             case JsonObject ignored -> JsonType.OBJECT;
             case JsonNull ignored -> JsonType.NULL;
+            case JsonCustom<?> ignored -> JsonType.CUSTOM;
             case JsonString ignored -> JsonType.STRING;
             case JsonNumber ignored -> JsonType.NUMBER;
             case JsonBoolean ignored -> JsonType.BOOLEAN;
             case JsonSyntaxToken ignored -> JsonType.SYNTAX;
-            default -> {
-                if (JsonCustom.class.isAssignableFrom(object.getClass())) {
-                    yield JsonType.CUSTOM;
-                }
-                throw new IllegalStateException("Unexpected value: " + object);
-            }
+            default -> throw new IllegalStateException("Unexpected value: " + object);
         };
     }
 

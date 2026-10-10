@@ -2,6 +2,7 @@ package org.techhouse.ops.index;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -74,7 +75,7 @@ public final class IndexEntryReader {
         if (!pendingIds.isEmpty() && !reconcilePending(combined, dbName, collName, fieldName, pendingIds)) {
             return null;
         }
-        if (combined.isEmpty()) {
+        if (combined.isEmpty() || doesNotCoverEveryDocument(combined, dbName, collName)) {
             return null;
         }
         if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
@@ -110,11 +111,11 @@ public final class IndexEntryReader {
             for (var customType : CustomTypeFactory.getCustomTypes().values()) {
                 addCachedEntriesOfType(entries, dbName, collName, fieldName, customType);
             }
-            if (entries.isEmpty()) {
+            if (entries.isEmpty() || doesNotCoverEveryDocument(entries, dbName, collName)) {
                 return null;
             }
             entries.sort(order);
-            ordered = collectIds(entries, maxIds);
+            ordered = idsInOrder(entries, order, maxIds);
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);
         }
@@ -128,15 +129,46 @@ public final class IndexEntryReader {
         return ordered;
     }
 
-    private static List<String> collectIds(List<FieldIndexEntry<?>> entries, long maxIds) {
-        final var ordered = new ArrayList<String>();
+    private static boolean doesNotCoverEveryDocument(List<FieldIndexEntry<?>> entries, String dbName, String collName) {
+        final var covered = new HashSet<String>();
         for (final var entry : entries) {
-            ordered.addAll(entry.getIds());
-            if (ordered.size() >= maxIds) {
-                break;
+            covered.addAll(entry.getIds());
+        }
+        return covered.size() < cache.pkIndexSize(dbName, collName);
+    }
+
+    public static List<String> idsInOrder(List<FieldIndexEntry<?>> sortedEntries, Comparator<FieldIndexEntry<?>> order,
+            long maxIds) {
+        final var ordered = new ArrayList<String>();
+        var runStart = 0;
+        while (runStart < sortedEntries.size() && ordered.size() < maxIds) {
+            var runEnd = runStart + 1;
+            while (runEnd < sortedEntries.size()
+                    && order.compare(sortedEntries.get(runStart), sortedEntries.get(runEnd)) == 0) {
+                runEnd++;
             }
+            ordered.addAll(mergedIds(sortedEntries.subList(runStart, runEnd)));
+            runStart = runEnd;
         }
         return ordered;
+    }
+
+    private static List<String> mergedIds(List<FieldIndexEntry<?>> run) {
+        if (run.size() == 1) {
+            return sortedIds(run.getFirst());
+        }
+        final var ids = new ArrayList<String>();
+        for (final var entry : run) {
+            ids.addAll(entry.getIds());
+        }
+        Collections.sort(ids);
+        return ids;
+    }
+
+    public static List<String> sortedIds(FieldIndexEntry<?> entry) {
+        final var ids = new ArrayList<>(entry.getIds());
+        Collections.sort(ids);
+        return ids;
     }
 
     private static void addCachedEntriesOfType(List<FieldIndexEntry<?>> entries, String dbName, String collName,
@@ -250,22 +282,22 @@ public final class IndexEntryReader {
         if (cache.hasNoIndex(dbName, collName, fieldName)) {
             return null;
         }
+        for (var localValue : localValues) {
+            if (IndexValueCodec.elementToLookupValue(localValue) == null) {
+                return null;
+            }
+        }
         recordAnalyzeIndexUse(dbName, collName, fieldName);
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
         final var matchingIds = new HashSet<String>();
         for (var localValue : localValues) {
-            if (localValue.isJsonNull()) {
-                continue;
-            }
             final var lookupValue = IndexValueCodec.elementToLookupValue(localValue);
-            if (lookupValue == null) {
-                continue;
-            }
             final var operator = new FieldOperator(FieldOperatorType.EQUALS, fieldName, localValue);
             final var ids = cache.getIdsFromIndex(dbName, collName, fieldName, operator, lookupValue);
-            if (ids != null) {
-                matchingIds.addAll(ids);
+            if (ids == null) {
+                return null;
             }
+            matchingIds.addAll(ids);
         }
         final var pendingIds = PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName);
         if (pendingIds.isEmpty()) {

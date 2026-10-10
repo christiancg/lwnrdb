@@ -13,7 +13,7 @@ public class BooleanTypeAdapter implements TypeAdapter<Boolean> {
     public Boolean fromJson(JsonBaseElement value) {
         if (value.getJsonType() == JsonBaseElement.JsonType.BOOLEAN) {
             return value.asJsonBoolean().getValue();
-        } else if (value.getJsonType() == JsonBaseElement.JsonType.STRING) {
+        } else if (value.isJsonString()) {
             return Boolean.parseBoolean(value.asJsonString().getValue());
         } else {
             return null;

@@ -19,7 +19,7 @@ public class JsonArray extends JsonBaseElement implements Iterable<JsonBaseEleme
     }
 
     public void add(String string) {
-        elements.add(new JsonString(string));
+        elements.add(string == null ? JsonNull.INSTANCE : new JsonString(string));
     }
 
     public JsonBaseElement set(int index, JsonBaseElement element) {
@@ -65,6 +65,7 @@ public class JsonArray extends JsonBaseElement implements Iterable<JsonBaseEleme
     }
 
     @Override
+    @SuppressWarnings("NullableProblems")
     public Iterator<JsonBaseElement> iterator() {
         return elements.iterator();
     }

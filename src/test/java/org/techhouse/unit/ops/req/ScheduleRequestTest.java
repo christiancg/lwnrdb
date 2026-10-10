@@ -29,10 +29,6 @@ public class ScheduleRequestTest {
         request.setTimeoutMs(1000L);
         request.setDescription("nightly");
         request.setIfVersion(4L);
-        request.setStampedVersion(5L);
-        request.setStampedUpdatedAt(6L);
-        request.setStampedUpdatedBy("alice");
-        request.setStampedDefiner("owner");
         final var args = new JsonObject();
         args.add("k", new JsonString("v"));
         request.setArgs(args);
@@ -43,10 +39,6 @@ public class ScheduleRequestTest {
         assertEquals(1000L, request.getTimeoutMs());
         assertEquals("nightly", request.getDescription());
         assertEquals(4L, request.getIfVersion());
-        assertEquals(5L, request.getStampedVersion());
-        assertEquals(6L, request.getStampedUpdatedAt());
-        assertEquals("alice", request.getStampedUpdatedBy());
-        assertEquals("owner", request.getStampedDefiner());
         assertEquals("v", request.getArgs().get("k").asJsonString().getValue());
         assertTrue(request.isEnabled());
         request.setEnabled(false);

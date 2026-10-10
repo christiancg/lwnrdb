@@ -2,6 +2,9 @@ package org.techhouse.data;
 
 import java.io.BufferedWriter;
 import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -14,9 +17,10 @@ public class Client {
     private String authenticatedUsername;
     private volatile BufferedWriter writer;
     private final ReentrantLock writerLock = new ReentrantLock();
-    private Transaction activeTransaction;
+    private volatile Transaction activeTransaction;
     private volatile boolean hasLocalSlice;
     private final Set<String> transactionParticipants = ConcurrentHashMap.newKeySet();
+    private final Map<String, Set<String>> transactionWriteHolders = new ConcurrentHashMap<>();
 
     public Client(String address) {
         this.address = address;
@@ -82,9 +86,22 @@ public class Client {
         transactionParticipants.add(ownerAddress);
     }
 
+    public void recordTransactionWrite(String collectionId, String holder) {
+        transactionWriteHolders.computeIfAbsent(collectionId, _ -> ConcurrentHashMap.newKeySet()).add(holder);
+    }
+
+    public Set<String> transactionWriteHolders(Collection<String> collectionIds) {
+        final var holders = new HashSet<String>();
+        for (final var collectionId : collectionIds) {
+            holders.addAll(transactionWriteHolders.getOrDefault(collectionId, Set.of()));
+        }
+        return holders;
+    }
+
     public void clearTransactionState() {
         hasLocalSlice = false;
         transactionParticipants.clear();
+        transactionWriteHolders.clear();
     }
 
     @Override

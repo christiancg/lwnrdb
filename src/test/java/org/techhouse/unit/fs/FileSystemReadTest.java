@@ -75,6 +75,24 @@ public class FileSystemReadTest {
     }
 
     @Test
+    public void test_a_disk_read_entry_carries_its_page() throws Exception {
+        final var fileSystem = new FileSystem();
+        TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
+        final var line = "{\"_id\":\"onpage1\",\"name\":\"test\"}" + Globals.NEWLINE;
+        final var pageOne = new File(TestGlobals.PATH + Globals.FILE_SEPARATOR + TestGlobals.DB + Globals.FILE_SEPARATOR
+                + TestGlobals.COLL + Globals.FILE_SEPARATOR + TestGlobals.COLL + "-1" + Globals.DB_FILE_EXTENSION);
+        java.nio.file.Files.writeString(pageOne.toPath(), line);
+        final var indexEntry = new PkIndexEntry(TestGlobals.DB, TestGlobals.COLL, "onpage1", 0,
+                line.getBytes(java.nio.charset.StandardCharsets.UTF_8).length, 1L, 0L);
+
+        final var positioned = fileSystem.getById(indexEntry);
+        final var scanned = fileSystem.readWholeCollectionPage(TestGlobals.DB, TestGlobals.COLL, 1L).get("onpage1");
+
+        assertEquals(1L, positioned.getPage(), "a positioned read must carry its own page, not default to 0");
+        assertEquals(1L, scanned.getPage(), "a scanned read must carry the page it was scanned from, not default to 0");
+    }
+
+    @Test
     public void test_get_by_id_returns_valid_db_entry() throws Exception {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);

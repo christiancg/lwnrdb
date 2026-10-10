@@ -1,6 +1,7 @@
 package org.techhouse.ops.schedule;
 
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.time.temporal.ChronoUnit;
 import java.util.BitSet;
@@ -9,7 +10,7 @@ import java.util.Map;
 import org.techhouse.ex.InvalidCronException;
 
 public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, BitSet months, BitSet daysOfWeek,
-        boolean domRestricted, boolean dowRestricted) {
+        boolean domRestricted, boolean dowRestricted, boolean firesInBothFallBackPasses) {
     private static final int SEARCH_HORIZON_YEARS = 4;
     private static final Map<String, Integer> MONTH_NAMES = Map.ofEntries(Map.entry("JAN", 1), Map.entry("FEB", 2),
             Map.entry("MAR", 3), Map.entry("APR", 4), Map.entry("MAY", 5), Map.entry("JUN", 6), Map.entry("JUL", 7),
@@ -35,10 +36,48 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
             daysOfWeek.set(0);
         }
         return new CronExpression(minutes, hours, daysOfMonth, months, daysOfWeek, isRestricted(fields[2]),
-                isRestricted(fields[4]));
+                isRestricted(fields[4]), startsWithWildcard(fields[0]) || startsWithWildcard(fields[1]));
     }
 
     public ZonedDateTime nextAfter(ZonedDateTime from) {
+        final var walked = walkForward(from);
+        if (!firesInBothFallBackPasses) {
+            return walked;
+        }
+        final var repeated = firstInRepeatedHour(from);
+        if (repeated == null) {
+            return walked;
+        }
+        return walked == null || repeated.toInstant().isBefore(walked.toInstant()) ? repeated : walked;
+    }
+
+    private ZonedDateTime firstInRepeatedHour(ZonedDateTime from) {
+        final var zone = from.getZone();
+        final var transition = zone.getRules().getTransition(from.toLocalDateTime());
+        if (transition == null || !transition.isOverlap()) {
+            return null;
+        }
+        final var laterOffset = transition.getOffsetAfter();
+        final var overlapEnd = transition.getDateTimeBefore();
+        var candidate = transition.getDateTimeAfter();
+        while (candidate.isBefore(overlapEnd)) {
+            if (matches(candidate)) {
+                final var resolved = ZonedDateTime.ofInstant(candidate.toInstant(laterOffset), zone);
+                if (resolved.isAfter(from)) {
+                    return resolved;
+                }
+            }
+            candidate = candidate.plusMinutes(1);
+        }
+        return null;
+    }
+
+    private boolean matches(LocalDateTime candidate) {
+        return months.get(candidate.getMonthValue()) && matchesDay(candidate) && hours.get(candidate.getHour())
+                && minutes.get(candidate.getMinute());
+    }
+
+    private ZonedDateTime walkForward(ZonedDateTime from) {
         final var zone = from.getZone();
         var candidate = from.toLocalDateTime().truncatedTo(ChronoUnit.MINUTES).plusMinutes(1);
         final var limit = candidate.plusYears(SEARCH_HORIZON_YEARS);
@@ -59,11 +98,26 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
                 candidate = candidate.plusMinutes(1);
                 continue;
             }
-            final var resolved = candidate.atZone(zone);
-            if (resolved.isAfter(from)) {
+            final var resolved = firstOccurrenceAfter(candidate, zone, from);
+            if (resolved != null) {
                 return resolved;
             }
             candidate = candidate.plusMinutes(1);
+        }
+        return null;
+    }
+
+    private static ZonedDateTime firstOccurrenceAfter(LocalDateTime candidate, ZoneId zone, ZonedDateTime from) {
+        final var offsets = zone.getRules().getValidOffsets(candidate);
+        if (offsets.isEmpty()) {
+            final var shifted = candidate.atZone(zone);
+            return shifted.isAfter(from) ? shifted : null;
+        }
+        for (final var offset : offsets) {
+            final var resolved = ZonedDateTime.ofInstant(candidate.toInstant(offset), zone);
+            if (resolved.isAfter(from)) {
+                return resolved;
+            }
         }
         return null;
     }
@@ -78,7 +132,11 @@ public record CronExpression(BitSet minutes, BitSet hours, BitSet daysOfMonth, B
     }
 
     private static boolean isRestricted(String field) {
-        return !"*".equals(field.trim());
+        return !startsWithWildcard(field);
+    }
+
+    private static boolean startsWithWildcard(String field) {
+        return field.trim().startsWith("*");
     }
 
     private static BitSet parseField(String text, String field, int min, int max, Map<String, Integer> names) {

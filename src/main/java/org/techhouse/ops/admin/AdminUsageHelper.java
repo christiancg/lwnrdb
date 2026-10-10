@@ -58,14 +58,14 @@ public final class AdminUsageHelper {
                 final var updateResult = fs.updateFromCollection(usageEntry, existingPk);
                 savedPk = updateResult.indexEntry();
                 cache.shiftPkPositionsAfterCompaction(updateResult.compaction());
-                AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
-                        EventType.UPDATED, List.of(usageEntry), false);
+                AdminPageHelper.recordLandedDelta(Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.UPDATED,
+                        List.of(usageEntry));
             } else {
                 usageEntry.setPage(cache.selectPageForInsert(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
                         usageEntry.byteSize()));
                 savedPk = fs.insertIntoCollection(usageEntry);
-                AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
-                        EventType.CREATED, List.of(usageEntry), false);
+                AdminPageHelper.recordLandedDelta(Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.CREATED,
+                        List.of(usageEntry));
             }
             cache.putPkIndexCollectionUsage(savedPk);
         } finally {
@@ -92,13 +92,14 @@ public final class AdminUsageHelper {
                 final var usage = AdminCollectionUsageEntry.fromJsonObject(data);
                 if (usage.getLastAccessMillis() < threshold) {
                     usage.setPreviousByteSize(pk.getLength());
+                    usage.setPage(pk.getPage());
                     final var compaction = fs.deleteFromCollection(pk);
                     cache.shiftPkPositionsAfterCompaction(compaction);
                     cache.removePkIndexCollectionUsage(pk.getValue());
                     memoryManagement.clearCounter(usage.getKind(), usage.getDbName(), usage.getCollName(),
                             usage.getIndexKey());
-                    AdminPageHelper.baseUpdateEntryCount(Globals.ADMIN_DB_NAME, Globals.ADMIN_COLLECTION_USAGE_NAME,
-                            EventType.DELETED, List.of(usage), false);
+                    AdminPageHelper.recordLandedDelta(Globals.ADMIN_COLLECTION_USAGE_NAME, EventType.DELETED,
+                            List.of(usage));
                 }
             }
         } finally {

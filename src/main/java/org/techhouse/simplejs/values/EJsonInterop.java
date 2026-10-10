@@ -4,6 +4,7 @@ import static org.techhouse.simplejs.values.JsLimits.MAX_SAFE_INTEGER_BIG;
 
 import java.util.IdentityHashMap;
 import java.util.Map;
+import org.techhouse.ejson.custom_types.CustomTypeFactory;
 import org.techhouse.ejson.custom_types.JsonDateTime;
 import org.techhouse.ejson.custom_types.JsonGeo;
 import org.techhouse.ejson.custom_types.JsonTime;
@@ -16,8 +17,13 @@ import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ejson.elements.JsonNumber;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
+import org.techhouse.ejson.exceptions.BadImplementationCustomTypeException;
+import org.techhouse.ejson.exceptions.NonRegisteredCustomTypeException;
+import org.techhouse.ejson.internal.NumberFormatter;
 import org.techhouse.simplejs.builtins.InterpreterOps;
+import org.techhouse.simplejs.builtins.JsonBuiltins;
 import org.techhouse.simplejs.exceptions.TypeErrorException;
+import org.techhouse.simplejs.internal.JsCoercion;
 
 public final class EJsonInterop {
     private static final long BYTES_PER_ELEMENT = 32L;
@@ -45,9 +51,9 @@ public final class EJsonInterop {
 
     private static JsonBaseElement convert(JsValue value, Conversion mode, String path) {
         return switch (value) {
-            case JsNumber n -> new JsonNumber(n.getValue());
+            case JsNumber n -> numberToEjson(n, mode, path);
             case JsBigInt bigInt -> bigIntToEjson(bigInt, mode, path);
-            case JsString s -> new JsonString(s.getValue());
+            case JsString s -> stringToEjson(s.getValue(), mode, path);
             case JsBoolean b -> new JsonBoolean(b.getValue());
             case JsNull ignored -> JsonNull.INSTANCE;
             case JsUndefined ignored -> null;
@@ -76,9 +82,49 @@ public final class EJsonInterop {
             case JsTypedArray typed -> typedArrayToEjson(typed, mode, path);
             case JsArrayBuffer ignored -> new JsonObject();
             case JsDataView ignored -> new JsonObject();
-            case JsProxy proxy -> convert(proxy.getTarget(), mode, path);
+            case JsProxy proxy -> proxyToEjson(proxy, mode, path);
             default -> null;
         };
+    }
+
+    private static JsonBaseElement numberToEjson(JsNumber value, Conversion mode, String path) {
+        final var asDouble = value.getValue();
+        if (mode.hostMode() && !Double.isFinite(asDouble)) {
+            throw new TypeErrorException("Cannot serialize" + at(path) + ": " + NumberFormatter.toJsString(asDouble)
+                    + " is not a JSON number");
+        }
+        if (mode.hostMode() && asDouble == 0.0) {
+            return new JsonNumber(0.0);
+        }
+        return new JsonNumber(asDouble);
+    }
+
+    private static JsonBaseElement stringToEjson(String value, Conversion mode, String path) {
+        final var asString = new JsonString(value);
+        if (!mode.hostMode() || !JsonCustom.isJsonCustom(asString)) {
+            return asString;
+        }
+        return readableCustom(asString, path);
+    }
+
+    private static JsonBaseElement readableCustom(JsonString customShaped, String path) {
+        try {
+            final var custom = CustomTypeFactory.getCustomTypeInstance(customShaped);
+            if (custom instanceof JsonGeo geo && !geo.isFinitePoint()) {
+                throw new TypeErrorException(
+                        "Cannot serialize" + at(path) + ": a geo point needs finite latitude and longitude");
+            }
+            return custom;
+        } catch (NonRegisteredCustomTypeException | BadImplementationCustomTypeException refused) {
+            throw new TypeErrorException("Cannot serialize" + at(path) + ": " + refused.getMessage());
+        }
+    }
+
+    private static void refuseUnreadableKey(String key, Conversion mode, String path) {
+        final var asString = new JsonString(key);
+        if (mode.hostMode() && JsonCustom.isJsonCustom(asString)) {
+            readableCustom(asString, path);
+        }
     }
 
     private static JsonBaseElement bigIntToEjson(JsBigInt value, Conversion mode, String path) {
@@ -114,15 +160,75 @@ public final class EJsonInterop {
     }
 
     private static JsonBaseElement arrayToEjson(JsArray array, Conversion mode, String path) {
+        refuseUnstorableLength(array.length(), mode, path);
         guardCycle(array, mode.visited());
         final var result = new JsonArray();
-        final var elements = array.getElements();
-        for (var i = 0; i < elements.size(); i++) {
-            final var converted = convert(elements.get(i), mode, indexPath(path, i));
+        final var length = (int) array.length();
+        for (var i = 0; i < length; i++) {
+            final var converted = convert(elementOf(array, i, mode.ops()), mode, indexPath(path, i));
             result.add(converted == null ? JsonNull.INSTANCE : converted);
         }
         mode.visited().remove(array);
         return result;
+    }
+
+    private static JsValue elementOf(JsArray array, int index, InterpreterOps ops) {
+        if (ops != null && array.hasIndexAccessor(index)) {
+            return ops.getMember(array, new JsString(Integer.toString(index)));
+        }
+        return array.get(index);
+    }
+
+    private static void refuseUnstorableLength(long length, Conversion mode, String path) {
+        if (mode.hostMode() && length > JsArray.MAX_DENSE_LENGTH) {
+            throw new TypeErrorException("Cannot store an array of length " + length + at(path) + ": it exceeds "
+                    + JsArray.MAX_DENSE_LENGTH + " elements");
+        }
+    }
+
+    private static JsonBaseElement proxyToEjson(JsProxy proxy, Conversion mode, String path) {
+        final var ops = mode.ops();
+        if (ops == null || isCallable(proxy.getTarget())) {
+            return convert(proxy.getTarget(), mode, path);
+        }
+        return JsonBuiltins.isArray(proxy)
+                ? proxyArrayToEjson(proxy, mode, path, ops)
+                : proxyObjectToEjson(proxy, mode, path, ops);
+    }
+
+    private static JsonBaseElement proxyArrayToEjson(JsProxy proxy, Conversion mode, String path, InterpreterOps ops) {
+        final var length = (long) JsCoercion.toNumber(ops.getMember(proxy, new JsString("length")), ops);
+        refuseUnstorableLength(length, mode, path);
+        guardCycle(proxy, mode.visited());
+        final var result = new JsonArray();
+        for (var i = 0; i < (int) length; i++) {
+            final var element = ops.getMember(proxy, new JsString(Integer.toString(i)));
+            final var converted = convert(element, mode, indexPath(path, i));
+            result.add(converted == null ? JsonNull.INSTANCE : converted);
+        }
+        mode.visited().remove(proxy);
+        return result;
+    }
+
+    private static JsonBaseElement proxyObjectToEjson(JsProxy proxy, Conversion mode, String path, InterpreterOps ops) {
+        guardCycle(proxy, mode.visited());
+        final var result = new JsonObject();
+        for (final var key : ops.ownKeys(proxy)) {
+            if (!(key instanceof JsString name)) {
+                continue;
+            }
+            refuseUnreadableKey(name.getValue(), mode, memberPath(path, name.getValue()));
+            final var converted = convert(ops.getMember(proxy, name), mode, memberPath(path, name.getValue()));
+            if (converted != null) {
+                result.add(name.getValue(), converted);
+            }
+        }
+        mode.visited().remove(proxy);
+        return result;
+    }
+
+    private static boolean isCallable(JsValue value) {
+        return value instanceof JsFunction || value instanceof JsNativeFunction || value instanceof JsClass;
     }
 
     private static JsonBaseElement objectToEjson(JsObject object, Conversion mode, String path) {
@@ -132,6 +238,7 @@ public final class EJsonInterop {
             if (!object.isEnumerable(key)) {
                 continue;
             }
+            refuseUnreadableKey(key, mode, memberPath(path, key));
             final var converted = convert(ownValue(object, key, mode.ops()), mode, memberPath(path, key));
             if (converted != null) {
                 result.add(key, converted);
@@ -211,10 +318,10 @@ public final class EJsonInterop {
 
     private static JsValue customFromEjson(JsonCustom<?> element) {
         return switch (element.getCustomTypeName()) {
-            case JsonGeo.CUSTOM_TYPE_NAME -> new JsGeo(((JsonGeo) element).point());
-            case JsonVector.CUSTOM_TYPE_NAME -> new JsVector(((JsonVector) element).getCustomValue());
-            case JsonDateTime.CUSTOM_TYPE_NAME -> new JsDbDateTime(((JsonDateTime) element).getCustomValue());
-            case JsonTime.CUSTOM_TYPE_NAME -> new JsDbTime(((JsonTime) element).getCustomValue());
+            case JsonGeo.CUSTOM_TYPE_NAME -> new JsGeo((JsonGeo) element);
+            case JsonVector.CUSTOM_TYPE_NAME -> new JsVector((JsonVector) element);
+            case JsonDateTime.CUSTOM_TYPE_NAME -> new JsDbDateTime((JsonDateTime) element);
+            case JsonTime.CUSTOM_TYPE_NAME -> new JsDbTime((JsonTime) element);
             default -> new JsString(element.getValue());
         };
     }

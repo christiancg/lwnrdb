@@ -1,7 +1,9 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -10,7 +12,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.techhouse.cluster.AdminEpoch;
 import org.techhouse.cluster.ClusterRouter;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
@@ -44,9 +45,17 @@ public class ClusterRouterTest {
     }
 
     @BeforeEach
-    public void setUp() {
+    public void setUp() throws Exception {
         origEnabled = config.isClusterEnabled();
         origRouting = config.isScriptRoutingEnabled();
+        resetOwnership();
+    }
+
+    private void resetOwnership() throws Exception {
+        ownership.setSelfNodeId(null);
+        ownership.onMembershipChanged(new MembershipView(List.of()));
+        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
+        TestUtils.setPrivateField(membershipService, "self", null);
     }
 
     @AfterEach
@@ -54,10 +63,7 @@ public class ClusterRouterTest {
         pool.closeAll();
         TestUtils.setPrivateField(config, "clusterEnabled", origEnabled);
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", origRouting);
-        ownership.setSelfNodeId(null);
-        ownership.onMembershipChanged(new MembershipView(List.of()));
-        TestUtils.setPrivateField(membershipService, "members", new ConcurrentHashMap<>());
-        TestUtils.setPrivateField(membershipService, "self", null);
+        resetOwnership();
     }
 
     // An unreachable peer at port 1, caught up on admin metadata and with no script load at all, so
@@ -67,7 +73,6 @@ public class ClusterRouterTest {
         TestUtils.setPrivateField(config, "scriptRoutingEnabled", true);
         final var self = new NodeInfo("self", "127.0.0.1", 9990, NodeState.ALIVE, 1L, 1L, 9);
         final var other = new NodeInfo("other", "127.0.0.1", 1, NodeState.ALIVE, 1L, 1L, 0);
-        other.setAdminEpoch(IocContainer.get(AdminEpoch.class).current());
         final var members = new LinkedHashMap<String, NodeInfo>();
         members.put(self.getNodeId(), self);
         members.put(other.getNodeId(), other);
@@ -95,10 +100,12 @@ public class ClusterRouterTest {
     }
 
     @Test
-    public void test_null_for_non_routable_operation() throws Exception {
+    public void test_admin_op_is_refused_when_no_coordinator_can_be_resolved() throws Exception {
         TestUtils.setPrivateField(config, "clusterEnabled", true);
-        assertNull(
-                router.forward(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "{}", false, null, null));
+        final var response = router.forward(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "{}", false,
+                null, null);
+        assertNotNull(response, "a coordinated admin op must not be applied locally when it cannot replicate");
+        assertTrue(response.contains("503-9"), response);
     }
 
     @Test

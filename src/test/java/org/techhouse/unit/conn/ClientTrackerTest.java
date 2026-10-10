@@ -4,13 +4,16 @@ import static org.junit.jupiter.api.Assertions.*;
 
 import java.net.InetAddress;
 import java.net.Socket;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.techhouse.config.Configuration;
 import org.techhouse.conn.ClientTracker;
 import org.techhouse.data.Client;
+import org.techhouse.data.Transaction;
 import org.techhouse.test.TestUtils;
 import org.techhouse.utils.ReflectionUtils;
 
@@ -164,5 +167,109 @@ public class ClientTrackerTest {
     public void test_get_authenticated_username_null_client_id() {
         ClientTracker clientTracker = new ClientTracker();
         assertNull(clientTracker.getAuthenticatedUsername(null));
+    }
+
+    @Test
+    public void test_has_active_transaction_finds_a_live_session_by_its_id() {
+        ClientTracker clientTracker = new ClientTracker();
+        final var clientId = clientTracker.registerForwardedClient("tx-owner");
+        final var transactionId = UUID.randomUUID();
+        clientTracker.setActiveTransaction(clientId, new Transaction(transactionId, clientId));
+
+        assertTrue(clientTracker.hasActiveTransaction(transactionId.toString()));
+        assertFalse(clientTracker.hasActiveTransaction(UUID.randomUUID().toString()));
+        assertFalse(clientTracker.hasActiveTransaction(null));
+
+        clientTracker.clearActiveTransaction(clientId);
+        assertFalse(clientTracker.hasActiveTransaction(transactionId.toString()));
+    }
+
+    private static UUID connect(ClientTracker clientTracker, String username) {
+        Socket socket = Mockito.mock(Socket.class);
+        InetAddress address = Mockito.mock(InetAddress.class);
+        Mockito.when(socket.getInetAddress()).thenReturn(address);
+        Mockito.when(address.getHostAddress()).thenReturn("127.0.0.1");
+        UUID clientId = clientTracker.addClient(socket);
+        clientTracker.setAuthenticatedUser(clientId, username);
+        return clientId;
+    }
+
+    @Test
+    public void test_deauthenticate_user_clears_every_connection_of_that_name()
+            throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxConnections", 0);
+        ClientTracker clientTracker = new ClientTracker();
+        UUID first = connect(clientTracker, "carol");
+        UUID second = connect(clientTracker, "carol");
+
+        clientTracker.deauthenticateUser("carol");
+
+        assertNull(clientTracker.getAuthenticatedUsername(first));
+        assertNull(clientTracker.getAuthenticatedUsername(second));
+    }
+
+    @Test
+    public void test_deauthenticate_user_leaves_other_names_alone()
+            throws NoSuchFieldException, IllegalAccessException {
+        TestUtils.setPrivateField(Configuration.getInstance(), "maxConnections", 0);
+        ClientTracker clientTracker = new ClientTracker();
+        UUID other = connect(clientTracker, "dave");
+        connect(clientTracker, "carol");
+
+        clientTracker.deauthenticateUser("carol");
+
+        assertEquals("dave", clientTracker.getAuthenticatedUsername(other));
+    }
+
+    @Test
+    public void test_deauthenticate_user_leaves_tx_sessions_and_forwarded_clients_alone() {
+        ClientTracker clientTracker = new ClientTracker();
+        UUID forwarded = clientTracker.registerForwardedClient("carol");
+        var session = clientTracker.registerTxSession("session-1", "carol", "edge");
+        try {
+            clientTracker.deauthenticateUser("carol");
+
+            assertEquals("carol", clientTracker.getAuthenticatedUsername(forwarded),
+                    "a forwarded request acts for an edge connection that is deauthenticated on its own node");
+            assertEquals("carol", clientTracker.getAuthenticatedUsername(session.clientId()),
+                    "a participant slice must keep the identity that owns its thread-held locks");
+        } finally {
+            clientTracker.removeTxSession("session-1");
+        }
+    }
+
+    @Test
+    public void test_transaction_write_holders_union_across_collections() {
+        final var clientTracker = new ClientTracker();
+        final var clientId = clientTracker.registerForwardedClient("u");
+        clientTracker.recordTransactionWrite(clientId, "db|a", "local");
+        clientTracker.recordTransactionWrite(clientId, "db|b", "10.0.0.2:9000");
+        clientTracker.recordTransactionWrite(clientId, "db|b", "10.0.0.3:9000");
+
+        assertEquals(Set.of("local", "10.0.0.2:9000", "10.0.0.3:9000"),
+                clientTracker.transactionWriteHolders(clientId, List.of("db|a", "db|b", "db|c")));
+        assertEquals(Set.of("local"), clientTracker.transactionWriteHolders(clientId, List.of("db|a")));
+        assertTrue(clientTracker.transactionWriteHolders(clientId, List.of("db|c")).isEmpty());
+    }
+
+    @Test
+    public void test_clear_transaction_state_forgets_write_holders() {
+        final var clientTracker = new ClientTracker();
+        final var clientId = clientTracker.registerForwardedClient("u");
+        clientTracker.recordTransactionWrite(clientId, "db|a", "local");
+
+        clientTracker.clearTransactionState(clientId);
+
+        assertTrue(clientTracker.transactionWriteHolders(clientId, List.of("db|a")).isEmpty());
+    }
+
+    @Test
+    public void test_unknown_client_has_no_write_holders() {
+        final var clientTracker = new ClientTracker();
+        clientTracker.recordTransactionWrite(UUID.randomUUID(), "db|a", "local");
+        clientTracker.recordTransactionWrite(null, "db|a", "local");
+
+        assertTrue(clientTracker.transactionWriteHolders(null, List.of("db|a")).isEmpty());
+        assertTrue(clientTracker.transactionWriteHolders(UUID.randomUUID(), List.of("db|a")).isEmpty());
     }
 }

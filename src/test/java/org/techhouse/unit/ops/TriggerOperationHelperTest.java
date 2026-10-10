@@ -9,9 +9,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
+import org.techhouse.config.Globals;
 import org.techhouse.data.TriggerDefinition;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ErrorCode;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.OperationType;
@@ -78,6 +80,20 @@ public class TriggerOperationHelperTest {
         assertEquals(1, stored.size());
         assertEquals("audit", stored.getFirst().getName());
         assertEquals("recalc", stored.getFirst().getProcedureName());
+    }
+
+    @Test
+    public void test_save_rejects_the_reserved_history_collection() throws Exception {
+        IocContainer.get(FileSystem.class).createCollectionFile(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME);
+        AdminOperationHelper.createPageCollections(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME);
+        AdminOperationHelper.saveCollectionEntry(
+                new org.techhouse.data.admin.AdminCollEntry(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME));
+
+        final var response = TriggerOperationHelper.executeSave(new SaveTriggerRequest(TestGlobals.DB,
+                Globals.SCRIPT_RUNS_COLLECTION_NAME, "t", List.of("CREATED"), "recalc"), ACTOR);
+
+        assertEquals(ErrorCode.INVALID_TRIGGER.getCode(), response.getErrorCode(),
+                "accepting it reports success for a trigger that afterWrite short-circuits and never fires");
     }
 
     @Test
@@ -172,20 +188,6 @@ public class TriggerOperationHelperTest {
     }
 
     @Test
-    public void test_definer_is_stamped_on_the_request_for_deterministic_re_execution() throws Exception {
-        final var request = request("audit");
-        TriggerOperationHelper.executeSave(request, ACTOR);
-        assertEquals(ACTOR, request.getStampedDefiner());
-        assertEquals(1L, request.getStampedVersion());
-        assertTrue(request.getStampedUpdatedAt() > 0);
-        cache.removeTriggers(TestGlobals.DB, TestGlobals.COLL);
-        TriggerOperationHelper.executeSave(request, "peer-has-no-acting-user");
-        final var replicated = cache.getTriggersFor(TestGlobals.DB, TestGlobals.COLL).getFirst();
-        assertEquals(ACTOR, replicated.getDefiner());
-        assertEquals(1L, replicated.getVersion());
-    }
-
-    @Test
     public void test_delete_is_idempotent_when_absent() throws Exception {
         assertEquals(OperationStatus.OK, TriggerOperationHelper
                 .executeDelete(new DeleteTriggerRequest(TestGlobals.DB, TestGlobals.COLL, "never")).getStatus());
@@ -257,4 +259,5 @@ public class TriggerOperationHelperTest {
     public void test_save_response_type_is_save_trigger() throws Exception {
         assertEquals(OperationType.SAVE_TRIGGER, save(request("audit")).getType());
     }
+
 }

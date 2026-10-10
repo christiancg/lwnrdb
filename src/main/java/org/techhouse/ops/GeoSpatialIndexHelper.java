@@ -37,7 +37,7 @@ public final class GeoSpatialIndexHelper {
         }
         final var fieldName = operator.getField();
         final var pendingBefore = PendingWriteReconciler.pendingIds(dbName, collName);
-        final List<FieldIndexEntry<JsonGeo>> entries;
+        final Set<String> candidates;
         try {
             rl.lockIndexRead(dbName, collName, fieldName);
         } catch (InterruptedException e) {
@@ -45,18 +45,18 @@ public final class GeoSpatialIndexHelper {
             throw new IOException("Interrupted while acquiring index read lock", e);
         }
         try {
-            entries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, JsonGeo.class);
+            final var entries = cache.getFieldIndexAndLoadIfNecessary(dbName, collName, fieldName, JsonGeo.class);
+            if (entries == null || entries.isEmpty()) {
+                return null;
+            }
+            candidates = collectByBoundingBox(entries, bbox);
         } finally {
             rl.releaseIndexRead(dbName, collName, fieldName);
-        }
-        if (entries == null || entries.isEmpty()) {
-            return null;
         }
         recordAnalyzeIndexUse(dbName, collName, fieldName);
         if (!Globals.ADMIN_DB_NAME.equals(dbName)) {
             cache.recordFieldIndexAccess(dbName, collName, fieldName);
         }
-        final var candidates = collectByBoundingBox(entries, bbox);
         // Not-yet-indexed committed writes are added as candidates; the caller re-tests exactly.
         candidates.addAll(PendingWriteReconciler.pendingIdsAround(pendingBefore, dbName, collName));
         return candidates;

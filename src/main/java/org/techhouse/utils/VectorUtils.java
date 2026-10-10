@@ -14,24 +14,38 @@ public final class VectorUtils {
     private static final Map<Long, double[]> PLANES = new ConcurrentHashMap<>();
     private static final int MAX_CACHED_PLANE_SHAPES = 8;
 
-    // NaN when the similarity is undefined (mismatched dimensions or a zero vector), not 0.0 — 0.0 is a
-    // valid cosine (orthogonal), so the caller must not confuse "cannot compare" with "not similar".
     public static double cosineSimilarity(double[] a, double[] b) {
         if (a.length != b.length) {
+            return Double.NaN;
+        }
+        final var scaleA = maxAbs(a);
+        final var scaleB = maxAbs(b);
+        if (isDegenerateScale(scaleA) || isDegenerateScale(scaleB)) {
             return Double.NaN;
         }
         var dot = 0.0;
         var normA = 0.0;
         var normB = 0.0;
         for (var i = 0; i < a.length; i++) {
-            dot += a[i] * b[i];
-            normA += a[i] * a[i];
-            normB += b[i] * b[i];
-        }
-        if (normA == 0.0 || normB == 0.0) {
-            return Double.NaN;
+            final var x = a[i] / scaleA;
+            final var y = b[i] / scaleB;
+            dot += x * y;
+            normA += x * x;
+            normB += y * y;
         }
         return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+    }
+
+    private static double maxAbs(double[] vector) {
+        var max = 0.0;
+        for (final var component : vector) {
+            max = Math.max(max, Math.abs(component));
+        }
+        return max;
+    }
+
+    private static boolean isDegenerateScale(double scale) {
+        return !(scale > 0.0 && Double.isFinite(scale));
     }
 
     public static String simHash(double[] vector, int bits) {

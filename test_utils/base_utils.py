@@ -32,6 +32,12 @@ from typing import Callable, Optional
 
 # ── report format ────────────────────────────────────────────────────────────
 
+# CI merges stdout and stderr into one pipe, where stdout is block-buffered and stderr is not, so a
+# server-log dump written to stderr used to surface thousands of lines into the middle of the check
+# report - ahead of checks that had already printed. Line buffering keeps the merged stream ordered.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(line_buffering=True)
+
 WIDTH = 70
 
 GREEN = "\033[92m"
@@ -206,12 +212,18 @@ class Conn:
 
     def send(self, payload: dict, timeout: Optional[float] = None) -> dict:
         """Send one request, read one response line. Never raises on a dead connection."""
+        return self.send_raw(json.dumps(payload), timeout)
+
+    def send_raw(self, line: str, timeout: Optional[float] = None) -> dict:
         if timeout is not None:
             self.s.settimeout(timeout)
         try:
-            self.s.sendall((json.dumps(payload) + "\n").encode())
+            self.s.sendall((line + "\n").encode())
         except (BrokenPipeError, OSError):
             return {"status": "ERROR", "message": "Server closed connection unexpectedly"}
+        return self._read_response()
+
+    def _read_response(self) -> dict:
         try:
             raw = self.f.readline().decode().strip()
         except (OSError, ConnectionError):
@@ -274,6 +286,30 @@ def port_open(host: Optional[str] = None, port: Optional[int] = None) -> bool:
             return True
     except OSError:
         return False
+
+
+PK_FIELD_SEPARATOR = "\x1f"
+
+
+def read_pk_rows(pk_path: str) -> list:
+    with open(pk_path, "r", encoding="utf-8") as fp:
+        return [[fields[0]] + [int(value) for value in fields[1:]]
+                for fields in (line.rstrip("\r\n").split(PK_FIELD_SEPARATOR) for line in fp) if len(fields) == 5]
+
+
+def write_pk_rows(pk_path: str, rows: list) -> None:
+    with open(pk_path, "w", encoding="utf-8", newline="") as fp:
+        for row in sorted(rows, key=lambda r: r[0]):
+            fp.write(PK_FIELD_SEPARATOR.join(str(value) for value in row) + "\n")
+
+
+def write_compaction_marker(collection_folder: str, kind: str, db: str, coll: str, row: list, page_bytes: bytes,
+                            target_page: int = -1, target_length_before: int = 0) -> None:
+    doc_id, position, length, page, version = row
+    header = PK_FIELD_SEPARATOR.join(str(value) for value in (
+        kind, db, coll, page, position, len(page_bytes), length, doc_id, version, target_page, target_length_before))
+    with open(os.path.join(collection_folder, f"{coll}-{page}.compacting"), "wb") as fp:
+        fp.write(header.encode("utf-8") + b"\n" + page_bytes[position:])
 
 
 def read_log(log_path: str) -> str:

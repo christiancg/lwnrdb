@@ -5,6 +5,9 @@ import org.techhouse.cache.Cache;
 import org.techhouse.ejson.EJson;
 import org.techhouse.fs.FileSystem;
 import org.techhouse.ioc.IocContainer;
+import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.admin.AdminTombstone;
+import org.techhouse.ops.admin.StoredDefinitions;
 import org.techhouse.ops.req.DeleteSchemaRequest;
 import org.techhouse.ops.req.SaveSchemaRequest;
 import org.techhouse.ops.resp.OperationResponse;
@@ -33,20 +36,21 @@ public final class SchemaOperationHelper {
                     ErrorCode.INVALID_SCHEMA.getDefaultMessage() + ": " + String.join("; ", validation.getErrors()),
                     ErrorCode.INVALID_SCHEMA);
         }
-        fs.writeCollectionSchema(dbName, collName, eJson.toJson(schema));
+        StoredDefinitions.writeSchema(dbName, collName, schema);
         cache.putCollectionSchema(dbName, collName, schema);
         return new SaveSchemaResponse("Collection schema saved successfully", validation.getWarnings());
     }
 
-    // Idempotent so cluster re-execution on an already schema-less peer does not fail replication.
-    public static OperationResponse executeDeleteSchema(DeleteSchemaRequest request) {
+    public static OperationResponse executeDeleteSchema(DeleteSchemaRequest request) throws IOException {
         final var dbName = request.getDatabaseName();
         final var collName = request.getCollectionName();
         if (cache.getAdminCollectionEntry(dbName, collName) == null) {
             return new OperationResponse(OperationType.DELETE_SCHEMA, "Collection '" + collName + "' not found",
                     ErrorCode.DATABASE_NOT_FOUND);
         }
-        fs.deleteCollectionSchema(dbName, collName);
+        if (fs.deleteCollectionSchema(dbName, collName)) {
+            AdminTombstone.record(AdminRecordKey.schema(dbName, collName));
+        }
         cache.removeCollectionSchema(dbName, collName);
         return OperationResponse.ok(OperationType.DELETE_SCHEMA, "Collection schema deleted successfully");
     }

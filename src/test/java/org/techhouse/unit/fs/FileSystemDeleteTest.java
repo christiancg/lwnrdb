@@ -52,13 +52,13 @@ public class FileSystemDeleteTest {
     }
 
     @Test
-    public void test_delete_nonexistent_database() throws NoSuchFieldException, IllegalAccessException {
+    public void test_delete_absent_database_counts_as_deleted() throws NoSuchFieldException, IllegalAccessException {
         FileSystem fileSystem = new FileSystem();
         TestUtils.setDbPath(fileSystem, TestGlobals.PATH);
 
         boolean result = fileSystem.deleteDatabase("nonExistentDb");
 
-        assertFalse(result);
+        assertTrue(result);
     }
 
     @Test
@@ -72,14 +72,14 @@ public class FileSystemDeleteTest {
     }
 
     @Test
-    public void test_delete_collection_files_nonexistent_folder() {
+    public void test_delete_absent_collection_folder_counts_as_deleted() {
         FileSystem fileSystem = new FileSystem();
         String dbName = "nonExistentDb";
         String collectionName = "nonExistentCollection";
 
         boolean result = fileSystem.deleteCollectionFiles(dbName, collectionName);
 
-        assertFalse(result);
+        assertTrue(result);
     }
 
     @Test

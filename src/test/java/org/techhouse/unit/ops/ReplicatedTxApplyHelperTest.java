@@ -19,6 +19,8 @@ import org.techhouse.ops.OperationProcessor;
 import org.techhouse.ops.OperationStatus;
 import org.techhouse.ops.ReplicatedApplyHelper;
 import org.techhouse.ops.ReplicatedTxApplyHelper;
+import org.techhouse.ops.admin.CollectionIncarnation;
+import org.techhouse.ops.req.CreateCollectionRequest;
 import org.techhouse.ops.req.FindByIdRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
@@ -60,19 +62,36 @@ public class ReplicatedTxApplyHelperTest {
     @Test
     public void test_applies_upsert_and_delete_entries_atomically() throws Exception {
         ReplicatedApplyHelper.apply(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                List.of(doc("tx-del")), null));
+                List.of(doc("tx-del")), null, List.of("1")));
         assertEquals(OperationStatus.OK, findStatus("tx-del"));
 
         final var upsert = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
-                List.of(doc("tx-a"), doc("tx-b")), null, List.of(10L, 11L));
+                List.of(doc("tx-a"), doc("tx-b")), null, List.of("10", "11"));
         final var delete = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.DELETE, null,
-                List.of("tx-del"), List.of(12L));
+                List.of("tx-del"), List.of("12"));
 
         assertTrue(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(upsert, delete))));
 
         assertEquals(OperationStatus.OK, findStatus("tx-a"));
         assertEquals(OperationStatus.OK, findStatus("tx-b"));
         assertEquals(OperationStatus.NOT_FOUND, findStatus("tx-del"));
-        assertEquals(12L, fs.readTombstones(TestGlobals.DB, TestGlobals.COLL).get("tx-del"));
+        assertEquals(12L, fs.tombstones().read(TestGlobals.DB, TestGlobals.COLL).get("tx-del"));
+    }
+
+    @Test
+    public void test_a_batch_with_one_stale_entry_applies_nothing() {
+        assertEquals(OperationStatus.OK,
+                processor.processMessage(new CreateCollectionRequest(TestGlobals.DB, "txIncarnated")).getStatus());
+        final var current = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                List.of(doc("tx-current")), null, List.of("20"));
+        current.setIncarnationValue(CollectionIncarnation.current(TestGlobals.DB, TestGlobals.COLL));
+        final var stale = new ReplicationPayload(TestGlobals.DB, "txIncarnated", ReplicationOp.UPSERT,
+                List.of(doc("tx-stale")), null, List.of("21"));
+        stale.setIncarnationValue(CollectionIncarnation.current(TestGlobals.DB, "txIncarnated") + 1);
+
+        assertFalse(ReplicatedTxApplyHelper.apply(new TxReplicationPayload(List.of(current, stale))));
+
+        assertEquals(OperationStatus.NOT_FOUND, findStatus("tx-current"),
+                "a replica must not keep half of a transaction batch whose other half is refused");
     }
 }

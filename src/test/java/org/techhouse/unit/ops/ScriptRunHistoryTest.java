@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
@@ -16,6 +17,7 @@ import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminDbEntry;
+import org.techhouse.ejson.elements.JsonNull;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ScriptRunHistory;
@@ -150,6 +152,59 @@ public class ScriptRunHistoryTest {
         assertEquals(11, stored.length(), "expected 10 characters plus the ellipsis, got " + stored);
     }
 
+    private static ScriptRunRecord failedRun(String runId, String errorMessage, List<String> stack, List<String> logs) {
+        return new ScriptRunRecord(runId, ScriptRunKind.TRIGGER, TestGlobals.DB, "job", "proc", TestGlobals.COLL,
+                "CREATED", "u1", "u2", System.currentTimeMillis(), 1L, 1, ScriptRunRecord.OUTCOME_ERROR, "Error",
+                errorMessage, stack, null, logs, false);
+    }
+
+    private static org.techhouse.ejson.elements.JsonObject readRowCold(String id) {
+        cache.evictCollection(TestGlobals.DB, Globals.SCRIPT_RUNS_COLLECTION_NAME);
+        return readRow(id);
+    }
+
+    @Test
+    public void test_a_custom_shaped_error_message_round_trips_through_the_reader() {
+        ScriptRunHistory.write(failedRun("run-custom-shape", "#tag(fix)", null, null));
+
+        final var row = readRowCold("run-custom-shape");
+
+        assertNotNull(row, "a row the lexer cannot read back is silently skipped after an eviction");
+        assertTrue(row.get("errorMessage").isJsonString());
+        assertEquals("\\#tag(fix)", row.get("errorMessage").asJsonString().getValue());
+    }
+
+    @Test
+    public void test_a_registered_custom_shape_is_not_promoted() {
+        ScriptRunHistory.write(failedRun("run-geo-shape", "#geo(1,2)", null, null));
+
+        final var errorMessage = Objects.requireNonNull(readRowCold("run-geo-shape")).get("errorMessage");
+
+        assertFalse(errorMessage.isJsonCustom(), "a cold read must answer the same type the warm row held");
+        assertEquals("\\#geo(1,2)", errorMessage.asJsonString().getValue());
+    }
+
+    @Test
+    public void test_stack_and_log_lines_are_escaped_too() throws Exception {
+        setConfig("scriptRunHistoryIncludeLogs", true);
+        ScriptRunHistory.write(failedRun("run-shaped-lines", "plain", List.of("#frame(1)"), List.of("#log(x)")));
+
+        final var row = Objects.requireNonNull(readRowCold("run-shaped-lines"));
+
+        assertEquals("\\#frame(1)", row.get("stack").asJsonArray().get(0).asJsonString().getValue());
+        assertEquals("\\#log(x)", row.get("logs").asJsonArray().get(0).asJsonString().getValue());
+    }
+
+    @Test
+    public void test_ordinary_text_is_unchanged() {
+        ScriptRunHistory.write(failedRun("run-plain-text", "#not custom", List.of("at main (1:1)"), null));
+
+        final var row = Objects.requireNonNull(readRowCold("run-plain-text"));
+
+        assertEquals("#not custom", row.get("errorMessage").asJsonString().getValue());
+        assertEquals("at main (1:1)", row.get("stack").asJsonArray().get(0).asJsonString().getValue());
+    }
+
     @Test
     public void test_a_disabled_history_writes_nothing() throws Exception {
         setConfig("scriptRunHistoryEnabled", false);
@@ -231,6 +286,19 @@ public class ScriptRunHistoryTest {
                 null, "u1", "u2", System.currentTimeMillis(), 1L, 1, ScriptRunRecord.OUTCOME_ERROR, "Error", "boom",
                 null, null, null, false));
         assertEquals(1L, ScriptRunHistory.getRecorded());
+    }
+
+    @Test
+    public void test_a_row_stores_json_nulls_for_the_absent_fields() {
+        ScriptRunHistory.write(new ScriptRunRecord("run-absent-fields", ScriptRunKind.TRIGGER, TestGlobals.DB, "job",
+                null, null, null, "u1", "u2", System.currentTimeMillis(), 1L, 1, ScriptRunRecord.OUTCOME_OK, null, null,
+                null, new ScriptRunMetrics(1L, 1L, 1L, 1L, 1L, 1L), null, false));
+        final var document = Objects.requireNonNull(readRow("run-absent-fields"));
+        assertSame(JsonNull.INSTANCE, document.get("procedure"));
+        assertSame(JsonNull.INSTANCE, document.get("collection"));
+        assertSame(JsonNull.INSTANCE, document.get("event"));
+        assertSame(JsonNull.INSTANCE, document.get("errorName"));
+        assertSame(JsonNull.INSTANCE, document.get("errorMessage"));
     }
 
     @Test

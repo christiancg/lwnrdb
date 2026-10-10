@@ -51,8 +51,12 @@ public final class DbDateTimeBuiltins {
     }
 
     private static LocalDateTime of(int year, int month, int day, int hour, int minute, int second) {
+        return of(year, month, day, hour, minute, second, 0);
+    }
+
+    private static LocalDateTime of(int year, int month, int day, int hour, int minute, int second, int nano) {
         try {
-            return LocalDateTime.of(year, month, day, hour, minute, second);
+            return LocalDateTime.of(year, month, day, hour, minute, second, nano);
         } catch (DateTimeException e) {
             throw new RangeErrorException("Invalid DbDateTime: " + e.getMessage());
         }
@@ -78,8 +82,9 @@ public final class DbDateTimeBuiltins {
             return wrapped.getValue();
         }
         if (value instanceof JsTemporalPlainDateTime temporal) {
-            return of(temporal.year(), temporal.month(), temporal.day(), temporal.time().hour(),
-                    temporal.time().minute(), temporal.time().second());
+            final var time = temporal.time();
+            return of(temporal.year(), temporal.month(), temporal.day(), time.hour(), time.minute(), time.second(),
+                    DbTimeBuiltins.nanoOf(time));
         }
         if (value instanceof JsTemporalPlainDate temporal) {
             return of(temporal.year(), temporal.month(), temporal.day(), 0, 0, 0);

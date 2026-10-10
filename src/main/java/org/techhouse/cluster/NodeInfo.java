@@ -14,7 +14,6 @@ public class NodeInfo {
     private volatile int scriptLoad;
     private volatile int scriptCapacity;
     private volatile boolean adminSyncing;
-    private volatile long adminEpoch;
 
     public NodeInfo() {
     }
@@ -116,14 +115,6 @@ public class NodeInfo {
         this.adminSyncing = adminSyncing;
     }
 
-    public long getAdminEpoch() {
-        return adminEpoch;
-    }
-
-    public void setAdminEpoch(long adminEpoch) {
-        this.adminEpoch = adminEpoch;
-    }
-
     /**
      * Deliberately separate from the membership fields: a change here is not a membership change, so it must
      * not fire the membership listeners.
@@ -132,7 +123,6 @@ public class NodeInfo {
         scriptLoad = incoming.getScriptLoad();
         scriptCapacity = incoming.getScriptCapacity();
         adminSyncing = incoming.isAdminSyncing();
-        adminEpoch = incoming.getAdminEpoch();
     }
 
     @Override
@@ -143,20 +133,20 @@ public class NodeInfo {
             return false;
         return port == that.port && incarnation == that.incarnation && heartbeat == that.heartbeat
                 && scriptLoad == that.scriptLoad && scriptCapacity == that.scriptCapacity
-                && adminSyncing == that.adminSyncing && adminEpoch == that.adminEpoch
-                && Objects.equals(nodeId, that.nodeId) && Objects.equals(host, that.host) && state == that.state;
+                && adminSyncing == that.adminSyncing && Objects.equals(nodeId, that.nodeId)
+                && Objects.equals(host, that.host) && state == that.state;
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(nodeId, host, port, state, incarnation, heartbeat, scriptLoad, scriptCapacity, adminSyncing,
-                adminEpoch);
+        return Objects.hash(nodeId, host, port, state, incarnation, heartbeat, scriptLoad, scriptCapacity,
+                adminSyncing);
     }
 
     @Override
     public String toString() {
         return "NodeInfo(nodeId=" + nodeId + ", host=" + host + ", port=" + port + ", state=" + state + ", incarnation="
                 + incarnation + ", heartbeat=" + heartbeat + ", scriptLoad=" + scriptLoad + ", scriptCapacity="
-                + scriptCapacity + ", adminSyncing=" + adminSyncing + ", adminEpoch=" + adminEpoch + ")";
+                + scriptCapacity + ", adminSyncing=" + adminSyncing + ")";
     }
 }

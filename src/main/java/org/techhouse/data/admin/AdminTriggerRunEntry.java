@@ -1,12 +1,16 @@
 package org.techhouse.data.admin;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.config.Globals;
 import org.techhouse.data.DbEntry;
 import org.techhouse.ejson.elements.JsonArray;
+import org.techhouse.ejson.elements.JsonCustom;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 
@@ -29,6 +33,10 @@ public class AdminTriggerRunEntry extends DbEntry {
     private static final String LAST_ERROR_FIELD = "lastError";
     private static final String LAST_ERROR_AT_FIELD = "lastErrorAt";
     private static final String NEXT_ATTEMPT_AT_FIELD = "nextAttemptAt";
+    private static final String PRIOR_VERSIONS_FIELD = "priorVersions";
+    private static final String TX_ID_FIELD = "txId";
+
+    public static final long ABSENT_VERSION = -1L;
 
     private String runId;
     private String nodeId;
@@ -48,6 +56,8 @@ public class AdminTriggerRunEntry extends DbEntry {
     private String lastError;
     private long lastErrorAt;
     private long nextAttemptAt;
+    private Map<String, Long> priorVersions = new LinkedHashMap<>();
+    private String txId;
 
     private AdminTriggerRunEntry() {
         setDatabaseName(Globals.ADMIN_DB_NAME);
@@ -73,8 +83,8 @@ public class AdminTriggerRunEntry extends DbEntry {
         this.actingUser = actingUser;
         this.depth = depth;
         this.firedAt = firedAt;
-        this.ids = ids == null ? new ArrayList<>() : ids;
-        this.documents = documents == null ? new ArrayList<>() : documents;
+        this.ids = ids == null ? new ArrayList<>() : new ArrayList<>(ids);
+        this.documents = documents == null ? new ArrayList<>() : new ArrayList<>(documents);
         set_id(buildId(runId, chunkSeq));
         setData(new JsonObject());
         syncData();
@@ -121,7 +131,21 @@ public class AdminTriggerRunEntry extends DbEntry {
         result.lastError = readString(object, LAST_ERROR_FIELD);
         result.lastErrorAt = longOrZero(readString(object, LAST_ERROR_AT_FIELD));
         result.nextAttemptAt = longOrZero(readString(object, NEXT_ATTEMPT_AT_FIELD));
+        result.priorVersions = readPriorVersions(object);
+        result.txId = readString(object, TX_ID_FIELD);
         return result;
+    }
+
+    private static Map<String, Long> readPriorVersions(JsonObject object) {
+        final var versions = new LinkedHashMap<String, Long>();
+        if (object.has(PRIOR_VERSIONS_FIELD) && object.get(PRIOR_VERSIONS_FIELD).isJsonObject()) {
+            for (final var entry : object.get(PRIOR_VERSIONS_FIELD).asJsonObject().entrySet()) {
+                if (entry.getValue() instanceof JsonString version) {
+                    versions.put(entry.getKey(), Long.parseLong(version.getValue()));
+                }
+            }
+        }
+        return versions;
     }
 
     private static TriggerRunStatus statusOf(String value) {
@@ -181,13 +205,64 @@ public class AdminTriggerRunEntry extends DbEntry {
         data.addProperty(LAST_ERROR_FIELD, lastError);
         data.addProperty(LAST_ERROR_AT_FIELD, Long.toString(lastErrorAt));
         data.addProperty(NEXT_ATTEMPT_AT_FIELD, Long.toString(nextAttemptAt));
+        writePriorVersions(data);
+        writeTxId(data);
         setData(data);
+    }
+
+    private void writePriorVersions(JsonObject data) {
+        if (priorVersions.isEmpty()) {
+            data.remove(PRIOR_VERSIONS_FIELD);
+            return;
+        }
+        final var versions = new JsonObject();
+        priorVersions.forEach((id, version) -> versions.addProperty(id, Long.toString(version)));
+        data.add(PRIOR_VERSIONS_FIELD, versions);
+    }
+
+    private void writeTxId(JsonObject data) {
+        if (txId == null) {
+            data.remove(TX_ID_FIELD);
+            return;
+        }
+        data.addProperty(TX_ID_FIELD, txId);
+    }
+
+    public void stage(Map<String, Long> versionsBeforeTheWrite) {
+        this.status = TriggerRunStatus.STAGED;
+        this.priorVersions = new LinkedHashMap<>(versionsBeforeTheWrite);
+        syncData();
+    }
+
+    public void narrowTo(Set<String> landedIds) {
+        ids.removeIf(id -> !landedIds.contains(id));
+        documents.removeIf(document -> !landedIds.contains(documentId(document)));
+        confirm();
+    }
+
+    public boolean isEmpty() {
+        return ids.isEmpty() && documents.isEmpty();
+    }
+
+    private void confirm() {
+        this.status = TriggerRunStatus.PENDING;
+        this.priorVersions = new LinkedHashMap<>();
+        syncData();
+    }
+
+    private static String documentId(JsonObject document) {
+        return document.has(Globals.PK_FIELD) && document.get(Globals.PK_FIELD).isJsonString()
+                ? document.get(Globals.PK_FIELD).asJsonString().getValue()
+                : null;
     }
 
     public void markAttempt(TriggerRunStatus newStatus, int attemptCount, String error, long nextAttempt) {
         this.status = newStatus;
+        if (newStatus != TriggerRunStatus.STAGED) {
+            this.priorVersions = new LinkedHashMap<>();
+        }
         this.attempts = attemptCount;
-        this.lastError = error;
+        this.lastError = JsonCustom.asPlainText(error);
         this.lastErrorAt = error == null ? lastErrorAt : System.currentTimeMillis();
         this.nextAttemptAt = nextAttempt;
         syncData();
@@ -195,6 +270,19 @@ public class AdminTriggerRunEntry extends DbEntry {
 
     public TriggerRunStatus getStatus() {
         return status;
+    }
+
+    public Map<String, Long> getPriorVersions() {
+        return priorVersions;
+    }
+
+    public String getTxId() {
+        return txId;
+    }
+
+    public void setTxId(String txId) {
+        this.txId = txId;
+        syncData();
     }
 
     public int getAttempts() {

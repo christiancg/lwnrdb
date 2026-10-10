@@ -215,6 +215,57 @@ def test_interval_schedule(conn: Conn):
           f"counter advanced from {settled} to {after} after the delete")
 
 
+def test_interval_schedule_holds_its_rate(conn: Conn):
+    section("An interval schedule does not drift")
+    check_status("save a 1s schedule against the 1s tick", conn.save_schedule(
+        "rate", "counter", intervalMs=1000, args={"id": "rate"}), "OK")
+
+    await_counter(conn, "rate", 1)
+    start_value = counter_value(conn, "rate")
+    start_time = time.time()
+    await_counter(conn, "rate", start_value + 5, timeout=20.0)
+    elapsed = time.time() - start_time
+    fired = counter_value(conn, "rate") - start_value
+
+    conn.delete_schedule("rate")
+    check("five 1s occurrences take about five seconds", fired >= 5 and elapsed < 9.0,
+          f"{fired} fires in {elapsed:.1f}s")
+
+
+SLEEPER_SOURCE = (
+    "import db from 'db'; import args from 'args';"
+    " db.save(db.name, '" + COLL + "', { _id: args.id, n: 1 });"
+    " return new Promise(function (resolve) { setTimeout(function () { resolve(1); }, 4000); });"
+)
+
+
+def test_a_queued_run_does_not_outlive_its_delete(conn: Conn):
+    section("A run still queued when its schedule is deleted does not fire")
+    clear_schedules(conn)
+    check_status("store a procedure that holds a worker for four seconds",
+                 conn.save_procedure("sleeper", SLEEPER_SOURCE), "OK")
+    check_status("occupy the first worker",
+                 conn.save_schedule("sleeper_a", "sleeper", intervalMs=500, args={"id": "sleep-a"}), "OK")
+    check_status("occupy the second worker",
+                 conn.save_schedule("sleeper_b", "sleeper", intervalMs=500, args={"id": "sleep-b"}), "OK")
+    both_busy = await_counter(conn, "sleep-a", 1) >= 1 and await_counter(conn, "sleep-b", 1) >= 1
+    check("both workers are busy", both_busy, "a sleeper never started")
+
+    check_status("schedule the victim behind them",
+                 conn.save_schedule("victim", "counter", intervalMs=300, args={"id": "victim"}), "OK")
+    time.sleep(1.0)
+    check_status("delete the victim while its run is queued", conn.delete_schedule("victim"), "OK")
+    conn.delete_schedule("sleeper_a")
+    conn.delete_schedule("sleeper_b")
+    time.sleep(5.0)
+
+    check("the queued run did not fire after the delete", counter_value(conn, "victim") == 0,
+          f"counter reached {counter_value(conn, 'victim')}")
+    check("and left no run history", not history_rows(conn, kind="SCHEDULE", name="victim"),
+          f"rows={history_rows(conn, kind='SCHEDULE', name='victim')!r}")
+    check_status("delete the sleeper procedure", conn.delete_procedure("sleeper"), "OK")
+
+
 def test_cron_schedule(conn: Conn):
     section("Cron schedule")
     # A cron for the minute after next, so the test never races the current minute rolling over.
@@ -258,6 +309,15 @@ def test_listing(conn: Conn):
     conn.delete_schedule("listed")
 
 
+def test_schedule_name_case_variants(conn: Conn):
+    section("Schedule name case variants")
+    check_status("save Rollup", conn.save_schedule("Rollup", "counter", cron="0 3 * * *"), "OK")
+    conn.delete_schedule("rollup")
+    names = [s["name"] for s in conn.list_schedules().get("schedules", [])]
+    check("deleting rollup leaves Rollup in place", "Rollup" in names, f"got {names}")
+    check_status("Rollup still deletes by its own spelling", conn.delete_schedule("Rollup"), "OK")
+
+
 def test_validation(conn: Conn):
     section("Validation")
     check_code("a malformed cron is refused", conn.save_schedule("bad", "counter", cron="not a cron"),
@@ -265,6 +325,11 @@ def test_validation(conn: Conn):
     check_code("both cron and intervalMs are refused",
                conn.save_schedule("bad", "counter", cron="0 3 * * *", intervalMs=1000), "ERROR", "400-16")
     check_code("neither cron nor intervalMs is refused", conn.save_schedule("bad", "counter"), "ERROR", "400-16")
+    check_code("a parsable but unsatisfiable cron is refused",
+               conn.save_schedule("bad", "counter", cron="0 0 31 4 *"), "ERROR", "400-16")
+    check_status("a distant but reachable cron is accepted",
+                 conn.save_schedule("leapday", "counter", cron="0 0 29 2 *"), "OK")
+    conn.delete_schedule("leapday")
     check_code("an unknown procedure is refused", conn.save_schedule("bad", "nosuchproc", intervalMs=1000),
                "NOT_FOUND", "404-8")
     check_code("an unknown database is refused",
@@ -424,6 +489,23 @@ def test_referential_integrity(conn: Conn):
     check_status("restore the procedure", conn.save_procedure("counter", COUNTER_SOURCE), "OK")
 
 
+def test_a_client_cannot_forge_the_stamped_definer():
+    section("A client cannot forge the coordinator's stamp")
+    forged = {"stampedVersion": 7, "stampedDefiner": ADMIN_USERNAME, "stampedUpdatedBy": ADMIN_USERNAME,
+              "stampedUpdatedAt": 1, "stampedCreatedAt": 1}
+    with user_conn(MANAGER) as manager:
+        check_status("a MANAGE user installs a schedule carrying a forged stamp",
+                     manager.save_schedule("forgedStamp", "counter", cron="0 3 * * *", **forged), "OK")
+        with admin_conn() as admin:
+            stored = next((entry for entry in admin.list_schedules().get("schedules", [])
+                           if entry.get("name") == "forgedStamp"), {})
+            check("the definer is the caller, not the forged admin", stored.get("definer") == MANAGER,
+                  f"got {stored}")
+            check("so is updatedBy", stored.get("updatedBy") == MANAGER, f"got {stored}")
+            check("and the version was assigned by the server", stored.get("version") == 1, f"got {stored}")
+        check_status("clean up the schedule", manager.delete_schedule("forgedStamp"), "OK")
+
+
 def test_permissions():
     section("Permissions")
     with user_conn(MANAGER) as manager:
@@ -520,14 +602,18 @@ def main():
         with admin_conn() as conn:
             setup_data(conn)
             test_interval_schedule(conn)
+            test_interval_schedule_holds_its_rate(conn)
+            test_a_queued_run_does_not_outlive_its_delete(conn)
             test_cron_schedule(conn)
             test_listing(conn)
+            test_schedule_name_case_variants(conn)
             test_validation(conn)
             test_import_failure(conn)
             test_failure_logs_a_stack(conn, log_path)
             test_run_history(conn)
             test_referential_integrity(conn)
         test_permissions()
+        test_a_client_cannot_forge_the_stamped_definer()
         with admin_conn() as conn:
             test_storage_placement(conn, work_dir)
             test_stats(conn)

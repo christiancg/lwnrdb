@@ -1,8 +1,10 @@
 package org.techhouse.simplejs.internal;
 
 import java.util.List;
+import org.techhouse.ejson.elements.JsonBaseElement;
 import org.techhouse.simplejs.exceptions.SimpleJsRuntimeException;
 import org.techhouse.simplejs.internal.interpreter.StackCapture;
+import org.techhouse.simplejs.values.EJsonInterop;
 import org.techhouse.simplejs.values.JsUndefined;
 import org.techhouse.simplejs.values.JsValue;
 
@@ -29,6 +31,18 @@ public final class Session implements AutoCloseable {
             final var value = interpreter.callValue(fn, JsUndefined.getInstance(), args);
             interpreter.eventLoop.drain(interpreter.deadlineNanos);
             return value;
+        } finally {
+            StackCapture.uninstall(interpreter.callStack);
+        }
+    }
+
+    public JsonBaseElement toHostEjson(JsValue value) {
+        if (closed) {
+            throw new SimpleJsRuntimeException("Script session is closed");
+        }
+        StackCapture.install(interpreter.callStack);
+        try {
+            return EJsonInterop.toHostEjson(value, interpreter.ops());
         } finally {
             StackCapture.uninstall(interpreter.callStack);
         }

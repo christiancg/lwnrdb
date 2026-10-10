@@ -12,6 +12,8 @@ import org.techhouse.ops.req.ResolveTriggerRunRequest;
 import org.techhouse.ops.req.StopListenRequest;
 
 public final class ControlRequestValidator {
+    private static final String TRIGGER_RUN_STATUS_RULE = "status must be 'PENDING' or 'DEAD'";
+
     private ControlRequestValidator() {
     }
 
@@ -33,12 +35,13 @@ public final class ControlRequestValidator {
         if (status == null || status.isBlank()) {
             return ValidationResult.ok();
         }
+        final TriggerRunStatus parsed;
         try {
-            TriggerRunStatus.valueOf(status.toUpperCase(Locale.ROOT));
+            parsed = TriggerRunStatus.valueOf(status.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            return ValidationResult.fail("status must be 'PENDING' or 'DEAD'");
+            return ValidationResult.fail(TRIGGER_RUN_STATUS_RULE);
         }
-        return ValidationResult.ok();
+        return parsed == parsed.reported() ? ValidationResult.ok() : ValidationResult.fail(TRIGGER_RUN_STATUS_RULE);
     }
 
     static ValidationResult validateResolveTriggerRun(ResolveTriggerRunRequest request) {

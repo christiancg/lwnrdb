@@ -31,6 +31,10 @@ final class CacheSizeEstimator {
         return total;
     }
 
+    static long estimateFieldIndexSizeByCount(int entryCount) {
+        return (long) entryCount * ESTIMATED_FIELD_ENTRY_OVERHEAD_BYTES;
+    }
+
     static long estimateFieldIndexSize(List<FieldIndexEntry<?>> entries) {
         if (entries == null)
             return 0L;

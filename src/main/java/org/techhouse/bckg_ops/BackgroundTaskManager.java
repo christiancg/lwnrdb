@@ -1,5 +1,6 @@
 package org.techhouse.bckg_ops;
 
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -13,22 +14,27 @@ public class BackgroundTaskManager {
     private final LinkedBlockingQueue<Event> queue = new LinkedBlockingQueue<>();
     private final AtomicInteger inFlight = new AtomicInteger();
     private final IdleSignal idleSignal = new IdleSignal();
+    private final AtomicInteger parked = new AtomicInteger();
+    private final AtomicInteger workerCount = new AtomicInteger();
     private volatile boolean draining;
-    private ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
+    private volatile ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor();
 
     public void submitBackgroundTask(Event op) {
-        if (draining) {
+        if (draining && !BackgroundProcessorThread.onWorkerThread()) {
             logger.warning("Rejecting a background task during shutdown: " + op);
             return;
         }
+        inFlight.incrementAndGet();
         queue.add(op);
     }
 
-    public void startBackgroundWorkers() {
+    public synchronized void startBackgroundWorkers() {
         draining = false;
         final var threadCount = Configuration.getInstance().getBackgroundProcessingThreads();
+        workerCount.set(threadCount);
+        parked.set(0);
         for (int i = 0; i < threadCount; i++) {
-            final var thread = new BackgroundProcessorThread(queue, inFlight, idleSignal);
+            final var thread = new BackgroundProcessorThread(queue, inFlight, parked, workerCount, idleSignal);
             pool.execute(thread);
         }
         logger.info("Started listening for background tasks");
@@ -37,14 +43,14 @@ public class BackgroundTaskManager {
     public boolean drain(long timeoutMillis) {
         draining = true;
         try {
-            if (idleSignal.awaitIdle(this::isIdle, timeoutMillis)) {
+            if (idleSignal.awaitIdle(this::isIdle, workerCount.get() > 0 ? timeoutMillis : 0L)) {
                 stopBackgroundWorkers();
                 return true;
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        final var remaining = queue.size() + inFlight.get();
+        final var remaining = inFlight.get();
         logger.warning("Background queue did not drain within " + timeoutMillis + "ms; " + remaining
                 + " event(s) abandoned. Their field indexes may be stale - run REINDEX on the affected"
                 + " collections.");
@@ -53,16 +59,19 @@ public class BackgroundTaskManager {
     }
 
     private boolean isIdle() {
-        return queue.isEmpty() && inFlight.get() == 0;
+        return queue.isEmpty() && inFlight.get() == 0 && parked.get() >= workerCount.get();
     }
 
     public int pending() {
-        return queue.size() + inFlight.get();
+        return inFlight.get();
     }
 
-    public void stopBackgroundWorkers() {
+    public synchronized void stopBackgroundWorkers() {
+        workerCount.set(0);
         pool = RestartablePool.shutdownAndReplace(pool, logger, "Background");
-        queue.clear();
+        final var discarded = new ArrayList<Event>();
+        queue.drainTo(discarded);
+        inFlight.addAndGet(-discarded.size());
         logger.info("Stopped listening for background tasks");
     }
 }

@@ -1,5 +1,6 @@
 package org.techhouse.ejson.validate;
 
+import java.math.BigDecimal;
 import java.util.List;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
@@ -19,7 +20,7 @@ class SchemaScalarValidator {
                     + " characters");
         }
         final var pattern = obj.get(SchemaKeywords.PATTERN);
-        if (pattern != null && !SchemaPatterns.compile(pattern.asJsonString().getValue()).matcher(value).find()) {
+        if (pattern != null && !SchemaPatterns.matches(pattern.asJsonString().getValue(), value)) {
             errors.add(SchemaValidator.at(path) + ": string does not match the required pattern");
         }
     }
@@ -44,10 +45,13 @@ class SchemaScalarValidator {
         final var multipleOf = obj.get(SchemaKeywords.MULTIPLE_OF);
         if (multipleOf != null) {
             final var divisor = multipleOf.asJsonNumber().getValue().doubleValue();
-            final var quotient = value / divisor;
-            if (Math.abs(quotient - Math.rint(quotient)) > 1e-9) {
+            if (isNotMultiple(value, divisor)) {
                 errors.add(SchemaValidator.at(path) + ": value is not a multiple of " + divisor);
             }
         }
+    }
+
+    private static boolean isNotMultiple(double value, double divisor) {
+        return BigDecimal.valueOf(value).remainder(BigDecimal.valueOf(divisor)).signum() != 0;
     }
 }

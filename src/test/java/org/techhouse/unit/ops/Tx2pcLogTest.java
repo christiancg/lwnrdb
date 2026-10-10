@@ -6,6 +6,8 @@ import java.util.List;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.techhouse.ops.Tx2pcLog;
 import org.techhouse.test.TestUtils;
 
@@ -45,20 +47,20 @@ public class Tx2pcLogTest {
     public void test_outcome_marker_and_status() throws Exception {
         final var committed = "aaaa1111-0000-0000-0000-000000000000";
         final var aborted = "bbbb2222-0000-0000-0000-000000000000";
-        assertEquals(Tx2pcLog.Status.UNKNOWN, Tx2pcLog.status(committed));
-        Tx2pcLog.recordOutcome(committed, true);
-        Tx2pcLog.recordOutcome(aborted, false);
+        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(committed));
+        Tx2pcLog.recordOutcome(committed, true, null);
+        Tx2pcLog.recordOutcome(aborted, false, null);
         assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(committed));
         assertEquals(Tx2pcLog.Status.ABORTED, Tx2pcLog.status(aborted));
         assertTrue(Tx2pcLog.outcomeDtxIds().contains(committed));
         Tx2pcLog.deleteOutcomeMarker(committed);
-        assertEquals(Tx2pcLog.Status.UNKNOWN, Tx2pcLog.status(committed));
+        assertEquals(Tx2pcLog.Status.NO_RECORD, Tx2pcLog.status(committed));
     }
 
     @Test
     public void test_garbage_collect_outcomes_drops_aged_keeps_recent() throws Exception {
         final var dtxId = "cccc3333-0000-0000-0000-000000000000";
-        Tx2pcLog.recordOutcome(dtxId, true);
+        Tx2pcLog.recordOutcome(dtxId, true, null);
         Tx2pcLog.garbageCollectOutcomes(Long.MAX_VALUE / 2);
         assertTrue(Tx2pcLog.outcomeDtxIds().contains(dtxId));
         Tx2pcLog.garbageCollectOutcomes(-1000L);
@@ -69,17 +71,59 @@ public class Tx2pcLogTest {
     public void test_coordinator_marker_round_trip() throws Exception {
         final var dtxId = "22222222-2222-2222-2222-222222222222";
         assertFalse(Tx2pcLog.isCommitted(dtxId));
-        Tx2pcLog.recordCoordinatorCommit(dtxId, List.of("127.0.0.1:9001", "127.0.0.1:9002"));
+        Tx2pcLog.recordCoordinatorCommit(dtxId, "client-session-1", List.of("127.0.0.1:9001", "127.0.0.1:9002"));
         assertTrue(Tx2pcLog.isCommitted(dtxId));
         assertTrue(Tx2pcLog.committedDtxIds().contains(dtxId));
         assertEquals(List.of("127.0.0.1:9001", "127.0.0.1:9002"), Tx2pcLog.readCoordinatorParticipants(dtxId));
+        assertEquals("client-session-1", Tx2pcLog.readCoordinatorSessionId(dtxId));
         Tx2pcLog.deleteCoordinatorMarker(dtxId);
         assertFalse(Tx2pcLog.isCommitted(dtxId));
     }
 
     @Test
+    public void test_coordinator_marker_with_no_session_id_reads_null() throws Exception {
+        final var dtxId = "22222222-3333-3333-3333-222222222222";
+        Tx2pcLog.recordCoordinatorCommit(dtxId, null, List.of("127.0.0.1:9001"));
+        assertNull(Tx2pcLog.readCoordinatorSessionId(dtxId));
+    }
+
+    @Test
     public void test_missing_markers_read_empty() throws Exception {
         assertEquals(List.of(), Tx2pcLog.readCoordinatorParticipants("no-such-dtx"));
+        assertNull(Tx2pcLog.readCoordinatorSessionId("no-such-dtx"));
         assertNull(Tx2pcLog.readParticipantMarker("no-such-dtx"));
+    }
+
+    @Test
+    public void test_status_rechecks_the_decision_before_answering_no_record() throws Exception {
+        final var dtxId = "dddd4444-0000-0000-0000-000000000000";
+        Tx2pcLog.recordCoordinatorCommit(dtxId, "session", List.of("127.0.0.1:9001"));
+        try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
+            log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false, true);
+
+            assertEquals(Tx2pcLog.Status.COMMITTED, Tx2pcLog.status(dtxId));
+        }
+    }
+
+    @Test
+    public void test_status_recheck_reads_the_outcome_marker_too() throws Exception {
+        final var dtxId = "eeee5555-0000-0000-0000-000000000000";
+        try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
+            log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false);
+            Tx2pcLog.recordOutcome(dtxId, false, null);
+
+            assertEquals(Tx2pcLog.Status.ABORTED, Tx2pcLog.status(dtxId));
+        }
+    }
+
+    @Test
+    public void test_status_prepared_takes_precedence_over_a_late_decision() throws Exception {
+        final var dtxId = "ffff6666-0000-0000-0000-000000000000";
+        Tx2pcLog.recordParticipantPrepared(dtxId, "127.0.0.1:9000", List.of("127.0.0.1:9000"), List.of("db|collA"));
+        try (MockedStatic<Tx2pcLog> log = Mockito.mockStatic(Tx2pcLog.class, Mockito.CALLS_REAL_METHODS)) {
+            log.when(() -> Tx2pcLog.isCommitted(dtxId)).thenReturn(false);
+
+            assertEquals(Tx2pcLog.Status.PREPARED, Tx2pcLog.status(dtxId));
+        }
     }
 }

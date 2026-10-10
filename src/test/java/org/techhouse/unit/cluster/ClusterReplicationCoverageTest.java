@@ -1,6 +1,13 @@
 package org.techhouse.unit.cluster;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.after;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.util.HashMap;
 import java.util.List;
@@ -13,21 +20,25 @@ import org.techhouse.cluster.ClusterCoordinator;
 import org.techhouse.cluster.MembershipView;
 import org.techhouse.cluster.NodeInfo;
 import org.techhouse.cluster.NodeState;
+import org.techhouse.cluster.PeerConnectionPool;
 import org.techhouse.cluster.ReplicationOutcome;
 import org.techhouse.cluster.Replicator;
+import org.techhouse.cluster.admin.AdminRecord;
+import org.techhouse.cluster.admin.AdminRecords;
 import org.techhouse.cluster.membership.MembershipService;
+import org.techhouse.cluster.msg.AdminSnapshotPayload;
 import org.techhouse.cluster.msg.ReplicationOp;
 import org.techhouse.cluster.msg.ReplicationPayload;
 import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
-import org.techhouse.config.Globals;
 import org.techhouse.data.admin.AdminUserEntry;
 import org.techhouse.ejson.elements.JsonObject;
 import org.techhouse.ejson.elements.JsonString;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.ops.AdminOperationHelper;
 import org.techhouse.ops.ReplicatedApplyHelper;
-import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.admin.AdminRecordKey;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -50,8 +61,8 @@ public class ClusterReplicationCoverageTest {
         return object;
     }
 
-    private static AdminUserEntry user(String username) {
-        return new AdminUserEntry(username, "hash-" + username, false, Set.of(), new HashMap<>(), new HashMap<>());
+    private static AdminUserEntry bob() {
+        return new AdminUserEntry("bob", "hash-bob", false, Set.of(), new HashMap<>(), new HashMap<>());
     }
 
     @BeforeEach
@@ -94,25 +105,28 @@ public class ClusterReplicationCoverageTest {
     @Test
     public void test_replicate_delete_meets_quorum() {
         assertEquals(ReplicationOutcome.QUORUM_MET,
-                coordinator.replicateDelete(TestGlobals.DB, TestGlobals.COLL, List.of("gone")));
+                coordinator.replicateDelete(TestGlobals.DB, TestGlobals.COLL, List.of("gone"), null));
     }
 
     @Test
-    public void test_replicate_admin_op_meets_quorum() {
+    public void test_replicate_admin_records_meets_quorum() throws Exception {
+        assertEquals(ReplicationOutcome.QUORUM_MET, coordinator.replicateAdminRecords(
+                AdminRecords.of(List.of(AdminRecordKey.collection(TestGlobals.DB, TestGlobals.COLL)))));
+    }
+
+    @Test
+    public void test_replicate_user_record_and_its_tombstone_meet_quorum() throws Exception {
+        AdminOperationHelper.saveUserEntry(bob());
         assertEquals(ReplicationOutcome.QUORUM_MET,
-                coordinator.replicateAdminOp(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "alice"));
+                coordinator.replicateAdminRecords(AdminRecords.of(List.of(AdminRecordKey.user("bob")))));
+        assertEquals(ReplicationOutcome.QUORUM_MET, coordinator
+                .replicateAdminRecords(List.of(AdminRecord.tombstone(AdminRecordKey.user("bob"), Long.MAX_VALUE))));
     }
 
     @Test
-    public void test_replicate_user_op_upsert_and_delete_meet_quorum() throws Exception {
-        AdminOperationHelper.saveUserEntry(user("bob"));
-        assertEquals(ReplicationOutcome.QUORUM_MET, coordinator.replicateUserOp("bob", false));
-        assertEquals(ReplicationOutcome.QUORUM_MET, coordinator.replicateUserOp("bob", true));
-    }
-
-    @Test
-    public void test_replicate_user_op_not_applicable_for_unknown_user() {
-        assertEquals(ReplicationOutcome.NOT_APPLICABLE, coordinator.replicateUserOp("nobody", false));
+    public void test_broadcast_reindex_meets_quorum() {
+        assertEquals(ReplicationOutcome.QUORUM_MET,
+                coordinator.broadcastReindex(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null)));
     }
 
     @Test
@@ -120,9 +134,36 @@ public class ClusterReplicationCoverageTest {
         final var docPayload = new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
                 List.of(doc("b1")), null);
         assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcast(docPayload));
-        final var userPayload = new ReplicationPayload(Globals.ADMIN_DB_NAME, Globals.ADMIN_USERS_COLLECTION_NAME,
-                ReplicationOp.UPSERT, List.of(user("carol").getData()), null);
-        assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcastUser(userPayload));
-        assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcastAdmin("{\"type\":\"REINDEX\"}", "alice"));
+        assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcastAdmin(new AdminSnapshotPayload(List.of())));
+        assertEquals(ReplicationOutcome.QUORUM_MET, replicator.broadcastReindex("{\"type\":\"REINDEX\"}"));
+    }
+
+    @Test
+    public void test_two_node_ids_at_one_address_count_as_one_ack() throws Exception {
+        final var self = new NodeInfo("self", "127.0.0.1", 19990, NodeState.ALIVE, 1L, 1L);
+        final var stale = new NodeInfo("stale-id", "127.0.0.1", 19991, NodeState.ALIVE, 1L, 1L);
+        final var fresh = new NodeInfo("fresh-id", "127.0.0.1", 19991, NodeState.ALIVE, 1L, 1L);
+        final var members = new ConcurrentHashMap<String, NodeInfo>();
+        members.put(self.getNodeId(), self);
+        members.put(stale.getNodeId(), stale);
+        members.put(fresh.getNodeId(), fresh);
+        TestUtils.setPrivateField(membershipService, "members", members);
+        TestUtils.setPrivateField(config, "clusterExpectedSize", 3);
+        ownership.onMembershipChanged(membershipService.membershipView());
+        final var originalTimeout = config.getReplicationAckTimeoutMs();
+        TestUtils.setPrivateField(config, "replicationAckTimeoutMs", 200L);
+        final var realPool = TestUtils.getPrivateField(replicator, "pool", PeerConnectionPool.class);
+        final var pool = mock(PeerConnectionPool.class);
+        when(pool.request(any(), any(), anyLong())).thenThrow(new IllegalStateException("unreachable"));
+        TestUtils.setPrivateField(replicator, "pool", pool);
+        try {
+            replicator.broadcast(new ReplicationPayload(TestGlobals.DB, TestGlobals.COLL, ReplicationOp.UPSERT,
+                    List.of(doc("dedup")), null));
+
+            verify(pool, after(500).times(1)).request(eq(stale.address()), any(), anyLong());
+        } finally {
+            TestUtils.setPrivateField(replicator, "pool", realPool);
+            TestUtils.setPrivateField(config, "replicationAckTimeoutMs", originalTimeout);
+        }
     }
 }

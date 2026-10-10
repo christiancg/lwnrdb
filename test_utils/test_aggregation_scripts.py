@@ -226,6 +226,27 @@ def test_reduce(conn: Conn):
           results(total)[0].get("total") == sum(i * 10 * i for i in range(1, DOCUMENT_COUNT + 1)),
           f"got {results(total)}")
 
+    folded = conn.aggregate([reduce_step("export default (acc, doc) => acc + '|' + doc._id;", "", "folded")])
+    expected_order = "".join(f"|{doc_id}" for doc_id in sorted(f"o{i}" for i in range(1, DOCUMENT_COUNT + 1)))
+    check("a non-commutative fold enumerates in a defined order",
+          results(folded)[0].get("folded") == expected_order,
+          f"got {results(folded)[0].get('folded')!r}, expected {expected_order!r}")
+
+    priced = [{"type": "FILTER", "operator": {"fieldOperatorType": "GREATER_THAN", "field": "price", "value": 0}},
+              reduce_step("export default (acc, doc) => acc + '|' + doc._id;", "", "folded")]
+    after_filter = conn.aggregate(priced)
+    check("a fold after an index-backed FILTER enumerates in _id order",
+          results(after_filter)[0].get("folded") == expected_order,
+          f"got {results(after_filter)[0].get('folded')!r}, expected {expected_order!r}")
+    scanned = conn.aggregate([{"type": "SKIP", "skip": 0}] + priced)
+    check("the same fold answered by a scan agrees with the index",
+          results(scanned)[0].get("folded") == expected_order, f"got {results(scanned)[0].get('folded')!r}")
+
+    distinct = conn.aggregate([{"type": "DISTINCT", "fieldName": "sku"},
+                               reduce_step("export default (acc, row) => acc + '|' + row.sku;", "", "skus")])
+    check("a fold after DISTINCT enumerates its rows in a defined order",
+          results(distinct)[0].get("skus") == "|sku-0|sku-1|sku-2", f"got {results(distinct)}")
+
     defaulted = conn.aggregate([reduce_step("export default (acc, doc) => (acc ?? 0) + 1;")])
     check("default result field is 'value'", results(defaulted)[0].get("value") == DOCUMENT_COUNT,
           f"got {results(defaulted)}")
@@ -239,6 +260,23 @@ def test_reduce(conn: Conn):
                             script_map("doubled", "export default (doc) => doc.n * 2;")])
     check("a step after REDUCE sees the single document",
           results(after)[0].get("doubled") == DOCUMENT_COUNT * 2, f"got {results(after)}")
+
+
+def test_getters_cross_the_boundary(conn: Conn):
+    section("MAP and REDUCE: a getter on a script result is read")
+    mapped = conn.aggregate([script_map(
+        "priced", "export default (doc) => ({ get total() { return doc.price * doc.qty; } });")])
+    check_status("a MAP script returning a getter runs", mapped, "OK")
+    rows = {row["_id"]: row for row in results(mapped)}
+    check("a MAP script getter becomes a field", rows.get("o3", {}).get("priced") == {"total": 90},
+          f"got {rows.get('o3')}")
+
+    folded = conn.aggregate([reduce_step(
+        "export default (acc, doc) => { const n = acc.n + 1; return { get n() { return n; } }; };",
+        {"n": 0}, "count")])
+    check_status("a REDUCE script returning a getter runs", folded, "OK")
+    check("a REDUCE accumulator getter is kept",
+          (results(folded) or [{}])[0].get("count") == {"n": DOCUMENT_COUNT}, f"got {results(folded)}")
 
 
 # ── phase 1: permissions ─────────────────────────────────────────────────────
@@ -463,6 +501,7 @@ def main():
             test_computed_field(conn)
             test_script_predicate(conn)
             test_reduce(conn)
+            test_getters_cross_the_boundary(conn)
             test_permissions(conn)
             test_sandbox(conn)
             test_closed_doors(conn)

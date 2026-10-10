@@ -89,4 +89,35 @@ public class ListenDirtyDedupTest {
 
         assertEquals(0, queue().size());
     }
+
+    @Test
+    public void test_a_transactional_commit_notifies_once_with_the_final_state() throws Exception {
+        manager.register(UUID.randomUUID(), dirtyRequest(), "hash");
+
+        manager.deferNotifications();
+        for (var i = 0; i < 5; i++) {
+            manager.markDirty("db", "coll");
+        }
+        assertEquals(0, queue().size(),
+                "a re-run queued mid-commit would hash a result holding some of the transaction's ops and not others");
+
+        manager.flushDeferredNotifications();
+
+        assertEquals(1, queue().size(), "the commit notifies once, after every op has been applied");
+    }
+
+    @Test
+    public void test_deferral_does_not_hold_back_another_thread() throws Exception {
+        manager.register(UUID.randomUUID(), dirtyRequest(), "hash");
+        manager.deferNotifications();
+        try {
+            final var writer = new Thread(() -> manager.markDirty("db", "coll"));
+            writer.start();
+            writer.join(5_000L);
+
+            assertEquals(1, queue().size(), "a standalone write on another thread must notify immediately");
+        } finally {
+            manager.flushDeferredNotifications();
+        }
+    }
 }

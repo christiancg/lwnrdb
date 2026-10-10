@@ -1,7 +1,10 @@
 package org.techhouse.fs;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
@@ -18,6 +21,7 @@ import org.techhouse.config.Globals;
 // dirty read skips the collection lock but still serializes against each file's physical write.
 final class FileLocks {
     private static final Map<String, ReentrantReadWriteLock> fileLocks = new ConcurrentHashMap<>();
+    private static final byte LINE_FEED = '\n';
 
     private FileLocks() {
     }
@@ -30,7 +34,7 @@ final class FileLocks {
         final var lock = lockFor(file).readLock();
         lock.lock();
         try {
-            return Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+            return decodeLines(Files.readAllBytes(file.toPath()));
         } catch (NoSuchFileException e) {
             return null;
         } finally {
@@ -42,9 +46,15 @@ final class FileLocks {
         final var lock = lockFor(file).readLock();
         lock.lock();
         try {
-            return Files.readAllLines(file.toPath(), StandardCharsets.UTF_8);
+            return decodeLines(Files.readAllBytes(file.toPath()));
         } finally {
             lock.unlock();
+        }
+    }
+
+    static List<String> decodeLines(byte[] bytes) throws IOException {
+        try (var reader = new BufferedReader(new StringReader(new String(bytes, StandardCharsets.UTF_8)))) {
+            return reader.lines().toList();
         }
     }
 
@@ -68,6 +78,20 @@ final class FileLocks {
         } catch (IOException e) {
             // ATOMIC_MOVE is not supported across filesystems or on every platform.
             Files.move(tmp, path, StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    static String separatorBeforeAppend(File file) throws IOException {
+        return endsMidLine(file) ? Globals.NEWLINE : "";
+    }
+
+    static boolean endsMidLine(File file) throws IOException {
+        if (!file.exists() || file.length() == 0) {
+            return false;
+        }
+        try (var raf = new RandomAccessFile(file, "r")) {
+            raf.seek(raf.length() - 1);
+            return raf.readByte() != LINE_FEED;
         }
     }
 }

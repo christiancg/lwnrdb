@@ -81,31 +81,31 @@ public class ListenManagerTest {
     }
 
     @Test
-    public void unregisterAllForCollection_removesOnlyThatCollectionsRegistrations() {
+    public void endAllForCollection_removesOnlyThatCollectionsRegistrations() {
         final var clientA = UUID.randomUUID();
         final var clientB = UUID.randomUUID();
         final var idA = manager.register(clientA, dirtyRequest("db", "coll"), "hash");
         final var idB = manager.register(clientB, dirtyRequest("db", "other"), "hash");
 
-        manager.unregisterAllForCollection("db", "coll");
+        manager.endAllForCollection("db", "coll", ListenManager.COLLECTION_DROPPED);
 
         assertNull(manager.getRegistration(idA));
         assertNotNull(manager.getRegistration(idB));
     }
 
     @Test
-    public void unregisterAllForCollection_emptyCollection_doesNotThrow() {
-        assertDoesNotThrow(() -> manager.unregisterAllForCollection("db", "nonexistent"));
+    public void endAllForCollection_emptyCollection_doesNotThrow() {
+        assertDoesNotThrow(() -> manager.endAllForCollection("db", "nonexistent", ListenManager.COLLECTION_DROPPED));
     }
 
     @Test
-    public void unregisterAllForDatabase_removesAllCollectionsInDatabase() {
+    public void endAllForDatabase_removesAllCollectionsInDatabase() {
         final var client = UUID.randomUUID();
         final var idA = manager.register(client, dirtyRequest("mydb", "coll1"), "hash");
         final var idB = manager.register(client, dirtyRequest("mydb", "coll2"), "hash");
         final var idC = manager.register(client, dirtyRequest("other", "coll1"), "hash");
 
-        manager.unregisterAllForDatabase("mydb");
+        manager.endAllForDatabase("mydb", ListenManager.DATABASE_DROPPED);
 
         assertNull(manager.getRegistration(idA));
         assertNull(manager.getRegistration(idB));
@@ -113,8 +113,22 @@ public class ListenManagerTest {
     }
 
     @Test
-    public void unregisterAllForDatabase_emptyDatabase_doesNotThrow() {
-        assertDoesNotThrow(() -> manager.unregisterAllForDatabase("nonexistent"));
+    public void endAllForDatabase_emptyDatabase_doesNotThrow() {
+        assertDoesNotThrow(() -> manager.endAllForDatabase("nonexistent", ListenManager.DATABASE_DROPPED));
+    }
+
+    @Test
+    public void end_unknownListen_returnsFalse() {
+        assertFalse(manager.end(UUID.randomUUID(), ListenManager.COLLECTION_DROPPED));
+    }
+
+    @Test
+    public void end_twice_returnsFalseTheSecondTime() {
+        final var listenId = manager.register(UUID.randomUUID(), dirtyRequest("db", "coll"), "hash");
+
+        assertTrue(manager.end(listenId, ListenManager.COLLECTION_DROPPED));
+        assertFalse(manager.end(listenId, ListenManager.DATABASE_DROPPED));
+        assertNull(manager.getRegistration(listenId));
     }
 
     @Test

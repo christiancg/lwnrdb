@@ -361,16 +361,26 @@ data half.
 realm `Error.prototype`) whenever the underlying `OperationResponse` is not OK — a denial, a
 schema violation, an entry-too-large, a cluster rejection, an internal error. Only genuine
 absence stays a value: `findById` answers `null`, `aggregate` answers `[]`, and `delete` of an
-absent id is a no-op.
+absent id is a no-op. A collection that is not registered is not absence: reads of it throw
+(`404-11`) exactly as writes do, and so does a JOIN into one. A call that omits a required argument, or passes one of the wrong shape, is a
+catchable `TypeError` too — `db.save` needs a document and `db.aggregate`, `db.bulkSave` and
+`db.cursor` each need an array, and every database name, collection name and id must be a string:
+nothing is coerced, so `db.delete(db.name, "c")` or `db.findById(db.name, "c", 5)` throws rather
+than addressing the document whose `_id` is `"undefined"` or `"5"`.
 
 **`db.cursor(database, collection, pipeline, options)`** walks a pipeline one batch at a time so
 a script can read a collection larger than its memory budget. Each batch is an ordinary
 `AGGREGATE` with `SKIP`/`LIMIT` appended to a *copy* of the caller's pipeline, so it is
 authorized, schema-checked and cluster-routed exactly like a hand-written `db.aggregate` and adds
-no cluster surface at all. It is **not** a snapshot (paging over a live collection can show a
-document twice or not at all), **not** self-ordering (without a `SORT` step the paging is
-meaningless, but injecting one would change the results of a pipeline ending in `GROUP_BY`), and
-**not** stateful server-side (abandoning it holds nothing to release).
+no cluster surface at all. A pipeline that does not already end in a defined order is paged with
+a `SORT` on `_id` appended before `SKIP`/`LIMIT`, because an unordered source enumerates differently
+warm and cold and an eviction between batches would otherwise repeat or skip rows; rows with no
+`_id` (`GROUP_BY` output) keep their stream position under SORT's own fallback. A `LIMIT` or `SKIP`
+the caller's own pipeline applies to unordered documents gets a `SORT` on `_id` inserted before it
+too, so `[LIMIT 100]` pages the first 100 documents by `_id` rather than a subset that differs warm
+and cold. It is still **not**
+a snapshot (a write landing between batches can show a document twice or not at all), and **not**
+stateful server-side (abandoning it holds nothing to release).
 
 **`db.transaction(fn)`** runs `fn` in a transaction, committing on return and rolling back on
 throw. The scoped-callback form is what makes it safe: a transaction holds each written
@@ -378,8 +388,9 @@ collection's write lock across calls and `ResourceLocking.releaseWrite` is threa
 callback **may not suspend** — an async function, a generator and a returned promise are all
 rejected with a `TypeError`, and `EnforcingDatabaseAccess` pins the session to the opening
 thread. Because the rollback lives in Java, a sandbox abort still rolls back and releases the
-locks. Three limitations: `listCollections`/`listDatabases` inside a transaction observe an empty
-list rather than throwing; under clustering the 2PC round trips block the thread owning the
+locks. Three limitations: `listCollections` inside a transaction throws a catchable `Error`
+(`409-6`, listing is refused while a transaction is open), and `listDatabases` answers the run's
+scope without a request when the run is scoped and otherwise throws the same error; under clustering the 2PC round trips block the thread owning the
 locks; and the three control ops skip `AuthorizationChecker` (they carry nothing to authorize —
 each buffered write is still authorized on its own request).
 
@@ -405,7 +416,27 @@ future proposals; `toTemporal()` bridges to `Temporal.PlainDateTime`/`PlainTime`
 arithmetic is reachable from a stored field without a second implementation. `EJsonInterop`
 emits real `JsonGeo`/`JsonVector`/… values, so a document saved from a script keeps the type the
 storage and index layers already understand; a custom type registered later with no value type
-here degrades to its wire text rather than silently vanishing.
+here degrades to its wire text rather than silently vanishing. A custom value **read from a
+document is written back with its original spelling**: the value type keeps the `JsonCustom` it
+came from, so `#geo(45,-122)` passing untouched through a before hook or a `db.findById` →
+`db.save` round trip is stored as `#geo(45,-122)`, not re-derived as `#geo(45.0,-122.0)`. Only a
+value the script builds itself (`new Geo(...)`, `Geo.from(...)`) takes the derived spelling.
+`Geo.from('#geo(...)')` applies the same range check as the constructor, so a `NaN` coordinate is a
+`RangeError` either way, and a `'#geo(NaN,…)'` string is refused when it is promoted into a document.
+
+A **plain string in custom wire format is promoted on the way into a document**, so
+`'#geo(1,2)'` stores the same custom value as the identical bytes arriving over the wire and is
+indexed in the same family. `Geo.from('#geo(1,2)')` is the same point in the same family, but as a
+value the script built it takes the derived spelling `#geo(1.0,2.0)`. The promotion
+keeps the raw text verbatim — `#geo(1,2)` is stored as `#geo(1,2)`, not normalised to
+`#geo(1.0,2.0)` — so it changes the value's *type* and never its bytes. An unregistered or
+malformed one (`#nosuch(1)`, `#geo(bad)`) fails the write with a `TypeError` naming the member,
+exactly as the wire path already refuses the identical document at parse time. `JSON.stringify`
+is deliberately unaffected: a custom-shaped string stringifies as the string it is.
+
+Nothing on disk needs migrating, because the promotion never changed a stored byte. A collection
+that a script wrote a custom value into *before* this behaviour existed does hold that value in
+the wrong index family, though, and one `REINDEX` of the collection moves it into the right one.
 
 ### What a run reports back
 
@@ -414,8 +445,25 @@ here degrades to its wire text rather than silently vanishing.
   a rejection becomes the script error, and one still pending after the drain fails the run
   (`400-20`) rather than quietly contributing JSON `null`. The conversion happens *inside* the
   interpreter's lifetime, so an accessor-valued property is read through its getter and the
-  getter's work is charged to the run's budgets. The converted result is measured against
+  getter's work is charged to the run's budgets. The same holds for a before-hook replacement, a
+  MAP `SCRIPT` value and a REDUCE accumulator, which convert under their session's own stack
+  capture. An array is read by its length the way `JSON.stringify` reads it — an index getter
+  through the getter, a hole or a sparse slot as `null` — and a `Proxy` through its `get` and
+  `ownKeys` traps; an array longer than 2^24 elements fails with a `TypeError`, since no document
+  could hold it. The converted result is measured against
   `scriptMaxResultBytes` (`400-15`); a trigger passes `-1`, since its result is discarded.
+  A **non-finite number cannot cross into a run result or a document**: `Infinity`, `-Infinity`
+  and `NaN` fail the conversion with a `TypeError`, because the engine's own reader cannot parse
+  the token `NumberFormatter` spells for them. `JSON.stringify` keeps its own ECMAScript-mandated
+  answer of `null` for the same values.
+
+  The pipeline's three script surfaces differ, and the rule is whether the result is **stored** or
+  only **tested**. A `MAP` value operator and a `REDUCE` accumulator are stored, so a non-finite
+  result becomes `null`, matching what the arithmetic operators already answer. A before-write hook
+  refuses with a `TypeError`. A `FILTER` script predicate and a `MAP` script condition are only
+  tested, so the result never becomes an EJson value at all: truthiness is decided inside the
+  interpreter under ordinary JavaScript rules, which means `Infinity` and `-Infinity` **keep** a
+  document while `NaN`, `0`, `-0`, `''`, `null` and `undefined` drop it.
 - **Console output** is captured on **every** exit path — value, throw, syntax error, abort — as
   a ring buffer keeping the newest `maxLogLines` (a longer line is clipped at
   `maxLogLineChars`, both setting a `logsTruncated` flag), and teed to the host sink when one
@@ -458,10 +506,10 @@ where the run sits relative to the write path.
 | Surface | Authority | `db` | Budgets | Console | Notes |
 |---|---|---|---|---|---|
 | `RUN_SCRIPT` | caller | yes | `script*` | returned | ad-hoc; parse cached by source hash |
-| `CALL_PROCEDURE` | **invoker** (caller) | yes | `script*` | returned | parse cached by `db\|name\|version` |
+| `CALL_PROCEDURE` | **invoker** (caller) | yes | `script*` | returned | parse cached by `db\|name\|version`, checked by source hash |
 | After trigger | **definer** (installer) | yes | `script*`, `triggerTimeoutMs` | logged | async, exactly-once, retried |
 | Before-write hook | recorded, not enforced | **no** | `beforeHook*` | discarded | synchronous, in the write lock, fail-closed |
-| Schedule | **definer** | yes | `scheduleTimeoutMs` | logged | at-most-once per due instant |
+| Schedule | **definer** | yes | `scheduleTimeoutMs` | logged | at-most-once per due instant under a stable view |
 | Pipeline script | the query's caller | **no** | `aggregationScript*` | discarded | one callable per pipeline, per document |
 
 ### Ad-hoc scripts and stored procedures
@@ -481,7 +529,10 @@ runtime state lives in the per-run `Interpreter`/`Environment`/`Intrinsics`.
 
 `scriptPermissions` is a per-database `ScriptPermissionLevel` — `NONE`/`RUN`/`MANAGE`, where
 `MANAGE` additionally allows installing procedures, triggers and schedules; admins and database
-owners have an implicit `MANAGE`. A legacy boolean reads as `RUN`/`NONE`.
+owners have an implicit `MANAGE`. A legacy boolean reads as `RUN`/`NONE`. For a trigger,
+`MANAGE` is bounded by the collection: a `collectionPermissions` entry that does not grant
+`READ_WRITE` on that collection refuses `SAVE_TRIGGER`, `DELETE_TRIGGER` and `TEST_TRIGGER` there,
+because a before hook rewrites or vetoes every write to it.
 
 **Errors** map to: `403-2` scripting disabled, `404-4` unknown database, `400-10` source too
 large, `400-9` threw or would not parse, `400-11` budget/depth, `400-12` memory, `400-15` result
@@ -503,25 +554,85 @@ admin, owner or `MANAGE` user can install one. Two consequences: a definer who n
 falling back to an admin would let *deleting* a user widen a trigger's authority), and a definer
 whose permissions are later reduced silently narrows it.
 
+The definer is always the saving user: no request field can name another one, so a client cannot
+install a trigger that runs as someone else. Peers never derive it either — they receive the
+coordinator's definition file, definer included, as a versioned admin record.
+
 **An after trigger runs exactly once, not at least once.** Before an event is queued,
 `TriggerRunLog` persists a pending-run record in `admin/trigger_runs`; `TriggerDispatcher` then
 runs the procedure inside a transaction whose final buffered op **consumes** that record, so the
-run's effects and the evidence that would replay them commit together. `TriggerRunRecovery`
-re-queues what is still pending at startup. This rests on single-node commits being crash-atomic
+run's effects and the evidence that would replay them commit together. On a cluster the record is
+node-local, so the consume op always sits in the firing node's own slice: a body whose writes were
+all forwarded to other owners still commits through 2PC with this node as a participant, never as a
+bare forward that would leave the record behind. `TriggerRunRecovery`
+re-queues what is still pending at startup — only the runs pending when the process started,
+snapshotted before the executor, the scheduler or the cluster can record new ones, since a run
+recorded after that was already queued by whatever recorded it. This rests on single-node commits being crash-atomic
 (`ops/TxCommitLog`), and at-least-once would be unusable for the ordinary case of a trigger that
 increments a counter. Consequences: a run costs a transaction; an explicit `db.transaction(…)`
 inside a trigger is rejected (the run is already transactional); and the guarantee covers
 *database effects*, so a replayed run's console output can repeat.
 
+The record is written **before the evidence of the triggering write can be lost**, never after it.
+A transaction stages its runs once its ops have applied and before its commit marker is cleared,
+under a run id derived from the transaction id, the trigger, the event and the document, so a
+startup replay of that commit re-stages the same records instead of adding new ones. Its buffered
+ops are deleted only after the marker, so a replay always sees the whole transaction;
+the events are queued only after the marker is gone, so a trigger still never sees a transaction
+that could roll back. A standalone `SAVE`/`BULK_SAVE`/`DELETE` stages its runs under the collection
+lock *before* the write, as `STAGED` records carrying each document's prior version (or "absent").
+If the write lands, the in-process event is queued under that run id; if it is refused or fails, the
+records are discarded; a partially applied `BULK_SAVE` keeps only what committed. A `STAGED` run
+found at startup fires for exactly the documents whose version has changed since it was staged —
+every save stamps a fresh version and a delete removes the document — and is otherwise discarded.
+`LIST_TRIGGER_RUNS` reports a staged run as `PENDING`.
+
 A failed run is **retried** — the state machine lives on the pending-run record itself, which is
-what keeps exactly-once intact (a record still present is still un-applied). A retryable failure
+what keeps exactly-once intact (a record still present is still un-applied). An error raised
+*after* the run's transaction committed is the exception: the module body is wrapped in that
+transaction and the event loop is drained once the wrapper has returned, so a pending timer or a
+throwing microtask surfaces as a script error on a run whose effects are already durable and
+whose record is already gone. Such a run is recorded as an error and **never re-queued** —
+re-running it would apply the effects a second time. A retryable failure
 (a script error or a commit failure) increments `attempts` and re-queues after a doubling
 backoff up to `triggerMaxAttempts`, after which the record is marked `DEAD` with its payload and
-last error kept. Everything else is terminal and consumes the record: a missing definer or
-procedure, exceeded depth, a queue-overflow drop, and a **cancellation** — the one place the
-exactly-once guarantee is deliberately waived, because an operator cancelling a runaway trigger
-wants it stopped. `LIST_TRIGGER_RUNS`/`RESOLVE_TRIGGER_RUN` are the admin-only operator surface,
+last error kept, for `triggerDeadLetterRetentionMs` from the moment it died. A retry re-reads its documents when it *runs*, not when it is scheduled, so it
+sees any write made during the backoff; if they are gone the run is consumed, and if the read
+itself fails the run stays pending and is retried (then dead-lettered) like any other failure. A
+run evicted by a full trigger queue is dead-lettered too, not dropped. Everything else is terminal
+and consumes the record: a missing definer or procedure, exceeded depth, and a **cancellation** —
+the one place the exactly-once guarantee is deliberately waived, because an operator cancelling a
+runaway trigger wants it stopped. A run is replayed by the node whose data directory holds it,
+whatever id that node ran under when it wrote it, so switching `clusterEnabled` on or off does not
+orphan a pending run. `LIST_TRIGGER_RUNS`/`RESOLVE_TRIGGER_RUN` are the admin-only operator surface,
 fanned out cluster-wide because `admin/trigger_runs` is not replicated.
+
+Two outcomes are neither ordinary retries nor terminal consumes, and both used to be misfiled.
+
+**A definition that cannot be *read* is not a definition that was deleted.** `findTrigger` answered
+`null` for both, and the caller consumes the pending run on `null` — so a transient I/O failure
+reading `{coll}-triggers.json` deleted the only record that would have replayed the run, and an
+after trigger for a committed write silently never ran. It is worst at startup, where every run
+`TriggerRunRecovery` re-queues is exposed at once, so one brief disk stall could consume all of
+them. An unreadable definition now leaves the record `PENDING` and retries with the same doubling
+backoff, dead-lettering only once `triggerMaxAttempts` is exhausted. `AdminCache` already refuses
+to cache such a failure as an absence (`MetadataReadException`); the dispatcher now agrees.
+
+**A half-applied commit is not a retryable failure.** `TRANSACTION_HALF_APPLIED` (500-33) means the
+transaction passed its commit point, applied some of its ops, and deliberately kept both its write
+locks and its commit-log marker so recovery can finish the slice. Re-running the body would apply
+those ops a second time — the counter-incrementing trigger double-counts, which is precisely what
+exactly-once exists to prevent. The run is dead-lettered instead, leaving it visible to
+`RESOLVE_TRIGGER_RUN`. `REPLICATION_TIMEOUT` was already special-cased in the same seam; this is
+the second status that needs it.
+This holds whatever the script itself answers. A body whose commit fenced and that then throws
+from a timer or a microtask still surfaces as a script error, and that error used to take the
+ordinary retry path, so the dispatcher now checks the fence before it looks at the result. A
+script transaction that committed through a single remote owner, which answered `500-33` or
+`409-10`, counts as fenced too (the edge keeps that transaction, see
+[clustering](clustering.md)), so such a run is dead-lettered rather than retried. For `409-10`,
+dead-lettering is the safe direction: the outcome is unknown, and a retry could apply the body
+twice.
 
 Triggers are **queued** from `OperationProcessor`'s write handlers and `TransactionOperationHelper.commit`
 — never from the write helpers, since a replicated apply reaches those directly and would fire
@@ -533,18 +644,28 @@ event is dropped and counted. Cascades carry `triggerDepth + 1` on the request i
 not a `ThreadLocal`, so the bound survives a cluster forward — zeroed for client requests;
 `allowCascade` defaults to false.
 
+A transaction fires each trigger for its **net effect**: several writes to one id fire once, a
+`DELETE` of an id the same transaction created fires nothing (no one outside it could ever see the
+document), and deleting a document that existed before the transaction fires `DELETED` as usual.
+A `batch`-mode trigger runs once per collection and event for the whole transaction, deletes
+included, with every affected document in `documents`.
+
 **Before-write hooks** are the veto. Returning nothing or `true` accepts the write, a plain
 object replaces the document, anything else or a `throw` refuses it (`400-21`); an abort keeps
 its own code, so an operator can tell a hook that said no from one that never finished. Every
 failure is **fail-closed**. They run on the `openCallable` seam rather than `SimpleJs.run`, which
 is the entry point whose call happens on the caller's thread (the write lock is thread-owned) and
 which gives **one interpreter per request** — a `BULK_SAVE` of N documents evaluates the body
-once and shares one budget across all N invocations. There is **no `db`**: a re-entrant call from
+once and shares one budget across all N invocations (one interpreter for its inserts, one for its
+updates). That holds inside a transaction and inside a trigger exactly as outside one: both paths
+open their hooks through `BulkBeforeHooks`, so module-level state and the budget behave the same
+whichever way the bulk arrived. There is **no `db`**: a re-entrant call from
 under a held write lock would take a lock this thread owns, or make a network round trip while a
 writer waits; the module resolver is kept so a hook can import shared code, since that takes no
 locks. A replacement may not change `_id` (that would relocate the document, turning an update
 into an insert elsewhere) and is re-validated against the collection's JSON Schema, which runs at
-the *edge*, before the hook. Several hooks chain in ascending name order and the first refusal
+the *edge*, before the hook. It is also held to the same nesting cap a client request is
+(`Globals.MAX_REQUEST_NESTING_DEPTH`). Several hooks chain in ascending name order and the first refusal
 stops the chain. Budgets are an order below `RUN_SCRIPT`'s, because a client write is blocked
 while one runs. Under clustering a hook runs on the collection's **owner** — the edge forwards
 raw request JSON, so an edge-side mutation would be lost in transit.
@@ -572,15 +693,22 @@ unsatisfiable expression such as `0 0 30 2 *` answers `null` instead of spinning
 walked as *local* date-times and only then resolved against `scriptTimeZone`, which is what makes
 a daily schedule fire once across a DST transition.
 
-Delivery is **at-most-once per due instant**: a node taking a schedule over computes the next
-*future* occurrence, so a handoff may drop a tick but can never replay one. `nextRunAt` is
+Delivery is **at-most-once per due instant under a stable membership view**: a node taking a
+schedule over computes the next *future* occurrence, so a handoff may drop a tick but can never
+replay one, and `ScheduleExecutor` fires only when this node both holds a write quorum and owns
+the ring key — without the quorum gate a partitioned minority owns every schedule and re-runs it.
+While the view is still converging after a join or leave, two nodes can each believe they own the
+same key and both hold quorum, so an occurrence can still fire twice; a job that must not run
+twice has to be idempotent. `nextRunAt` is
 therefore never persisted — a durable `lastRunAt` would mean a DDL write per run and would churn
-the admin epoch. Missed runs while a node was down are skipped, not caught up, so a job that must
+the schedule's replicated admin record. Missed runs while a node was down are skipped, not caught up, so a job that must
 not miss an occurrence should be idempotent and driven off data rather than off the clock. A run
 is deliberately **not** transactional (there is no run record to consume atomically); a job
 wanting atomicity opens its own `db.transaction(…)`, which — unlike inside a trigger — is
 permitted. `bckg_ops/ScheduleExecutor` owns the ticker plus its own queue and workers, skipping
-anything this node does not own or that is still running.
+anything this node does not own or that is still running. A run still waiting in that queue when its
+schedule is deleted, disabled or changed is skipped: the dispatcher runs it only while it is still the
+registered entry, so an acknowledged `DELETE_SCHEDULE` never fires a stale definition afterwards.
 
 ### Pipeline scripts
 
@@ -619,6 +747,13 @@ opt-in, since an exploratory client would write a row per keystroke; `BEFORE_HOO
 refusals only). A row carries the run's identity, outcome, attempt number and metrics; `skipped`
 is the outcome no other surface reports — a trigger whose definer was deleted, a schedule whose
 procedure is gone. An hourly owner-only sweep applies the retention.
+
+Script-controlled text in a row (`errorName`, `errorMessage`, each `stack` and `logs` line) that is
+shaped like a custom type — `#name(...)` — is stored with a leading backslash, so `#tag(fix)` reads
+back as `\#tag(fix)`. The row is built in Java rather than parsed from the wire, and the reader
+promotes every custom-shaped string, so without the escape an unregistered shape made the row
+unreadable after an eviction or restart (skipped by every scan) and a registered one such as
+`#geo(1,2)` came back as a custom value where the warm row held a string.
 
 ### Under clustering
 

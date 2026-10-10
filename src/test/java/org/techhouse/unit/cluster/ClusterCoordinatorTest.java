@@ -17,7 +17,7 @@ import org.techhouse.cluster.ownership.OwnershipManager;
 import org.techhouse.config.Configuration;
 import org.techhouse.config.Globals;
 import org.techhouse.ioc.IocContainer;
-import org.techhouse.ops.req.CreateCollectionRequest;
+import org.techhouse.ops.req.ReindexRequest;
 import org.techhouse.test.TestGlobals;
 import org.techhouse.test.TestUtils;
 
@@ -102,19 +102,21 @@ public class ClusterCoordinatorTest {
 
     @Test
     public void test_replicate_not_applicable_when_disabled() {
-        assertEquals(ReplicationOutcome.NOT_APPLICABLE,
+        assertEquals(ReplicationOutcome.NOT_CLUSTERED,
                 coordinator.replicateUpsert(TestGlobals.DB, TestGlobals.COLL, List.of("a")));
-        assertEquals(ReplicationOutcome.NOT_APPLICABLE,
-                coordinator.replicateDelete(TestGlobals.DB, TestGlobals.COLL, List.of("a")));
+        assertEquals(ReplicationOutcome.NOT_CLUSTERED,
+                coordinator.replicateDelete(TestGlobals.DB, TestGlobals.COLL, List.of("a"), null));
     }
 
     @Test
-    public void test_replicate_not_applicable_when_not_owner() throws Exception {
+    public void test_replicate_reports_not_owner_rather_than_success() throws Exception {
         enable(2);
         ownership.setSelfNodeId("self");
         ownership.onMembershipChanged(new MembershipView(List.of(node("self", 9990), node("other", 9991))));
-        assertEquals(ReplicationOutcome.NOT_APPLICABLE,
-                coordinator.replicateDelete(TestGlobals.DB, collectionOwnedByOther(), List.of("a")));
+        assertEquals(ReplicationOutcome.NOT_OWNER,
+                coordinator.replicateDelete(TestGlobals.DB, collectionOwnedByOther(), List.of("a"), null));
+        assertEquals(ReplicationOutcome.NOT_OWNER,
+                coordinator.replicateUpsert(TestGlobals.DB, collectionOwnedByOther(), List.of("a")));
     }
 
     @Test
@@ -139,8 +141,9 @@ public class ClusterCoordinatorTest {
     }
 
     @Test
-    public void test_replicate_admin_op_not_applicable_when_disabled() {
-        assertEquals(ReplicationOutcome.NOT_APPLICABLE,
-                coordinator.replicateAdminOp(new CreateCollectionRequest(TestGlobals.DB, TestGlobals.COLL), "alice"));
+    public void test_admin_records_and_reindex_are_not_replicated_when_disabled() {
+        assertEquals(ReplicationOutcome.NOT_CLUSTERED, coordinator.replicateAdminRecords(List.of()));
+        assertEquals(ReplicationOutcome.NOT_CLUSTERED,
+                coordinator.broadcastReindex(new ReindexRequest(TestGlobals.DB, TestGlobals.COLL, null)));
     }
 }

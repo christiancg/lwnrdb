@@ -125,12 +125,122 @@ def test_bulk_save_atomic(c):
                find_by_id(c, COLL, "bob").get("status") == "NOT_FOUND")
 
 
+def test_transactional_writes_answer_like_plain_writes(c):
+    section("Transactional writes are validated like plain ones")
+    save_schema(c, COLL, PERSON_SCHEMA)
+    plain = save(c, COLL, {"_id": "plainbad", "name": "NoAge"})
+    check_code("a plain non-compliant save is rejected", plain, "ERROR", "400-7")
+
+    check_status("start a transaction", c.send({"type": "START_TRANSACTION"}), "OK")
+    in_tx = save(c, COLL, {"_id": "txbad", "name": "NoAge"})
+    check_code("the same document inside a transaction is rejected with the same code", in_tx, "ERROR", "400-7")
+    check("and the same message, apart from the document",
+          in_tx.get("message", "").split(":")[0] == plain.get("message", "").split(":")[0],
+          f"plain={plain.get('message')!r} tx={in_tx.get('message')!r}")
+    bulk = bulk_save(c, COLL, [{"_id": "txgood", "name": "Ok", "age": 1}, {"_id": "txbulkbad", "name": "NoAge"}])
+    check_code("a transactional bulk save with one bad document is rejected", bulk, "ERROR", "400-7")
+    check_status("commit what is left", c.send({"type": "COMMIT_TRANSACTION"}), "OK")
+
+    check("nothing the transaction refused was persisted",
+          all(find_by_id(c, COLL, _id).get("status") == "NOT_FOUND" for _id in ("txbad", "txgood", "txbulkbad")))
+
+
+def test_multiple_of_rejects_a_tiny_non_multiple(c):
+    section("multipleOf rejects a nonzero value smaller than its divisor")
+    check_status("save a multipleOf schema",
+                 save_schema(c, COLL, {"type": "object", "properties": {
+                     "big": {"multipleOf": 1000000}, "cents": {"multipleOf": 0.01}}}), "OK")
+    check_code("0.001 is not a multiple of 1000000", save(c, COLL, {"_id": "tiny", "big": 0.001}), "ERROR", "400-7")
+    check("the refused document was not persisted", find_by_id(c, COLL, "tiny").get("status") == "NOT_FOUND")
+    check_status("2000000 is a multiple of 1000000", save(c, COLL, {"_id": "whole", "big": 2000000}), "OK")
+    check_status("0 is a multiple of anything", save(c, COLL, {"_id": "zero", "big": 0}), "OK")
+    check_status("19.99 is a multiple of 0.01", save(c, COLL, {"_id": "price", "cents": 19.99}), "OK")
+    check_code("19.995 is not a multiple of 0.01", save(c, COLL, {"_id": "halfcent", "cents": 19.995}),
+               "ERROR", "400-7")
+
+
+def test_multiple_of_is_exact_for_huge_values(c):
+    section("multipleOf stays exact when the quotient overflows or passes the double integer range")
+    check_status("save a multipleOf schema",
+                 save_schema(c, COLL, {"type": "object", "properties": {
+                     "odd": {"multipleOf": 0.123456789}, "three": {"multipleOf": 3}}}), "OK")
+    check_code("1e308 is not a multiple of 0.123456789", save(c, COLL, {"_id": "huge_odd", "odd": 1e308}),
+               "ERROR", "400-7")
+    check_code("1e20 is not a multiple of 3", save(c, COLL, {"_id": "huge_three", "three": 10 ** 20}),
+               "ERROR", "400-7")
+    check_status("3e20 is a multiple of 3", save(c, COLL, {"_id": "huge_three_ok", "three": 3 * 10 ** 20}), "OK")
+
+
+def test_pattern_uses_ecma_semantics(c):
+    section("pattern follows ECMA-262, not Java regex")
+    check_status("save a pattern schema",
+                 save_schema(c, COLL, {"type": "object", "properties": {"slug": {"pattern": "^[a-z]+$"}}}), "OK")
+    check_status("a matching value is accepted", save(c, COLL, {"_id": "slug-ok", "slug": "abc"}), "OK")
+    check_code("'$' does not match before a trailing newline",
+               save(c, COLL, {"_id": "slug-nl", "slug": "abc\n"}), "ERROR", "400-7")
+    check("the refused document was not persisted", find_by_id(c, COLL, "slug-nl").get("status") == "NOT_FOUND")
+    check_status("save a non-whitespace pattern schema",
+                 save_schema(c, COLL, {"type": "object", "properties": {"token": {"pattern": "^\\S+$"}}}), "OK")
+    check_code("a no-break space is whitespace in ECMA-262",
+               save(c, COLL, {"_id": "nbsp", "token": "a\u00a0b"}), "ERROR", "400-7")
+    check_code("a Java-only possessive quantifier is refused at save",
+               save_schema(c, COLL, {"type": "object", "properties": {"p": {"pattern": "a++"}}}), "ERROR", "400-8")
+    check_code("a Java-only inline flag is refused in patternProperties",
+               save_schema(c, COLL, {"type": "object", "patternProperties": {"(?i)^a": {}}}), "ERROR", "400-8")
+
+
 def test_invalid_schema_rejected(c):
     section("Invalid schema rejected")
     check_code("schema with a bad keyword value is rejected",
                save_schema(c, COLL, {"type": "object", "required": "name"}), "ERROR", "400-8")
     check_code("schema using an unknown type is rejected",
                save_schema(c, COLL, {"type": "objct"}), "ERROR", "400-8")
+
+
+def test_cyclic_ref_rejected(c):
+    section("Cyclic $ref rejected at save")
+    check_code("a schema whose root refers to itself is rejected",
+               save_schema(c, COLL, {"$ref": "#"}), "ERROR", "400-8")
+    check_code("a cycle through $defs is rejected",
+               save_schema(c, COLL, {"$ref": "#/$defs/a",
+                                     "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"$ref": "#/$defs/a"}}}),
+               "ERROR", "400-8")
+    check_code("a cycle through an applicator is rejected",
+               save_schema(c, COLL, {"allOf": [{"$ref": "#"}]}), "ERROR", "400-8")
+    check_code("an unresolvable pointer is rejected",
+               save_schema(c, COLL, {"$ref": "#/$defs/missing"}), "ERROR", "400-8")
+    check_code("a pointer that resolves to a non-schema node is rejected",
+               save_schema(c, COLL, {"required": ["a"], "properties": {"x": {"$ref": "#/required"}}}),
+               "ERROR", "400-8")
+    check_status("a pointer to a boolean schema is accepted",
+                 save_schema(c, COLL, {"$defs": {"any": True}, "properties": {"x": {"$ref": "#/$defs/any"}}}), "OK")
+    check_status("recursion bounded by instance depth is still accepted", save_schema(c, COLL, {
+        "type": "object",
+        "properties": {"name": {"type": "string"}, "child": {"$ref": "#"}},
+    }), "OK")
+    check_status("a nested document validates against the recursive schema",
+                 save(c, COLL, {"_id": "rec1", "name": "a", "child": {"name": "b"}}), "OK")
+    check_code("a nested document that breaks the recursive schema is refused",
+               save(c, COLL, {"_id": "rec2", "name": "a", "child": {"name": 3}}), "ERROR", "400-7")
+    check_status("the connection survives a schema-heavy exchange",
+                 find_by_id(c, COLL, "rec1"), "OK")
+
+
+def test_ref_targets_are_checked(c):
+    section("$ref targets are validated as schemas wherever they live")
+    check_code("a malformed enum behind a $ref into definitions is rejected",
+               save_schema(c, COLL, {"definitions": {"role": {"enum": "admin"}},
+                                     "properties": {"role": {"$ref": "#/definitions/role"}}}),
+               "ERROR", "400-8")
+    resp = save_schema(c, COLL, {"definitions": {"role": {"enum": ["admin"]}},
+                                 "properties": {"role": {"$ref": "#/definitions/role"}}})
+    check_status("a well-formed target behind definitions is accepted", resp, "OK")
+    check("definitions itself is still only a warning",
+          any("definitions" in w for w in resp.get("warnings", [])), detail=str(resp.get("warnings")))
+    check_code("the target's enum is enforced",
+               save(c, COLL, {"_id": "ref1", "role": "guest"}), "ERROR", "400-7")
+    check_status("a value the target's enum allows saves",
+                 save(c, COLL, {"_id": "ref2", "role": "admin"}), "OK")
 
 
 def test_schema_warnings(c):
@@ -204,7 +314,13 @@ def main():
     groups = [
         test_save_and_enforce_schema,
         test_bulk_save_atomic,
+        test_transactional_writes_answer_like_plain_writes,
+        test_multiple_of_rejects_a_tiny_non_multiple,
+        test_multiple_of_is_exact_for_huge_values,
+        test_pattern_uses_ecma_semantics,
         test_invalid_schema_rejected,
+        test_cyclic_ref_rejected,
+        test_ref_targets_are_checked,
         test_schema_warnings,
         test_custom_type_enforcement,
         test_delete_schema,

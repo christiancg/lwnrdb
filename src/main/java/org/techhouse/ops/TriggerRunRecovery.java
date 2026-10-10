@@ -1,19 +1,25 @@
 package org.techhouse.ops;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import org.techhouse.bckg_ops.TriggerExecutor;
 import org.techhouse.bckg_ops.events.EventType;
 import org.techhouse.bckg_ops.events.TriggerEvent;
 import org.techhouse.cache.Cache;
 import org.techhouse.config.Configuration;
 import org.techhouse.data.DbEntry;
+import org.techhouse.data.PkIndexEntry;
 import org.techhouse.data.admin.AdminTriggerRunEntry;
 import org.techhouse.data.admin.TriggerRunStatus;
 import org.techhouse.ioc.IocContainer;
 import org.techhouse.log.Logger;
+import org.techhouse.ops.tx.FencedTriggerRuns;
+import org.techhouse.ops.tx.SliceStates;
 
 public final class TriggerRunRecovery {
     private static final Logger logger = Logger.logFor(TriggerRunRecovery.class);
@@ -24,21 +30,39 @@ public final class TriggerRunRecovery {
     private TriggerRunRecovery() {
     }
 
-    public static void recoverLocal() {
+    public static Set<String> startupRunIds() {
+        try {
+            final var ownedByReplay = new HashSet<String>();
+            final var startup = new HashSet<String>();
+            for (final var entry : TriggerRunLog.pending()) {
+                final var txId = entry.getTxId();
+                if (txId != null && SliceStates.isFenced(txId)) {
+                    ownedByReplay.add(entry.getRunId());
+                } else {
+                    startup.add(entry.getRunId());
+                }
+            }
+            ownedByReplay.addAll(FencedTriggerRuns.consumedByFencedSlices());
+            startup.removeAll(ownedByReplay);
+            return startup;
+        } catch (Exception e) {
+            logger.error("Failed to read the pending trigger runs to decide which ones startup recovery replays;"
+                    + " falling back to every pending run", e);
+            return TriggerRunLog.pendingRunIds();
+        }
+    }
+
+    public static void recoverLocal(Set<String> startupRunIds) {
         if (!configuration.isTriggersEnabled() || !TriggerRunLog.isEnabled()) {
             return;
         }
         try {
-            final var byRun = groupByRun(TriggerRunLog.pending(), TriggerRunLog.currentNodeId());
+            final var byRun = groupByRun(TriggerRunLog.pending(), TriggerRunLog.ownNodeIds(), startupRunIds);
             var requeued = 0;
             for (final var chunks : byRun.values()) {
-                final var event = toEvent(chunks);
-                if (event == null) {
-                    TriggerDispatcher.consumeQuietly(chunks.getFirst().getRunId(), chunks.getFirst().getTriggerName());
-                    continue;
+                if (requeue(chunks)) {
+                    requeued++;
                 }
-                triggerExecutor.submit(event);
-                requeued++;
             }
             if (requeued > 0) {
                 logger.info("Re-queued " + requeued + " trigger run(s) left pending by the previous shutdown");
@@ -46,6 +70,67 @@ public final class TriggerRunRecovery {
         } catch (Exception e) {
             logger.error("Failed to recover pending trigger runs at startup", e);
         }
+    }
+
+    public static void requeueRuns(Set<String> runIds) {
+        if (runIds.isEmpty() || !configuration.isTriggersEnabled() || !TriggerRunLog.isEnabled()) {
+            return;
+        }
+        try {
+            for (final var chunks : groupByRun(TriggerRunLog.pending(), TriggerRunLog.ownNodeIds(), runIds).values()) {
+                requeue(chunks);
+            }
+        } catch (Exception e) {
+            logger.error("Failed to requeue the trigger runs of a discarded transaction slice " + runIds
+                    + "; they stay pending until the next restart", e);
+        }
+    }
+
+    private static boolean requeue(List<AdminTriggerRunEntry> stored) {
+        final var first = stored.getFirst();
+        try {
+            final var chunks = stored.stream().anyMatch(TriggerRunRecovery::isStaged) ? confirmLanded(stored) : stored;
+            if (chunks.isEmpty()) {
+                TriggerDispatcher.consumeQuietly(first.getRunId(), first.getTriggerName());
+                return false;
+            }
+            final var event = toEvent(chunks);
+            if (event == null) {
+                TriggerDispatcher.consumeQuietly(first.getRunId(), first.getTriggerName());
+                return false;
+            }
+            triggerExecutor.submit(event);
+            return true;
+        } catch (Exception e) {
+            logger.error("Failed to recover pending trigger run " + first.getRunId() + "; it stays pending", e);
+            return false;
+        }
+    }
+
+    private static List<AdminTriggerRunEntry> confirmLanded(List<AdminTriggerRunEntry> chunks) throws Exception {
+        final var first = chunks.getFirst();
+        final var primaryKeyIndex = cache.getPkIndexAndLoadIfNecessary(first.getDbName(), first.getCollName());
+        final var landed = new HashSet<String>();
+        for (final var chunk : chunks) {
+            if (!isStaged(chunk)) {
+                continue;
+            }
+            chunk.getPriorVersions().forEach((id, priorVersion) -> {
+                if (currentVersion(primaryKeyIndex, id) != priorVersion) {
+                    landed.add(id);
+                }
+            });
+        }
+        return TriggerRunLog.confirmStaged(first.getRunId(), landed);
+    }
+
+    private static boolean isStaged(AdminTriggerRunEntry chunk) {
+        return chunk.getStatus() == TriggerRunStatus.STAGED;
+    }
+
+    private static long currentVersion(List<PkIndexEntry> primaryKeyIndex, String id) {
+        final var position = Collections.binarySearch(primaryKeyIndex, id);
+        return position >= 0 ? primaryKeyIndex.get(position).getVersion() : AdminTriggerRunEntry.ABSENT_VERSION;
     }
 
     public static void warnAboutStrandedRuns() {
@@ -96,10 +181,11 @@ public final class TriggerRunRecovery {
     }
 
     private static LinkedHashMap<String, List<AdminTriggerRunEntry>> groupByRun(List<AdminTriggerRunEntry> pending,
-            String nodeId) {
+            Set<String> ownNodeIds, Set<String> runIds) {
         final var byRun = new LinkedHashMap<String, List<AdminTriggerRunEntry>>();
         for (final var entry : pending) {
-            if (!nodeId.equals(entry.getNodeId()) || entry.getStatus() == TriggerRunStatus.DEAD) {
+            if (!runIds.contains(entry.getRunId()) || !ownNodeIds.contains(entry.getNodeId())
+                    || entry.getStatus() == TriggerRunStatus.DEAD) {
                 continue;
             }
             byRun.computeIfAbsent(entry.getRunId(), _ -> new ArrayList<>()).add(entry);
@@ -108,6 +194,10 @@ public final class TriggerRunRecovery {
     }
 
     static TriggerEvent toEvent(List<AdminTriggerRunEntry> chunks) throws Exception {
+        return toEvent(chunks, chunks.getFirst().getAttempts() + 1);
+    }
+
+    static TriggerEvent toEvent(List<AdminTriggerRunEntry> chunks, int attempt) throws Exception {
         final var first = chunks.getFirst();
         final var entries = new ArrayList<DbEntry>();
         if (first.getEventType() == EventType.DELETED) {
@@ -128,6 +218,10 @@ public final class TriggerRunRecovery {
         }
         return new TriggerEvent(first.getEventType(), first.getDbName(), first.getCollName(), first.getTriggerName(),
                 first.getProcedureName(), first.isBatchMode(), entries, first.getActingUser(), first.getDepth(),
-                first.getRunId());
+                first.getRunId(), Math.max(1, attempt), recordedFiredAt(first));
+    }
+
+    private static long recordedFiredAt(AdminTriggerRunEntry run) {
+        return run.getFiredAt() > 0 ? run.getFiredAt() : System.currentTimeMillis();
     }
 }
