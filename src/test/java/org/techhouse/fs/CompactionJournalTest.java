@@ -184,8 +184,8 @@ public class CompactionJournalTest {
 
         try (var logWriter = mockStatic(LogWriter.class)) {
             assertEquals(List.of(), fx.recovery.recoverAll(), "a refused delete was not completed");
-            logWriter.verify(() -> LogWriter.writeLogEntry(argThat(
-                    entry -> entry.contains(DB + "|" + COLL + " page 0") && entry.contains("Repair or restore"))));
+            logWriter.verify(() -> LogWriter.writeLogEntry(
+                    argThat(entry -> entry.contains(DB + "|" + COLL + " page 0") && entry.contains("primaryKey"))));
         }
         assertEquals(shifted, fx.pageText(0));
         assertEquals("garbage\nmore garbage\n", Files.readString(pkFile.toPath(), StandardCharsets.UTF_8));

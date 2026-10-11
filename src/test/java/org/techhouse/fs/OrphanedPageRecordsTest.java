@@ -77,6 +77,19 @@ public class OrphanedPageRecordsTest {
     }
 
     @Test
+    public void test_scan_reports_an_unterminated_tail_without_refusing_adoption() throws IOException {
+        f.seed(0, "a");
+        final var indexedEnd = f.page(0).length();
+        appendRaw(0, record("b") + "{\"_id\":\"torn\"");
+
+        final var scan = OrphanedPageRecords.scanRecords(f.page(0), DB, COLL, 0, indexedEnd);
+
+        assertTrue(scan.readable());
+        assertTrue(scan.unterminatedTail());
+        assertEquals(List.of("b"), adoptAll(0).stream().map(DbEntry::get_id).toList());
+    }
+
+    @Test
     public void test_a_complete_record_past_the_last_indexed_end_is_adopted_at_its_exact_offset() throws IOException {
         f.seed(0, "a");
         f.seed(0, "b");

@@ -114,6 +114,17 @@ public final class PageOccupancyReconciler {
         if (adopted.isEmpty() && retired.isEmpty() && agreesWithFiles(rows, fileLengths)) {
             return false;
         }
+        replaceRows(dbName, collName, fileLengths, rows);
+        return true;
+    }
+
+    public static void rebuildRows(String dbName, String collName) throws Exception {
+        replaceRows(dbName, collName, fs.pageFileLengths(dbName, collName),
+                rowsByPage(cache.getAdminPageEntries(dbName, collName)));
+    }
+
+    private static void replaceRows(String dbName, String collName, Map<Long, Long> fileLengths,
+            Map<Long, AdminPageEntry> rows) throws Exception {
         final var counts = entryCountsByPage(dbName, collName);
         final var corrected = new ArrayList<AdminPageEntry>();
         for (final var file : fileLengths.entrySet()) {
@@ -125,10 +136,9 @@ public final class PageOccupancyReconciler {
             }
         }
         AdminPageHelper.replacePageEntries(dbName, collName, corrected);
-        return true;
     }
 
-    private static void scheduleIndexMaintenanceFor(String dbName, String collName, List<DbEntry> adopted) {
+    public static void scheduleIndexMaintenanceFor(String dbName, String collName, List<DbEntry> adopted) {
         final var generation = pendingIndexWrites.mark(dbName, collName,
                 adopted.stream().map(DbEntry::get_id).toList());
         final var incarnation = CollectionIncarnation.current(dbName, collName);

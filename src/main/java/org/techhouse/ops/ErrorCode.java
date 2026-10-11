@@ -67,6 +67,8 @@ public enum ErrorCode {
             OperationStatus.ERROR),
     TRANSACTION_ALREADY_COMMITTED("409-14",
             "The transaction already committed on its owner; it can no longer be rolled back", OperationStatus.ERROR),
+    PRIMARY_KEY_REBUILD_REFUSED("409-15", "The primary-key index cannot be rebuilt from the page files",
+            OperationStatus.ERROR),
     LISTEN_ENDED("410-1", "The listen ended", OperationStatus.NOT_FOUND),
     NOT_COLLECTION_OWNER("421-1", "This node is not the owner of the target collection", OperationStatus.ERROR),
     TRANSACTION_READ_SPANS_NODES("421-3",

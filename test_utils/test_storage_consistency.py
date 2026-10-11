@@ -48,6 +48,11 @@ BULK_GROWTH_DOCS = 10
 DANGLING_COLL = "dangling_pk_docs"
 OLD_GRAMMAR_COLL = "old_grammar_pk_docs"
 OLD_GRAMMAR_PK = "first|0|20|0|0\nsecond|20|20|0|0\n"
+REBUILD_UNREADABLE_COLL = "rebuild_unreadable_pk_docs"
+REBUILD_SWAPPED_COLL = "rebuild_swapped_offset_docs"
+REBUILD_LOST_ROW_COLL = "rebuild_lost_row_docs"
+REBUILD_DUPLICATE_COLL = "rebuild_duplicate_docs"
+REBUILD_IDS = ("alpha", "bravo", "charlie")
 UNLISTED_DB = "unlisted_db"
 UNLISTED_COLL = "unlisted_docs"
 UNLISTED_GHOST = "unlisted_docX"
@@ -546,6 +551,100 @@ def test_a_restored_pk_index_serves_every_document(conn: Conn):
     pk = conn.count_via_pk(coll=OLD_GRAMMAR_COLL)
     scan = conn.count_via_scan(coll=OLD_GRAMMAR_COLL)
     check("no write landed while it was unreadable", pk == scan == 2, f"pk={pk} scan={scan}")
+
+
+def reindex_primary_key(conn: Conn, coll: str) -> dict:
+    return conn.send({"type": "REINDEX", "databaseName": DB, "collectionName": coll, "primaryKey": True})
+
+
+def seed_collections_for_primary_key_rebuilds(conn: Conn):
+    section("Seed collections whose pk.idx will be unreadable, misaddressed, short a row, or face a duplicated record")
+    for coll in (REBUILD_UNREADABLE_COLL, REBUILD_SWAPPED_COLL, REBUILD_LOST_ROW_COLL, REBUILD_DUPLICATE_COLL):
+        check_status(f"create {coll}", conn.create_coll(coll), "OK")
+        check_status(f"index pad on {coll}", conn.create_index("pad", coll=coll), "OK")
+        for doc_id in REBUILD_IDS:
+            check_status(f"save {doc_id} into {coll}", conn.save({"_id": doc_id, "pad": doc_id}, coll=coll), "OK")
+
+
+def damage_the_pk_indexes_to_rebuild(work_dir: str):
+    with open(pk_index_file(work_dir, DB, REBUILD_UNREADABLE_COLL), "w") as index:
+        index.write(OLD_GRAMMAR_PK)
+    swapped_path = pk_index_file(work_dir, DB, REBUILD_SWAPPED_COLL)
+    rows = bu.read_pk_rows(swapped_path)
+    first, second = rows[0], rows[1]
+    first[1:3], second[1:3] = second[1:3], first[1:3]
+    bu.write_pk_rows(swapped_path, rows)
+    lost_row_path = pk_index_file(work_dir, DB, REBUILD_LOST_ROW_COLL)
+    bu.write_pk_rows(lost_row_path, [row for row in bu.read_pk_rows(lost_row_path) if row[0] != "bravo"])
+    page = os.path.join(work_dir, "db", DB, REBUILD_DUPLICATE_COLL, page_files(work_dir, DB, REBUILD_DUPLICATE_COLL)[0])
+    with open(page, "rb") as fp:
+        first_record = fp.read().split(b"\n")[0] + b"\n"
+    with open(page, "ab") as fp:
+        fp.write(first_record)
+
+
+def pad_of(response: dict):
+    return (response.get("object") or {}).get("pad")
+
+
+def test_reindex_primary_key_rebuilds_an_unrecognised_pk_index(conn: Conn):
+    section("REINDEX primaryKey rebuilds an unreadable pk.idx from the pages, at version 0")
+    coll = REBUILD_UNREADABLE_COLL
+    check_status("before the rebuild a FIND_BY_ID answers an error", conn.find("alpha", coll=coll), "ERROR")
+    rebuilt = reindex_primary_key(conn, coll)
+    check_status("REINDEX primaryKey answers OK", rebuilt, "OK")
+    check("every record became an entry at version 0",
+          rebuilt.get("primaryKeyEntries") == 3 and rebuilt.get("unversionedEntries") == 3, f"response={rebuilt}")
+    check("with nothing to compare against, every field index was rebuilt", rebuilt.get("rebuiltFields") == ["pad"],
+          f"rebuiltFields={rebuilt.get('rebuiltFields')}")
+    for doc_id in REBUILD_IDS:
+        check_status(f"{doc_id} reads back", conn.find(doc_id, coll=coll), "OK")
+    check_status("a SAVE now lands", conn.save({"_id": "delta", "pad": "delta"}, coll=coll), "OK")
+    pk = conn.count_via_pk(coll=coll)
+    scan = conn.count_via_scan(coll=coll)
+    check("the index-only COUNT agrees with the scan", pk == scan == 4, f"pk={pk} scan={scan}")
+
+
+def test_reindex_primary_key_repairs_swapped_offsets(conn: Conn):
+    section("REINDEX primaryKey re-addresses rows whose offsets were swapped, keeping their versions")
+    coll = REBUILD_SWAPPED_COLL
+    rebuilt = reindex_primary_key(conn, coll)
+    check_status("REINDEX primaryKey answers OK", rebuilt, "OK")
+    check("every version survived and no field index was rebuilt",
+          rebuilt.get("unversionedEntries") == 0 and rebuilt.get("rebuiltFields") == [], f"response={rebuilt}")
+    for doc_id in REBUILD_IDS:
+        found = conn.find(doc_id, coll=coll)
+        check(f"{doc_id} reads back its own document", found.get("status") == "OK" and pad_of(found) == doc_id,
+              f"response={found}")
+
+
+def test_reindex_primary_key_restores_a_record_pk_idx_lost(conn: Conn):
+    section("REINDEX primaryKey indexes a record pk.idx lost from the middle of a page")
+    coll = REBUILD_LOST_ROW_COLL
+    check_status("before the rebuild the middle record is unreachable by id", conn.find("bravo", coll=coll),
+                 "NOT_FOUND")
+    rebuilt = reindex_primary_key(conn, coll)
+    check_status("REINDEX primaryKey answers OK", rebuilt, "OK")
+    check("only the lost record is at version 0 and no field index was rebuilt",
+          rebuilt.get("unversionedEntries") == 1 and rebuilt.get("rebuiltFields") == [], f"response={rebuilt}")
+    check_status("bravo reads back", conn.find("bravo", coll=coll), "OK")
+    by_index = bu.wait_until(lambda: conn.ids(coll, [bu.filter_step("pad", "EQUALS", "bravo")]) == ["bravo"], 10)
+    check("an index-backed FILTER finds bravo", bool(by_index))
+    pk = conn.count_via_pk(coll=coll)
+    scan = conn.count_via_scan(coll=coll)
+    check("the index-only COUNT agrees with the scan", pk == scan == 3, f"pk={pk} scan={scan}")
+
+
+def test_reindex_primary_key_refuses_a_duplicated_record(conn: Conn, work_dir: str):
+    section("REINDEX primaryKey refuses a page holding the same _id twice and leaves pk.idx untouched")
+    coll = REBUILD_DUPLICATE_COLL
+    with open(pk_index_file(work_dir, DB, coll), "rb") as index:
+        before = index.read()
+    refused = reindex_primary_key(conn, coll)
+    check_code("REINDEX primaryKey answers 409-15", refused, "ERROR", "409-15")
+    with open(pk_index_file(work_dir, DB, coll), "rb") as index:
+        check("pk.idx is byte-identical", index.read() == before)
+    check_status("the collection still reads as before", conn.find("alpha", coll=coll), "OK")
 
 
 def seed_collections_for_a_lost_line_end_and_a_half_built_index(conn: Conn):
@@ -1927,6 +2026,7 @@ def main():
             seed_a_collection_whose_page_tail_will_tear(conn)
             seed_collections_for_a_lost_line_end_and_a_half_built_index(conn)
             seed_collections_for_a_lost_record_and_an_unrecognised_pk_index(conn)
+            seed_collections_for_primary_key_rebuilds(conn)
             seed_a_collection_that_will_hold_an_unindexed_record(conn)
             seed_collections_whose_compactions_a_kill_will_interrupt(conn)
             seed_drops_a_kill_will_interrupt(conn, work_dir)
@@ -1950,6 +2050,7 @@ def main():
         lose_the_last_line_end(work_dir)
         lose_the_last_record(work_dir)
         plant_an_old_grammar_pk_index(work_dir)
+        damage_the_pk_indexes_to_rebuild(work_dir)
         leave_the_index_half_built(work_dir)
         leave_an_unindexed_record(work_dir)
         interrupt_the_compactions(work_dir)
@@ -1967,6 +2068,10 @@ def main():
             test_a_lost_line_end_is_restored_at_startup(conn, work_dir)
             test_a_pk_entry_past_its_page_is_retired_at_startup(conn)
             test_an_unrecognised_pk_index_is_never_overwritten(conn, work_dir)
+            test_reindex_primary_key_rebuilds_an_unrecognised_pk_index(conn)
+            test_reindex_primary_key_repairs_swapped_offsets(conn)
+            test_reindex_primary_key_restores_a_record_pk_idx_lost(conn)
+            test_reindex_primary_key_refuses_a_duplicated_record(conn, work_dir)
             test_an_unindexed_record_is_adopted_at_startup(conn)
             test_an_update_killed_mid_compaction_is_undone_at_startup(conn, work_dir)
             test_a_delete_killed_mid_compaction_is_completed_at_startup(conn, work_dir)

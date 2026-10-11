@@ -794,6 +794,32 @@ A field with no registered index → `404-6`
 {"type": "REINDEX", "databaseName": "test", "collectionName": "testCollection", "fieldNames": ["neverIndexed"]}
 ```
 
+`"primaryKey": true` rebuilds the collection's `pk.idx` from its page files, then its page-occupancy rows. On
+a healthy collection it changes nothing and answers `rebuiltFields: []`, `unversionedEntries: 0`: the field
+indexes catch up in the background for any id the rebuild found or dropped. When the old `pk.idx` could not be
+read, every registered field index is rebuilt too and every entry is at version 0.
+
+```json
+{"type": "REINDEX", "databaseName": "test", "collectionName": "testCollection", "primaryKey": true}
+```
+
+Adding `fieldNames` also rebuilds those fields
+
+```json
+{"type": "REINDEX", "databaseName": "test", "collectionName": "testCollection", "primaryKey": true, "fieldNames": ["aNumber"]}
+```
+
+A field with no registered index → `404-6`, before `pk.idx` is touched
+
+```json
+{"type": "REINDEX", "databaseName": "test", "collectionName": "testCollection", "primaryKey": true, "fieldNames": ["neverIndexed"]}
+```
+
+A page holding a line that is not a record, an `_id` twice (on one page or two), or a torn last record →
+`409-15`, and `pk.idx` is left byte-identical. A request alone cannot produce that state;
+`test_utils/test_storage_consistency.py` (`test_reindex_primary_key_refuses_a_duplicated_record`) does, by
+appending a copy of a record to its page while the server is stopped.
+
 Update index with new entry
 
 ```json
@@ -2463,6 +2489,15 @@ With `faultInjectionEnabled=true`, waiting on a point nothing reaches → `408-3
 
 ```json
 {"type": "AWAIT_FAULT", "point": "WRITE_OWNERSHIP_RECHECKED", "timeoutMs": 100}
+```
+
+On a standalone node too, `PK_INDEX_REPLACED` stops a `REINDEX` with `"primaryKey": true` right after it wrote the
+rebuilt `pk.idx`: arm it with `HALT` and send the `REINDEX`. The restarted node warns about whatever field-index
+work was outstanding (an unclean stop for ids the rebuild found or dropped, half-built fields when the old `pk.idx`
+was unreadable or `fieldNames` named some) and answers those fields by a scan until the next `REINDEX`
+
+```json
+{"type": "ARM_FAULT", "point": "PK_INDEX_REPLACED", "action": "HALT", "match": "test|testCollection"}
 ```
 
 Every `500-*` answer is a failure inside the server — a disk that is full or unwritable, a file that could not

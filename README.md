@@ -373,6 +373,33 @@ The response lists the fields that were rebuilt:
 ```
 Returns `404-6` if a named field has no registered index.
 
+`"primaryKey": true` also rebuilds the collection's primary-key index (`pk.idx`) from its page files, which are
+authoritative, and then its page-occupancy metadata. It is the repair for a `pk.idx` that cannot be read (every
+read and write of the collection answers an error until then), that points at the wrong bytes, or that lost or
+kept a record the pages say otherwise about. When the old `pk.idx` cannot be read, a page-compaction journal that
+startup left for that reason is completed or undone first, exactly as startup would. When it can be read, any
+journal still on disk was left by a write this process could not clean up after: its saved tail is stale, so
+the rebuild refuses with `409-15` and names it rather than replay it over newer records.
+```json
+{"type":"REINDEX","databaseName":"my_db","collectionName":"my_coll","primaryKey":true}
+```
+```json
+{"type":"REINDEX","status":"OK","message":"Rebuilt the primary-key index (2 entries)","rebuiltFields":[],"primaryKeyEntries":2,"unversionedEntries":0}
+```
+- A page record does not carry its write version, so each entry keeps the version the old `pk.idx` held for it.
+  An id the old file did not name, or every id when the old file could not be read, gets version `0`
+  (`unversionedEntries` counts them). Under clustering that lets any other node's copy or tombstone outrank it.
+- Field indexes are not rebuilt unless `fieldNames` names them: the ids the rebuild found or dropped are queued
+  for the background index worker, and index-backed reads stay correct meanwhile. When the old `pk.idx` could not
+  be read there is nothing to compare against, so every registered field index is rebuilt and listed in
+  `rebuiltFields`.
+- If a page holds a line that is not a record, the same `_id` twice (on one page or across pages), or a torn last
+  record, the rebuild refuses with `409-15` and leaves `pk.idx` untouched, rather than guess which copy is real.
+- The field-index work is recorded before the new `pk.idx` is written: the changed ids are marked pending, and every
+  field the request will rebuild is marked as half-built. A process killed in between therefore restarts with the
+  unclean-stop warning and with those fields answered by a scan until the next `REINDEX`, never with a stale index.
+- Admin databases cannot be reindexed.
+
 Under clustering, `REINDEX` rebuilds on every node: the coordinator rebuilds its own indexes, then asks every
 peer to do the same, and answers `503-3` when a majority did not confirm (the rebuild still stands where it ran).
 
@@ -1153,6 +1180,7 @@ A fault is armed at a named **point**. It fires once, the first time a thread re
 | `WRITE_OWNERSHIP_RECHECKED` | A clustered write re-checked, under its collection lock, that this node owns the collection, and has not applied yet | `<db>\|<collection>` |
 | `DELETE_TOMBSTONE_RESERVED` | A clustered delete wrote its tombstone and has not deleted the document yet | `<db>\|<collection>` |
 | `ANTI_ENTROPY_SNAPSHOTTED` | An anti-entropy round took its snapshot and released its lock, and has not sent its digest yet | `<db>\|<collection>` |
+| `PK_INDEX_REPLACED` | A `REINDEX` with `"primaryKey": true` wrote the rebuilt `pk.idx` and has not rebuilt the page rows or field indexes yet | `<db>\|<collection>` |
 | `PEER_REPLY` | A node applied a peer's request and has not written the reply yet. The only point that can `DROP` | the request type, e.g. `COMMIT_TX` |
 
 | Action | Effect |
@@ -1240,6 +1268,7 @@ Every error response includes an `errorCode` field. Codes follow the pattern `NN
 | `409-12` | `ERROR` | A previous transaction on this connection is still being resolved on a participant; retry once it finishes |
 | `409-13` | `ERROR` | A participant no longer holds this transaction's buffered writes (it restarted or reaped the session); roll back and retry |
 | `409-14` | `ERROR` | The transaction already committed on its owner; it can no longer be rolled back |
+| `409-15` | `ERROR` | The primary-key index cannot be rebuilt from the page files |
 | `410-1` | `NOT_FOUND` | The listen ended: a collection it reads was dropped, its database was dropped, or the listening user can no longer read it. Pushed once on the listen's connection; the `listenId` is unregistered afterwards |
 | `500-1` | `ERROR` | Error during authentication |
 | `500-2` | `ERROR` | Error creating user |
@@ -1558,7 +1587,7 @@ What a single node promises, and what it deliberately does not. The multi-node m
 **Guaranteed**
 
 - **An acknowledged write survives a process crash.** Writes go to the files before the response is sent, so a `kill -9` or a JVM crash loses nothing that was acknowledged.
-- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the page files, and an in-place update, delete or relocation that was interrupted is completed or restored from its `.compacting` journal. That last step needs a readable `pk.idx`; when it is not, startup logs the affected pages and retries at the next start.
+- **A torn write heals at startup.** A half-written trailing line in a page, `pk.idx`, field-index or tombstone file is skipped and the file rewritten without it. Page-occupancy metadata is rebuilt from the page files, and an in-place update, delete or relocation that was interrupted is completed or restored from its `.compacting` journal. That last step needs a readable `pk.idx`; when it is not, startup logs the affected pages and retries at the next start, and [`REINDEX`](#reindex) with `"primaryKey": true` recovers them and rebuilds the `pk.idx` from the pages.
 - **Index and scan answer identically.** Field-index maintenance is asynchronous, but an index-backed read reconciles the documents not yet indexed, and an index that does not cover every document declines so the query scans. The one exception is vector `nearest` (below).
 - **Transactions are atomic and write-exclusive**, with read-your-writes inside the transaction and no snapshot isolation outside it (see [Concurrency & locking](#concurrency--locking)). A crash never leaves half a transaction applied.
 - **After-triggers are not lost to a crash** while `triggerRunLogEnabled` is on (the default): a run is recorded durably before it runs and replayed at startup, and its effects commit together with the consumption of that record, so a replay cannot apply them twice. A run that keeps failing is retried and then dead-lettered, never dropped silently.

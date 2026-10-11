@@ -383,7 +383,9 @@ membership machinery — serializes them:
    (`AdminRecordKey.touchedBy`) to every peer in one `REPLICATE_ADMIN` and waits for a
    majority of acknowledgements. `REINDEX` is the one exception: it touches no record, so the
    coordinator broadcasts the request itself (`REINDEX_BROADCAST`) and every peer rebuilds its
-   own indexes from its own documents.
+   own indexes from its own documents. With `"primaryKey": true` each node also rebuilds its own
+   `pk.idx` from its own page files; an entry the node could not version from its old `pk.idx`
+   gets version 0, so anti-entropy lets any other node's copy or tombstone outrank it.
 3. A node without a write quorum rejects an admin op up front (`503-2`) — the same
    split-brain protection document writes get.
 4. A node that is not the coordinator refuses a coordinated admin op with `421-1` **before**
@@ -628,7 +630,7 @@ then, drain the node's traffic at the load balancer first if that window matters
 **Testing failures between two statements.** Killing a process can only land *somewhere* in a
 critical section. To stop a node at one exact statement, the engine has a test-only fault seam:
 named points (`WRITE_OWNERSHIP_RECHECKED`, `DELETE_TOMBSTONE_RESERVED`, `ANTI_ENTROPY_SNAPSHOTTED`,
-`PEER_REPLY`) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
+`PK_INDEX_REPLACED`, `PEER_REPLY`) that `ARM_FAULT` can make pause, halt the process, or drop one peer reply. It is
 inert unless `faultInjectionEnabled=true`, which no production node should set; the integration
 suite turns it on for its throwaway nodes. See the
 [README](../README.md#fault-injection-testing-and-debugging-only) for the operations.
@@ -860,7 +862,7 @@ order; the peer dispatches them on `correlationId`.
 | `REPLICATE` | `replication`: `{dbName, collName, op: UPSERT\|DELETE, documents, ids, versions}` | document write replication |
 | `FORWARD_REQUEST` / `FORWARD_RESPONSE` | `forwardBody` (Base64 JSON), `actingUser` | request routing and script placement |
 | `REPLICATE_ADMIN` | `adminSnapshot`: the `{key, version, body}` admin records an op touched (`body` absent for a tombstone) | admin/DDL replication by record-shipping |
-| `REINDEX_BROADCAST` | `forwardBody` (the `REINDEX` request) | a cluster-wide index rebuild |
+| `REINDEX_BROADCAST` | `forwardBody` (the `REINDEX` request, `primaryKey` included) | a cluster-wide index rebuild |
 | `DIGEST` / `PULL` | `antiEntropy`: a collection's `{id, version, deleted, length}` digest and its summary, or pulled documents | document anti-entropy |
 | `ADMIN_SNAPSHOT` | `adminSnapshot`: every admin record and admin tombstone the node holds | admin/DDL anti-entropy |
 | `FORWARD_TX_REQUEST` | `forwardBody`, `txSessionId`, `txId` (reply reuses `FORWARD_RESPONSE`) | a forwarded transaction operation |

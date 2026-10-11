@@ -101,6 +101,13 @@ final class CompactionJournal {
         }
     }
 
+    List<File> findMarkerFiles(String dbName, String collName) {
+        final var markers = paths.collectionFolder(dbName, collName)
+                .listFiles(file -> file.isFile() && file.getName().startsWith(collName + Globals.FILE_PAGE_SEPARATOR)
+                        && file.getName().endsWith(MARKER_EXTENSION));
+        return markers == null ? List.of() : Arrays.stream(markers).sorted().toList();
+    }
+
     private static boolean isUnderLiveFolders(File root, File marker) {
         for (var folder = marker.getParentFile(); folder != null
                 && !folder.equals(root); folder = folder.getParentFile()) {
